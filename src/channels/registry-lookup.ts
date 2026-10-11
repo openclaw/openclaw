@@ -1,4 +1,3 @@
-// Cached lookup view for active channel plugin registry entries and aliases.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ActivePluginChannelRegistration,
@@ -68,19 +67,16 @@ function buildRegisteredChannelPluginLookup(): RegisteredChannelPluginLookup {
   return registeredChannelPluginLookup;
 }
 
-/** Lists active channel plugin registrations from the current registry snapshot. */
 export function listRegisteredChannelPluginEntries(): ActivePluginChannelRegistration[] {
   return buildRegisteredChannelPluginLookup().entries;
 }
 
-/** Finds an active channel plugin registration by normalized id or alias. */
 export function findRegisteredChannelPluginEntry(
   normalizedKey: string,
 ): ActivePluginChannelRegistration | undefined {
   return buildRegisteredChannelPluginLookup().byKey.get(normalizedKey);
 }
 
-/** Finds an active channel plugin registration by its canonical plugin id. */
 export function findRegisteredChannelPluginEntryById(
   id: string,
 ): ActivePluginChannelRegistration | undefined {

@@ -2,18 +2,18 @@ import fs from "node:fs";
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
 import { createNativeTypeScriptParser } from "./native-typescript.mts";
+import { isRecord as object } from "./record-shared.mjs";
 import { parseReleaseVersion } from "./release-version.mjs";
 import {
   isUpdateCompatibilityChunk,
   UPDATE_COMPATIBILITY_CHUNK_HEADER,
 } from "./update-compat-contract.mjs";
 import { ModuleGraph, type UpdateCompatibilityOrigin } from "./update-compat-module-graph.mts";
-import { isUpdatePackageAssetImport } from "./update-compat-source-imports.mts";
 
 export { isUpdateCompatibilityChunk } from "./update-compat-contract.mjs";
 export const UPDATE_COMPATIBILITY_INVENTORY_FILE = "update-compat-inventory.json";
 const HASHED_CHUNK = /-[A-Za-z0-9_-]{8}\.m?js$/;
-const POST_SWAP_OWNER = /^src\/(?:cli\/update-cli\/|daemon\/|cli\/runtime-cleanup\.ts$)/;
+const POST_SWAP_OWNER = /^src\/(?:cli\/update-cli\/|daemon\/|cli\/runtime-cleanup(?:-scope)?\.ts$)/;
 
 // These verified releases coalesced lifecycle declarations under the cache module's region.
 // Keep this provenance correction only while those releases remain in the supported upgrade window.
@@ -62,6 +62,7 @@ export type UpdateCompatibilityRelease = {
   buildId: string;
   commit: string;
   integrity: string;
+  schemaVersions?: unknown;
   chunks: UpdateCompatibilityChunk[];
 };
 export type UpdateCompatibilityInventory = {
@@ -101,6 +102,23 @@ function ownerAt(source: string, offset: number): string | undefined {
     owner = match[1];
   }
   return owner;
+}
+
+function isPostSwapImport(owner: string, node: ts.CallExpression): boolean {
+  // The wizard starts the update, and cleanup-scope prepares its resources
+  // before running the command. Only its final drain can follow replacement.
+  if (owner === "src/cli/update-cli/wizard.ts") {
+    return false;
+  }
+  if (owner !== "src/cli/runtime-cleanup-scope.ts") {
+    return true;
+  }
+  for (let ancestor: ts.Node = node; ancestor.parent; ancestor = ancestor.parent) {
+    if (ts.isTryStatement(ancestor.parent) && ancestor.parent.finallyBlock === ancestor) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function consumedExports(node: ts.CallExpression): string[] | undefined {
@@ -189,14 +207,12 @@ export function recordUpdateCompatibilityRelease(params: {
     const visit = (node: ts.Node) => {
       if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
         const owner = ownerAt(source, node.getStart());
-        // The wizard's only lazy command import starts the update, before replacement.
-        if (owner && POST_SWAP_OWNER.test(owner) && owner !== "src/cli/update-cli/wizard.ts") {
+        if (owner && POST_SWAP_OWNER.test(owner) && isPostSwapImport(owner, node)) {
           const specifier = node.arguments[0];
           if (!specifier || !ts.isStringLiteralLikeNode(specifier)) {
-            if (isUpdatePackageAssetImport(owner, node)) {
-              return;
-            }
-            throw new Error(`Nonliteral post-swap import in ${file}: ${node.getText()}`);
+            // This inventory bridges literal dist imports. Computed package
+            // assets retain their package owner's installation contract.
+            return;
           }
           if (specifier.text.startsWith(".")) {
             const target = path.resolve(path.dirname(file), specifier.text);
@@ -244,6 +260,7 @@ export function recordUpdateCompatibilityRelease(params: {
     buildId: build.buildId,
     commit: build.commit,
     integrity: params.integrity,
+    schemaVersions: packageJson.openclaw?.schemaVersions,
     chunks: [...chunks.values()]
       .toSorted((a, b) => a.path.localeCompare(b.path))
       .map((chunk) => ({
@@ -254,9 +271,6 @@ export function recordUpdateCompatibilityRelease(params: {
   };
 }
 
-function object(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 function safeRelative(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -351,6 +365,7 @@ export function parseUpdateCompatibilityInventory(
       buildId: release.buildId,
       commit: release.commit,
       integrity: release.integrity,
+      schemaVersions: release.schemaVersions,
       chunks,
     };
   });
@@ -403,14 +418,20 @@ function collectRequiredCompatibilityChunks(
   return [...requiredByPath.values()];
 }
 
+const STABLE_10_1_CLEANUP_FACADE = "runtime-cleanup-DlrF_x2c.mjs";
+const STABLE_10_1_CLEANUP_OWNER = "runtime-cleanup-Dowg583v.mjs";
+
 export function listUpdateCompatibilityChunkPaths(
   inventory: UpdateCompatibilityInventory,
 ): string[] {
   return [
     ...new Set(
-      inventory.releases.flatMap((release) =>
-        release.chunks.filter((chunk) => HASHED_CHUNK.test(chunk.path)).map((chunk) => chunk.path),
-      ),
+      inventory.releases.flatMap((release) => [
+        ...release.chunks
+          .filter((chunk) => HASHED_CHUNK.test(chunk.path))
+          .map((chunk) => chunk.path),
+        ...(release.version === "2026.10.1" ? [STABLE_10_1_CLEANUP_OWNER] : []),
+      ]),
     ),
   ].toSorted();
 }
@@ -465,6 +486,7 @@ export function writeUpdateCompatibilityChunks(params: {
       relative.startsWith("extensions/") ||
       relative.startsWith("plugin-sdk/") ||
       relative.startsWith("config-doctor/") ||
+      relative.startsWith("state-retention/") ||
       relative.startsWith("native-hook-relay/")
     ) {
       continue;
@@ -542,9 +564,30 @@ export function writeUpdateCompatibilityChunks(params: {
       if (!specifier.startsWith(".")) {
         specifier = `./${specifier}`;
       }
-      lines.push(
-        `export { ${match.exported} as ${entry.exported} } from ${JSON.stringify(specifier)};`,
-      );
+      if (
+        chunk.path === STABLE_10_1_CLEANUP_FACADE &&
+        entry.exported === "runCliDisposerAfterPending"
+      ) {
+        // Published 10.1 loads the queue owner before updating, then imports this
+        // facade after replacement. Resolve through that original URL so Node uses
+        // its cached disposer queue, not the candidate's empty queue. Keep the owner
+        // path resolver-visible until upgrades from 10.1 are no longer supported.
+        const owner = path.join(distDir, STABLE_10_1_CLEANUP_OWNER);
+        if (!fs.existsSync(owner) || isUpdateCompatibilityChunk(fs.readFileSync(owner, "utf8"))) {
+          outputs.set(
+            STABLE_10_1_CLEANUP_OWNER,
+            `${UPDATE_COMPATIBILITY_CHUNK_HEADER}\nexport { ${match.exported} as i } from ${JSON.stringify(specifier)};\n`,
+          );
+        }
+        lines.push(
+          "// 10.1's already-loaded owner must drain its original pending disposer queue.",
+          `export { i as runCliDisposerAfterPending } from "./${STABLE_10_1_CLEANUP_OWNER}";`,
+        );
+      } else {
+        lines.push(
+          `export { ${match.exported} as ${entry.exported} } from ${JSON.stringify(specifier)};`,
+        );
+      }
     }
     const contents = `${lines.join("\n")}\n`;
     outputs.set(chunk.path, contents);

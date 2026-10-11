@@ -73,7 +73,9 @@ function transcriptMethod<T>(
           throw new Error("Transcript archive access changed");
         }
       };
-      respond(true, await read(store, params, cfg, assertCurrent));
+      const result = await read(store, params, cfg, assertCurrent);
+      assertCurrent();
+      respond(true, result);
     } catch (error) {
       if (!(error instanceof TranscriptLibraryError)) {
         context.logGateway.warn(`${method} failed: ${formatForLog(error)}`);
@@ -116,6 +118,7 @@ export const transcriptsHandlers: GatewayRequestHandlers = {
       assertCurrent();
       if (!entry.hasSummary && entry.utteranceCount > 0) {
         await ensureTranscriptSummary({
+          stateDir: resolveStateDir(),
           store,
           session: entry.session,
           config: resolveTranscriptsConfig(cfg.transcripts),

@@ -12,7 +12,7 @@ import {
   nativeApprovalTargetsMatch,
   shouldSuppressLocalNativeExecApprovalPrompt,
 } from "./approval-native-helpers.js";
-import type { OpenClawConfig } from "./config-runtime.js";
+import type { OpenClawConfig } from "./config-contracts.js";
 
 const EMPTY_SESSION_CFG = {
   session: {

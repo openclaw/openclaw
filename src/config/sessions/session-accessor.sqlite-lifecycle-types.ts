@@ -4,6 +4,10 @@ import type {
 } from "../../agents/subagents/registry/subagent-registry-read.types.js";
 import type { SqliteWalReclamationResult } from "../../infra/sqlite-wal.js";
 import type {
+  DatabaseFileIdentity,
+  DatabasePathIdentity,
+} from "../../infra/sqlite-worker-identity.js";
+import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
@@ -24,14 +28,16 @@ import type {
   DeleteSessionEntryLifecycleResult,
   SessionEntryLifecycleRemoval,
   SessionEntryLifecycleUpsert,
+  SqliteSessionArtifactPreparationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
-import type { SessionEntryMaintenanceAgeFact } from "./session-accessor.sqlite-maintenance-age.js";
+import type { SessionEntryMaintenanceAgeChange } from "./session-accessor.sqlite-maintenance-age.js";
 import type {
   SessionEntryCommitContext,
   SessionEntryCreateWithTranscriptOptions,
 } from "./session-accessor.types.js";
-import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.js";
+import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -114,9 +120,11 @@ export type ProjectedLifecycleCommitResult = {
   maintenancePlans: SessionEntryMaintenancePlan[];
   removedSessionKeys: string[];
   pendingArchives: boolean;
+  progressCardResetKeys?: string[];
+  projectionReconcileSessionIds?: string[];
 };
 
-export type ProjectedLifecycleRemovalCommitInput = {
+export type ProjectedLifecycleCommitInput = {
   projected: ProjectedLifecycleMutation;
   materializationFailed: boolean;
   allowCanonicalRepair?: boolean;
@@ -180,7 +188,6 @@ export type SqliteSessionDeletionScope =
   | { kind: "entry"; phase: "plan" | "commit" }
   | { kind: "historical-generation"; phase: "plan" | "commit"; sessionId: string };
 export type SessionEntryMaintenanceInput = {
-  ageFact?: SessionEntryMaintenanceAgeFact;
   activeSessionKey?: string;
   activeSessionKeys?: readonly string[];
   archiveDirectory: string;
@@ -202,6 +209,41 @@ type SessionReclamationPlanBase = {
   materializedPlans: MaterializedSessionStateDeletePlan[];
 };
 
+export type SessionMaintenanceMetadataCommand =
+  | { kind: "maintenance-statistics" }
+  | {
+      kind: "maintenance-age";
+      ageChanges?: readonly SessionEntryMaintenanceAgeChange[];
+      maintenance: ResolvedSessionMaintenanceConfig;
+      readOnly?: { input: SessionEntryMaintenanceInput };
+    }
+  | {
+      kind: "maintenance-plan";
+      ageChanges?: readonly SessionEntryMaintenanceAgeChange[];
+      input: SessionEntryMaintenanceInput;
+    };
+
+export type SessionMaintenanceMetadataResult =
+  | { kind: "maintenance-statistics"; value: true }
+  | { kind: "maintenance-age"; nextAt: number | undefined }
+  | { kind: "maintenance-preservation-required" }
+  | { kind: "maintenance-plan-stale" }
+  | {
+      kind: "maintenance-plan";
+      value: SessionEntryMaintenancePlan;
+      nextAt: number | undefined;
+      readOnlyInput?: SessionEntryMaintenanceInput;
+    };
+
+export type SessionMaintenanceReadCommand = Exclude<
+  SessionMaintenanceMetadataCommand,
+  { kind: "maintenance-statistics" }
+> & { expectedIdentity: DatabasePathIdentity };
+
+export type SessionMaintenanceReadResult =
+  | { kind: "maintenance-write-required" }
+  | Exclude<SessionMaintenanceMetadataResult, { kind: "maintenance-statistics" }>;
+
 export type SqliteSessionReclamationPlan =
   | (SessionReclamationPlanBase & {
       kind: "lifecycle-projection-plan";
@@ -210,9 +252,8 @@ export type SqliteSessionReclamationPlan =
   | (SessionReclamationPlanBase & {
       agentId: string;
       kind: "lifecycle-projection-commit";
-      input: ProjectedLifecycleRemovalCommitInput;
+      input: ProjectedLifecycleCommitInput;
     })
-  | (SessionReclamationPlanBase & { kind: "lifecycle-projection-count" })
   | (SessionReclamationPlanBase & {
       kind: "deletion-plan";
       planning: SessionDeletionPlanningOperation;
@@ -228,11 +269,7 @@ export type SqliteSessionReclamationPlan =
       nowMs: number;
     })
   | (SessionReclamationPlanBase & { kind: "maintenance-pages"; maxPages?: number })
-  | (SessionReclamationPlanBase & { kind: "maintenance-statistics" })
-  | (SessionReclamationPlanBase & {
-      kind: "maintenance-plan";
-      input: SessionEntryMaintenanceInput;
-    })
+  | (SessionReclamationPlanBase & SessionMaintenanceMetadataCommand & { materializedPlans: [] })
   | (SessionReclamationPlanBase & {
       agentId: string;
       entries: SessionEntryRemovalPlan[];
@@ -262,28 +299,25 @@ export type SqliteSessionReclamationPlan =
       sessionId: string;
     });
 
+export type SqliteArchiveReclamationPlan = Exclude<
+  SqliteSessionReclamationPlan,
+  SessionMaintenanceMetadataCommand
+>;
+
 export type SqliteSessionReclamationResult =
   | { kind: "lifecycle-projection-plan"; value: ProjectedLifecycleMutation }
   | { kind: "lifecycle-projection-commit"; value: ProjectedLifecycleCommitResult }
-  | { kind: "lifecycle-projection-count"; value: number }
   | { kind: "deletion-plan"; value: SessionDeletionPlanningResult }
   | { kind: "archive-publish-prepare"; value: TranscriptArchivePublishPlan[] }
   | { kind: "archive-publish-record"; value: true }
   | { kind: "maintenance-pages"; value: SqliteWalReclamationResult }
-  | { kind: "maintenance-statistics"; value: true }
-  | { kind: "maintenance-preservation-required" }
-  | { kind: "maintenance-plan-stale" }
-  | {
-      kind: "maintenance-plan";
-      value: SessionEntryMaintenancePlan;
-      ageFact?: SessionEntryMaintenanceAgeFact;
-    }
+  | SessionMaintenanceMetadataResult
   | {
       kind: "maintenance-finalize";
       value: {
         archivedTranscripts: SessionLifecycleArchivedTranscript[];
-        changedEntries: SessionEntryRemovalPlan[];
-        committedEntries: SessionEntryRemovalPlan[];
+        /** Positions in the captured plan; never echo its saved entry snapshots. */
+        committedEntryIndices: number[];
       };
     }
   | { kind: "entry"; value: DeleteSessionEntryLifecycleResult }
@@ -321,8 +355,7 @@ type SessionEntryMaintenanceCounts = {
 };
 export type SessionEntryMaintenancePlan = SessionEntryMaintenanceCounts & {
   /** Exact rows written by planning; parent publication must not rescan the store. */
-  archivedSessionKeys: string[];
-  archivedWorktrees?: Array<{ entry: SessionEntry; sessionKey: string; storePath: string }>;
+  archivedEntries: Array<{ sessionKey: string; sessionId?: string }>;
   entryRemovals: SessionEntryRemovalPlan[];
   stateDeletePlans: SessionStateDeletePlan[];
 };
@@ -332,6 +365,30 @@ export type SessionEntryMaintenanceResult = SessionEntryMaintenanceCounts & {
 export type LifecycleArtifactCleanupPlan = {
   deletePlans: SessionStateDeletePlan[];
   entries: SessionEntryRemovalPlan[];
+};
+export type LifecycleArtifactCleanupInput = {
+  continuation?: CanonicalSessionReaderContinuation;
+  agentId?: string;
+  archiveRemovedEntryTranscripts: boolean;
+  archiveDirectory: string;
+  pluginOwnerId?: string;
+  sessionKeySegmentPrefix: string;
+  transcriptContentMarker: string;
+  orphanTranscriptMinAgeMs: number;
+  nowMs: number;
+  diagnostics?: SqliteSessionArtifactPreparationDiagnostics;
+};
+export type LifecycleArtifactCleanupRequest = {
+  kind: "lifecycle-artifact-plan";
+  database: { agentId: string; path: string };
+  env: NodeJS.ProcessEnv;
+  input: LifecycleArtifactCleanupInput;
+  expectedSource: DatabaseFileIdentity;
+};
+export type LifecycleArtifactCleanupWorkerResult = {
+  kind: "lifecycle-artifact-plan";
+  plan: LifecycleArtifactCleanupPlan;
+  diagnostics: LifecycleArtifactCleanupInput["diagnostics"];
 };
 export type ProjectedLifecycleMutation = {
   archiveRecovery?: { pending: boolean; databaseIdentity: string };

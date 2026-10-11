@@ -19,6 +19,7 @@ const UNGUARDED_RUNTIME_API_PLUGIN_IDS = [
   "browser",
   "canvas",
   "clickclack",
+  "cloudflare",
   "copilot-proxy",
   "feishu",
   "google",
@@ -61,14 +62,12 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
       'export { resolveDiscordChannelAllowlist, type DiscordChannelResolution } from "./src/resolve-channels.js";',
       'export { resolveDiscordUserAllowlist, type DiscordUserResolution } from "./src/resolve-users.js";',
       'export { setDiscordRuntime } from "./src/runtime.js";',
-      'export type { DiscordAllowList, DiscordChannelConfigResolved, DiscordGuildEntryResolved } from "./src/monitor/allow-list.js";',
-      'export { allowListMatches, isDiscordGroupAllowedByPolicy, normalizeDiscordAllowList, normalizeDiscordSlug, resolveDiscordChannelConfig, resolveDiscordChannelConfigWithFallback, resolveDiscordCommandAuthorized, resolveDiscordGuildEntry, resolveDiscordShouldRequireMention, resolveGroupDmAllow, shouldEmitDiscordReactionNotification } from "./src/monitor/allow-list.js";',
+      'export { allowListMatches, isDiscordGroupAllowedByPolicy, normalizeDiscordAllowList, normalizeDiscordSlug, resolveDiscordChannelConfig, resolveDiscordChannelConfigWithFallback, resolveDiscordCommandAuthorized, resolveDiscordGuildEntry, resolveDiscordShouldRequireMention, resolveGroupDmAllow, shouldEmitDiscordReactionNotification, type DiscordAllowList, type DiscordChannelConfigResolved, type DiscordGuildEntryResolved } from "./src/monitor/allow-list.js";',
       'export type { DiscordMessageEvent, DiscordMessageHandler } from "./src/monitor/listeners.js";',
       'export { registerDiscordListener } from "./src/monitor/listeners.js";',
       'export { createDiscordMessageHandler } from "./src/monitor/message-handler.js";',
       'export { createDiscordNativeCommand } from "./src/monitor/native-command.js";',
-      'export type { MonitorDiscordOpts } from "./src/monitor/provider.js";',
-      'export { monitorDiscordProvider } from "./src/monitor/provider.js";',
+      'export { monitorDiscordProvider, type MonitorDiscordOpts } from "./src/monitor/provider.js";',
       'export { resolveDiscordReplyTarget, sanitizeDiscordThreadName } from "./src/monitor/threading.js";',
       'export { createDiscordGatewayPlugin, resolveDiscordGatewayIntents, waitForDiscordGatewayPluginRegistration } from "./src/monitor/gateway-plugin.js";',
       'export { clearGateways, getGateway, registerGateway, unregisterGateway } from "./src/monitor/gateway-registry.js";',
@@ -128,7 +127,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { hashMatrixAccessToken, resolveMatrixAccountStorageRoot, resolveMatrixCredentialsDir, resolveMatrixCredentialsFilename, resolveMatrixCredentialsPath, resolveMatrixHomeserverKey, sanitizeMatrixPathSegment } from "./src/storage-paths.js";',
     'export { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./src/matrix/deps.js";',
     'export { assertHttpUrlTargetsPrivateNetwork, closeDispatcher, createPinnedDispatcher, resolvePinnedHostnameWithPolicy, ssrfPolicyFromDangerouslyAllowPrivateNetwork, type LookupFn, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";',
-    'export { setMatrixThreadBindingIdleTimeoutBySessionKey, setMatrixThreadBindingMaxAgeBySessionKey } from "./src/matrix/thread-bindings-shared.js";',
+    'export { setMatrixThreadBindingIdleTimeoutBySessionKey, setMatrixThreadBindingIdleTimeoutBySessionKeyAsync, setMatrixThreadBindingMaxAgeBySessionKey, setMatrixThreadBindingMaxAgeBySessionKeyAsync } from "./src/matrix/thread-bindings-shared.js";',
     'export { setMatrixRuntime } from "./src/runtime.js";',
     'export { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";',
     'export type { ChannelDirectoryEntry, ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";',
@@ -137,7 +136,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";',
     'export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";',
     'export type { WizardPrompter } from "openclaw/plugin-sdk/setup";',
-    'export function chunkTextForOutbound(text: string, limit: number): string[] { if (text.length === 0) { return [""]; } if (Number.isFinite(limit) && limit > 0 && !Number.isInteger(limit)) { return chunkTextForOutboundSdk(text, limit); } const chunks: string[] = []; let remaining = text; while (remaining.length > limit) { const window = remaining.slice(0, limit); const splitAt = Math.max(window.lastIndexOf("\\n"), window.lastIndexOf(" ")); const breakAt = splitAt > 0 ? splitAt : limit; chunks.push(remaining.slice(0, breakAt).trimEnd()); remaining = remaining.slice(breakAt).trimStart(); } if (remaining.length > 0) { chunks.push(remaining); } return chunks; }',
+    'export function chunkTextForOutbound(text: string, limit: number): string[] { if (text.length === 0 || limit <= 0) { return [text]; } if (Number.isFinite(limit) && limit > 0 && !Number.isInteger(limit)) { return chunkTextForOutboundSdk(text, limit); } const chunks: string[] = []; let remaining = text; while (remaining.length > limit) { const window = remaining.slice(0, limit); const splitAt = Math.max(window.lastIndexOf("\\n"), window.lastIndexOf(" ")); const breakAt = splitAt > 0 ? splitAt : limit; chunks.push(remaining.slice(0, breakAt).trimEnd()); remaining = remaining.slice(breakAt).trimStart(); } if (remaining.length > 0) { chunks.push(remaining); } return chunks; }',
   ],
   [contractPluginPath({
     rootDir: ROOT_DIR,
@@ -239,6 +238,9 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
       'export { setWhatsAppRuntime } from "./src/runtime.js";',
       'export { startWebLoginWithQr, waitForWebLogin } from "./login-qr-runtime.js";',
     ],
+  [contractPluginPath({ rootDir: ROOT_DIR, pluginId: "x", relativePath: "runtime-api.ts" })]: [
+    'export { setXRuntime } from "./src/runtime.js";',
+  ],
 } as const;
 
 function collectRuntimeApiFiles(): string[] {

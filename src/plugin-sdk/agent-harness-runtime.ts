@@ -40,12 +40,20 @@ import { expandToolGroups } from "../agents/tool-policy-shared.js";
 import {
   buildWatchedSessionsPromptLines,
   prepareWatchedSessionsPrompt,
+  prepareWatchedSessionsPromptAsync,
 } from "../agents/watched-sessions-prompt.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveExecModePolicy } from "../infra/exec-approvals-core.js";
 import { maxAsk, minSecurity } from "../infra/exec-approvals-policy.js";
 import type { ImageContent } from "../llm/types.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
+
+export type {
+  AgentExecutorBinding,
+  AgentExecutorContext,
+  AgentExecutorController,
+} from "../plugins/agent-executor-controller.types.js";
+export { resolveAgentExecutorController } from "../plugins/agent-executor-controller.js";
 
 export { projectAgentActivityItem } from "../agents/agent-activity-presentation.js";
 export { projectAgentToolActivity } from "../infra/agent-activity-events.js";
@@ -63,6 +71,7 @@ export const execPolicy = Object.freeze({ resolveExecModePolicy, minSecurity, ma
  * Harness runtimes that assemble their own instruction layers (e.g. Codex)
  * must surface the same watched-session facts as the embedded prompt, or the
  * model keeps refusing cross-session questions on those runtimes (openclaw#114797).
+ * @deprecated Await prepareWatchedSessionsHarnessContext with current host authority.
  */
 export function buildWatchedSessionsHarnessContext(params: {
   config?: OpenClawConfig;
@@ -74,6 +83,18 @@ export function buildWatchedSessionsHarnessContext(params: {
   const lines = buildWatchedSessionsPromptLines(
     prepareWatchedSessionsPrompt({ enabled: true, ...params }),
   );
+  return lines.length > 0 ? lines.join("\n").trimEnd() : undefined;
+}
+
+/** Prepares current watched-session facts through the worker before rendering them. */
+export async function prepareWatchedSessionsHarnessContext(
+  params: Parameters<typeof buildWatchedSessionsHarnessContext>[0] & {
+    assertCurrent: () => void;
+  },
+): Promise<string | undefined> {
+  const prepared = await prepareWatchedSessionsPromptAsync({ enabled: true, ...params });
+  params.assertCurrent();
+  const lines = buildWatchedSessionsPromptLines(prepared);
   return lines.length > 0 ? lines.join("\n").trimEnd() : undefined;
 }
 
@@ -119,6 +140,7 @@ export type {
 } from "../agents/harness/types.js";
 export {
   AgentHarnessPreflightError,
+  AgentHarnessSessionCleanupError,
   AgentHarnessSessionSupersededError,
 } from "../agents/harness/errors.js";
 export { projectSettledTurnFinalizationAttemptResult } from "../agents/harness/settled-turn-finalization-result.js";
@@ -256,6 +278,7 @@ export {
   extractMessagingToolSourceReplyPayload,
   isDeliveredMessagingToolSendToCurrentSource,
 } from "../agents/embedded-agent-messaging-extraction.js";
+export { captureToolAuthoredSourceReply } from "../agents/embedded-agent-tool-authored-source-reply.js";
 export {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
@@ -430,7 +453,6 @@ export async function loadCodexBundleMcpThreadConfig(
 }
 
 export { decodeHeaderEnvPlaceholder } from "../agents/bundle-mcp-adapter.js";
-export { resolveConfiguredMcpTransport } from "../config/mcp-config-normalize.js";
 
 /** Lazily load the strict MCP proxy client with core-owned framing, startup, and shutdown. */
 export const mcpStdioRuntime = Object.freeze({
@@ -464,8 +486,22 @@ export async function prepareHarnessNativeMcpAppPreview(params: {
   }
   const { buildMcpAppCanvasPayload, fetchMcpAppView } =
     await import("../agents/mcp-ui-resource.js");
+  const { prepareMcpAppFormUpload } = await import("../agents/mcp-form-resource-upload.js");
   const view = await fetchMcpAppView({
     runtime: params.runtime,
+    requesterId: params.runtime.appRequester?.profileId,
+    uploadResources:
+      params.agentId && params.runtime.sessionKey
+        ? await prepareMcpAppFormUpload({
+            runtime: params.runtime,
+            serverName: params.serverName,
+            agentId: params.agentId,
+            sessionKey: params.runtime.sessionKey,
+            assertCurrent: () => {
+              params.runtime.assertOwnerCurrent?.();
+            },
+          })
+        : undefined,
     agentId: params.agentId,
     serverName: params.serverName,
     toolName: params.toolName,
@@ -519,10 +555,10 @@ export {
   resolveWritableSandboxBindHostRoots,
 } from "../agents/sandbox/fs-paths.js";
 export {
-  buildBootstrapContextForFiles,
   resolveBootstrapContextForRun,
   resolveBootstrapFilesForRun,
 } from "../agents/bootstrap-files.js";
+export { buildBootstrapContextForFiles } from "../agents/embedded-agent-helpers/bootstrap.js";
 export { prepareAgentWorkspaceContext } from "../agents/harness/workspace-context.js";
 export { buildAgentWorkspaceInstructionSnapshot } from "../agents/harness/workspace-instructions.js";
 export type { EmbeddedContextFile } from "../agents/embedded-agent-helpers/context-file.js";
@@ -592,6 +628,7 @@ export {
 export {
   awaitAgentEndSideEffects,
   runAgentEndSideEffects,
+  runAgentEndSideEffectsAsync,
 } from "../agents/harness/agent-end-side-effects.js";
 export { buildEmbeddedForegroundPromptContext } from "../agents/embedded-agent-runner/run/agent-end-context.js";
 export type { EmbeddedForegroundPromptContext } from "../agents/embedded-agent-runner/run/params.js";

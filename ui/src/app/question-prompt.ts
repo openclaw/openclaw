@@ -1,3 +1,4 @@
+import type { QuestionRecord } from "@openclaw/gateway-client/browser";
 import {
   asSafeIntegerInRange,
   resolveTimerTimeoutMs,
@@ -5,9 +6,7 @@ import {
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import type {
-  Question,
   QuestionAnswers,
-  QuestionRecord,
   QuestionResolvedEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError, type GatewayEventFrame } from "../api/gateway.ts";
@@ -36,14 +35,13 @@ export type QuestionDraft = {
 
 type QuestionPromptStatus = QuestionRecord["status"] | "unavailable";
 
-export type QuestionPrompt = {
-  id: string;
-  questions: Question[];
+export type QuestionPrompt = Pick<
+  QuestionRecord,
+  "id" | "questions" | "createdAtMs" | "expiresAtMs"
+> & {
   agentId?: string;
   sessionKey?: string;
   runId?: string;
-  createdAtMs: number;
-  expiresAtMs: number;
   status: QuestionPromptStatus;
   answers?: QuestionAnswers;
   submittedAnswers?: QuestionAnswers;
@@ -199,11 +197,19 @@ export function createQuestionPromptState(onChange: () => void): QuestionPromptS
   return state;
 }
 
-function scheduleExpiry(state: QuestionPromptState): void {
-  if (state.expiryTimer) {
-    globalThis.clearTimeout(state.expiryTimer);
-    state.expiryTimer = null;
+function clearQuestionPromptTimer(
+  state: QuestionPromptState,
+  field: "expiryTimer" | "refreshRetryTimer",
+): void {
+  const timer = state[field];
+  if (timer) {
+    globalThis.clearTimeout(timer);
+    state[field] = null;
   }
+}
+
+function scheduleExpiry(state: QuestionPromptState): void {
+  clearQuestionPromptTimer(state, "expiryTimer");
   let nextExpiry = Infinity;
   for (const prompt of state.prompts.values()) {
     if (prompt.status === "pending") {
@@ -386,7 +392,7 @@ function markRecoveryUnavailable(state: QuestionPromptState, prompt: QuestionPro
 async function refreshPendingQuestions(
   state: QuestionPromptState,
   client: QuestionClient,
-  isCurrentClient: () => boolean = () => state.client === client,
+  isCurrentClient: () => boolean,
 ): Promise<boolean> {
   const startedAtRevision = state.revision;
   const listResult = await requestQuestionGateway(client, "question.list", {});
@@ -516,10 +522,7 @@ export function setQuestionPromptClient(
   state: QuestionPromptState,
   client: QuestionClient | null,
 ): void {
-  if (state.refreshRetryTimer) {
-    globalThis.clearTimeout(state.refreshRetryTimer);
-    state.refreshRetryTimer = null;
-  }
+  clearQuestionPromptTimer(state, "refreshRetryTimer");
   if (state.client === client) {
     return;
   }
@@ -538,10 +541,7 @@ export function setQuestionPromptClient(
 
   if (ownerChanged) {
     const changed = state.prompts.size > 0 || state.unmatchedResolutions.size > 0;
-    if (state.expiryTimer) {
-      globalThis.clearTimeout(state.expiryTimer);
-      state.expiryTimer = null;
-    }
+    clearQuestionPromptTimer(state, "expiryTimer");
     state.prompts.clear();
     state.unmatchedResolutions.clear();
     if (changed) {
@@ -576,14 +576,8 @@ export function disposeQuestionPromptState(state: QuestionPromptState): void {
   if (state.client) {
     unregisterQuestionClientOwner(state.client, state);
   }
-  if (state.expiryTimer) {
-    globalThis.clearTimeout(state.expiryTimer);
-    state.expiryTimer = null;
-  }
-  if (state.refreshRetryTimer) {
-    globalThis.clearTimeout(state.refreshRetryTimer);
-    state.refreshRetryTimer = null;
-  }
+  clearQuestionPromptTimer(state, "expiryTimer");
+  clearQuestionPromptTimer(state, "refreshRetryTimer");
   state.clientGeneration += 1;
   // Retained records belong to the previous client: remount on it may recover
   // them, while a different Gateway must still recognize and purge its state.

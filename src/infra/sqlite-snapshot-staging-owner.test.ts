@@ -5,15 +5,15 @@ import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createDeferredCore } from "../shared/deferred.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   createRetainedOperation,
   type RetainedOperation,
   type RetainedOutcome,
-} from "./retained-operation.js";
+} from "@openclaw/worker-runtime/lifecycle";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { requireNodeSqlite } from "./node-sqlite.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { withRuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import {
@@ -25,10 +25,9 @@ import {
 import type { RetainedPreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
 import { captureSqliteReadOnlyWorkerLaunch } from "./sqlite-readonly-worker.js";
 import { startSqliteReadOnlyLocationAsync } from "./sqlite-snapshot-source.js";
-import {
-  allocateWorkerOwnedSqliteSnapshotDirectory,
-  captureSqliteSnapshotStagingOwner,
-} from "./sqlite-snapshot-staging-owner.js";
+import { allocateWorkerOwnedSqliteSnapshotDirectory } from "./sqlite-snapshot-staging-allocation.js";
+import { captureSqliteSnapshotStagingOwner } from "./sqlite-snapshot-staging-owner.js";
+import { holdNativeStop, waitForGate } from "./sqlite-snapshot-staging-owner.test-support.js";
 import { createSqliteSnapshotStagingDirectory } from "./sqlite-snapshot-staging.js";
 import type { RetainedNativeWorker } from "./worker-native-lifecycle.types.js";
 import type {
@@ -266,18 +265,6 @@ function releaseReplyGate(gate: ReplyGate | undefined): void {
   }
 }
 
-async function waitForGate(
-  gate: { entered: ReturnType<typeof createDeferredCore<void>> },
-  request: Promise<unknown>,
-): Promise<void> {
-  await Promise.race([
-    gate.entered.promise,
-    request.then(() => {
-      throw new Error("Snapshot request settled before its retained release barrier");
-    }),
-  ]);
-}
-
 beforeEach(() => {
   observation.tasks = 0;
   observation.admitted = [];
@@ -304,6 +291,18 @@ const directories = useAutoCleanupTempDirTracker((cleanup) => {
     cleanup();
   });
 });
+
+function createProbe(root: string, name = "source", value = "preserved") {
+  const filename = path.join(root, `${name}.sqlite`);
+  const database = new (requireNodeSqlite().DatabaseSync)(filename);
+  try {
+    database.exec("CREATE TABLE probe(value TEXT)");
+    database.prepare("INSERT INTO probe VALUES(?)").run(value);
+  } finally {
+    database.close();
+  }
+  return filename;
+}
 
 it.each(["queued", "accepted"] as const)(
   "settles %s allocation cancellation without retiring a sibling token",
@@ -496,17 +495,7 @@ it("services a queued snapshot while the earlier caller's Promise reactions are 
   fs.mkdirSync(cache);
   vi.stubEnv("XDG_CACHE_HOME", cache);
   const sqlite = requireNodeSqlite();
-  const sources = ["first", "second"].map((value) => {
-    const filename = path.join(root, `${value}.sqlite`);
-    const database = new sqlite.DatabaseSync(filename);
-    try {
-      database.exec("CREATE TABLE probe(value TEXT)");
-      database.prepare("INSERT INTO probe VALUES (?)").run(value);
-    } finally {
-      database.close();
-    }
-    return filename;
-  });
+  const sources = ["first", "second"].map((value) => createProbe(root, value, value));
   const original = sources.map((filename) => fs.readFileSync(filename));
   const replyGate: ReplyGate = {
     kind: "prepared",
@@ -605,14 +594,7 @@ it("services a queued snapshot while the earlier caller's Promise reactions are 
 
 it("retains an early preparation close until its original accepted result joins", async () => {
   const root = directories.make("staging-request-early-close-");
-  const source = path.join(root, "source.sqlite");
-  const sqlite = requireNodeSqlite();
-  const writer = new sqlite.DatabaseSync(source);
-  try {
-    writer.exec("CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES('early');");
-  } finally {
-    writer.close();
-  }
+  const source = createProbe(root, "source", "early");
   const { env, cwd } = captureSqliteReadOnlyWorkerLaunch();
   const gate: ReplyGate = { kind: "prepared", entered: createDeferredCore(), open: false };
   observation.replyGate = gate;
@@ -648,17 +630,7 @@ it("retains an early preparation close until its original accepted result joins"
 it("keeps failed preparation custody retryable without requesting a sibling snapshot's cleanup", async () => {
   const root = directories.make("staging-request-failed-close-");
   const sqlite = requireNodeSqlite();
-  const sources = ["first", "sibling"].map((value) => {
-    const filename = path.join(root, `${value}.sqlite`);
-    const writer = new sqlite.DatabaseSync(filename);
-    try {
-      writer.exec("CREATE TABLE probe(value TEXT)");
-      writer.prepare("INSERT INTO probe VALUES(?)").run(value);
-    } finally {
-      writer.close();
-    }
-    return filename;
-  });
+  const sources = ["first", "sibling"].map((value) => createProbe(root, value, value));
   const original = sources.map((filename) => fs.readFileSync(filename));
   const owner = captureSqliteSnapshotStagingOwner();
   const { env, cwd } = captureSqliteReadOnlyWorkerLaunch();
@@ -686,6 +658,7 @@ it("keeps failed preparation custody retryable without requesting a sibling snap
   );
   let releaseReader: (() => void) | undefined;
   let native: RetainedNativeWorker | undefined;
+  let recoveryStop: ReturnType<typeof holdNativeStop> | undefined;
   try {
     await waitForGate(gate, first.result);
     if (!gate.directory) {
@@ -718,9 +691,14 @@ it("keeps failed preparation custody retryable without requesting a sibling snap
     }
     releaseReader();
     releaseReader = undefined;
+    // Native cleanup fences every sibling after VM loss. Admit both requests before
+    // starting the shared stop, then prove sibling servicing alone can finish it.
+    recoveryStop = holdNativeStop(native);
     const firstClose = first.startClose();
     const siblingClose = sibling.startClose();
     expect(firstClose.read().status).toBe("pending");
+    expect(siblingClose.read().status).toBe("pending");
+    recoveryStop.release();
     let microtaskRan = false;
     queueMicrotask(() => {
       microtaskRan = true;
@@ -750,6 +728,7 @@ it("keeps failed preparation custody retryable without requesting a sibling snap
     releaseReader?.();
     releaseReplyGate(gate);
     await Promise.allSettled([first.result, sibling.result]);
+    recoveryStop?.restore();
     // Preserve the failing result while explicitly retrying canonical custody cleanup on RED.
     await Promise.allSettled([first.startClose().result, sibling.startClose().result]);
     await Promise.all([first.startClose().result, sibling.startClose().result]);
@@ -762,16 +741,10 @@ it("keeps failed preparation custody retryable without requesting a sibling snap
 it("keeps an owned snapshot and its creator lock after abrupt worker exit until requested cleanup joins", async () => {
   const root = directories.make("staging-lost-worker-custody-");
   const cache = path.join(root, "cache");
-  const source = path.join(root, "source.sqlite");
   fs.mkdirSync(cache);
   vi.stubEnv("XDG_CACHE_HOME", cache);
   const sqlite = requireNodeSqlite();
-  const writer = new sqlite.DatabaseSync(source);
-  try {
-    writer.exec("CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES('preserved');");
-  } finally {
-    writer.close();
-  }
+  const source = createProbe(root);
   const prepared = await startSqliteReadOnlyLocationAsync(source, {
     preserveSourceArtifacts: true,
   }).result;
@@ -828,17 +801,7 @@ it("joins both generation snapshots after their shared staging Worker exits abru
   fs.mkdirSync(cache);
   vi.stubEnv("XDG_CACHE_HOME", cache);
   const sqlite = requireNodeSqlite();
-  const sources = ["first", "second"].map((value) => {
-    const filename = path.join(root, `${value}.sqlite`);
-    const writer = new sqlite.DatabaseSync(filename);
-    try {
-      writer.exec("CREATE TABLE probe(value TEXT)");
-      writer.prepare("INSERT INTO probe VALUES(?)").run(value);
-    } finally {
-      writer.close();
-    }
-    return filename;
-  });
+  const sources = ["first", "second"].map((value) => createProbe(root, value, value));
   const original = sources.map((filename) => fs.readFileSync(filename));
   const stagingUrl = resolveRuntimeProcessEntrypointUrl("sqliteSnapshotStaging");
   const prepared: RetainedPreparedSqliteReadOnlyLocation[] = [];
@@ -916,15 +879,9 @@ it("joins both generation snapshots after their shared staging Worker exits abru
 it("keeps an unbound snapshot reader alive across retained generation close and subsequent admission", async () => {
   const root = directories.make("staging-generation-reader-");
   const cache = path.join(root, "cache");
-  const source = path.join(root, "source.sqlite");
   fs.mkdirSync(cache);
   vi.stubEnv("XDG_CACHE_HOME", cache);
-  const database = new (requireNodeSqlite().DatabaseSync)(source);
-  try {
-    database.exec("CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES('preserved');");
-  } finally {
-    database.close();
-  }
+  const source = createProbe(root);
   const original = fs.readFileSync(source);
   const stagingUrl = resolveRuntimeProcessEntrypointUrl("sqliteSnapshotStaging");
   const resolveGeneration = (name: string) => (url: URL) => {

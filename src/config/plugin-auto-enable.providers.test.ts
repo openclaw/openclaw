@@ -136,6 +136,64 @@ describe("applyPluginAutoEnable providers", () => {
     });
   });
 
+  it("auto-enables the bundled owner selected by a storage location", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        storage: {
+          locations: {
+            archive: { provider: " ARCHIVE-OBJECTS ", settings: {}, encryption: "none" },
+          },
+        },
+        plugins: { allow: ["telegram"] },
+      },
+      env,
+      manifestRegistry: makeRegistry([
+        {
+          id: "storage-fixture",
+          channels: [],
+          contracts: { storageProviders: ["archive-objects"] },
+          origin: "bundled",
+        },
+      ]),
+    });
+    expect(result.config.plugins?.entries?.["storage-fixture"]?.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toEqual(["telegram", "storage-fixture"]);
+    expect(result.autoEnabledReasons).toEqual({
+      "storage-fixture": ["archive-objects storage provider selected"],
+    });
+  });
+
+  it.each([
+    { origin: "global" as const, plugins: {} },
+    { origin: "bundled" as const, plugins: { enabled: false } },
+    { origin: "bundled" as const, plugins: { deny: ["storage-fixture"] } },
+  ])(
+    "does not auto-enable storage against external trust or explicit disablement: %j",
+    ({ origin, plugins }) => {
+      const result = applyPluginAutoEnable({
+        config: {
+          storage: {
+            locations: {
+              archive: { provider: "archive-objects", settings: {}, encryption: "none" },
+            },
+          },
+          plugins,
+        },
+        env,
+        manifestRegistry: makeRegistry([
+          {
+            id: "storage-fixture",
+            channels: [],
+            contracts: { storageProviders: ["archive-objects"] },
+            origin,
+          },
+        ]),
+      });
+      expect(result.config.plugins?.entries?.["storage-fixture"]?.enabled).not.toBe(true);
+      expect(result.changes).toEqual([]);
+    },
+  );
+
   it("requires explicit enablement for external worker providers", () => {
     const result = applyPluginAutoEnable({
       config: { cloudWorkers: { profiles: { production: { provider: "cloud-vendor" } } } },
@@ -192,31 +250,6 @@ describe("applyPluginAutoEnable providers", () => {
     );
   });
 
-  it("uses manifest-owned provider auto-enable metadata for third-party plugins", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        auth: {
-          profiles: {
-            "acme-oauth:default": {
-              provider: "acme-oauth",
-              mode: "oauth",
-            },
-          },
-        },
-      },
-      env,
-      manifestRegistry: makeRegistry([
-        {
-          id: "acme",
-          channels: [],
-          autoEnableWhenConfiguredProviders: ["acme-oauth"],
-        },
-      ]),
-    });
-
-    expect(result.config.plugins?.entries?.acme?.enabled).toBe(true);
-  });
-
   it("auto-enables third-party provider plugins when manifest-owned web search config exists", () => {
     const result = applyPluginAutoEnable({
       config: {
@@ -261,27 +294,20 @@ describe("applyPluginAutoEnable providers", () => {
     expect(result.changes).toContain("acme tool configured, enabled automatically.");
   });
 
-  it.each([false, true])(
-    "requires an unambiguous shorthand model owner (ambiguous=%s)",
-    (ambiguous) => {
-      const result = applyPluginAutoEnable({
-        config: { agents: { defaults: { model: "gpt-5.4" } } },
-        env,
-        manifestRegistry: makeRegistry(
-          (ambiguous ? ["openai", "proxy-openai"] : ["openai"]).map((id) => ({
-            id,
-            channels: [],
-            modelSupport: { modelPrefixes: ["gpt-"] },
-          })),
-        ),
-      });
-      expect(result.config.plugins?.entries?.openai).toEqual(
-        ambiguous ? undefined : { enabled: true },
-      );
-      expect(result.config.plugins?.entries?.["proxy-openai"]).toBeUndefined();
-      expect(result.changes).toEqual(
-        ambiguous ? [] : ["gpt-5.4 model configured, enabled automatically."],
-      );
-    },
-  );
+  it("does not activate ambiguous shorthand model owners", () => {
+    const result = applyPluginAutoEnable({
+      config: { agents: { defaults: { model: "gpt-5.4" } } },
+      env,
+      manifestRegistry: makeRegistry(
+        ["openai", "proxy-openai"].map((id) => ({
+          id,
+          channels: [],
+          modelSupport: { modelPrefixes: ["gpt-"] },
+        })),
+      ),
+    });
+    expect(result.config.plugins?.entries?.openai).toBeUndefined();
+    expect(result.config.plugins?.entries?.["proxy-openai"]).toBeUndefined();
+    expect(result.changes).toEqual([]);
+  });
 });

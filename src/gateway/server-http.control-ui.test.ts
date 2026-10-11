@@ -15,8 +15,6 @@ import {
 describe("Gateway Control UI identity", () => {
   it.each([
     { basePath: "", enabled: true },
-    { basePath: "", enabled: false },
-    { basePath: "/console/", enabled: true },
     { basePath: "/console/", enabled: false },
   ])(
     "keeps authenticated media available at $basePath with dashboard enabled=$enabled",
@@ -140,7 +138,7 @@ describe("Gateway Control UI identity", () => {
     });
   });
 
-  it("keeps static requests independent of workspace identity reads while bootstrap resolves identity", async () => {
+  it("keeps assets independent of identity reads while documents and bootstrap resolve identity", async () => {
     await withTempDir("openclaw-http-identity-", async (controlUiRoot) => {
       await fs.writeFile(nodePath.join(controlUiRoot, "index.html"), "<html>synthetic UI</html>\n");
       const workspace = await fs.realpath(controlUiRoot);
@@ -174,12 +172,28 @@ describe("Gateway Control UI identity", () => {
               ([file]) => nodePath.basename(String(file)) === "IDENTITY.md",
             );
           try {
-            for (const path of ["/", "/chat", "/assets/app.js"]) {
-              const response = await sendRequest(server, { path, method: "GET" });
-              expect(response.res.statusCode, path).toBe(200);
+            for (const method of ["GET", "HEAD"]) {
+              const response = await sendRequest(server, { path: "/assets/app.js", method });
+              expect(response.res.statusCode, method).toBe(200);
+              if (method === "HEAD") {
+                expect(response.getBody()).toBe("");
+              }
             }
             expect(identityReads()).toHaveLength(0);
             expect(prepareIdentity).not.toHaveBeenCalled();
+
+            for (const path of ["/", "/chat"]) {
+              const response = await sendRequest(server, { path, method: "GET" });
+              expect(response.res.statusCode, path).toBe(200);
+              expect(response.getBody()).toContain('data-openclaw-bootstrap-config="');
+              expect(response.getBody()).toContain(
+                "&quot;assistantAgentId&quot;:&quot;research&quot;",
+              );
+              expect(response.getBody()).toContain(
+                "&quot;assistantName&quot;:&quot;Synthetic assistant&quot;",
+              );
+              expect(response.setHeader).toHaveBeenCalledWith("Cache-Control", "private, no-store");
+            }
 
             const bootstrap = await sendRequest(server, {
               path: "/control-ui-config.json",

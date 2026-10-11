@@ -9,6 +9,7 @@ import {
 import { withReplySystemEventContext } from "../auto-reply/reply/system-event-session-key.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { formatErrorMessage } from "./errors.js";
+import { execRequestAbortSignal, readExecRequestOwners } from "./exec-request-context.js";
 import { resolveHeartbeatTimeoutOverrideSeconds } from "./heartbeat-config.js";
 import { createHeartbeatDispatch, deliverHeartbeatDispatch } from "./heartbeat-dispatch.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
@@ -24,8 +25,18 @@ import {
   type HeartbeatRunOptions,
 } from "./heartbeat-runner-execution.js";
 import { createHeartbeatTypingCallbacks } from "./heartbeat-typing.js";
-import { getHeartbeatWakeAbortSignal, type HeartbeatRunResult } from "./heartbeat-wake.js";
+import {
+  getHeartbeatWakeAbortSignal,
+  HEARTBEAT_SKIP_NO_PENDING_EVENT,
+  type HeartbeatRunResult,
+} from "./heartbeat-wake.js";
 import { markSessionEventWakeWorkStarted } from "./session-event-wake.js";
+import { resolveSystemEventQueueKey } from "./system-event-ownership.js";
+import {
+  consumeSelectedSystemEventEntries,
+  peekSystemEventEntries,
+  type SystemEvent,
+} from "./system-events.js";
 
 export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<HeartbeatRunResult> {
   const wake = await resolveHeartbeatWakeStage(opts);
@@ -51,8 +62,45 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
     return { status: "skipped", reason: "alerts-disabled" };
   }
   const policy = createHeartbeatDispatch(opts, wake, prepared);
-  const state: ReplyOperationRunState = { heartbeat: policy };
-  const signal = getHeartbeatWakeAbortSignal();
+  const state: ReplyOperationRunState = {
+    heartbeat: policy,
+    sessionEventDelivery: prepared.canRelayToUser ? undefined : false,
+  };
+  const execRequestOwners = [
+    ...new Set(
+      prepared.inspectedSystemEventsToConsume.flatMap(
+        (event) => readExecRequestOwners(event) ?? [],
+      ),
+    ),
+  ];
+  const cancelledExecResult = (): HeartbeatRunResult | undefined =>
+    execRequestOwners.some((owner) => owner.signal.aborted)
+      ? {
+          status: "skipped",
+          reason: peekSystemEventEntries(resolveSystemEventQueueKey(prepared.sessionKey, agentId))
+            .length
+            ? "preempted"
+            : HEARTBEAT_SKIP_NO_PENDING_EVENT,
+        }
+      : undefined;
+  const cancelledBeforeDispatch = cancelledExecResult();
+  if (cancelledBeforeDispatch) {
+    return cancelledBeforeDispatch;
+  }
+  const settledResult = () => cancelledExecResult() ?? policy.result;
+  const signal = execRequestAbortSignal(execRequestOwners, getHeartbeatWakeAbortSignal());
+  const eventQueueKey = resolveSystemEventQueueKey(prepared.sessionKey, agentId);
+  const deferredGenericIds = new Set(prepared.deferredGenericEvents.map((event) => event.id));
+  // Ordinary generic events normally settle at prompt admission. Defer this batch
+  // only until its request outcome is known, without changing other error exits.
+  const ordinaryGenericIds = new Set(
+    execRequestOwners.length > 0 && prepared.inspectsRunQueue
+      ? prepared.genericEvents
+          .filter((event) => event.id && !deferredGenericIds.has(event.id))
+          .map((event) => event.id)
+      : [],
+  );
+  const admittedGenericEvents: SystemEvent[] = [];
   const channel = delivery.channel !== "none" ? delivery.channel : undefined;
   const typing =
     channel &&
@@ -74,10 +122,11 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
     const { dispatchInboundMessageWithRoutedChannelDispatcher } =
       await import("../auto-reply/dispatch.js");
     await typing?.onReplyStart();
+    signal?.throwIfAborted();
     const heartbeatContext = {
       Body: appendCronStyleCurrentTimeLine(prepared.prompt, cfg, startedAt),
       From: sender,
-      To: sender,
+      To: !suppressOriginatingContext ? delivery.to : undefined,
       OriginatingChannel: !suppressOriginatingContext ? channel : undefined,
       OriginatingTo: !suppressOriginatingContext ? delivery.to : undefined,
       AccountId: delivery.accountId,
@@ -112,6 +161,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
       replyOptions: withReplySystemEventContext<InternalGetReplyOptions>(
         {
           isHeartbeat: true,
+          useHeartbeatFailureCopy: prepared.useHeartbeatFailureCopy,
           // Isolated heartbeats mint a fresh session ID per run, so nothing later
           // reuses this run's bundle MCP runtime; retire it at settlement.
           ...(prepared.run.kind === "isolated" ? { cleanupBundleMcpOnRunEnd: true } : {}),
@@ -134,7 +184,12 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
           timeoutOverrideSeconds: prepared.hasTaskContinuation
             ? undefined
             : resolveHeartbeatTimeoutOverrideSeconds(cfg, heartbeat),
-          bootstrapContextMode: heartbeat?.lightContext === true ? "lightweight" : undefined,
+          // A conversation's continuation keeps its full context and cached prompt prefix.
+          bootstrapContextMode:
+            heartbeat?.lightContext === true && !wake.preflight.conversationRoute
+              ? "lightweight"
+              : undefined,
+          continuesConversation: Boolean(wake.preflight.conversationRoute),
           disableBlockStreaming: true,
           suppressToolProgressMessages: true,
           suppressDefaultToolProgressMessages: true,
@@ -161,16 +216,31 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
         },
         {
           sessionKey: prepared.inspectsRunQueue ? prepared.sessionKey : runSessionKey,
+          heartbeatEventQueueSessionKey: eventQueueKey,
+          execRequestOwners,
           events: prepared.inspectsRunQueue ? prepared.genericEvents : [],
+          deferredEventIds: [...deferredGenericIds, ...ordinaryGenericIds].filter(
+            (id): id is string => typeof id === "string",
+          ),
+          onEventsAdmitted: (events) => {
+            admittedGenericEvents.push(
+              ...events.filter((event) => ordinaryGenericIds.has(event.id)),
+            );
+          },
         },
       ),
       dispatcherOptions: {
         deliver: (payload) =>
-          deliverHeartbeatDispatch(policy, payload, state.agentTurnOwner?.abortSignal ?? signal),
+          deliverHeartbeatDispatch(
+            policy,
+            payload,
+            execRequestAbortSignal(execRequestOwners, state.agentTurnOwner?.abortSignal ?? signal),
+          ),
       },
     });
-    if (policy.result) {
-      return policy.result;
+    const settled = settledResult();
+    if (settled) {
+      return settled;
     }
     const execution = resolveReplyOperationAgentTurn(state);
     const reason =
@@ -182,8 +252,9 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
     emitHeartbeatEvent({ status: "skipped", reason, durationMs: Date.now() - startedAt });
     return { status: "skipped", reason };
   } catch (error) {
-    if (policy.result) {
-      return policy.result;
+    const settled = settledResult();
+    if (settled) {
+      return settled;
     }
     const reason = formatErrorMessage(error);
     emitHeartbeatEvent({
@@ -197,6 +268,12 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
     heartbeatLog.error(`heartbeat failed: ${reason}`, { error: reason });
     return { status: "failed", reason };
   } finally {
+    if (
+      !execRequestOwners.some((owner) => owner.signal.aborted) ||
+      (policy.execDeliveryOutcome !== undefined && policy.execDeliveryOutcome !== "rejected")
+    ) {
+      consumeSelectedSystemEventEntries(eventQueueKey, admittedGenericEvents);
+    }
     typing?.onCleanup?.();
   }
 }

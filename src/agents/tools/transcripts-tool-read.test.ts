@@ -11,7 +11,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createTranscriptCaptureAppends } from "../../transcripts/capture-appends.js";
-import { activeSessions } from "../../transcripts/capture.js";
+import { activeSessions } from "../../transcripts/capture-startup.js";
 import type {
   TranscriptSessionDescriptor,
   TranscriptSourceProvider,
@@ -129,66 +129,58 @@ describe("transcripts read actions", () => {
     }
   });
 
-  it.each(["active", "stopped"] as const)(
-    "rejects notes rewritten while %s source authorization is pending",
-    async (state) => {
-      const descriptor = {
-        ...session,
-        ...(state === "stopped" ? { stoppedAt: "2026-08-02T15:00:00.000Z" } : {}),
-      };
-      await store.writeSession(descriptor);
+  it("rejects notes rewritten while active source authorization is pending", async () => {
+    const descriptor = session;
+    await store.writeSession(descriptor);
+    await store.writeSummary(
+      summarizeTranscripts({ session: descriptor, utterances: [{ text: "Authorized notes" }] }),
+      descriptor,
+    );
+    registerActiveCapture(descriptor);
+    const entered = createDeferred();
+    const release = createDeferred();
+    const authorize = vi.fn<NonNullable<TranscriptSourceProvider["accessControl"]>["authorize"]>(
+      async ({ source }) => {
+        if (source.guildId !== "team") {
+          return { ok: false, error: "denied" };
+        }
+        entered.resolve();
+        await release.promise;
+        return { ok: true, value: undefined };
+      },
+    );
+    getProvider.mockReturnValue({
+      id: "voice",
+      accessControl: { channelId: "discord", authorize },
+    });
+    const params = { action: "show", selector: transcriptSessionSelector(descriptor) };
+    const reading = run(params, true);
+    try {
+      await Promise.race([entered.promise, reading]);
+      expect(authorize).toHaveBeenCalledOnce();
+      const rewritten = { ...descriptor, source: { providerId: "voice", guildId: "other" } };
+      await store.writeSession(rewritten);
       await store.writeSummary(
-        summarizeTranscripts({ session: descriptor, utterances: [{ text: "Authorized notes" }] }),
-        descriptor,
+        summarizeTranscripts({ session: rewritten, utterances: [{ text: "Other guild notes" }] }),
+        rewritten,
       );
-      if (state === "active") {
-        registerActiveCapture(descriptor);
-      }
-      const entered = createDeferred();
-      const release = createDeferred();
-      const authorize = vi.fn<NonNullable<TranscriptSourceProvider["accessControl"]>["authorize"]>(
-        async ({ source }) => {
-          if (source.guildId !== "team") {
-            return { ok: false, error: "denied" };
-          }
-          entered.resolve();
-          await release.promise;
-          return { ok: true, value: undefined };
-        },
-      );
-      getProvider.mockReturnValue({
-        id: "voice",
-        accessControl: { channelId: "discord", authorize },
+      release.resolve();
+      const shown = await reading;
+      expect(shown.details).toMatchObject({
+        sessionId: descriptor.sessionId,
+        selector: params.selector,
+        skipped: true,
+        retryable: true,
+        text: expect.stringContaining("Retry show"),
       });
-      const params = { action: "show", selector: transcriptSessionSelector(descriptor) };
-      const reading = run(params, true);
-      try {
-        await Promise.race([entered.promise, reading]);
-        expect(authorize).toHaveBeenCalledOnce();
-        const rewritten = { ...descriptor, source: { providerId: "voice", guildId: "other" } };
-        await store.writeSession(rewritten);
-        await store.writeSummary(
-          summarizeTranscripts({ session: rewritten, utterances: [{ text: "Other guild notes" }] }),
-          rewritten,
-        );
-        release.resolve();
-        const shown = await reading;
-        expect(shown.details).toMatchObject({
-          sessionId: descriptor.sessionId,
-          selector: params.selector,
-          skipped: true,
-          retryable: true,
-          text: expect.stringContaining("Retry show"),
-        });
-        expect(JSON.stringify(shown)).not.toContain("Other guild notes");
-        await expect(run(params, true)).rejects.toThrow("session not found");
-        expect(await store.readSession(params.selector)).toEqual(rewritten);
-      } finally {
-        release.resolve();
-        await reading.catch(() => undefined);
-      }
-    },
-  );
+      expect(JSON.stringify(shown)).not.toContain("Other guild notes");
+      await expect(run(params, true)).rejects.toThrow("session not found");
+      expect(await store.readSession(params.selector)).toEqual(rewritten);
+    } finally {
+      release.resolve();
+      await reading.catch(() => undefined);
+    }
+  });
 
   it("reads across agent ownership without widening mutation authority", async () => {
     await store.appendUtteranceForSession(session, {
@@ -353,10 +345,9 @@ describe("transcripts read actions", () => {
     expect(JSON.stringify(listed.content).length).toBeLessThan(4200);
   });
 
-  it.each([{}, { selector: "one", sessionId: "two" }])(
-    "requires exactly one show selector %j",
-    async (params) => {
-      await expect(run({ action: "show", ...params })).rejects.toThrow("exactly one");
-    },
-  );
+  it("requires exactly one show selector", async () => {
+    await expect(run({ action: "show", selector: "one", sessionId: "two" })).rejects.toThrow(
+      "exactly one",
+    );
+  });
 });

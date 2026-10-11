@@ -6,16 +6,10 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { SessionWorkStartInvalidatedError } from "./lifecycle.js";
 import { readSessionEntryInstanceId } from "./session-accessor.sqlite-entry-identity.js";
 import { reactionDb, reactionRows, summarizeReactions } from "./session-reaction-store.read.js";
-import type { StoredMessageReactionSummary } from "./session-reaction-store.types.js";
-
-export type SetSessionReactionParams = {
-  messageId: string;
-  emoji: string;
-  identityId: string;
-  identityLabel?: string;
-  remove?: boolean;
-  expectedSessionId: string;
-};
+import type {
+  SessionReactionWrite,
+  SetSessionReactionParams,
+} from "./session-reaction-store.types.js";
 
 export class SessionReactionLimitError extends Error {
   constructor() {
@@ -31,12 +25,6 @@ export class SessionReactionMessageMissingError extends Error {
     this.name = "SessionReactionMessageMissingError";
   }
 }
-
-/** `changed` is false for an add that already exists or a remove with nothing to remove. */
-export type SessionReactionWrite = {
-  reactions: StoredMessageReactionSummary[];
-  changed: boolean;
-};
 
 export function setSessionReactionInDatabase(
   database: OpenClawAgentDatabase,
@@ -58,10 +46,14 @@ export function setSessionReactionInDatabase(
   const existing = rows.some(
     (row) => row.emoji === params.emoji && row.identity_id === params.identityId,
   );
+  if (params.remove ? !existing : existing) {
+    return {
+      reactions: summarizeReactions(rows),
+      newestRemainingEmoji: rows.at(-1)?.emoji,
+      changed: false,
+    };
+  }
   if (params.remove) {
-    if (!existing) {
-      return { reactions: summarizeReactions(rows), changed: false };
-    }
     executeSqliteQuerySync(
       database.db,
       db
@@ -72,10 +64,11 @@ export function setSessionReactionInDatabase(
         .where("emoji", "=", params.emoji)
         .where("identity_id", "=", params.identityId),
     );
+    const index = rows.findIndex(
+      (row) => row.emoji === params.emoji && row.identity_id === params.identityId,
+    );
+    rows.splice(index, 1);
   } else {
-    if (existing) {
-      return { reactions: summarizeReactions(rows), changed: false };
-    }
     const count =
       executeSqliteQueryTakeFirstSync(
         database.db,
@@ -105,30 +98,36 @@ export function setSessionReactionInDatabase(
     if (!identity) {
       throw new SessionReactionMessageMissingError();
     }
-    executeSqliteQuerySync(
+    const inserted = executeSqliteQueryTakeFirstSync(
       database.db,
-      db.insertInto("session_reactions").values({
-        session_key: sessionKey,
-        session_id: params.expectedSessionId,
-        message_id: params.messageId,
-        emoji: params.emoji,
-        identity_id: params.identityId,
-        identity_label: params.identityLabel ?? null,
-        created_at: Date.now(),
-      }),
+      db
+        .insertInto("session_reactions")
+        .values({
+          session_key: sessionKey,
+          session_id: params.expectedSessionId,
+          message_id: params.messageId,
+          emoji: params.emoji,
+          identity_id: params.identityId,
+          identity_label: params.identityLabel ?? null,
+          created_at: Date.now(),
+        })
+        .returningAll(),
+    );
+    if (!inserted) {
+      throw new Error("Reaction insert did not return its stored row");
+    }
+    rows.push(inserted);
+    // Match SQLite BINARY text ordering, including supplementary Unicode characters.
+    rows.sort(
+      (left, right) =>
+        left.created_at - right.created_at ||
+        Buffer.compare(Buffer.from(left.emoji), Buffer.from(right.emoji)) ||
+        Buffer.compare(Buffer.from(left.identity_id), Buffer.from(right.identity_id)),
     );
   }
   return {
-    reactions: summarizeReactions(
-      executeSqliteQuerySync(
-        database.db,
-        reactionRows(database, sessionKey, params.expectedSessionId).where(
-          "message_id",
-          "=",
-          params.messageId,
-        ),
-      ).rows,
-    ),
+    reactions: summarizeReactions(rows),
+    newestRemainingEmoji: rows.at(-1)?.emoji,
     changed: true,
   };
 }

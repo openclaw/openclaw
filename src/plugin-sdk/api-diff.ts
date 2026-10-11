@@ -218,8 +218,8 @@ function collectDeclarationChanges(
   before: readonly PluginSdkApiDeclarationSection[],
   after: readonly PluginSdkApiDeclarationSection[],
 ): PluginSdkApiDeclarationChange[] {
-  const beforeByKey = new Map((before ?? []).map((section) => [sectionKey(section), section]));
-  const afterByKey = new Map((after ?? []).map((section) => [sectionKey(section), section]));
+  const beforeByKey = new Map(before.map((section) => [sectionKey(section), section]));
+  const afterByKey = new Map(after.map((section) => [sectionKey(section), section]));
   const removedByName = new Map<string, string[]>();
   const addedByName = new Map<string, string[]>();
   for (const [key, section] of beforeByKey) {
@@ -453,21 +453,17 @@ export function formatPluginSdkApiDiffReport(params: {
     lines.push("", `… ${diff.exports.length - REPORT_ITEM_LIMIT} more affected exports`);
   }
 
-  appendExportChanges(
-    lines,
-    "Exports removed",
-    diff.exports.filter((change) => change.change === "removed"),
-  );
-  appendExportChanges(
-    lines,
-    "Exports added",
-    diff.exports.filter((change) => change.change === "added"),
-  );
-  appendExportChanges(
-    lines,
-    "Signatures changed",
-    diff.exports.filter((change) => change.change === "signature"),
-  );
+  for (const [kind, title] of [
+    ["removed", "Exports removed"],
+    ["added", "Exports added"],
+    ["signature", "Signatures changed"],
+  ] as const) {
+    appendExportChanges(
+      lines,
+      title,
+      diff.exports.filter((change) => change.change === kind),
+    );
+  }
   const reachable = collectDeclarationReportChanges(diff.exports);
   if (reachable.length > 0) {
     lines.push("", `## Reachable declarations changed (${reachable.length})`);

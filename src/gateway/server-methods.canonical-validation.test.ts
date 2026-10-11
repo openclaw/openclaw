@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import * as archiveWorker from "../config/sessions/session-accessor.sqlite-archive.js";
 import { ensureSessionEntrySync } from "../config/sessions/session-accessor.sqlite-initial-entry.js";
+import { markCanonicalSessionValidationPending } from "../config/sessions/session-canonical-key.js";
 import * as readiness from "../config/sessions/session-canonical-validation-readiness.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -11,11 +12,8 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  authorizeGatewayRequestPreDispatch,
-  createRequestGatewayMethodRegistry,
-  handleGatewayRequest,
-} from "./server-methods.js";
+import { createRequestGatewayMethodRegistry, handleGatewayRequest } from "./server-methods.js";
+import { authorizeGatewayRequestPreDispatch } from "./server-methods/request-authorization.js";
 import { sessionSubscriptionHandlers } from "./server-methods/sessions-subscriptions.js";
 import type { GatewayRequestContext, GatewayRequestHandler } from "./server-methods/types.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
@@ -114,7 +112,7 @@ it.each(["sessions.patch", "talk.session.create"])(
   },
 );
 
-it("authorizes exact rows independently of bulk validation and fences dirty rows", async () => {
+it("authorizes exact rows independently of bulk validation and fences corrupt subscriptions", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
     const insert = database.db.prepare(`INSERT INTO session_nodes
@@ -130,6 +128,7 @@ it("authorizes exact rows independently of bulk validation and fences dirty rows
       );
     }
     database.db.exec("UPDATE session_nodes SET entry_valid = 1; COMMIT");
+    markCanonicalSessionValidationPending(database);
     await readiness.certifySessionCanonicalValidationPending({ agentId: "main" });
     const releaseForeground = retainSessionListForegroundWork();
     const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
@@ -143,6 +142,10 @@ it("authorizes exact rows independently of bulk validation and fences dirty rows
       await projection.ensureMaterialized();
       database.db.exec(`UPDATE session_nodes SET entry_json = entry_json || ' '
         WHERE session_key != 'agent:main:clean'; UPDATE session_nodes SET entry_valid = 1`);
+      markCanonicalSessionValidationPending(
+        database,
+        Array.from({ length: 1000 }, (_, i) => `agent:main:dirty-${i}`),
+      );
       // Reopening creates an unadmitted reader, as after startup or idle reader retirement.
       await closeOpenClawAgentDatabaseByPathAsync(database.path);
       sessionChanges.emitBatch(
@@ -184,10 +187,11 @@ it("authorizes exact rows independently of bulk validation and fences dirty rows
         await releaseRow.promise;
         return readFacts(...args);
       });
+      const subscribeSessionMessageEvents = vi.fn();
       const context = bindSessionRowProjection(
         {
           getRuntimeConfig: () => ({}),
-          subscribeSessionMessageEvents: vi.fn(),
+          subscribeSessionMessageEvents,
           logGateway: { warn: vi.fn(), error: vi.fn() },
         } as unknown as GatewayRequestContext,
         () => projection,
@@ -272,9 +276,23 @@ it("authorizes exact rows independently of bulk validation and fences dirty rows
         storePath: current.path,
         factsInvalidated: true,
       });
-      await expect(authorize("agent:main:dirty-0")).rejects.toThrow(
-        "invalid persisted session row",
-      );
+      subscribeSessionMessageEvents.mockClear();
+      await expect(
+        handleGatewayRequest({
+          req: {
+            type: "req",
+            id: "corrupt-subscribe",
+            method: "sessions.messages.subscribe",
+            params: { key: "agent:main:dirty-0" },
+          },
+          client: { ...client, connId: "corrupt-subscribe" },
+          context,
+          respond: vi.fn(),
+          isWebchatConnect: () => false,
+          extraHandlers: sessionSubscriptionHandlers,
+        }),
+      ).rejects.toThrow("invalid persisted session row");
+      expect(subscribeSessionMessageEvents).not.toHaveBeenCalled();
     } finally {
       releaseRow.resolve();
       const current = openOpenClawAgentDatabase({ agentId: "main" });

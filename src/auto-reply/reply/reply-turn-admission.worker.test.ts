@@ -4,10 +4,21 @@ import { setImmediate } from "node:timers/promises";
 import { isMainThread } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
+import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import {
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../../process/gateway-work-admission.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import * as agentWriteAdmission from "../../state/openclaw-agent-write-admission.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -15,6 +26,7 @@ import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.tes
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { holdStateDatabaseWriteTransaction } from "../../test-utils/state-database-contention.js";
 import { replyRunRegistry, waitForReplyRunSuccessorAdmission } from "./reply-run-registry.js";
+import { acquireReplyOperationSessionActor } from "./reply-run-registry.state.js";
 import { testing } from "./reply-run-registry.test-support.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 
@@ -24,6 +36,7 @@ beforeEach(() => {
 
 afterEach(() => {
   testing.resetReplyRunRegistry();
+  resetGatewayWorkAdmission();
   vi.restoreAllMocks();
 });
 
@@ -31,22 +44,17 @@ type Admission = Awaited<ReturnType<typeof admitReplyTurn>>;
 
 function observeNativeOpen(databasePath: string, agentId: string) {
   const entered = createDeferred();
-  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-  const observed = vi
-    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) =>
-      createAdmission((request, grant) => {
-        admit(request, grant);
-        if (
-          request.stage === "open" &&
-          isRecord(request.facts) &&
-          request.facts.databasePath === databasePath &&
-          request.facts.agentId === agentId
-        ) {
-          entered.resolve();
-        }
-      }, attachment),
-    );
+  const observed = probe.admission(workerAdmission, (request, grant, admit) => {
+    admit(request, grant);
+    if (
+      request.stage === "open" &&
+      isRecord(request.facts) &&
+      request.facts.databasePath === databasePath &&
+      request.facts.agentId === agentId
+    ) {
+      entered.resolve();
+    }
+  });
   return { entered: entered.promise, restore: () => observed.mockRestore() };
 }
 
@@ -60,63 +68,52 @@ async function completeAdmission(result: Admission | undefined, sessionKey: stri
   }
 }
 
-it.each(["missing", "corrupt"] as const)(
-  "handles a %s persistent store through reply admission without main-thread SQLite",
-  async (storage) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const storePath = path.join(state.sessionsDir(), "agent.sqlite");
-      const sessionKey = "agent:main:first-worker-admission";
-      openOpenClawStateDatabase({ env: state.env });
-      expect(fs.existsSync(storePath)).toBe(false);
-      const corruptBytes = Buffer.from("synthetic bytes that are not a SQLite database");
-      if (storage === "corrupt") {
-        fs.mkdirSync(path.dirname(storePath), { recursive: true });
-        fs.writeFileSync(storePath, corruptBytes);
+it("creates a missing persistent store through reply admission without main-thread SQLite", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const storePath = path.join(state.sessionsDir(), "agent.sqlite");
+    const sessionKey = "agent:main:first-worker-admission";
+    openOpenClawStateDatabase({ env: state.env });
+    expect(fs.existsSync(storePath)).toBe(false);
+    const sql = observeMainThreadSql({ includeClose: true });
+    sql.calibrate();
+    const opened = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+    let result: Admission | undefined;
+    try {
+      const pending = admitReplyTurn({
+        storePath,
+        sessionKey,
+        sessionId: "first-worker-admission-session",
+        kind: "visible",
+        resetTriggered: false,
+      }).then((admitted) => {
+        result = admitted;
+        return admitted;
+      });
+      result = await pending;
+      if (result.status !== "owned" || !result.databaseClaim) {
+        throw new Error("First persistent admission must retain its database claim");
       }
-      const sql = observeMainThreadSql({ includeClose: true });
-      sql.calibrate();
-      const opened = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
-      let result: Admission | undefined;
+      expect(result.sessionEntry).toBeUndefined();
+      expect(result.databaseClaim.isCurrent()).toBe(true);
+      expect(fs.existsSync(storePath)).toBe(true);
+      await completeAdmission(result, sessionKey);
+      expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+      sql.expectIdle();
+      expect(opened).not.toHaveBeenCalled();
+    } finally {
       try {
-        const pending = admitReplyTurn({
-          storePath,
-          sessionKey,
-          sessionId: "first-worker-admission-session",
-          kind: "visible",
-          resetTriggered: false,
-        }).then((admitted) => {
-          result = admitted;
-          return admitted;
-        });
-        if (storage === "corrupt") {
-          await expect(pending).rejects.toThrow(/not a database|malformed|corrupt/i);
-          expect(fs.readFileSync(storePath)).toEqual(corruptBytes);
-        } else {
-          result = await pending;
-          if (result.status !== "owned" || !result.databaseClaim) {
-            throw new Error("First persistent admission must retain its database claim");
-          }
-          expect(result.sessionEntry).toBeUndefined();
-          expect(result.databaseClaim.isCurrent()).toBe(true);
-          expect(fs.existsSync(storePath)).toBe(true);
-          await completeAdmission(result, sessionKey);
-        }
-        expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
-        sql.expectIdle();
-        expect(opened).not.toHaveBeenCalled();
+        await completeAdmission(result, sessionKey);
       } finally {
-        try {
-          await completeAdmission(result, sessionKey);
-        } finally {
-          opened.mockRestore();
-          sql.restore();
-        }
+        opened.mockRestore();
+        sql.restore();
       }
-    });
-  },
-);
+    }
+  });
+});
 
-it("admits cold and reopened persistent replies without main-thread SQLite while a shared writer is held", async () => {
+it("retains one actor per cold/reopened reply admission and drains it without main-thread SQLite", async ({
+  signal,
+}) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const storePath = path.join(state.sessionsDir(), "agent.sqlite");
     const sessionKey = "agent:main:worker-admission";
@@ -157,16 +154,16 @@ it("admits cold and reopened persistent replies without main-thread SQLite while
         },
       );
       let result: Admission | undefined;
+      const releaseActorPhase = createDeferred();
+      let actorPhase: Promise<void> | undefined;
       try {
-        await withTestTimeout(
-          Promise.race([
+        await withinTest(
+          awaitGateBeforeSettlement(
             nativeOpen.entered,
-            pending.then(() => {
-              throw new Error("Admission completed while its shared writer was held");
-            }),
-          ]),
-          5_000,
-          `${phase} admission never reached its native factory`,
+            pending,
+            `${phase} admission completed while its shared writer was held`,
+          ),
+          signal,
         );
         await setImmediate();
         expect(Atomics.load(holder.released, 0)).toBe(0);
@@ -185,15 +182,72 @@ it("admits cold and reopened persistent replies without main-thread SQLite while
           expect(result.databaseClaim.incarnation).not.toBe(previousIncarnation);
         }
         previousIncarnation = result.databaseClaim.incarnation;
-        await completeAdmission(result, sessionKey);
+        const { operation, databaseClaim } = result;
+        const [actor, sibling] = await Promise.all([
+          acquireReplyOperationSessionActor(operation),
+          acquireReplyOperationSessionActor(operation),
+        ]);
+        if (!actor || !sibling) {
+          throw new Error("Persistent admission must acquire a session actor");
+        }
+        expect(sibling).toBe(actor);
+        const authority = {
+          assertCurrent: () => databaseClaim.assertCurrent(),
+          authorize() {},
+        };
+        const before = await actor.read(authority);
+        expect(before.entry).toMatchObject({
+          sessionId,
+          updatedAt: phase === "cold" ? 1 : 543,
+        });
+        const updatedAt = phase === "cold" ? 543 : 987;
+        const patched = await actor.patch(
+          {
+            commandId: `${phase}-activity`,
+            phaseId: "reply-admission",
+            expected: before.version,
+            reducers: [{ kind: "activity", updatedAt }],
+          },
+          authority,
+        );
+        expect(patched.kind).toBe("committed");
+        expect(sibling.snapshot(authority)?.entry).toMatchObject({ sessionId, updatedAt });
+
+        const phaseEntered = createDeferred();
+        actorPhase = actor.withPhase("retained-reply", authority, async () => {
+          phaseEntered.resolve();
+          await releaseActorPhase.promise;
+        });
+        await withinTest(phaseEntered.promise, signal);
+        operation.complete();
+        expect(() => actor.snapshot(authority)).toThrow();
+        expect(() => acquireReplyOperationSessionActor(operation)).toThrow();
+        let successorSettled = false;
+        const successor = waitForReplyRunSuccessorAdmission(sessionKey, null).then((next) => {
+          successorSettled = true;
+          return next;
+        });
+        await setImmediate();
+        expect(successorSettled).toBe(false);
+        expect(databaseClaim.isCurrent()).toBe(true);
+        releaseActorPhase.resolve();
+        await withinTest(actorPhase, signal);
+        expect(await withinTest(successor, signal)).toMatchObject({ settled: true });
+        expect(databaseClaim.isCurrent()).toBe(false);
         expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
         sql.expectIdle();
         expect(opened).not.toHaveBeenCalled();
       } finally {
         try {
+          releaseActorPhase.resolve();
+          await Promise.allSettled([actorPhase]);
           controller.abort();
           await releaseWriter();
           result ??= await pending.catch(() => undefined);
+          if (result?.status === "owned") {
+            result.operation.complete();
+            await waitForReplyRunSuccessorAdmission(sessionKey, null);
+          }
           await completeAdmission(result, sessionKey);
           await settlement;
         } finally {
@@ -206,7 +260,9 @@ it("admits cold and reopened persistent replies without main-thread SQLite while
   });
 });
 
-it("cancels a contended persistent admission without claiming the reply or poisoning a concurrent admission", async () => {
+it("cancels a contended persistent admission without claiming the reply or poisoning a concurrent admission", async ({
+  signal,
+}) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const storePath = path.join(state.sessionsDir(), "agent.sqlite");
     const sessionKey = "agent:main:cancel-worker-admission";
@@ -236,7 +292,7 @@ it("cancels a contended persistent admission without claiming the reply or poiso
       .spyOn(agentWriteAdmission, "runOpenClawAgentWorkerWrite")
       .mockImplementation((...args) => {
         const pendingWrite = enqueue(...args);
-        if (args[0].path === storePath && ++queued === 2) {
+        if (!("target" in args[0]) && args[0].path === storePath && ++queued === 2) {
           followerQueued.resolve();
         }
         return pendingWrite;
@@ -256,15 +312,13 @@ it("cancels a contended persistent admission without claiming the reply or poiso
     let follower: Promise<Admission> | undefined;
     let result: Admission | undefined;
     try {
-      await withTestTimeout(
-        Promise.race([
+      await withinTest(
+        awaitGateBeforeSettlement(
           nativeOpen.entered,
-          pending.then(() => {
-            throw new Error("Admission completed before cancellation under contention");
-          }),
-        ]),
-        5_000,
-        "Admission never reached its native factory",
+          pending,
+          "Admission completed before cancellation under contention",
+        ),
+        signal,
       );
       follower = admitReplyTurn({
         ...request,
@@ -274,15 +328,13 @@ it("cancels a contended persistent admission without claiming the reply or poiso
         upstreamAbortSignal: followerController.signal,
       });
       void follower.catch(() => undefined);
-      await withTestTimeout(
-        Promise.race([
+      await withinTest(
+        awaitGateBeforeSettlement(
           followerQueued.promise,
-          follower.then(() => {
-            throw new Error("Concurrent admission completed before entering the writer queue");
-          }),
-        ]),
-        5_000,
-        "Concurrent admission never entered the writer queue",
+          follower,
+          "Concurrent admission completed before entering the writer queue",
+        ),
+        signal,
       );
       controller.abort(new Error("Synthetic cancelled reply"));
       await setImmediate();
@@ -315,90 +367,135 @@ it("cancels a contended persistent admission without claiming the reply or poiso
   });
 });
 
-it("keeps successors behind physical claim release when another agent occupies the idle slot", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const activePath = path.join(state.sessionsDir(), "agent.sqlite");
-    const idlePath = path.join(state.sessionsDir("other"), "agent.sqlite");
-    const activeKey = "agent:main:completion-close";
-    const idleKey = "agent:other:completion-idle";
-    const activeSessionId = "completion-active-session";
-    const idleSessionId = "completion-idle-session";
-    for (const [storePath, sessionKey, sessionId] of [
-      [activePath, activeKey, activeSessionId],
-      [idlePath, idleKey, idleSessionId],
-    ] as const) {
-      replaceSessionEntrySync({ storePath, sessionKey }, { sessionId, updatedAt: 1 });
-      await closeOpenClawAgentDatabaseByPathAsync(storePath);
-    }
-    const shared = openOpenClawStateDatabase({ env: state.env });
-    const leases = shared.db.prepare("SELECT lease_id FROM agent_database_leases WHERE path = ?");
-    let active: Admission | undefined;
-    let idle: Admission | undefined;
-    try {
-      active = await admitReplyTurn({
-        storePath: activePath,
-        sessionKey: activeKey,
-        sessionId: activeSessionId,
-        expectedSessionId: activeSessionId,
-        kind: "visible",
-        resetTriggered: false,
+it.each(["complete", "user-abort", "restart-abort", "frozen-restart"] as const)(
+  "keeps successors behind physical claim release after %s during executor drain with a full idle cache",
+  async (ending) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const activePath = path.join(state.sessionsDir(), "agent.sqlite");
+      const activeKey = "agent:main:completion-close";
+      const activeSessionId = "completion-active-session";
+      const idleTargets = Array.from({ length: 4 }, (_, index) => {
+        const agentId = `other-${index}`;
+        return {
+          agentId,
+          storePath: path.join(state.sessionsDir(agentId), "agent.sqlite"),
+          sessionKey: `agent:${agentId}:completion-idle`,
+          sessionId: `completion-idle-session-${index}`,
+        };
       });
-      idle = await admitReplyTurn({
-        storePath: idlePath,
-        sessionKey: idleKey,
-        agentId: "other",
-        sessionId: idleSessionId,
-        expectedSessionId: idleSessionId,
-        kind: "visible",
-        resetTriggered: false,
-      });
-      if (active.status !== "owned" || !active.databaseClaim || idle.status !== "owned") {
-        throw new Error("Fixture requires two admitted persistent reply owners");
+      for (const { storePath, sessionKey, sessionId } of [
+        { storePath: activePath, sessionKey: activeKey, sessionId: activeSessionId },
+        ...idleTargets,
+      ]) {
+        replaceSessionEntrySync({ storePath, sessionKey }, { sessionId, updatedAt: 1 });
+        await closeOpenClawAgentDatabaseByPathAsync(storePath);
       }
-      await completeAdmission(idle, idleKey);
-      expect(leases.all(activePath)).toHaveLength(1);
-      expect(leases.all(idlePath)).toHaveLength(1);
-
-      const holder = holdStateDatabaseWriteTransaction(shared.path, 10_000);
-      await holder.ready;
-      const releaseWriter = async () => {
-        holder.release();
-        await holder.joined;
-      };
-      const sql = observeMainThreadSql({ includeClose: true });
-      sql.calibrate();
-      const opened = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
-      let successor: ReturnType<typeof waitForReplyRunSuccessorAdmission> | undefined;
+      const shared = openOpenClawStateDatabase({ env: state.env });
+      const leases = shared.db.prepare("SELECT lease_id FROM agent_database_leases WHERE path = ?");
+      let active: Admission | undefined;
+      const idleAdmissions: Array<{ sessionKey: string; admission: Admission }> = [];
+      const work = new AsyncWorkScope();
       try {
-        active.operation.complete();
-        expect(active.databaseClaim.isCurrent()).toBe(false);
-        let settled = false;
-        successor = waitForReplyRunSuccessorAdmission(activeKey, null).then((result) => {
-          settled = true;
-          return result;
-        });
-        await setImmediate();
-        expect(Atomics.load(holder.released, 0)).toBe(0);
-        expect(settled).toBe(false);
-        await releaseWriter();
-        expect(await successor).toMatchObject({ settled: true });
-        expect(replyRunRegistry.get(activeKey)).toBeUndefined();
-        sql.expectIdle();
-        expect(opened).not.toHaveBeenCalled();
-      } finally {
-        try {
-          await releaseWriter();
-          await successor;
-        } finally {
-          opened.mockRestore();
-          sql.restore();
+        active = await work.run(() =>
+          admitReplyTurn({
+            storePath: activePath,
+            sessionKey: activeKey,
+            sessionId: activeSessionId,
+            expectedSessionId: activeSessionId,
+            kind: "visible",
+            resetTriggered: false,
+          }),
+        );
+        if (active.status !== "owned" || !active.databaseClaim) {
+          throw new Error("Fixture requires an admitted persistent reply owner");
         }
+        for (const target of idleTargets) {
+          const admission = await admitReplyTurn({
+            ...target,
+            expectedSessionId: target.sessionId,
+            kind: "visible",
+            resetTriggered: false,
+          });
+          idleAdmissions.push({ sessionKey: target.sessionKey, admission });
+          if (admission.status !== "owned") {
+            throw new Error("Fixture requires four admitted idle reply owners");
+          }
+          await completeAdmission(admission, target.sessionKey);
+          expect(leases.all(target.storePath)).toHaveLength(1);
+        }
+        expect(leases.all(activePath)).toHaveLength(1);
+
+        const holder = holdStateDatabaseWriteTransaction(shared.path, 10_000);
+        await holder.ready;
+        const releaseWriter = async () => {
+          holder.release();
+          await holder.joined;
+        };
+        const sql = observeMainThreadSql({ includeClose: true });
+        sql.calibrate();
+        const opened = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+        let successor: ReturnType<typeof waitForReplyRunSuccessorAdmission> | undefined;
+        try {
+          // Drain forces physical retirement of the active owner and the full idle cache.
+          markGatewayRestartDraining();
+          if (ending !== "complete") {
+            active.operation.setPhase("running");
+            active.operation.attachBackend({
+              kind: "embedded",
+              runId: "completion-run",
+              cancel() {},
+            });
+            if (ending === "frozen-restart") {
+              active.operation.freezeAbort();
+              work.beginClose(createAgentRunRestartAbortError());
+              expect(active.operation.abortForRestart()).toBe(false);
+              expect(active.operation.abortSignal.aborted).toBe(false);
+            } else {
+              expect(
+                ending === "restart-abort"
+                  ? active.operation.abortForRestart()
+                  : active.operation.abortByUser(),
+              ).toBe(true);
+            }
+            expect(active.databaseClaim.isCurrent()).toBe(ending === "user-abort");
+            expect(replyRunRegistry.get(activeKey)).toBe(active.operation);
+          }
+          active.operation.complete();
+          expect(active.databaseClaim.isCurrent()).toBe(false);
+          let settled = false;
+          successor = waitForReplyRunSuccessorAdmission(activeKey, null).then((result) => {
+            settled = true;
+            return result;
+          });
+          await setImmediate();
+          expect(Atomics.load(holder.released, 0)).toBe(0);
+          expect(settled).toBe(false);
+          await releaseWriter();
+          expect(await successor).toMatchObject({ settled: true });
+          expect(replyRunRegistry.get(activeKey)).toBeUndefined();
+          sql.expectIdle();
+          expect(opened).not.toHaveBeenCalled();
+        } finally {
+          try {
+            await releaseWriter();
+            await successor;
+          } finally {
+            opened.mockRestore();
+            sql.restore();
+          }
+        }
+        expect(leases.all(activePath)).toEqual([]);
+        for (const target of idleTargets) {
+          await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
+          expect(leases.all(target.storePath)).toEqual([]);
+        }
+      } finally {
+        await completeAdmission(active, activeKey);
+        for (const { admission, sessionKey } of idleAdmissions) {
+          await completeAdmission(admission, sessionKey);
+        }
+        await work.drain();
       }
-      expect(leases.all(activePath)).toEqual([]);
-      expect(leases.all(idlePath)).toHaveLength(1);
-    } finally {
-      await completeAdmission(active, activeKey);
-      await completeAdmission(idle, idleKey);
-    }
-  });
-});
+    });
+  },
+);

@@ -1,6 +1,3 @@
-/**
- * Runtime SDK helpers for host-authorized agent harness completion delivery.
- */
 import {
   isAgentHarnessCompletionCustodyCurrent,
   runWithAgentHarnessCompletionCustody,
@@ -13,10 +10,7 @@ import {
   type AgentHarnessCompletionScope,
 } from "../agents/agent-harness-completion-scope.js";
 import { buildAnnounceIdempotencyKey } from "../agents/announce-idempotency.js";
-import {
-  AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
-  type AgentInternalEventStatus,
-} from "../agents/internal-event-contract.js";
+import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../agents/internal-event-contract.js";
 import {
   formatAgentInternalEventsForPrompt,
   type AgentInternalEvent,
@@ -26,6 +20,10 @@ import {
   isInternalAnnounceRequesterSession,
   loadRequesterSessionEntry,
 } from "../agents/subagents/announce/subagent-announce-delivery.js";
+import {
+  captureRequesterSessionEntryCurrent,
+  withSubagentRequesterSource,
+} from "../agents/subagents/announce/subagent-announce-delivery.runtime.js";
 import {
   resolveAnnounceOrigin,
   resolveSubagentCompletionOrigin,
@@ -48,8 +46,6 @@ export type AgentHarnessCompletionDelivery = Awaited<
   ReturnType<typeof deliverSubagentAnnouncement>
 > & { recoveryPending?: true; recoveryBlocked?: true };
 
-const AGENT_HARNESS_COMPLETION_SOURCE_TOOL = "agent_harness_completion";
-
 /** Delivers a completed harness task result back to the requester or parent session. */
 export async function deliverAgentHarnessCompletion(params: {
   scope: AgentHarnessCompletionScope;
@@ -71,6 +67,29 @@ export async function deliverAgentHarnessCompletion(params: {
   expectedRequester?: { sessionId: string; lifecycleRevision?: string };
 }): Promise<AgentHarnessCompletionDelivery> {
   const scope = assertAgentHarnessCompletionScope(params.scope);
+  const run = () =>
+    withSubagentRequesterSource(
+      scope.requesterSessionKey,
+      scope.requesterAgentId,
+      async (isCurrent): Promise<AgentHarnessCompletionDelivery> =>
+        isCurrent?.() === false
+          ? {
+              delivered: false,
+              path: "none",
+              recoveryBlocked: true,
+              error: "completion requester locator is missing or replaced",
+            }
+          : deliverAgentHarnessCompletionBound(params),
+    );
+  return params.completionCustody
+    ? runWithAgentHarnessCompletionCustody(params.completionCustody, scope, run)
+    : run();
+}
+
+async function deliverAgentHarnessCompletionBound(
+  params: Parameters<typeof deliverAgentHarnessCompletion>[0],
+): Promise<AgentHarnessCompletionDelivery> {
+  const scope = assertAgentHarnessCompletionScope(params.scope);
   const completionCustody = params.completionCustody;
   const signal = completionCustody
     ? AbortSignal.any([completionCustody.signal, ...(params.signal ? [params.signal] : [])])
@@ -81,16 +100,28 @@ export async function deliverAgentHarnessCompletion(params: {
   const taskLabel = params.taskLabel?.trim() || "Agent harness task";
   const announceType = params.announceType?.trim() || "Agent harness task";
   const statusLabel = params.statusLabel?.trim() || params.status;
-  const eventStatus = mapHarnessCompletionStatus(params.status);
+  const eventStatus = params.status === "succeeded" ? "ok" : "error";
   const expectedRequester = params.expectedRequester;
-  const requester = loadRequesterSessionEntry(requesterSessionKey, scope.requesterAgentId);
+  const readRequesterCurrent = captureRequesterSessionEntryCurrent(
+    requesterSessionKey,
+    scope.requesterAgentId,
+  );
+  const requester = await loadRequesterSessionEntry(requesterSessionKey, scope.requesterAgentId);
   const requesterSessionId = requester.entry?.sessionId;
   const requesterLifecycleRevision = requester.entry?.lifecycleRevision;
-  const isRequesterCurrent = () => {
+  const isRequesterCurrent = (rejectRetiredCustody = false) => {
     if (completionCustody && !isAgentHarnessCompletionCustodyCurrent(completionCustody, scope)) {
+      if (rejectRetiredCustody) {
+        throw new Error("Harness completion custody retired");
+      }
       return false;
     }
-    const current = loadRequesterSessionEntry(requesterSessionKey, scope.requesterAgentId).entry;
+    let current: ReturnType<typeof readRequesterCurrent>;
+    try {
+      current = readRequesterCurrent();
+    } catch {
+      return false;
+    }
     return (
       Boolean(requesterSessionId) &&
       current?.sessionId === requesterSessionId &&
@@ -103,10 +134,9 @@ export async function deliverAgentHarnessCompletion(params: {
   const isSourceSessionEffectsAllowed = () =>
     !signal?.aborted && isRequesterCurrent() && params.isSourceSessionAdmissionAllowed();
   const requesterIsSubagent = isInternalAnnounceRequesterSession(requesterSessionKey);
-  let directOrigin = scope.requesterOrigin;
-  if (!requesterIsSubagent) {
-    directOrigin = resolveAnnounceOrigin(requester.entry, scope.requesterOrigin);
-  }
+  const directOrigin = requesterIsSubagent
+    ? scope.requesterOrigin
+    : resolveAnnounceOrigin(requester.entry, scope.requesterOrigin);
   const completionDirectOrigin =
     requesterIsSubagent || !directOrigin
       ? directOrigin
@@ -136,7 +166,7 @@ export async function deliverAgentHarnessCompletion(params: {
   ];
   const prompt = formatAgentInternalEventsForPrompt(internalEvents);
   const deliver = async (): Promise<AgentHarnessCompletionDelivery> => {
-    if (!requesterSessionId || !isRequesterCurrent()) {
+    if (!requesterSessionId || !isRequesterCurrent(true)) {
       return {
         delivered: false,
         path: "none",
@@ -145,13 +175,21 @@ export async function deliverAgentHarnessCompletion(params: {
       };
     }
     if (requester.agentId && requester.storePath) {
-      const custody = reconcileHarnessCompletionDelivery({
+      const custody = await reconcileHarnessCompletionDelivery({
         agentId: requester.agentId,
         storePath: requester.storePath,
         sessionKey: requester.canonicalKey,
         sourceRunId: buildAnnounceIdempotencyKey(params.announceId),
         taskRunId: childSessionKey,
       });
+      if (!isRequesterCurrent()) {
+        return {
+          delivered: false,
+          path: "none",
+          recoveryBlocked: true,
+          error: "completion requester locator is missing or replaced",
+        };
+      }
       if (custody === "delivered") {
         return { delivered: true, path: "direct" };
       }
@@ -184,13 +222,12 @@ export async function deliverAgentHarnessCompletion(params: {
           requesterAgentId: scope.requesterAgentId,
           isSourceSessionEffectsAllowed,
           triggerMessage: prompt,
-          steerMessage: prompt,
           internalEvents,
           requesterSessionOrigin: scope.requesterOrigin,
           completionDirectOrigin: completionDirectOrigin ?? directOrigin,
           directOrigin,
           sourceSessionKey: childSessionKey,
-          sourceTool: AGENT_HARNESS_COMPLETION_SOURCE_TOOL,
+          sourceTool: "agent_harness_completion",
           isSourceSessionAdmissionAllowed: isSourceSessionEffectsAllowed,
           targetRequesterSessionKey: requesterSessionKey,
           requesterIsSubagent,
@@ -206,18 +243,7 @@ export async function deliverAgentHarnessCompletion(params: {
     resolveGatewayContext
       ? withPluginRuntimeGatewayContextResolver(resolveGatewayContext, deliver)
       : deliver();
-  return completionCustody
-    ? await runWithAgentHarnessCompletionCustody(completionCustody, scope, deliverInGateway)
-    : await deliverInGateway();
-}
-
-function mapHarnessCompletionStatus(
-  status: AgentHarnessCompletionStatus,
-): AgentInternalEventStatus {
-  if (status === "succeeded") {
-    return "ok";
-  }
-  return "error";
+  return await deliverInGateway();
 }
 
 /** Returns true when completion delivery reached a persistent direct or steered path. */

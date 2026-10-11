@@ -20,7 +20,7 @@ never establish identity, and sender IDs derived from app-controlled message
 metadata remain asserted.
 
 For ordinary messages and app mentions from a verified Slack sender linked to an
-active user profile, OpenClaw includes that profile's canonical ID and current
+active user profile, OpenClaw includes that profile's primary ID and current
 display name in host-generated, per-turn conversation info. A linked profile with `operator.admin` authority can ask
 "Assign this session to me"; the agent uses that profile ID with the `sessions`
 tool's `assign_owner` action for sessions visible to that administrator, including
@@ -97,7 +97,7 @@ restart the Slack monitor. The Gateway remains running.
 
 <Tabs>
   <Tab title="DM policy">
-    `channels.slack.dmPolicy` controls DM access. `channels.slack.allowFrom` is the canonical DM allowlist.
+    `channels.slack.dmPolicy` controls DM access. `channels.slack.allowFrom` is the DM allowlist.
 
     - `pairing` (default)
     - `allowlist`
@@ -210,7 +210,7 @@ restart the Slack monitor. The Gateway remains running.
     - `systemPrompt`
     - `tools`, `toolsBySender`
     - `toolsBySender` key format: `channel:`, `id:`, `e164:`, `username:`, `name:`, or `"*"` wildcard
-      (legacy unprefixed keys still map to `id:` only)
+      (run `openclaw doctor --fix` to migrate retired unprefixed keys to `id:` entries)
 
     <a id="bot-created-threads" />
     `requireMentionInBotThreads` overrides mention gating only in threads whose root message was sent by this bot. Set it to `false` to allow unmentioned replies there while keeping `requireMention: true` for the rest of the channel. Set it to `true` to require a mention in those threads even when implicit reply or thread-participation mentions are enabled. Authorized text commands keep their existing bypass.

@@ -4,6 +4,7 @@ import {
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
   installMockGateway,
+  waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
@@ -55,11 +56,18 @@ suite.define(() => {
           "openclaw-assistant-panel .agent-chat__composer-combobox textarea",
         );
         if (handoff) {
-          await page.getByRole("link", { name: "Agents", exact: true }).click();
+          await page
+            .locator(
+              'openclaw-app-sidebar .sidebar-rail__pin[data-sidebar-entry="route:agents-home"]',
+            )
+            .getByRole("link", { name: "Agents", exact: true })
+            .click();
           await page.waitForURL((url) => url.pathname.endsWith("/agents"));
           await page.getByRole("region", { name: "Agents", exact: true }).waitFor();
-          await page.locator(".sidebar-footer-bar__home").click();
+          await page.getByRole("button", { name: "Talk to your Home agent", exact: true }).click();
           await dockComposer.waitFor({ state: "visible" });
+          expect(new URL(page.url()).pathname).toBe("/agents");
+          expect(await composer.isVisible()).toBe(false);
           await expect.poll(() => dockComposer.inputValue()).toBe("");
           if (newerDraft) {
             await dockComposer.fill(newer);
@@ -74,23 +82,29 @@ suite.define(() => {
           code: "UNAVAILABLE",
           message: "QA synthetic command rejection",
         });
+        const dockDraftBeforeReturn = handoff ? await dockComposer.inputValue() : null;
+        if (handoff) {
+          // The rail Home action toggles the dock; full-page navigation belongs to its header.
+          await page
+            .locator("openclaw-assistant-panel")
+            .getByRole("button", { name: "Open Home full page", exact: true })
+            .click();
+          await waitForControlUiRoute(page, { routeId: "chat", pathname: "/chat/main" });
+          await composer.waitFor({ state: "visible" });
+          await expect.poll(() => dockComposer.isVisible()).toBe(false);
+        }
         await page
           .locator("openclaw-chat-page .chat-error", { hasText: "QA synthetic command rejection" })
-          .waitFor({ state: "attached" });
+          .waitFor({ state: "visible" });
         const failureObservation = {
           sourceDraft: await composer.inputValue(),
-          dockDraft: handoff ? await dockComposer.inputValue() : null,
+          dockDraft: dockDraftBeforeReturn,
           errors: await page.locator(".chat-error").allTextContents(),
         };
         await page.screenshot({
           path: `${suite.artifactDir}/command-rejected.png`,
           fullPage: true,
         });
-        if (handoff) {
-          await page.locator("a.nav-item--home").click();
-          await composer.waitFor({ state: "visible" });
-          await expect.poll(() => dockComposer.isVisible()).toBe(false);
-        }
         const receipt = {
           handoff,
           newerDraft,

@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import { resolveChannelAllowFrom } from "../account-resolution.js";
 import { writeChannelSection } from "./config-helpers.js";
 import { resolveChannelSetupExecutionAdapter } from "./setup-contract.js";
 import { configureChannelAccessWithAllowlist } from "./setup-group-access-configure.js";
@@ -103,103 +104,6 @@ async function buildStatus(
   };
 }
 
-// Channel-owned contracts own config writes; released legacy adapters remain
-// supported through the single setup execution compatibility boundary.
-function applySetupInput(params: {
-  plugin: ChannelSetupPlugin;
-  cfg: OpenClawConfig;
-  accountId: string;
-  input: ChannelSetupInput;
-}) {
-  const setup = resolveChannelSetupExecutionAdapter(params.plugin);
-  if (!setup?.applyAccountConfig) {
-    throw new Error(`${params.plugin.id} does not support setup`);
-  }
-  let input: unknown = params.input;
-  if (params.plugin.setupContract) {
-    const parsed = params.plugin.setupContract.parseInput(input);
-    if (!parsed.ok) {
-      throw new Error(parsed.error);
-    }
-    input = parsed.value;
-  }
-  const resolvedAccountId =
-    setup.resolveAccountId?.({
-      cfg: params.cfg,
-      accountId: params.accountId,
-      input,
-    }) ?? params.accountId;
-  const validationError = setup.validateInput?.({
-    cfg: params.cfg,
-    accountId: resolvedAccountId,
-    input,
-  });
-  if (validationError) {
-    throw new Error(validationError);
-  }
-  let next = setup.applyAccountConfig({
-    cfg: params.cfg,
-    accountId: resolvedAccountId,
-    input,
-  });
-  if (params.input.name?.trim() && setup.applyAccountName) {
-    next = setup.applyAccountName({
-      cfg: next,
-      accountId: resolvedAccountId,
-      name: params.input.name,
-    });
-  }
-  return {
-    cfg: next,
-    accountId: resolvedAccountId,
-  };
-}
-
-function collectCredentialValues(params: {
-  wizard: ChannelSetupWizard;
-  cfg: OpenClawConfig;
-  accountId: string;
-}): ChannelSetupWizardCredentialValues {
-  const values: ChannelSetupWizardCredentialValues = {};
-  for (const credential of params.wizard.credentials) {
-    const resolvedValue = normalizeOptionalString(
-      credential.inspect({
-        cfg: params.cfg,
-        accountId: params.accountId,
-      }).resolvedValue,
-    );
-    if (resolvedValue) {
-      values[credential.inputKey] = resolvedValue;
-    }
-  }
-  return values;
-}
-
-// Text inputs can either update custom config state or reuse the same generic
-// setup input contract as credential steps.
-async function applyWizardTextInputValue(params: {
-  plugin: ChannelSetupPlugin;
-  input: ChannelSetupWizardTextInput;
-  cfg: OpenClawConfig;
-  accountId: string;
-  value: string;
-}) {
-  return params.input.applySet
-    ? await params.input.applySet({
-        cfg: params.cfg,
-        accountId: params.accountId,
-        value: params.value,
-      })
-    : applySetupInput({
-        plugin: params.plugin,
-        cfg: params.cfg,
-        accountId: params.accountId,
-        input: {
-          [params.input.inputKey]: params.value,
-        },
-      }).cfg;
-}
-
 function resolveTextInputKeepMessage(
   input: ChannelSetupWizardTextInput,
   currentValue: string,
@@ -242,25 +146,17 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
           options,
           shouldPromptAccountIds,
         }) ?? shouldPromptAccountIds;
+      const accountSelection = {
+        cfg,
+        prompter,
+        accountOverride: accountOverrides[plugin.id],
+        shouldPromptAccountIds: resolvedShouldPromptAccountIds,
+        listAccountIds: plugin.config.listAccountIds,
+        defaultAccountId,
+      };
       const accountId = await (wizard.resolveAccountIdForConfigure
-        ? wizard.resolveAccountIdForConfigure({
-            cfg,
-            prompter,
-            options,
-            accountOverride: accountOverrides[plugin.id],
-            shouldPromptAccountIds: resolvedShouldPromptAccountIds,
-            listAccountIds: plugin.config.listAccountIds,
-            defaultAccountId,
-          })
-        : resolveAccountIdForConfigure({
-            cfg,
-            prompter,
-            label: plugin.meta.label,
-            accountOverride: accountOverrides[plugin.id],
-            shouldPromptAccountIds: resolvedShouldPromptAccountIds,
-            listAccountIds: plugin.config.listAccountIds,
-            defaultAccountId,
-          }));
+        ? wizard.resolveAccountIdForConfigure({ ...accountSelection, options })
+        : resolveAccountIdForConfigure({ ...accountSelection, label: plugin.meta.label }));
 
       const channel = readChannelConfigSection(cfg, plugin.id) ?? {};
       // Wizards that explicitly own account selection may use defaultAccount as a
@@ -281,35 +177,94 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
           })
         : { cfg, restore: (currentCfg: OpenClawConfig) => currentCfg };
       let next = accountScope.cfg;
-      let credentialValues = collectCredentialValues({
-        wizard,
-        cfg: next,
-        accountId,
+      const accountContext = (currentCfg = next) => ({ cfg: currentCfg, accountId });
+      const collectCredentialValues = (currentCfg = next): ChannelSetupWizardCredentialValues => {
+        const values: ChannelSetupWizardCredentialValues = {};
+        for (const credential of wizard.credentials) {
+          const resolvedValue = normalizeOptionalString(
+            credential.inspect(accountContext(currentCfg)).resolvedValue,
+          );
+          if (resolvedValue) {
+            values[credential.inputKey] = resolvedValue;
+          }
+        }
+        return values;
+      };
+      let credentialValues = collectCredentialValues();
+      const stepContext = (currentCfg = next) => ({
+        ...accountContext(currentCfg),
+        credentialValues,
       });
+      const hookContext = () => ({ ...stepContext(), runtime, prompter, options });
+      const applyHookResult = (
+        result: Awaited<ReturnType<NonNullable<ChannelSetupWizard["prepare"]>>>,
+      ) => {
+        if (result?.cfg) {
+          next = result.cfg;
+        }
+        if (result?.credentialValues) {
+          credentialValues = { ...credentialValues, ...result.credentialValues };
+        }
+      };
+      const setCredentialValue = (key: string, value: string | undefined) => {
+        if (value) {
+          credentialValues[key] = value;
+        } else {
+          delete credentialValues[key];
+        }
+      };
+      // Channel-owned contracts own config writes; released legacy adapters remain
+      // supported through the single setup execution compatibility boundary.
+      const applyInput = (setupInput: ChannelSetupInput, currentCfg = next) => {
+        const setup = resolveChannelSetupExecutionAdapter(plugin);
+        if (!setup?.applyAccountConfig) {
+          throw new Error(`${plugin.id} does not support setup`);
+        }
+        let input: unknown = setupInput;
+        if (plugin.setupContract) {
+          const parsed = plugin.setupContract.parseInput(input);
+          if (!parsed.ok) {
+            throw new Error(parsed.error);
+          }
+          input = parsed.value;
+        }
+        const setupParams = (selectedAccountId: string) => ({
+          cfg: currentCfg,
+          accountId: selectedAccountId,
+          input,
+        });
+        const resolvedAccountId = setup.resolveAccountId?.(setupParams(accountId)) ?? accountId;
+        const validationError = setup.validateInput?.(setupParams(resolvedAccountId));
+        if (validationError) {
+          throw new Error(validationError);
+        }
+        let applied = setup.applyAccountConfig(setupParams(resolvedAccountId));
+        if (setupInput.name?.trim() && setup.applyAccountName) {
+          applied = setup.applyAccountName({
+            cfg: applied,
+            accountId: resolvedAccountId,
+            name: setupInput.name,
+          });
+        }
+        return applied;
+      };
       let usedEnvShortcut = false;
       const showNote = async (note: ChannelSetupWizard["introNote"]) => {
-        if (
-          note &&
-          (!note.shouldShow || (await note.shouldShow({ cfg: next, accountId, credentialValues })))
-        ) {
+        if (note && (!note.shouldShow || (await note.shouldShow(stepContext())))) {
           await prompter.note(note.lines.join("\n"), note.title);
         }
       };
 
       // The env shortcut is all-or-nothing. Once accepted, skip credential
       // prompts so the user does not overwrite env-backed setup accidentally.
-      if (wizard.envShortcut?.isAvailable({ cfg: next, accountId })) {
+      if (wizard.envShortcut?.isAvailable(accountContext())) {
         const useEnvShortcut = await prompter.confirm({
           message: wizard.envShortcut.prompt,
           initialValue: true,
         });
         if (useEnvShortcut) {
-          next = await wizard.envShortcut.apply({ cfg: next, accountId });
-          credentialValues = collectCredentialValues({
-            wizard,
-            cfg: next,
-            accountId,
-          });
+          next = await wizard.envShortcut.apply(accountContext());
+          credentialValues = collectCredentialValues();
           usedEnvShortcut = true;
         }
       }
@@ -321,23 +276,7 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
       // Prepare/finalize hooks may derive helper values from credentials.
       // Keep credentialValues current so later optional steps can reuse them.
       if (wizard.prepare) {
-        const prepared = await wizard.prepare({
-          cfg: next,
-          accountId,
-          credentialValues,
-          runtime,
-          prompter,
-          options,
-        });
-        if (prepared?.cfg) {
-          next = prepared.cfg;
-        }
-        if (prepared?.credentialValues) {
-          credentialValues = {
-            ...credentialValues,
-            ...prepared.credentialValues,
-          };
-        }
+        applyHookResult(await wizard.prepare(hookContext()));
       }
 
       const runCredentialSteps = async () => {
@@ -345,13 +284,11 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
           return;
         }
         for (const credential of wizard.credentials) {
-          let credentialState = credential.inspect({ cfg: next, accountId });
+          let credentialState = credential.inspect(accountContext());
           let resolvedCredentialValue = normalizeOptionalString(credentialState.resolvedValue);
           const shouldPrompt = credential.shouldPrompt
             ? await credential.shouldPrompt({
-                cfg: next,
-                accountId,
-                credentialValues,
+                ...stepContext(),
                 currentValue: resolvedCredentialValue,
                 state: credentialState,
               })
@@ -359,14 +296,10 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
           if (!shouldPrompt) {
             // A skipped credential can still expose a resolved value for later
             // text inputs, allowlist resolution, or finalize hooks.
-            if (resolvedCredentialValue) {
-              credentialValues[credential.inputKey] = resolvedCredentialValue;
-            } else {
-              delete credentialValues[credential.inputKey];
-            }
+            setCredentialValue(credential.inputKey, resolvedCredentialValue);
             continue;
           }
-          const allowEnv = credential.allowEnv?.({ cfg: next, accountId }) ?? false;
+          const allowEnv = credential.allowEnv?.(accountContext()) ?? false;
 
           const credentialResult = await runSingleChannelSecretStep({
             cfg: next,
@@ -393,82 +326,40 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
                 : undefined,
             applyUseEnv: async (currentCfg) =>
               credential.applyUseEnv
-                ? await credential.applyUseEnv({
-                    cfg: currentCfg,
-                    accountId,
-                  })
-                : applySetupInput({
-                    plugin,
-                    cfg: currentCfg,
-                    accountId,
-                    input: {
-                      [credential.inputKey]: undefined,
-                      useEnv: true,
-                    },
-                  }).cfg,
-            applySet: async (currentCfg, value, resolvedValue) => {
-              resolvedCredentialValue = resolvedValue;
-              return credential.applySet
+                ? await credential.applyUseEnv(accountContext(currentCfg))
+                : applyInput({ [credential.inputKey]: undefined, useEnv: true }, currentCfg),
+            applySet: async (currentCfg, value, resolvedValue) =>
+              credential.applySet
                 ? await credential.applySet({
-                    cfg: currentCfg,
-                    accountId,
-                    credentialValues,
+                    ...stepContext(currentCfg),
                     value,
                     resolvedValue,
                   })
-                : applySetupInput({
-                    plugin,
-                    cfg: currentCfg,
-                    accountId,
-                    input: {
-                      [credential.inputKey]: value,
-                      useEnv: false,
-                    },
-                  }).cfg;
-            },
+                : applyInput({ [credential.inputKey]: value, useEnv: false }, currentCfg),
           });
 
           next = credentialResult.cfg;
-          credentialState = credential.inspect({ cfg: next, accountId });
+          credentialState = credential.inspect(accountContext());
           resolvedCredentialValue =
             normalizeOptionalString(credentialResult.resolvedValue) ||
             normalizeOptionalString(credentialState.resolvedValue);
-          if (resolvedCredentialValue) {
-            credentialValues[credential.inputKey] = resolvedCredentialValue;
-          } else {
-            delete credentialValues[credential.inputKey];
-          }
+          setCredentialValue(credential.inputKey, resolvedCredentialValue);
         }
       };
 
       const runTextInputSteps = async () => {
         for (const textInput of wizard.textInputs ?? []) {
           const applyValue = async (value: string) => {
-            next = await applyWizardTextInputValue({
-              plugin,
-              input: textInput,
-              cfg: next,
-              accountId,
-              value,
-            });
+            next = textInput.applySet
+              ? await textInput.applySet({ ...accountContext(), value })
+              : applyInput({ [textInput.inputKey]: value });
           };
           let currentValue = normalizeOptionalString(credentialValues[textInput.inputKey]);
           if (!currentValue && textInput.currentValue) {
-            currentValue = normalizeOptionalString(
-              await textInput.currentValue({
-                cfg: next,
-                accountId,
-                credentialValues,
-              }),
-            );
+            currentValue = normalizeOptionalString(await textInput.currentValue(stepContext()));
           }
           const shouldPrompt = textInput.shouldPrompt
-            ? await textInput.shouldPrompt({
-                cfg: next,
-                accountId,
-                credentialValues,
-                currentValue,
-              })
+            ? await textInput.shouldPrompt({ ...stepContext(), currentValue })
             : true;
 
           let keepCurrentValue = !shouldPrompt;
@@ -502,11 +393,7 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
             textInput.sensitive === true
               ? undefined
               : normalizeOptionalString(
-                  (await textInput.initialValue?.({
-                    cfg: next,
-                    accountId,
-                    credentialValues,
-                  })) ?? currentValue,
+                  (await textInput.initialValue?.(stepContext())) ?? currentValue,
                 );
           const rawValue = await prompter.text({
             message: textInput.message,
@@ -518,12 +405,7 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
               if (!trimmed && textInput.required !== false) {
                 return "Required";
               }
-              return textInput.validate?.({
-                value: trimmed,
-                cfg: next,
-                accountId,
-                credentialValues,
-              });
+              return textInput.validate?.({ value: trimmed, ...stepContext() });
             },
           });
           const trimmedValue = rawValue.trim();
@@ -535,12 +417,7 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
             continue;
           }
           const normalizedValue = normalizeOptionalString(
-            textInput.normalizeValue?.({
-              value: trimmedValue,
-              cfg: next,
-              accountId,
-              credentialValues,
-            }) ?? trimmedValue,
+            textInput.normalizeValue?.({ value: trimmedValue, ...stepContext() }) ?? trimmedValue,
           );
           if (!normalizedValue) {
             delete credentialValues[textInput.inputKey];
@@ -568,34 +445,24 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
           cfg: next,
           prompter,
           label: access.label,
-          currentPolicy: access.currentPolicy({ cfg: next, accountId }),
-          currentEntries: access.currentEntries({ cfg: next, accountId }),
+          currentPolicy: access.currentPolicy(accountContext()),
+          currentEntries: access.currentEntries(accountContext()),
           placeholder: access.placeholder,
-          updatePrompt: access.updatePrompt({ cfg: next, accountId }),
+          updatePrompt: access.updatePrompt(accountContext()),
           skipAllowlistEntries: access.skipAllowlistEntries,
           setPolicy: (currentCfg, policy) =>
-            access.setPolicy({
-              cfg: currentCfg,
-              accountId,
-              policy,
-            }),
+            access.setPolicy({ ...accountContext(currentCfg), policy }),
           resolveAllowlist: access.resolveAllowlist
             ? async ({ cfg: currentCfg, entries }) =>
                 await access.resolveAllowlist!({
-                  cfg: currentCfg,
-                  accountId,
-                  credentialValues,
+                  ...stepContext(currentCfg),
                   entries,
                   prompter,
                 })
             : undefined,
           applyAllowlist: access.applyAllowlist
             ? ({ cfg: currentCfg, resolved }) =>
-                access.applyAllowlist!({
-                  cfg: currentCfg,
-                  accountId,
-                  resolved,
-                })
+                access.applyAllowlist!({ ...accountContext(currentCfg), resolved })
             : undefined,
         });
       }
@@ -620,10 +487,7 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
           );
         }
         const existingAllowFrom =
-          plugin.config.resolveAllowFrom?.({
-            cfg: next,
-            accountId,
-          }) ?? [];
+          (await resolveChannelAllowFrom({ plugin, ...accountContext() })) ?? [];
         const unique = await promptResolvedAllowFrom({
           prompter,
           existing: existingAllowFrom,
@@ -635,39 +499,13 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
           parseId: allowFrom.parseId,
           invalidWithoutTokenNote: allowFrom.invalidWithoutCredentialNote,
           resolveEntries: async ({ entries }) =>
-            allowFrom.resolveEntries({
-              cfg: next,
-              accountId,
-              credentialValues,
-              entries,
-            }),
+            allowFrom.resolveEntries({ ...stepContext(), entries }),
         });
-        next = await allowFrom.apply({
-          cfg: next,
-          accountId,
-          allowFrom: unique,
-        });
+        next = await allowFrom.apply({ ...accountContext(), allowFrom: unique });
       }
 
       if (wizard.finalize) {
-        const finalized = await wizard.finalize({
-          cfg: next,
-          accountId,
-          credentialValues,
-          runtime,
-          prompter,
-          options,
-          forceAllowFrom,
-        });
-        if (finalized?.cfg) {
-          next = finalized.cfg;
-        }
-        if (finalized?.credentialValues) {
-          credentialValues = {
-            ...credentialValues,
-            ...finalized.credentialValues,
-          };
-        }
+        applyHookResult(await wizard.finalize({ ...hookContext(), forceAllowFrom }));
       }
 
       await showNote(wizard.completionNote);

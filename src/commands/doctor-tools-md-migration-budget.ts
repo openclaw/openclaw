@@ -16,12 +16,9 @@ export function resolveToolsMdMigrationWorkspaceTargets(
   for (const agentId of listAgentIds(cfg)) {
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     const key = path.resolve(workspaceDir);
-    const existing = targets.get(key);
-    if (existing !== undefined) {
-      existing.agentIds.push(agentId);
-    } else {
-      targets.set(key, { primaryAgentId: agentId, agentIds: [agentId], workspaceDir });
-    }
+    const target = targets.get(key) ?? { primaryAgentId: agentId, agentIds: [], workspaceDir };
+    target.agentIds.push(agentId);
+    targets.set(key, target);
   }
   return [...targets.values()];
 }

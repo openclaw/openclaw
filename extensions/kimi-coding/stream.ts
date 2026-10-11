@@ -1,5 +1,9 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { streamSimple, type ToolCall } from "openclaw/plugin-sdk/llm";
+import {
+  resolveOpenAIRequestReasoning,
+  streamSimple,
+  type ToolCall,
+} from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   normalizeOpenAICompatibleReasoningReplay,
@@ -12,7 +16,7 @@ import {
   isRecord,
   parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isKimiK3ModelId } from "./provider-policy-api.js";
+import { isKimiK3ModelId, KIMI_K3_THINKING_EFFORTS } from "./provider-policy-api.js";
 
 const TOOL_CALLS_SECTION_BEGIN = "<|tool_calls_section_begin|>";
 const TOOL_CALLS_SECTION_END = "<|tool_calls_section_end|>";
@@ -21,7 +25,6 @@ const TOOL_CALL_ARGUMENT_BEGIN = "<|tool_call_argument_begin|>";
 const TOOL_CALL_END = "<|tool_call_end|>";
 
 type KimiThinkingType = "enabled" | "disabled";
-type KimiK3ThinkingEffort = "low" | "high" | "max";
 type KimiThinkingConfig = {
   type: KimiThinkingType;
   budget_tokens?: number;
@@ -39,15 +42,6 @@ const KIMI_ANTHROPIC_THINKING_BUDGETS: Record<Exclude<KimiThinkingLevel, "off">,
 };
 const KIMI_ANTHROPIC_VISIBLE_OUTPUT_RESERVE_TOKENS = 1024;
 const KIMI_ANTHROPIC_MIN_OUTPUT_TOKENS = 16000;
-const KIMI_K3_THINKING_EFFORTS: Record<Exclude<KimiThinkingLevel, "off">, KimiK3ThinkingEffort> = {
-  minimal: "low",
-  low: "low",
-  medium: "high",
-  high: "high",
-  adaptive: "high",
-  xhigh: "max",
-  max: "max",
-};
 
 function ensureKimiAnthropicMaxTokens(
   payloadObj: Record<string, unknown>,
@@ -191,12 +185,10 @@ function rewriteKimiTaggedToolCallsInMessage(message: unknown): void {
   const nextContent: unknown[] = [];
   for (const block of record.content) {
     const typedBlock = asOptionalObjectRecord(block);
-    if (typedBlock?.type !== "text" || typeof typedBlock.text !== "string") {
-      nextContent.push(block);
-      continue;
-    }
-
-    const parsed = parseKimiTaggedToolCalls(typedBlock.text);
+    const parsed =
+      typedBlock?.type === "text" && typeof typedBlock.text === "string"
+        ? parseKimiTaggedToolCalls(typedBlock.text)
+        : null;
     if (!parsed) {
       nextContent.push(block);
       continue;
@@ -231,14 +223,24 @@ function createKimiToolCallMarkupWrapper(baseStreamFn: StreamFn | undefined): St
 
 export function wrapKimiProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn {
   const configured = normalizeKimiThinkingConfig(ctx.extraParams?.thinking);
+  const extraBody = asOptionalObjectRecord(
+    ctx.extraParams?.extra_body ?? ctx.extraParams?.extraBody,
+  );
+  const templateKwargs = asOptionalObjectRecord(
+    extraBody?.chat_template_kwargs ??
+      ctx.extraParams?.chat_template_kwargs ??
+      ctx.extraParams?.chatTemplateKwargs,
+  );
   const underlying = ctx.streamFn ?? streamSimple;
   return createKimiToolCallMarkupWrapper((model, context, options) => {
-    const anthropic = (ctx.sourceApi ?? model.api) === "anthropic-messages";
+    const api = ctx.sourceApi ?? model.api;
+    const anthropic = api === "anthropic-messages";
     const k3 = anthropic && isKimiK3ModelId(model.id);
+    const openaiK3 = api === "openai-completions" && isKimiK3ModelId(model.id);
     const thinkingLevel = options?.reasoning ?? ctx.thinkingLevel ?? (k3 ? "high" : undefined);
     const thinkingConfig = resolveKimiThinkingConfig(configured, thinkingLevel);
     const enabledLevel =
-      thinkingLevel && thinkingLevel !== "off" ? thinkingLevel : k3 ? "high" : "low";
+      thinkingLevel && thinkingLevel !== "off" ? thinkingLevel : k3 || openaiK3 ? "high" : "low";
     // Replay needs scalar effort; legacy adaptive keeps its resolved thinking budget.
     const nativeLevel = enabledLevel === "adaptive" ? "high" : enabledLevel;
     const reasoning =
@@ -249,7 +251,9 @@ export function wrapKimiProviderStream(ctx: ProviderWrapStreamFnContext): Stream
           : nativeLevel;
     const runtimeModel = k3
       ? { ...model, compat: { ...model.compat, allowEmptySignature: true } }
-      : model;
+      : openaiK3
+        ? { ...model, thinkingLevelMap: { ...KIMI_K3_THINKING_EFFORTS, ...model.thinkingLevelMap } }
+        : model;
     return streamWithPayloadPatch(
       underlying,
       runtimeModel,
@@ -285,6 +289,13 @@ export function wrapKimiProviderStream(ctx: ProviderWrapStreamFnContext): Stream
         if (anthropic) {
           ensureKimiAnthropicMaxTokens(payloadObj, thinkingConfig);
         } else {
+          // A generated root effort would outrank explicit vLLM template kwargs.
+          if (openaiK3 && reasoning !== "off" && templateKwargs?.reasoning_effort === undefined) {
+            const { effort } = resolveOpenAIRequestReasoning(runtimeModel, reasoning);
+            if (effort !== undefined) {
+              payloadObj.reasoning_effort = effort;
+            }
+          }
           normalizeOpenAICompatibleReasoningReplay(payloadObj, {
             thinkingEnabled: thinkingConfig.type === "enabled",
             shouldBackfillAssistantMessage: (message) =>

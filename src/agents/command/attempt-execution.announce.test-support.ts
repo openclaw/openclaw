@@ -6,6 +6,17 @@ import type { AgentCommandOpts } from "./types.js";
 const SUBAGENT_ANNOUNCE_CHILD_SESSION_KEY = "agent:main:subagent:child";
 const SUBAGENT_ANNOUNCE_REQUESTER_TOOLS = ["read", "exec", "sessions_spawn", "message"];
 
+export function createSubagentAnnounceConfig(
+  { operatorTools, sandboxMode }: SubagentAnnounceDeliveryCase,
+  storePath: string,
+): OpenClawConfig {
+  return {
+    session: { store: storePath },
+    ...(operatorTools ? { tools: operatorTools } : {}),
+    ...(sandboxMode ? { agents: { defaults: { sandbox: { mode: sandboxMode } } } } : {}),
+  };
+}
+
 export function createSubagentAnnounceHandoffOptions(params: {
   sourceReplyDeliveryMode: "automatic" | "message_tool_only";
   targetSessionKey: string;
@@ -79,7 +90,7 @@ export type SubagentAnnounceDeliveryCase = {
   expectedToolsAllow?: readonly string[];
 };
 
-export const SUBAGENT_ANNOUNCE_DELIVERY_CASES: readonly SubagentAnnounceDeliveryCase[] = [
+const SUBAGENT_ANNOUNCE_DELIVERY_CASES: readonly SubagentAnnounceDeliveryCase[] = [
   {
     name: "automatic source replies",
     sourceReplyDeliveryMode: "automatic" as const,
@@ -182,6 +193,23 @@ export const SUBAGENT_ANNOUNCE_DELIVERY_CASES: readonly SubagentAnnounceDelivery
     expectedDisableTools: true,
   },
 ];
+
+// Only automatic Claude CLI completion replies restore requester tools.
+function createClaudeCliSubagentAnnounceDeliveryCases(): SubagentAnnounceDeliveryCase[] {
+  return SUBAGENT_ANNOUNCE_DELIVERY_CASES.map((testCase) => {
+    const retainsRequesterTools =
+      testCase.sourceReplyDeliveryMode === "automatic" && testCase.trustedInternalHandoff !== false;
+    return retainsRequesterTools
+      ? {
+          ...testCase,
+          expectedDisableTools: false,
+          expectedToolsAllow: testCase.runtimeToolsAllow ?? SUBAGENT_ANNOUNCE_REQUESTER_TOOLS,
+        }
+      : testCase;
+  });
+}
+export const SUBAGENT_ANNOUNCE_CLAUDE_CLI_DELIVERY_CASES =
+  createClaudeCliSubagentAnnounceDeliveryCases();
 
 function createEmbeddedSubagentAnnounceDeliveryCases(): SubagentAnnounceDeliveryCase[] {
   const cases: SubagentAnnounceDeliveryCase[] = [];

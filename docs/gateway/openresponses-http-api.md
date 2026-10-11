@@ -256,7 +256,7 @@ Failed agent runs, including whole-agent timeouts, return a failed response. Str
 
 A reply that ends because the agent reached its output-token budget is returned with `status: "incomplete"` and `incomplete_details: { "reason": "max_output_tokens" }`, and its final message item carries `status: "incomplete"`. Streaming emits these fields on the terminal `response.incomplete` event, so clients dispatching by event type also observe the truncation. This mirrors the `finish_reason: "length"` projection on `/v1/chat/completions`.
 
-Disconnecting the HTTP client cancels active source-URL downloads and the agent run. If cancellation happens while preparing input, the Gateway releases that download and does not start another input download or the agent run. This applies to both streaming and non-streaming requests.
+Disconnecting the HTTP client cancels active source-URL downloads and the agent run. If cancellation happens while preparing input, the Gateway releases that download and does not start another input download or the agent run. This applies to both streaming and non-streaming requests. If the Gateway itself cancels the agent run while the client is still connected, the request returns a failed response (HTTP `500` when not streaming) with the message `agent run was cancelled`, not a provider timeout.
 
 ## Usage
 

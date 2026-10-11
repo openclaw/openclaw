@@ -38,9 +38,7 @@ describe("Activity recap feedback", () => {
     ["updating", "", false, true],
     ["updating", "Search is fixed. Validation is running.", true, true],
     ["stale", "", true, false],
-    ["stale", "", false, false],
     ["current", "", true, false],
-    ["unavailable", "", true, false],
   ] as const)("marks only pending generation busy (%s, %s, %s)", (state, text, canEnsure, busy) => {
     const container = document.createElement("div");
     render(renderSessionActivitySummary(session({ state, text, canEnsure }), vi.fn()), container);

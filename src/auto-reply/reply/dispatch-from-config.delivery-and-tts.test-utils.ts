@@ -3,6 +3,7 @@ import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { createChannelPartialDeliveryError } from "../../channels/turn/delivery-result.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -53,7 +54,7 @@ import {
   messageAuditEvents,
   globalBeforeAll0,
   describe0BeforeEach0,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.js";
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { usesFullReplyRuntime } from "./reply-config-runtime-mode.js";
@@ -2908,7 +2909,10 @@ describe("dispatchReplyFromConfig", () => {
     expect(firstFinalReplyPayload(dispatcher)).toEqual({ text: "Partial useful answer." });
     expect(
       vi.mocked(dispatcher.sendFinalReply).mock.calls.map(([payload]) => payload.text),
-    ).toEqual(["Partial useful answer.", expect.stringContaining("Something went wrong")]);
+    ).toEqual([
+      "Partial useful answer.",
+      expect.stringContaining(GENERIC_EXTERNAL_RUN_FAILURE_TEXT),
+    ]);
   });
 
   it.each([

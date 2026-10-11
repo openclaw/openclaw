@@ -12,6 +12,11 @@ import { isImmutableGitCommitRef, parseGitPluginSpec } from "../../plugins/git-i
 import type { InstallSafetyOverrides } from "../../plugins/install-security-scan.types.js";
 import { resolveUserPath } from "../../utils.js";
 import { parseSkillFrontmatter } from "../loading/frontmatter.js";
+import {
+  loadSingleSkillDirectory,
+  type LocalSkillLoadDiagnostic,
+} from "../loading/local-loader.js";
+import { resolveSkillDiscoveryLimits } from "../loading/skill-root-discovery.js";
 import { installExtractedSkillRoot } from "./archive-install.js";
 import { validateRequestedSkillSlug } from "./install-paths.js";
 import { recordSkillSourceInstall, type SkillSourceOrigin } from "./source-install-metadata.js";
@@ -42,17 +47,6 @@ type SkillSourceInstallResult =
     }
   | { ok: false; error: string };
 
-function createGitCommandEnv(): NodeJS.ProcessEnv {
-  return sanitizeHostExecEnv({
-    baseEnv: {
-      ...process.env,
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_TERMINAL_PROMPT: "0",
-    },
-    blockPathOverrides: false,
-  });
-}
-
 async function resolveSkillInstallSlug(params: {
   sourceDir: string;
   fallbackLabel: string;
@@ -76,6 +70,37 @@ async function resolveSkillInstallSlug(params: {
   return validateRequestedSkillSlug(params.fallbackLabel);
 }
 
+async function rejectUndiscoverableSkillSource(params: {
+  sourceDir: string;
+  config?: OpenClawConfig;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  let rootRealPath: string;
+  try {
+    rootRealPath = await fs.realpath(params.sourceDir);
+  } catch {
+    return { ok: false, error: `Skill path not found: ${params.sourceDir}` };
+  }
+  const diagnostics: LocalSkillLoadDiagnostic[] = [];
+  // Discovery owns the content rules. Install copies source bytes into a new
+  // file, so a hardlinked SKILL.md does not remain a hardlink after install.
+  // Rejecting that source link here would fail a skill the staged copy can load.
+  const loaded = loadSingleSkillDirectory({
+    skillDir: rootRealPath,
+    rootRealPath,
+    source: "source-install",
+    maxBytes: resolveSkillDiscoveryLimits(params.config).maxSkillFileBytes,
+    rejectHardlinks: false,
+    onDiagnostic: (diagnostic) => {
+      diagnostics.push(diagnostic);
+    },
+  });
+  if (loaded) {
+    return { ok: true };
+  }
+  const message = diagnostics[0]?.message ?? "SKILL.md is missing";
+  return { ok: false, error: `Skill source is not loadable: ${message}` };
+}
+
 async function installLocalSkillDir(
   params: Omit<SkillSourceInstallParams, "spec"> & {
     sourceDir: string;
@@ -90,6 +115,13 @@ async function installLocalSkillDir(
     fallbackLabel: params.fallbackLabel,
     slug: params.slug,
   });
+  const discoverable = await rejectUndiscoverableSkillSource({
+    sourceDir: params.sourceDir,
+    config: params.config,
+  });
+  if (!discoverable.ok) {
+    return discoverable;
+  }
   const workspaceAccess = getAgentWorkspaceAccess(params.workspaceDir, "loadSkills");
   const access = workspaceAccess?.loadSkills ? workspaceAccess : undefined;
   if (access && !access.recordSkillSourceInstall) {
@@ -170,7 +202,13 @@ async function installGitSkill(
       repoDir,
       refMode: "resolve-remote",
       timeoutMs: params.timeoutMs,
-      commandEnv: () => ({ baseEnv: {}, env: createGitCommandEnv() }),
+      commandEnv: () => ({
+        baseEnv: {},
+        env: sanitizeHostExecEnv({
+          baseEnv: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0" },
+          blockPathOverrides: false,
+        }),
+      }),
     });
     if (!acquired.ok) {
       return acquired;
@@ -202,28 +240,6 @@ async function installGitSkill(
   });
 }
 
-async function installPathSkill(
-  params: SkillSourceInstallParams,
-): Promise<SkillSourceInstallResult> {
-  const sourceDir = resolveUserPath(params.spec);
-  let stat;
-  try {
-    stat = await fs.stat(sourceDir);
-  } catch {
-    return { ok: false, error: `Skill path not found: ${sourceDir}` };
-  }
-  if (!stat.isDirectory()) {
-    return { ok: false, error: `Skill path is not a directory: ${sourceDir}` };
-  }
-  return await installLocalSkillDir({
-    ...params,
-    sourceDir,
-    sourceSpec: params.spec,
-    source: "path",
-    fallbackLabel: path.basename(path.resolve(sourceDir)).trim(),
-  });
-}
-
 export function isSkillSourceInstallSpec(raw: string): boolean {
   const trimmed = raw.trim();
   return (
@@ -242,5 +258,21 @@ export async function installSkillFromSource(
   if (spec.toLowerCase().startsWith("git:")) {
     return await installGitSkill({ ...params, spec });
   }
-  return await installPathSkill({ ...params, spec });
+  const sourceDir = resolveUserPath(spec);
+  let stat;
+  try {
+    stat = await fs.stat(sourceDir);
+  } catch {
+    return { ok: false, error: `Skill path not found: ${sourceDir}` };
+  }
+  if (!stat.isDirectory()) {
+    return { ok: false, error: `Skill path is not a directory: ${sourceDir}` };
+  }
+  return await installLocalSkillDir({
+    ...params,
+    sourceDir,
+    sourceSpec: spec,
+    source: "path",
+    fallbackLabel: path.basename(path.resolve(sourceDir)).trim(),
+  });
 }

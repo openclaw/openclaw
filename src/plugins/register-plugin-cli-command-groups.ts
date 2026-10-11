@@ -37,10 +37,6 @@ function findCommandByPath(program: Command, path: readonly string[]): Command |
   return current;
 }
 
-function commandNamesFor(program: Command): Set<string> {
-  return new Set(program.commands.flatMap((command) => [command.name(), ...command.aliases()]));
-}
-
 function applyMachineOutputMode(
   program: Command,
   descriptor: OpenClawPluginCliRootCommandDescriptor,
@@ -81,7 +77,11 @@ export async function registerPluginCliCommandGroups(
       continue;
     }
     const existingCommands =
-      parentPath.length === 0 ? params.existingCommands : commandNamesFor(targetProgram);
+      parentPath.length === 0
+        ? params.existingCommands
+        : new Set(
+            targetProgram.commands.flatMap((command) => [command.name(), ...command.aliases()]),
+          );
     const registerEntry = async () => {
       await entry.register(targetProgram);
       for (const descriptor of entry.placeholders) {

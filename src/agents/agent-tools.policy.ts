@@ -91,7 +91,6 @@ function resolveSubagentDenyListForRole(role: SubagentSessionRole): string[] {
   return [...SUBAGENT_TOOL_DENY_ALWAYS];
 }
 
-/** Resolve sub-agent tool policy from stored session capabilities. */
 export function resolveSubagentToolPolicyForSession(
   cfg: OpenClawConfig | undefined,
   sessionKey: string,
@@ -118,7 +117,6 @@ export function resolveSubagentToolPolicyForSession(
   return { allow: mergedAllow, deny };
 }
 
-/** Resolve the tool policy inherited from a parent sub-agent session. */
 export function resolveInheritedToolPolicyForSession(
   cfg: OpenClawConfig | undefined,
   sessionKey: string | undefined | null,
@@ -143,7 +141,6 @@ export function resolveInheritedToolPolicyForSession(
   };
 }
 
-/** Resolve the shared profile, scope, extra, and sandbox policy layers. */
 export function resolveConfiguredToolPolicies(params: {
   cfg: OpenClawConfig;
   agentTools?: AgentToolsConfig;
@@ -286,7 +283,9 @@ export function resolveTrustedGroupId(params: {
   });
 }
 
-function resolveExplicitProfileAlsoAllow(tools?: OpenClawConfig["tools"]): string[] | undefined {
+function resolveExplicitProfileAlsoAllow(
+  tools?: Pick<AgentToolsConfig, "alsoAllow">,
+): string[] | undefined {
   return Array.isArray(tools?.alsoAllow) ? tools.alsoAllow : undefined;
 }
 
@@ -318,7 +317,6 @@ function detectImplicitProfileGrants(params: {
     .map(({ section, grants }) => ({ section: `tools.${section}`, grants }));
 }
 
-/** Resolve the layered global, provider, agent, and profile tool policies. */
 export function resolveEffectiveToolPolicy(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
@@ -414,32 +412,16 @@ export function resolveEffectiveToolPolicy(params: {
     agent: { kind: "config", path: agentToolsPath },
     agentProvider: { kind: "config", path: agentProviderPath },
   };
-  const profiles = [
-    ...(globalTools?.profile
-      ? [{ profile: globalTools.profile, source: "tools.profile", active: !agentTools?.profile }]
-      : []),
-    ...(agentTools?.profile
-      ? [{ profile: agentTools.profile, source: `${agentToolsPath}.profile`, active: true }]
-      : []),
-    ...(providerPolicy?.profile && providerPath
-      ? [
-          {
-            profile: providerPolicy.profile,
-            source: `${providerPath}.profile`,
-            active: !agentProviderPolicy?.profile,
-          },
-        ]
-      : []),
-    ...(agentProviderPolicy?.profile && agentProviderPath
-      ? [
-          {
-            profile: agentProviderPolicy.profile,
-            source: `${agentProviderPath}.profile`,
-            active: true,
-          },
-        ]
-      : []),
-  ];
+  const profiles = (
+    [
+      [globalTools, "tools", !agentTools?.profile],
+      [agentTools, agentToolsPath, true],
+      [providerPolicy, providerPath, !agentProviderPolicy?.profile],
+      [agentProviderPolicy, agentProviderPath, true],
+    ] as const
+  ).flatMap(([tools, path, active]) =>
+    tools?.profile && path ? [{ profile: tools.profile, source: `${path}.profile`, active }] : [],
+  );
   const explicitProfileAlsoAllow =
     resolveExplicitProfileAlsoAllow(agentTools) ?? resolveExplicitProfileAlsoAllow(globalTools);
   const agentPolicy = pickSandboxToolPolicy(agentTools);
@@ -468,11 +450,9 @@ export function resolveEffectiveToolPolicy(params: {
     profileAlsoAllow: explicitProfileAlsoAllow
       ? uniqueStrings(explicitProfileAlsoAllow)
       : undefined,
-    providerProfileAlsoAllow: Array.isArray(agentProviderPolicy?.alsoAllow)
-      ? agentProviderPolicy?.alsoAllow
-      : Array.isArray(providerPolicy?.alsoAllow)
-        ? providerPolicy?.alsoAllow
-        : undefined,
+    providerProfileAlsoAllow:
+      resolveExplicitProfileAlsoAllow(agentProviderPolicy) ??
+      resolveExplicitProfileAlsoAllow(providerPolicy),
   };
 
   const gatewayConfigReadAllowed =

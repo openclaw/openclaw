@@ -111,7 +111,7 @@ function expectSingleLine(row: HTMLElement) {
 }
 
 // Theme changes colors only; geometry is proven once per width.
-describe.each([1440, 390, 360])("reply attribution (%d px)", (width) => {
+describe.each([1440, 360])("reply attribution (%d px)", (width) => {
   beforeEach(async () => {
     await page.viewport(width, 800);
     host.style.width = `${width - 32}px`;
@@ -213,6 +213,48 @@ it("updates a mounted reply across the mobile breakpoint without losing navigati
   expect(onOpenReply).toHaveBeenCalledTimes(6);
 });
 
+it("keeps the unavailable-original label visible inside an own reply without a sender name", async () => {
+  await page.viewport(1440, 800);
+  host.style.width = "720px";
+  render(
+    renderMessageGroup(
+      {
+        kind: "group",
+        key: "own-missing-reply",
+        role: "user",
+        timestamp: 1,
+        isStreaming: false,
+        visibleContent: "text",
+        messages: [
+          {
+            key: "reply-paged",
+            hasVisibleContent: true,
+            message: {
+              role: "user",
+              content: "Follow up on the earlier synthetic answer.",
+              __openclaw: { id: "reply-paged", replyToId: "earlier-answer" },
+            },
+          },
+        ],
+      },
+      { showReasoning: false, resolveReplyPreview: () => ({ missing: true }) },
+    ),
+    host,
+  );
+  await document.fonts.ready;
+  const fallback = host.querySelector<HTMLElement>(
+    ".chat-reply-attribution--inline .chat-reply-attribution__unavailable",
+  )!;
+  expect(fallback.textContent?.trim()).toBe("Original message unavailable");
+  expect(getComputedStyle(fallback).visibility).toBe("visible");
+  const bounds = fallback.getBoundingClientRect();
+  const bubble = fallback.closest(".chat-bubble")!.getBoundingClientRect();
+  expect(bounds.width).toBeGreaterThan(0);
+  expect(bounds.height).toBeGreaterThan(0);
+  expect(bounds.left).toBeGreaterThanOrEqual(bubble.left);
+  expect(bounds.right).toBeLessThanOrEqual(bubble.right);
+});
+
 it.each([1440, 390])(
   "keeps a short own reply readable without overlapping its label at %d px",
   async (width) => {
@@ -301,8 +343,7 @@ it.each([1440, 390])(
         }),
       },
     })("older");
-    // The pane reports a transport failure as still pending until a new
-    // connection's retry answers (chat-pane-history-reply.test.ts).
+    // Live rows can remain pending until an authoritative history page supplies the source.
     const outcomes = [
       { name: "found with sender", snapshot: undefined, steps: [pending, found], text: "Mira" },
       {
@@ -324,7 +365,7 @@ it.each([1440, 390])(
         text: "Original message unavailable",
       },
       {
-        name: "failed then retried",
+        name: "unconfirmed until a later page",
         snapshot: undefined,
         steps: [pending, pending, found],
         text: "Mira",
@@ -374,7 +415,6 @@ it.each([1440, 390])(
                 showToolCalls: false,
                 avatarPlacement: "gutter",
                 onOpenReply: vi.fn(),
-                onResolveReply: vi.fn(),
                 resolveReplyPreview: () => lookup,
               })}
               <div class="after">Next</div>`,

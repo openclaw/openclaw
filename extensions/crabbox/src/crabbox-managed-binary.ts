@@ -4,9 +4,9 @@ import path from "node:path";
 import type { root } from "openclaw/plugin-sdk/file-access-runtime";
 import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
+import { crabboxExecutionError, type CrabboxCommandRunner } from "./crabbox-worker-command.js";
 
-export const CRABBOX_MIN_VERSION = "0.67.0";
+export const CRABBOX_MIN_VERSION = "0.73.0";
 const RELEASE_URL = `https://github.com/openclaw/crabbox/releases/download/v${CRABBOX_MIN_VERSION}`;
 const MAX_ARCHIVE_BYTES = 128 * 1024 * 1024;
 // Gateway startup contention can delay an otherwise healthy executable probe.
@@ -35,9 +35,12 @@ export async function probeCrabboxVersion(
       timeoutMs: VERSION_TIMEOUT_MS,
       ...(signal ? { signal } : {}),
     });
-  } catch {
+  } catch (error) {
     signal?.throwIfAborted();
-    return { status: "indeterminate", reason: "version command could not start" };
+    return {
+      status: "indeterminate",
+      reason: crabboxExecutionError("version command", error).message,
+    };
   }
   signal?.throwIfAborted();
   if (result.termination !== "exit" || result.code !== 0 || result.outputLimitExceeded) {

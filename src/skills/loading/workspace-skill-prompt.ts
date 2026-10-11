@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveEffectiveAgentSkillsLimits } from "../discovery/agent-filter.js";
 import { isSkillPromptVisible } from "../discovery/skill-index.js";
+import { resolveSkillFileHost } from "../skill-file-host.js";
 import type { SkillEligibilityContext, SkillEntry, SkillSnapshot } from "../types.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import { hasUnavailableSkillSecretOwners, isSkillSecretOwnerUnavailable } from "./config.js";
@@ -44,8 +45,10 @@ export async function buildSkillSnapshot(
     prompt: prepared.prompt,
     skills: eligible.map((entry) => ({
       name: entry.skill.name,
-      gatewayFilePath: entry.skill.fileHost === "gateway" ? entry.skill.filePath : undefined,
-      skillKey: resolveSkillKey(entry.skill, entry),
+      source: { filePath: entry.skill.filePath, fileHost: resolveSkillFileHost(entry.skill) },
+      gatewayFilePath:
+        resolveSkillFileHost(entry.skill) === "gateway" ? entry.skill.filePath : undefined,
+      skillKey: resolveSkillKey(entry),
       primaryEnv: entry.metadata?.primaryEnv,
       requiredEnv: entry.metadata?.requires?.env?.slice(),
     })),
@@ -55,6 +58,7 @@ export async function buildSkillSnapshot(
       ? { nodeSkillsEligibility: opts.eligibility.nodeSkills }
       : {}),
     resolvedSkills: prepared.skills.map((skill) => byName.get(skill.name)!),
+    discoverySkills: resolvedSkills,
     version: opts?.snapshotVersion,
     promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
   };
@@ -81,12 +85,8 @@ async function buildSkillsPromptFromEntries(
     return "";
   }
   const { prompt } = await buildSkillSnapshot(params.workspaceDir, {
+    ...params,
     entries,
-    config: params.config,
-    agentId: params.agentId,
-    eligibility: params.eligibility,
-    preserveEntryOrder: params.preserveEntryOrder,
-    assertCurrent: params.assertCurrent,
   });
   return prompt.trim() ? prompt : "";
 }
@@ -101,7 +101,7 @@ async function rebuildAfterUnsafeSnapshot(
   );
   const sourceEntries = params.entries ?? (await params.loadEntries?.());
   const entries = sourceEntries?.filter(
-    (entry) => !isSkillSecretOwnerUnavailable(resolveSkillKey(entry.skill, entry)),
+    (entry) => !isSkillSecretOwnerUnavailable(resolveSkillKey(entry)),
   );
   return buildSkillsPromptFromEntries(params, entries);
 }

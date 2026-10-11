@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import * as config from "../../config/config.js";
 import * as launchd from "../../daemon/launchd.js";
@@ -11,6 +10,8 @@ import * as scheduledTasks from "../../daemon/schtasks.js";
 import * as gatewayService from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { resolvePackageActivationAnchor } from "../../infra/package-update-activation-journal.js";
+import { createPackageActivationLifetimeFixture } from "../../infra/package-update-activation-lifetime.test-support.js";
+import { readPackageActivationReceipt } from "../../infra/package-update-activation.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
@@ -27,9 +28,11 @@ import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import * as triage from "../../infra/update-triage.js";
 import * as installedPlugins from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime } from "../../runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import * as stateOwnership from "../../state/openclaw-state-ownership.js";
 import { resolveProfileStateDir } from "../profile-utils.js";
+import { registerSignalExitGate, waitForCliSignalExit } from "../signal-exit-barrier.js";
 import * as updateShared from "./shared.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import * as updateConfig from "./update-command-config.js";
@@ -43,14 +46,18 @@ import {
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 import * as updateResume from "./update-command-resume.js";
+import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
 import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 import { updateCommand } from "./update-command.js";
+import { updateRepairCommand } from "./update-repair-command.js";
 
 const dirs = new Set<string>();
+const activationFixture = createPackageActivationLifetimeFixture();
 afterEach(() => cleanupTempDirs(dirs));
+afterEach(() => activationFixture.lifetime.cleanup());
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
@@ -88,6 +95,9 @@ function pendingPackageInvocation(
     readOnlyConfig?: boolean;
   } = {},
 ) {
+  if (params.serviceDrift) {
+    stubNodeRuntime();
+  }
   const home = fs.realpathSync(makeTempDir(dirs, "pending-package-admission-"));
   const identity = createManagedServiceIdentityFixture(home);
   const state = resolveProfileStateDir(params.profile ?? "default", process.env, () => home);
@@ -210,6 +220,41 @@ function pendingPackageInvocation(
 }
 
 describe.skipIf(process.platform === "win32")("pending package activation admission", () => {
+  it("preserves the prepared activation owner's full recovery command in the child result", () =>
+    activationFixture.lifetime.run(async () => {
+      const { root } = activationFixture.setup();
+      const prepared = await activationFixture.prepare();
+      const receipt = readPackageActivationReceipt(prepared.packageRoot);
+      expect(receipt?.phase).toBe("prepared");
+      const command = receipt?.recoveryCommand;
+      if (!command) {
+        throw new Error("Prepared activation did not provide its recovery command");
+      }
+      const f = pendingPackageInvocation();
+      vi.mocked(updateShared.resolveUpdateRoot).mockResolvedValue(prepared.packageRoot);
+      const before = materialSnapshot(root);
+      try {
+        await expect(updateCommand({ json: true, yes: true })).rejects.toMatchObject({ code: 1 });
+        expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+          expect.objectContaining({
+            status: "error",
+            reason: "update-recovery-pending",
+            steps: expect.arrayContaining([
+              expect.objectContaining({
+                diagnostics: [expect.stringContaining(command)],
+              }),
+            ]),
+          }),
+        );
+        for (const writer of Object.values(f.writers)) {
+          expect(writer).not.toHaveBeenCalled();
+        }
+        expect(materialSnapshot(root)).toEqual(before);
+      } finally {
+        f.restore();
+      }
+    }));
+
   it.each([
     { name: "source with absent history" },
     { name: "canonical source behind an alias", alias: true },
@@ -404,20 +449,23 @@ async function fixture() {
 }
 
 describe("pending recovery finalizer", () => {
-  it("refuses standalone finalization before recreating a displaced canonical database", async () => {
+  it.each([
+    { command: "finalize", invoke: updateFinalizeCommand },
+    { command: "repair", invoke: updateRepairCommand },
+  ])("refuses $command before recreating a displaced canonical database", async ({ invoke }) => {
     const f = await fixture();
     const before = fs.readFileSync(f.displaced);
     const configPath = path.join(f.root, "openclaw.json");
     const originalConfig = fs.readFileSync(configPath);
     const resolveRoot = vi
       .spyOn(updateShared, "resolveUpdateRoot")
-      .mockRejectedValue(new Error("ordinary finalization reached root discovery"));
+      .mockRejectedValue(new Error("ordinary maintenance reached root discovery"));
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
     vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
     await expect(
       withOwnedManagedUpdateEnv(
         { ...process.env, ...f.env, OPENCLAW_CONFIG_PATH: configPath },
-        () => updateFinalizeCommand({ json: true, yes: true, deferCompletionCache: true }),
+        () => invoke({ json: true, yes: true, deferCompletionCache: true }),
       ),
     ).rejects.toThrow("full-state recovery is deferred");
     expect(resolveRoot).not.toHaveBeenCalled();
@@ -536,11 +584,8 @@ it.each([false, true])(
     const run = f.opts.run!;
     const before = materialSnapshot(f.root);
     const listeners = process.listeners("SIGINT");
-    const exited = createDeferred();
-    const exit = vi.spyOn(process, "exit").mockImplementation(() => {
-      exited.resolve();
-      return undefined as never;
-    });
+    const previousExitCode = process.exitCode;
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
     const suspend = vi
       .spyOn(scheduledTasks, "suspendScheduledTaskAutoStartForUpdate")
       .mockResolvedValue(true);
@@ -552,6 +597,19 @@ it.each([false, true])(
     }
     const signal = process.listeners("SIGINT").find((listener) => !listeners.includes(listener));
     expect(signal).toBeDefined();
+    const siblingFinished = createDeferredCore();
+    const unregisterSibling = registerSignalExitGate(siblingFinished.promise);
+    const retired = createDeferredCore();
+    const removeListener = process.off.bind(process);
+    // Bun removes native signal listeners without emitting EventEmitter.removeListener.
+    // Observe the real removal effect, preserving its implementation and return value.
+    const off = vi.spyOn(process, "off").mockImplementation((event, listener) => {
+      const result = removeListener(event, listener);
+      if (event === "SIGBREAK" && listener === signal) {
+        retired.resolve();
+      }
+      return result;
+    });
     const cause = new UpdateCommandRecoveryPendingError("Database rollback could not finish");
     try {
       signal!("SIGINT");
@@ -564,15 +622,29 @@ it.each([false, true])(
           },
         ),
       ).rejects.toMatchObject({ name: "UpdateCommandPendingRecoveryFailure", cause });
-      // Assert retirement before awaiting exit, so a leaked gate fails immediately.
+      // Unwind releases its own gate without awaiting the still-pending sibling.
+      expect(process.listeners("SIGINT")).toContain(signal);
+      signal!("SIGINT");
+      expect(process.listeners("SIGINT")).toContain(signal);
+      siblingFinished.resolve();
+      expect(await waitForCliSignalExit()).toBe(130);
+      // Shared drain completion precedes this owner's status publication and retirement.
+      // Observe removal of its last signal listener instead of flushing microtasks.
+      await retired.promise;
       expect(process.listeners("SIGINT")).toEqual(listeners);
-      await exited.promise;
-      expect(exit).toHaveBeenCalledWith(130);
+      expect(process.exitCode).toBe(130);
+      expect(exit).not.toHaveBeenCalled();
       expect(suspend).toHaveBeenCalledOnce();
       expect(resume).not.toHaveBeenCalled();
       expect(materialSnapshot(f.root)).toEqual(before);
     } finally {
+      siblingFinished.resolve();
+      unregisterSibling();
       await recovery.complete(false, { preserveState: true });
+      await waitForCliSignalExit();
+      await retired.promise;
+      off.mockRestore();
+      process.exitCode = previousExitCode;
     }
   },
 );

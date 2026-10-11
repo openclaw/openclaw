@@ -19,13 +19,12 @@ import { personalGitHubStatus, type PersonalGitHubAction } from "./github-person
 import {
   claimPersonalGitHubPublication,
   insertPersonalGitHubPublication,
-  personalGitHubPublicationStatus,
   personalGitHubRequestDigest,
   readPersonalGitHubPublication,
   type PersonalGitHubPublicationRow,
 } from "./github-personal-publication-store.js";
 import {
-  resolveGitHubPublicationWorktreeOwner,
+  readGitHubPublicationWorktreeOwner,
   type PublicationSessionIdentity as SessionIdentity,
 } from "./github-publication-availability.js";
 import { executeGitHubPublication } from "./github-publication-executor.js";
@@ -59,26 +58,38 @@ export type PreparedRepositoryPublicationStatus = {
   repository: PreparedRepositoryWorkspace;
 };
 
-/** Personal receipt status shares account policy; execution custody stays with its coordinator. */
-export function createPersonalRepositoryPublicationStatusReader(
-  isExecuting: (row: RepositoryGitHubPublicationStatusRow) => boolean,
-) {
-  const preparePersonalStatus = async (requestId: string) => {
-    const row = readRepositoryGitHubPublication(requestId);
-    return row && row.owner_profile_id !== null && !terminalRepositoryGitHubPublication(row)
-      ? {
-          requestId: row.request_id,
-          workspaceId: row.workspace_id,
-          repository: await getSessionRepositoryWorkspaceStore().prepare(row.workspace_id),
-        }
-      : undefined;
-  };
-  const personalStatus = (
-    row: RepositoryGitHubPublicationStatusRow,
-    action: PersonalGitHubAction,
-    session: SessionIdentity,
-    prepared: PreparedRepositoryPublicationStatus | undefined,
-  ): SessionGitHubStatusResult => {
+export async function preparePersonalRepositoryPublicationStatus(requestId: string) {
+  const row = readRepositoryGitHubPublication(requestId);
+  return row && row.owner_profile_id !== null && !terminalRepositoryGitHubPublication(row)
+    ? {
+        requestId: row.request_id,
+        workspaceId: row.workspace_id,
+        repository: await getSessionRepositoryWorkspaceStore().prepare(row.workspace_id),
+      }
+    : undefined;
+}
+
+/** Source owners supply liveness; personal status never grants execution authority. */
+export function presentPersonalGitHubPublicationStatus(
+  receipt:
+    | { kind: "worktree"; row: PersonalGitHubPublicationRow }
+    | {
+        kind: "repository";
+        row: RepositoryGitHubPublicationStatusRow;
+        prepared: PreparedRepositoryPublicationStatus | undefined;
+      },
+  action: PersonalGitHubAction,
+  session: SessionIdentity & { archivedAt?: number | null },
+  executing: boolean,
+): SessionGitHubStatusResult {
+  const { row } = receipt;
+  const pending =
+    receipt.kind === "repository"
+      ? !terminalRepositoryGitHubPublication(row) && !executing
+      : row.status === "needs_confirmation" ||
+        ((row.status === "requested" || row.status === "publishing") && !executing);
+  let repositoryOwner: ReturnType<typeof resolveReceiptOwner>;
+  if (receipt.kind === "repository") {
     action.assertCurrent();
     if (
       row.owner_profile_id !== action.owner ||
@@ -87,73 +98,91 @@ export function createPersonalRepositoryPublicationStatusReader(
     ) {
       throw new Error("My GitHub publication was not found for this profile and session.");
     }
-    const executing = isExecuting(row);
-    const pending = !terminalRepositoryGitHubPublication(row) && !executing;
-    if (
-      pending &&
-      (!prepared ||
+    if (pending) {
+      const { prepared } = receipt;
+      if (
+        !prepared ||
         prepared.requestId !== row.request_id ||
-        prepared.workspaceId !== row.workspace_id)
-    ) {
-      throw new Error("My GitHub publication source changed; refresh its status.");
+        prepared.workspaceId !== receipt.row.workspace_id
+      ) {
+        throw new Error("My GitHub publication source changed; refresh its status.");
+      }
+      repositoryOwner = resolveReceiptOwner(receipt.row, prepared.repository);
     }
-    const currentOwner =
-      pending && prepared ? resolveReceiptOwner(row, prepared.repository) : undefined;
-    const connection = pending ? personalGitHubStatus(action) : null;
-    const mismatch =
-      pending &&
-      (row.session_id !== session.sessionId ||
-        row.session_lifecycle_revision !== (session.lifecycleRevision ?? null) ||
-        !currentOwner ||
-        connection?.generation !== row.connection_generation ||
-        connection.account?.accountId !== row.identity_account_id ||
-        connection.account.login.toLowerCase() !== row.identity_login.toLowerCase());
-    if (mismatch) {
-      return {
-        result: projectGitHubPublicationResult({
-          ...row,
-          status: "failed",
-          error_code:
-            row.session_id !== session.sessionId ||
-            row.session_lifecycle_revision !== (session.lifecycleRevision ?? null) ||
-            !currentOwner
-              ? "session_changed"
-              : "identity_changed",
-          next_action:
-            "Review the original account and any recorded GitHub effects, then create a new publication for the current session.",
-        }),
-        confirmation: null,
-      };
-    }
+  }
+  const connection = pending ? personalGitHubStatus(action) : null;
+  const lifecycle =
+    pending && receipt.kind === "worktree"
+      ? readGitHubPublicationSessionLifecycle({
+          publicationKind: "personal",
+          requestId: row.request_id,
+        })
+      : undefined;
+  const sessionChanged =
+    row.session_id !== session.sessionId ||
+    (receipt.kind === "repository"
+      ? receipt.row.session_lifecycle_revision !== (session.lifecycleRevision ?? null) ||
+        !repositoryOwner
+      : session.archivedAt != null ||
+        !lifecycle ||
+        lifecycle.lifecycle_revision !== (session.lifecycleRevision ?? null));
+  const code = !pending
+    ? null
+    : sessionChanged
+      ? "session_changed"
+      : connection?.generation !== row.connection_generation ||
+          connection.account?.accountId !== row.identity_account_id ||
+          connection.account.login.toLowerCase() !== row.identity_login.toLowerCase()
+        ? "identity_changed"
+        : null;
+  if (code) {
     return {
-      result: projectGitHubPublicationResult(
-        pending ? { ...row, status: "needs_confirmation" } : row,
-      ),
-      confirmation:
-        pending &&
-        row.connection_generation &&
-        row.push_repository &&
-        row.repository &&
-        row.base_branch &&
-        row.source_head_commit &&
-        row.source_index_tree &&
-        row.workspace_tree
-          ? {
-              requestDigest: row.request_digest,
-              generation: row.connection_generation,
-              account: { accountId: row.identity_account_id, login: row.identity_login },
-              pushRepository: row.push_repository,
-              repository: row.repository,
-              branch: row.branch,
-              baseBranch: row.base_branch,
-              sourceHeadCommit: row.source_head_commit,
-              sourceIndexTree: row.source_index_tree,
-              workspaceTree: row.workspace_tree,
-            }
-          : null,
+      result: projectGitHubPublicationResult({
+        ...row,
+        status: "failed",
+        error_code: code,
+        next_action:
+          receipt.kind === "repository"
+            ? "Review the original account and any recorded GitHub effects, then create a new publication for the current session."
+            : code === "session_changed"
+              ? "This request belongs to an earlier session incarnation. Review any recorded GitHub effects and create a new publication for the current session."
+              : "The original My GitHub selection changed or is unavailable. Review any recorded GitHub effects, reconnect if needed, and create a new publication.",
+      }),
+      confirmation: null,
     };
+  }
+  const result = projectGitHubPublicationResult(
+    pending ? { ...row, status: "needs_confirmation" } : row,
+  );
+  if (
+    !pending ||
+    (receipt.kind === "repository" &&
+      (!row.connection_generation ||
+        !row.push_repository ||
+        !row.repository ||
+        !row.base_branch ||
+        !row.source_head_commit ||
+        !row.source_index_tree ||
+        !row.workspace_tree))
+  ) {
+    return { result, confirmation: null };
+  }
+  // Worktree fields are non-null; repository fields passed the guard above.
+  return {
+    result,
+    confirmation: {
+      requestDigest: row.request_digest,
+      generation: row.connection_generation!,
+      account: { accountId: row.identity_account_id, login: row.identity_login },
+      pushRepository: row.push_repository!,
+      repository: row.repository!,
+      branch: row.branch,
+      baseBranch: row.base_branch!,
+      sourceHeadCommit: row.source_head_commit!,
+      sourceIndexTree: row.source_index_tree!,
+      workspaceTree: row.workspace_tree!,
+    },
   };
-  return { preparePersonalStatus, personalStatus };
 }
 
 export function assertPersonalGitHubPublicationReplay(
@@ -241,68 +270,30 @@ export function createPersonalGitHubPublicationCoordinator(
   const status = (
     row: PersonalGitHubPublicationRow,
     action: PersonalGitHubAction,
-    session: { sessionId: string; lifecycleRevision?: string | null },
-  ): SessionGitHubStatusResult => {
-    // The instance ID alone is not liveness: admission can stop before it claims an execution.
-    const executing =
+    session: SessionIdentity & { archivedAt?: number | null },
+  ) =>
+    presentPersonalGitHubPublicationStatus(
+      { kind: "worktree", row },
+      action,
+      session,
       row.gateway_instance_id === instanceId &&
-      row.execution_id !== null &&
-      active.get(row.request_id) === row.execution_id;
-    const projected = personalGitHubPublicationStatus(row, executing);
-    if (projected.result.status !== "needs_confirmation") {
-      return projected;
-    }
-    const connection = personalGitHubStatus(action);
-    const lifecycle = readGitHubPublicationSessionLifecycle({
-      publicationKind: "personal",
-      requestId: row.request_id,
-    });
-    const code =
-      row.session_id !== session.sessionId ||
-      !lifecycle ||
-      lifecycle.lifecycle_revision !== (session.lifecycleRevision ?? null)
-        ? "session_changed"
-        : connection.generation !== row.connection_generation ||
-            connection.account?.accountId !== row.identity_account_id ||
-            connection.account.login.toLowerCase() !== row.identity_login.toLowerCase()
-          ? "identity_changed"
-          : null;
-    if (!code) {
-      return projected;
-    }
-    // Keep the durable receipt/effect facts. An incompatible selection cannot be reconfirmed;
-    // report why so a cold browser can offer a fresh, explicit publication instead.
-    return {
-      result: projectGitHubPublicationResult({
-        ...row,
-        status: "failed",
-        error_code: code,
-        next_action:
-          code === "session_changed"
-            ? "This request belongs to an earlier session incarnation. Review any recorded GitHub effects and create a new publication for the current session."
-            : "The original My GitHub selection changed or is unavailable. Review any recorded GitHub effects, reconnect if needed, and create a new publication.",
-      }),
-      confirmation: null,
-    };
-  };
+        row.execution_id !== null &&
+        active.get(row.request_id) === row.execution_id,
+    );
   const withWorkspace = async <T>(
     action: PersonalGitHubSessionAction,
     run: (workspace: PersonalPublicationWorkspace) => Promise<T>,
   ): Promise<T> => {
     action.assertCurrent();
     return await placements.withLocalWorkspaceReservation(action, async (assertReservation) => {
-      const worktree = resolveGitHubPublicationWorktreeOwner(action).worktree;
+      const worktreeOwner = await readGitHubPublicationWorktreeOwner(action);
+      const { worktree } = worktreeOwner;
+      action.assertCurrent();
+      assertReservation();
       const lease = await acquireWorktreeRunLease(worktree.id, { exclusive: true });
       const assertCustody = () => {
         assertReservation();
-        const current = resolveGitHubPublicationWorktreeOwner({
-          ...action,
-          expected: {
-            worktreeId: worktree.id,
-            repositoryFingerprint: worktree.repoFingerprint,
-            branch: worktree.branch,
-          },
-        });
+        const current = worktreeOwner.assertCurrent();
         const workStartError = resolveSessionWorkStartError(
           action.sessionKey,
           current.loaded.entry,
@@ -377,7 +368,6 @@ export function createPersonalGitHubPublicationCoordinator(
           repository: row.repository,
           baseBranch: row.base_branch,
         },
-        projectResult: projectGitHubPublicationResult,
         bindWorkspaceSnapshot: () => {
           throw new Error("My GitHub publication is missing its accepted snapshot.");
         },
@@ -439,7 +429,8 @@ export function createPersonalGitHubPublicationCoordinator(
           workspace.assertCurrent();
           bound.assertCurrent();
         };
-        const worktree = resolveGitHubPublicationWorktreeOwner(action).worktree;
+        const { worktree } = await readGitHubPublicationWorktreeOwner(action);
+        assertCurrent();
         const identity = await preparePersonalGitHubPublicationSelection(
           bound,
           workspace.assertCurrent,
@@ -498,12 +489,7 @@ export function createPersonalGitHubPublicationCoordinator(
     },
     personalStatus(
       action: PersonalGitHubAction,
-      session: {
-        sessionKey: string;
-        agentId: string;
-        sessionId: string;
-        lifecycleRevision?: string | null;
-      },
+      session: SessionIdentity & { archivedAt?: number | null },
       requestId: string,
     ) {
       action.assertCurrent();
@@ -515,12 +501,7 @@ export function createPersonalGitHubPublicationCoordinator(
     },
     personalPending(
       action: PersonalGitHubAction,
-      session: {
-        sessionKey: string;
-        agentId: string;
-        sessionId: string;
-        lifecycleRevision?: string | null;
-      },
+      session: SessionIdentity & { archivedAt?: number | null },
     ) {
       action.assertCurrent();
       const row = readPersonalGitHubPublication(action.owner, {

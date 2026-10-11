@@ -1,10 +1,7 @@
 import path from "node:path";
 import { isPathInside } from "./path-guards.js";
-import {
-  readStableSqliteFileGeneration,
-  sameSqliteFileGeneration,
-  type SqliteFileGeneration,
-} from "./sqlite-file-generation.js";
+import { readSqliteFileGenerationSync } from "./sqlite-file-generation-worker.js";
+import { sameSqliteFileGeneration, type SqliteFileGeneration } from "./sqlite-file-generation.js";
 
 type TerminalOpenFailure = {
   error: Error;
@@ -13,7 +10,7 @@ type TerminalOpenFailure = {
 
 function generationMatchesPath(pathname: string, expected: SqliteFileGeneration): boolean {
   try {
-    return sameSqliteFileGeneration(expected, readStableSqliteFileGeneration(pathname));
+    return sameSqliteFileGeneration(expected, readSqliteFileGenerationSync(pathname));
   } catch {
     return false;
   }

@@ -238,7 +238,6 @@ describe("diagnostic session activity aliases", () => {
       sessionId: "s1",
       sessionKey: "main",
       workKey: "reply:main",
-      clearRunActivity: false,
     });
 
     expect(getDiagnosticSessionActivitySnapshot({ sessionId: "s1", sessionKey: "main" })).toEqual(
@@ -545,7 +544,7 @@ describe("stuck session diagnostics threshold", () => {
         reason: "repeated_model_requests_without_progress",
         repeatedRequestNoProgressAgeMs: stuckSessionAbortMs,
         activeWorkKind,
-        activeToolAgeMs: activeWorkKind === "tool_call" ? stuckSessionAbortMs : undefined,
+        activeToolAgeMs: activeWorkKind === "tool_call" ? (stuckSessionAbortMs * 4) / 3 : undefined,
       });
       expect(recoverStuckSession).toHaveBeenCalledTimes(1);
       expectRecoveryCall(recoverStuckSession, {
@@ -681,10 +680,10 @@ describe("stuck session diagnostics threshold", () => {
     );
     await vi.advanceTimersByTimeAsync(0);
 
-    // Semantic progress gives the next request its full provider allowance.
-    vi.advanceTimersByTime(30_000);
+    // Semantic progress grants the full allowance; recovery waits for the next heartbeat.
+    vi.advanceTimersByTime(requestTimeoutMs - 30_000);
     expect(recoverStuckSession).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(120_000);
+    vi.advanceTimersByTime(60_000);
 
     expectRecoveryCall(recoverStuckSession, { ...ref, queueDepth: 0, allowActiveAbort: true });
   });
@@ -1016,20 +1015,6 @@ describe("stuck session diagnostics threshold", () => {
 
     expect(events).toStrictEqual([]);
     expect(diagnosticSessionStates.size).toBe(0);
-  });
-
-  it("checks memory pressure every tick without recording idle samples", () => {
-    const emitMemorySample = createEmitMemorySampleMock();
-
-    startEnabledDiagnosticHeartbeat({ emitMemorySample, sampleLiveness: () => null });
-
-    vi.advanceTimersByTime(30_000);
-    expect(emitMemorySample).toHaveBeenLastCalledWith({ emitSample: false });
-
-    logSessionStateChange({ ...session, state: "processing" });
-    vi.advanceTimersByTime(30_000);
-
-    expect(emitMemorySample).toHaveBeenLastCalledWith({ emitSample: true });
   });
 
   it("records idle liveness samples without warning in the gateway log", () => {
@@ -1479,10 +1464,11 @@ describe("stuck session recovery activity reconciliation", () => {
     const state = startSession();
     markStaleActivity();
     const reply = { ...ref, sessionId: "reply-run-1" };
+    const replyOwner = createDiagnosticEmbeddedRunOwner(reply);
     const replyTool = { ...reply, toolName: "ReplyTool", toolCallId: "fresh-tool" };
 
     await recoverStalledSession(state.generation, () => {
-      markDiagnosticEmbeddedRunStarted(reply);
+      markDiagnosticEmbeddedRunStarted({ ...reply, owner: replyOwner });
       emitDiagnosticEvent({
         type: "tool.execution.started",
         ...replyTool,
@@ -1506,7 +1492,7 @@ describe("stuck session recovery activity reconciliation", () => {
       activeToolName: undefined,
     });
 
-    markDiagnosticEmbeddedRunEnded({ ...reply, clearRunActivity: false });
+    closeDiagnosticEmbeddedRunOwner(replyOwner);
     const activity = getDiagnosticSessionActivitySnapshot(ref);
     expect(activity.activeWorkKind).toBeUndefined();
     expect(activity.activeToolName).toBeUndefined();

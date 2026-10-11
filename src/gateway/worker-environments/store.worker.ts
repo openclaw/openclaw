@@ -1,149 +1,213 @@
-import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
+import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import type {
+  WorkerOperationContext,
+  WorkerOperationHandlers,
+} from "../../state/worker-operation-registry.js";
 import { createWorkerEnvironmentCommitAdmission } from "./store-commit-authority.js";
 import { reconcileAttachedSessionOwners } from "./store-mutations.js";
+import { createWorkerEnvironmentReceipt } from "./store-receipt.js";
 import { readWorkerEnvironmentFacts } from "./store-row-codec.js";
-import type { WorkerEnvironmentWorkerOperations } from "./store-worker-contract.js";
 import { readTotalChanges } from "./store-write.js";
 import { createWorkerEnvironmentStoreKernel } from "./store.kernel.js";
+import type {
+  WorkerEnvironmentMutationInput,
+  WorkerEnvironmentMutationMethods,
+} from "./store.types.js";
 import { pruneObservedTerminalWorkerEnvironments } from "./terminal-environment-retention.js";
 
-const admitted = () => {};
-type Command = SqliteWorkerCommand<WorkerEnvironmentWorkerOperations>;
+type Method = keyof WorkerEnvironmentMutationMethods | "initialize";
+type Input<Name extends Method> = {
+  nowMs?: number;
+  publicationIncarnation: string;
+} & (Name extends keyof WorkerEnvironmentMutationMethods
+  ? { input: WorkerEnvironmentMutationInput<Name> }
+  : unknown);
+type MutationContext = {
+  db: OpenClawStateDatabase["db"];
+  store: ReturnType<typeof createWorkerEnvironmentStoreKernel>;
+  now: () => number;
+  touch: (id: string) => void;
+};
 
-export function executeWorkerEnvironmentCommand(command: Command, database: OpenClawStateDatabase) {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-      const now = () => command.input.nowMs ?? Date.now();
-      const store = createWorkerEnvironmentStoreKernel({
-        database,
-        now,
-        write: (operation) => operation(db),
-      });
-      const changesBefore = readTotalChanges(db);
-      const touched = new Set<string>();
-      const touch = (id: string) => touched.add(id.trim());
-      const result = (() => {
-        switch (command.type) {
-          case "workerEnvironments.initialize":
-            for (const id of reconcileAttachedSessionOwners(db, now())) {
-              touch(id);
-            }
-            return undefined;
-          case "workerEnvironments.createIntent":
-            touch(command.input.input.environmentId);
-            return store.createIntent(command.input.input);
-          case "workerEnvironments.ensureNodeEnrollment":
-            touch(command.input.input);
-            return store.ensureNodeEnrollment(command.input.input);
-          case "workerEnvironments.revokeEnvironmentCredential":
-            touch(command.input.input.environmentId);
-            return store.revokeEnvironmentCredential(command.input.input);
-          case "workerEnvironments.reconcileSharedHost":
-            touch(command.input.input.environmentId);
-            return store.reconcileSharedHost(command.input.input);
-          case "workerEnvironments.adoptProvisionCleanupFailure":
-            touch(command.input.input.environmentId);
-            return store.adoptProvisionCleanupFailure(command.input.input);
-          case "workerEnvironments.requestDestroy":
-            touch(command.input.input.environmentId);
-            return store.requestDestroy(command.input.input);
-          case "workerEnvironments.refreshBootstrapReceipt":
-            touch(command.input.input.environmentId);
-            return store.refreshBootstrapReceipt({
-              ...command.input.input,
-              assertCurrent: admitted,
-            });
-          case "workerEnvironments.transition": {
-            const input = command.input.input;
-            touch(input.environmentId);
-            return store.transition({
-              ...input,
-              placementBinding: input.placementBinding
-                ? { ...input.placementBinding, assertCurrent: admitted }
-                : undefined,
-            });
-          }
-          case "workerEnvironments.renewCredential":
-            touch(command.input.input.environmentId);
-            return store.renewCredential(command.input.input);
-          case "workerEnvironments.markCredentialDelivered":
-            touch(command.input.input.environmentId);
-            return store.markCredentialDelivered(command.input.input);
-          case "workerEnvironments.recordError":
-            touch(command.input.input.environmentId);
-            return store.recordError(command.input.input);
-          case "workerEnvironments.ensurePreparedIntent": {
-            const value = store.ensurePreparedIntent({
-              ...command.input.input,
-              assertCurrent: admitted,
-            });
-            touch(command.input.input.intent.environmentId);
-            if (value) {
-              touch(value.environmentId);
-            }
-            return value;
-          }
-          case "workerEnvironments.requestPreparedDestroy":
-            touch(command.input.input.environmentId);
-            return store.requestPreparedDestroy({
-              ...command.input.input,
-              assertCurrent: admitted,
-            });
-          case "workerEnvironments.createSessionAttachmentIntent": {
-            const previous = store.getSessionAttachmentRecord(command.input.input.sessionId);
-            if (previous) {
-              touch(previous.environmentId);
-            }
-            touch(command.input.input.environmentId);
-            return store.createSessionAttachmentIntent(command.input.input, admitted);
-          }
-          case "workerEnvironments.closeSessionAttachment": {
-            const value = store.closeSessionAttachment(command.input.input, admitted);
-            if (value) {
-              touch(value.environmentId);
-            }
-            return value;
-          }
-          case "workerEnvironments.cancelSessionAttachmentReservation":
-            touch(command.input.input.environmentId);
-            return store.cancelSessionAttachmentReservation(command.input.input);
-          case "workerEnvironments.touchSessionAttachment":
-            touch(command.input.input.environmentId);
-            return store.touchSessionAttachment(command.input.input, admitted);
-          case "workerEnvironments.pruneTerminalEnvironments": {
-            const { approved } = command.input.input;
-            for (const row of approved) {
-              touch(row.environment_id);
-            }
-            return pruneObservedTerminalWorkerEnvironments({
-              observed: approved,
-              write: (operation) => operation(db),
-            });
-          }
-        }
-      })();
-      const receipt = {
-        result,
-        changed: readTotalChanges(db) !== changesBefore,
-        facts: readWorkerEnvironmentFacts(db, [...touched]),
-      };
-      deferSqliteWorkerCommitReceipt(db, receipt);
-      requestSqliteWorkerOperationAdmission({
-        stage: "commit",
-        facts: createWorkerEnvironmentCommitAdmission(receipt.facts),
-      });
-      return receipt;
-    },
-    { database },
-    { operationLabel: command.type },
-  );
+function mutation<Name extends Method, Result>(
+  name: Name,
+  execute: (input: Input<Name>, context: MutationContext) => Result,
+) {
+  return (input: Input<Name>, { open }: WorkerOperationContext) => {
+    const database = open();
+    return runOpenClawStateWriteTransaction(
+      (transactionDatabase) => {
+        const { db } = transactionDatabase;
+        const now = () => input.nowMs ?? Date.now();
+        const store = createWorkerEnvironmentStoreKernel(transactionDatabase, now);
+        const changesBefore = readTotalChanges(db);
+        const touched = new Set<string>();
+        const result = execute(input, { db, store, now, touch: (id) => touched.add(id.trim()) });
+        const facts = readWorkerEnvironmentFacts(db, [...touched]);
+        const receipt = {
+          result,
+          changed: readTotalChanges(db) !== changesBefore,
+          publication: createWorkerEnvironmentReceipt(
+            {
+              identity: requireOpenClawStateDatabaseIdentity({ db }).key,
+              incarnation: input.publicationIncarnation,
+            },
+            facts,
+          ),
+        };
+        deferSqliteWorkerCommitReceipt(db, receipt);
+        requestSqliteWorkerOperationAdmission({
+          stage: "commit",
+          facts: createWorkerEnvironmentCommitAdmission(facts),
+        });
+        return receipt;
+      },
+      { database },
+      { operationLabel: `workerEnvironments.${name}` },
+    );
+  };
 }
+
+export const workerEnvironmentOperations = {
+  "workerEnvironments.initialize": mutation("initialize", (_input, { db, now, touch }) => {
+    for (const id of reconcileAttachedSessionOwners(db, now())) {
+      touch(id);
+    }
+    return undefined;
+  }),
+  "workerEnvironments.createIntent": mutation("createIntent", ({ input }, { store, touch }) => {
+    touch(input.environmentId);
+    return store.createIntent(input);
+  }),
+  "workerEnvironments.ensureNodeEnrollment": mutation(
+    "ensureNodeEnrollment",
+    ({ input }, { store, touch }) => {
+      touch(input);
+      return store.ensureNodeEnrollment(input);
+    },
+  ),
+  "workerEnvironments.revokeEnvironmentCredential": mutation(
+    "revokeEnvironmentCredential",
+    ({ input }, { store, touch }) => {
+      touch(input.environmentId);
+      return store.revokeEnvironmentCredential(input);
+    },
+  ),
+  "workerEnvironments.reconcileSharedHost": mutation(
+    "reconcileSharedHost",
+    ({ input }, { store, touch }) => {
+      touch(input.environmentId);
+      return store.reconcileSharedHost(input);
+    },
+  ),
+  "workerEnvironments.adoptProvisionCleanupFailure": mutation(
+    "adoptProvisionCleanupFailure",
+    ({ input }, { store, touch }) => {
+      touch(input.environmentId);
+      return store.adoptProvisionCleanupFailure(input);
+    },
+  ),
+  "workerEnvironments.requestDestroy": mutation("requestDestroy", ({ input }, { store, touch }) => {
+    touch(input.environmentId);
+    return store.requestDestroy(input);
+  }),
+  "workerEnvironments.refreshBootstrapReceipt": mutation(
+    "refreshBootstrapReceipt",
+    ({ input }, { store, touch }) => {
+      touch(input.environmentId);
+      return store.refreshBootstrapReceipt(input);
+    },
+  ),
+  "workerEnvironments.transition": mutation("transition", ({ input }, { store, touch }) => {
+    touch(input.environmentId);
+    return store.transition(input);
+  }),
+  "workerEnvironments.renewCredential": mutation(
+    "renewCredential",
+    ({ input }, { store, touch }) => {
+      touch(input.environmentId);
+      return store.renewCredential(input);
+    },
+  ),
+  "workerEnvironments.markCredentialDelivered": mutation(
+    "markCredentialDelivered",
+    ({ input }, { store, touch }) => {
+      touch(input.environmentId);
+      return store.markCredentialDelivered(input);
+    },
+  ),
+  "workerEnvironments.recordError": mutation("recordError", ({ input }, { store, touch }) => {
+    touch(input.environmentId);
+    return store.recordError(input);
+  }),
+  "workerEnvironments.ensurePreparedIntent": mutation(
+    "ensurePreparedIntent",
+    ({ input }, { store, touch }) => {
+      const value = store.ensurePreparedIntent(input);
+      touch(input.intent.environmentId);
+      if (value) {
+        touch(value.environmentId);
+      }
+      return value;
+    },
+  ),
+  "workerEnvironments.requestPreparedDestroy": mutation(
+    "requestPreparedDestroy",
+    ({ input }, { store, touch }) => {
+      touch(input.environmentId);
+      return store.requestPreparedDestroy(input);
+    },
+  ),
+  "workerEnvironments.createSessionAttachmentIntent": mutation(
+    "createSessionAttachmentIntent",
+    ({ input }, { store, touch }) => {
+      const previous = store.getSessionAttachmentRecord(input.sessionId);
+      if (previous) {
+        touch(previous.environmentId);
+      }
+      touch(input.environmentId);
+      return store.createSessionAttachmentIntent(input);
+    },
+  ),
+  "workerEnvironments.closeSessionAttachment": mutation(
+    "closeSessionAttachment",
+    ({ input }, { store, touch }) => {
+      const value = store.closeSessionAttachment(input);
+      if (value) {
+        touch(value.environmentId);
+      }
+      return value;
+    },
+  ),
+  "workerEnvironments.cancelSessionAttachmentReservation": mutation(
+    "cancelSessionAttachmentReservation",
+    ({ input }, { store, touch }) => {
+      touch(input.environmentId);
+      return store.cancelSessionAttachmentReservation(input);
+    },
+  ),
+  "workerEnvironments.touchSessionAttachment": mutation(
+    "touchSessionAttachment",
+    ({ input }, { store, touch }) => {
+      touch(input.environmentId);
+      return store.touchSessionAttachment(input);
+    },
+  ),
+  "workerEnvironments.pruneTerminalEnvironments": mutation(
+    "pruneTerminalEnvironments",
+    ({ input: { approved } }, { db, touch }) => {
+      for (const row of approved) {
+        touch(row.environment_id);
+      }
+      return pruneObservedTerminalWorkerEnvironments(db, approved);
+    },
+  ),
+} satisfies WorkerOperationHandlers;

@@ -131,10 +131,7 @@ function countArgumentFields(value: unknown): number {
     return value.length;
   }
   const record = readRecord(value);
-  if (record) {
-    return Object.keys(record).length;
-  }
-  return 1;
+  return record ? Object.keys(record).length : 1;
 }
 
 function hasExplicitErrorFlag(value: Record<string, unknown> | null): boolean {
@@ -155,10 +152,7 @@ function resolveStatus(data: Record<string, unknown>): ActivityStatus {
     return "error";
   }
   const exitCode = Number(result?.exitCode ?? data.exitCode);
-  if (Number.isFinite(exitCode) && exitCode !== 0) {
-    return "error";
-  }
-  return "done";
+  return Number.isFinite(exitCode) && exitCode !== 0 ? "error" : "done";
 }
 
 function buildSummary(toolName: string, status: ActivityStatus, hiddenArgCount: number): string {

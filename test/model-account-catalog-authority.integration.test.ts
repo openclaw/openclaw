@@ -3,6 +3,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { buildOpenAIProvider } from "../extensions/openai/api.js";
 import { loadSelectedProviderAccountCatalog } from "../src/agents/models-config.providers.catalog-context.js";
 import { createPreparedAccountCatalogAccess } from "../src/agents/prepared-model-runtime.catalog-auth.js";
+import {
+  replaceSessionEntry,
+  upsertSessionEntryCore,
+} from "../src/config/sessions/session-accessor.sqlite-entry.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { createModelAccountConnectService } from "../src/gateway/model-account-connect.js";
 import { broadcastChatMetadataChanged } from "../src/gateway/server-chat-metadata-lifecycle.js";
@@ -125,26 +129,33 @@ beforeEach(() => {
   });
   vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "0");
   vi.stubEnv("OPENAI_API_KEY", "");
+  // Hold catalog deadlines while deferred auth/DNS and worker admission settle.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 });
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
+});
 
 describe("selected account catalog physical dispatch", () => {
-  it("sends one authorized credentialed request through the production HTTP owner", async () => {
-    const outcomes = await load();
-    expect(outcomes).toMatchObject([{ provider: "openai", profileId, status: "ready" }]);
-    expect(requests).toEqual([
-      { path: "/models", authorization: "Bearer synthetic-account-token" },
-    ]);
-  });
+  it.each(["owner", "foreign"])(
+    "dispatches credentials only for the authorized principal: %s",
+    async (requester) => {
+      principal = requester;
+      if (requester === "foreign") {
+        await expect(load()).rejects.toThrow("authority revoked");
+        expect(transport.resolveAuth).not.toHaveBeenCalled();
+        expect(requests).toEqual([]);
+      } else {
+        expect(await load()).toMatchObject([{ provider: "openai", profileId, status: "ready" }]);
+        expect(requests).toEqual([
+          { path: "/models", authorization: "Bearer synthetic-account-token" },
+        ]);
+      }
+    },
+  );
 
-  it("rejects a foreign principal before resolving auth or sending HTTP", async () => {
-    principal = "foreign";
-    await expect(load()).rejects.toThrow("authority revoked");
-    expect(transport.resolveAuth).not.toHaveBeenCalled();
-    expect(requests).toEqual([]);
-  });
-
-  it.each(["auth", "transport"])(
+  it.each(["auth", "transport", "generation"])(
     "sends zero requests when revoked during deferred %s",
     async (boundary) => {
       const entered = createDeferred();
@@ -164,29 +175,19 @@ describe("selected account catalog physical dispatch", () => {
       const result = load();
       const settled = result.catch((error: unknown) => error);
       await entered.promise;
-      authorized = false;
+      if (boundary === "generation") {
+        generationCurrent = false;
+      } else {
+        authorized = false;
+      }
       release.resolve();
       await settled;
       expect(requests).toEqual([]);
-      await expect(result).rejects.toThrow("authority revoked");
+      if (boundary !== "generation") {
+        await expect(result).rejects.toThrow("authority revoked");
+      }
     },
   );
-
-  it("sends zero requests when the prepared generation closes during DNS", async () => {
-    const entered = createDeferred();
-    const release = createDeferred();
-    transport.preflight.mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
-    });
-    const result = load();
-    const settled = result.catch((error: unknown) => error);
-    await entered.promise;
-    generationCurrent = false;
-    release.resolve();
-    await settled;
-    expect(requests).toEqual([]);
-  });
 
   it("does not revoke unrelated ambient discovery", async () => {
     authorized = false;
@@ -201,8 +202,16 @@ describe("selected account catalog physical dispatch", () => {
 });
 
 describe("Gateway automatic account dispatch authority", () => {
-  it.each(["allowed", "unlink-during-dns", "unlink-during-auth", "snapshot"] as const)(
-    "binds ordinary models.list to its real default link: %s",
+  it.each([
+    "allowed",
+    "unlink-during-dns",
+    "unlink-during-auth",
+    "snapshot",
+    "saved-allowed",
+    "saved-visibility-during-dns",
+    "saved-account-during-dns",
+  ] as const)(
+    "binds models.list discovery to current account and session authority: %s",
     async (scenario) => {
       await withOpenClawTestState(
         {
@@ -218,6 +227,9 @@ describe("Gateway automatic account dispatch authority", () => {
             credential,
             assertCurrent() {},
           }).authProfileId;
+          const saved = scenario.startsWith("saved-");
+          const viewer = saved ? ensureProfileForEmail("catalog-viewer@example.test") : person;
+          const sessionKey = "agent:main:catalog-authority-saved";
           const cfg: OpenClawConfig = {
             agents: {
               defaults: {
@@ -233,13 +245,28 @@ describe("Gateway automatic account dispatch authority", () => {
                   reader: {
                     agents: "*",
                     scopes: ["operator.read", "operator.write"],
-                    sessions: { others: "none" },
+                    sessions: { others: saved ? "view" : "none" },
                   },
                 },
               },
             },
           };
           await state.writeConfig(cfg);
+          if (saved) {
+            await replaceSessionEntry(
+              { agentId: "main", sessionKey },
+              {
+                sessionId: "catalog-authority-saved",
+                updatedAt: 1,
+                visibility: "shared",
+                createdActor: { type: "human", source: "profile", id: person.id },
+                providerOverride: "openai",
+                modelOverride: "gpt-5.4",
+                authProfileOverride: selected,
+                authProfileOverrideSource: "user",
+              },
+            );
+          }
           const registry = createEmptyPluginRegistry();
           registry.providers.push({
             pluginId: "openai",
@@ -298,10 +325,10 @@ describe("Gateway automatic account dispatch authority", () => {
               scopes: ["operator.read", "operator.write"],
             },
             authenticatedUserProfile: {
-              profileId: person.id,
-              displayName: person.displayName,
+              profileId: viewer.id,
+              displayName: viewer.displayName,
               hasAvatar: false,
-              updatedAt: person.updatedAt,
+              updatedAt: viewer.updatedAt,
             },
           };
           const context = createDirectChatContext({
@@ -343,60 +370,79 @@ describe("Gateway automatic account dispatch authority", () => {
               await release.promise;
               return resolvedAuth;
             });
-          } else if (scenario === "unlink-during-dns") {
+          } else if (scenario === "unlink-during-dns" || (saved && scenario !== "saved-allowed")) {
             transport.preflight.mockImplementationOnce(async () => {
               entered.resolve();
               await release.promise;
             });
           }
-          const readModels = () => request("models.list", { agentId: "main", view: "configured" });
+          const readModels = () =>
+            request("models.list", {
+              agentId: "main",
+              view: "configured",
+              refresh: true,
+              ...(saved ? { sessionKey } : {}),
+            });
           const pending =
             scenario === "snapshot"
               ? withOpenClawStateDatabaseReadSnapshot(readModels)
               : readModels();
           try {
-            if (scenario !== "allowed" && scenario !== "snapshot") {
+            if (scenario !== "allowed" && scenario !== "saved-allowed" && scenario !== "snapshot") {
               await Promise.race([
                 entered.promise,
                 pending.then(() => {
                   throw new Error("Catalog completed before dispatch gate");
                 }),
               ]);
-              const unlinked = await request("users.unlinkAuthProfile", {
-                profileId: person.id,
-                provider: "openai",
-              });
-              expect(unlinked).toHaveBeenCalledWith(true, { links: [] });
-              expect(listUserProfileAuthLinks(person.id)).toEqual([]);
-              expect(readUserModelAuthProfile(selected)).toBeDefined();
+              if (saved) {
+                await upsertSessionEntryCore(
+                  { agentId: "main", sessionKey },
+                  scenario === "saved-visibility-during-dns"
+                    ? { visibility: "draft" }
+                    : { authProfileOverride: "openai:changed-account" },
+                );
+              } else {
+                const unlinked = await request("users.unlinkAuthProfile", {
+                  profileId: person.id,
+                  provider: "openai",
+                });
+                expect(unlinked).toHaveBeenCalledWith(true, { links: [] });
+                expect(listUserProfileAuthLinks(person.id)).toEqual([]);
+                expect(readUserModelAuthProfile(selected)).toBeDefined();
+              }
               release.resolve();
             }
-            const response = await pending;
             if (scenario === "snapshot") {
+              // Direct handlers reject here; the transport owns the error response.
+              await expect(pending).rejects.toThrow(
+                "Profile authority requires live state, not a discovery snapshot",
+              );
               expect(transport.resolveAuth).not.toHaveBeenCalled();
-              expect(response.mock.calls[0]?.[0]).toBe(false);
               expect(requests).toHaveLength(0);
               return;
             }
+            const response = await pending;
             expect(transport.resolveAuth).toHaveBeenCalledWith(
               expect.objectContaining({ profileId: selected, lockedProfile: true }),
             );
-            console.info("catalog authority trace", {
-              scenario,
-              ordinaryAccepted: response.mock.calls[0]?.[0],
-              outboundRequests: requests.length,
-            });
-            if (scenario === "allowed") {
+            if (scenario === "allowed" || scenario === "saved-allowed") {
               expect(response.mock.calls[0]?.[0]).toBe(true);
-              expect(requests).toHaveLength(1);
+              expect(requests).toEqual([
+                { path: "/models", authorization: "Bearer synthetic-account-token" },
+              ]);
             } else {
               expect(requests).toHaveLength(0);
               expect(response.mock.calls[0]?.[0]).toBe(false);
+              if (saved) {
+                return;
+              }
               // Unlink removes the default, not the retained credential or an explicit self-owned selection.
               const pinned = await request("models.list", {
                 agentId: "main",
                 authProfileId: selected,
                 view: "configured",
+                refresh: true,
               });
               expect(pinned.mock.calls[0]?.[0]).toBe(true);
               expect(requests).toHaveLength(1);

@@ -1,3 +1,4 @@
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 
@@ -42,9 +43,10 @@ vi.mock("../../auto-reply/reply/stage-sandbox-media.js", () => {
   };
 });
 
-vi.mock("../../auto-reply/reply/reply-media-paths.runtime.js", () => {
+vi.mock("../../auto-reply/reply/reply-media-paths.js", async (importOriginal) => {
   optionalMediaRuntimesLoaded("reply-media-paths");
   return {
+    ...(await importOriginal<typeof import("../../auto-reply/reply/reply-media-paths.js")>()),
     createReplyMediaContext: () => {
       throw new Error("Reply media context is unavailable");
     },

@@ -5,6 +5,7 @@ import {
   INTER_SESSION_PROMPT_PREFIX_BASE,
   isAgentMediatedCompletionSourceTool,
   normalizeInputProvenance,
+  readInterSessionPromptEnvelope,
   shouldPreserveUserFacingSessionStateForInputProvenance,
   stripInterSessionPromptPrefixForDisplay,
 } from "./input-provenance.js";
@@ -110,6 +111,40 @@ describe("inter-session body whitespace", () => {
     [`${INTER_SESSION_PROMPT_PREFIX_BASE}    code`, "    code"],
   ])("preserves body bytes when the generated explanation is absent: %j", (input, body) => {
     expect(stripInterSessionPromptPrefixForDisplay(input)).toBe(body);
+  });
+});
+
+describe("readInterSessionPromptEnvelope", () => {
+  it("reads source provenance from a generated envelope", () => {
+    const text = annotateInterSessionPromptText("body", {
+      kind: "inter_session",
+      sourceSessionKey: "agent:main:main",
+      sourceChannel: "webchat",
+      sourceTool: "sessions_send",
+    });
+
+    const envelope = readInterSessionPromptEnvelope(text);
+
+    expect(envelope?.provenance).toEqual({
+      kind: "inter_session",
+      sourceSessionKey: "agent:main:main",
+      sourceChannel: "webchat",
+      sourceTool: "sessions_send",
+    });
+    expect(text.slice(envelope?.length)).toBe("body");
+  });
+
+  it("ignores headers without the generated explanation or with unknown fields", () => {
+    expect(
+      readInterSessionPromptEnvelope(`${INTER_SESSION_PROMPT_PREFIX_BASE} isUser=false\nhello`),
+    ).toBeUndefined();
+    const generated = annotateInterSessionPromptText("x", { kind: "inter_session" });
+    expect(
+      readInterSessionPromptEnvelope(
+        generated.replace("isUser=false", "sourceRole=user isUser=false"),
+      ),
+    ).toBeUndefined();
+    expect(readInterSessionPromptEnvelope(`quoted ${generated}`)).toBeUndefined();
   });
 });
 

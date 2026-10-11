@@ -188,7 +188,7 @@ function renderApprovedDependencyComment(approval, changes) {
       : "### ✅ Dependency graph changes approved",
     "",
     approval.kind === "author"
-      ? "This maintainer PR changes the dependency graph. This comment is informational because the PR author has repository Maintain or Admin access."
+      ? "This maintainer PR changes the dependency graph.\n\n**No secops approval is required. This comment is informational because the PR author has Maintain or Admin access.**"
       : "A maintainer approved this revision with an explicit dependency approval comment.",
     "",
     `- Current SHA: ${markdownCode(approval.sha)}`,
@@ -669,6 +669,7 @@ export async function reviewDependencyChanges(
       owner,
       repo,
       labelNames: new Set(labels.map((label) => label.name)),
+      recoverCommentWrites: mode === "enforce",
     });
   // Consolidate the former awareness and enforcement comments into one notice.
   await deleteCommentIfPresent(findComment(dependencyChangeMarker));

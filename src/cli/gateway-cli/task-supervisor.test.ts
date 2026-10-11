@@ -7,6 +7,7 @@ import {
   WINDOWS_TASK_SUPERVISOR_RESTART_EXIT_CODE_MIN,
 } from "../../daemon/windows-task-supervisor-contract.js";
 import type { SpawnInput } from "../../process/supervisor/types.js";
+import { captureEnv } from "../../test-utils/env.js";
 
 const { spawn, log, flushLogger, bindWindowsTaskLauncher } = vi.hoisted(() => ({
   spawn: vi.fn(),
@@ -49,7 +50,7 @@ describe("Windows Gateway task supervisor", () => {
   const argv = [...process.argv];
   const execArgv = [...process.execArgv];
   const exitCode = process.exitCode;
-  const launcherMarker = process.env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER;
+  const originalEnv = captureEnv(["OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER"]);
 
   beforeEach(() => {
     process.argv = [
@@ -68,50 +69,54 @@ describe("Windows Gateway task supervisor", () => {
     process.argv = [...argv];
     process.execArgv = [...execArgv];
     process.exitCode = exitCode;
-    if (launcherMarker === undefined) {
-      delete process.env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER;
-    } else {
-      process.env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER = launcherMarker;
-    }
+    originalEnv.restore();
     vi.restoreAllMocks();
     vi.clearAllMocks();
     spawn.mockReset();
     bindWindowsTaskLauncher.mockReset();
   });
 
-  it("binds launcher ownership before admitting a child and consumes the launcher marker", async () => {
-    process.env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER = "wscript";
-    bindWindowsTaskLauncher.mockImplementation(() => {
-      expect(spawn).not.toHaveBeenCalled();
-      expect(process.env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER).toBeUndefined();
-    });
-    spawn.mockImplementation(async () => {
-      expect(bindWindowsTaskLauncher).toHaveBeenCalledOnce();
-      expect(process.env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER).toBeUndefined();
-      return { cancel: vi.fn(), wait: async () => ({ exitCode: 0, exitSignal: null }) };
-    });
-    const { runWindowsGatewayTaskSupervisor } = await import("./task-supervisor.js");
-    await runWindowsGatewayTaskSupervisor();
-    expect(spawn).toHaveBeenCalledOnce();
-    expect(bindWindowsTaskLauncher).toHaveBeenCalledOnce();
-  });
+  it.each(["wscript", "cmd"])(
+    "binds %s launcher ownership before admitting a child and consumes the launcher marker",
+    async (launcher) => {
+      process.env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER = launcher;
+      bindWindowsTaskLauncher.mockImplementation(() => {
+        expect(spawn).not.toHaveBeenCalled();
+        expect(process.env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER).toBeUndefined();
+      });
+      spawn.mockImplementation(async () => {
+        expect(bindWindowsTaskLauncher).toHaveBeenCalledOnce();
+        expect(process.env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER).toBeUndefined();
+        return { cancel: vi.fn(), wait: async () => ({ exitCode: 0, exitSignal: null }) };
+      });
+      const { runWindowsGatewayTaskSupervisor } = await import("./task-supervisor.js");
+      await runWindowsGatewayTaskSupervisor();
+      expect(spawn).toHaveBeenCalledOnce();
+      expect(bindWindowsTaskLauncher).toHaveBeenCalledExactlyOnceWith(expect.anything(), launcher);
+    },
+  );
 
-  it("does not admit a Gateway after its task launcher has exited", async () => {
-    process.env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER = "wscript";
-    spawn.mockResolvedValue({
-      cancel: vi.fn(),
-      wait: async () => ({ exitCode: 0, exitSignal: null }),
-    });
-    bindWindowsTaskLauncher.mockImplementation(() => {
-      throw new Error("Windows task WScript launcher is no longer live");
-    });
-    const { runWindowsGatewayTaskSupervisor } = await import("./task-supervisor.js");
-    await runWindowsGatewayTaskSupervisor();
-    expect(spawn).not.toHaveBeenCalled();
-    expect(process.exitCode).toBe(1);
-    expect(JSON.stringify(log.error.mock.calls)).toContain("WScript launcher is no longer live");
-    expect(process.env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER).toBeUndefined();
-  });
+  it.each(["wscript", "cmd"])(
+    "does not admit a Gateway after its %s task launcher has exited",
+    async (launcher) => {
+      process.env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER = launcher;
+      spawn.mockResolvedValue({
+        cancel: vi.fn(),
+        wait: async () => ({ exitCode: 0, exitSignal: null }),
+      });
+      bindWindowsTaskLauncher.mockImplementation(() => {
+        throw new Error(`Windows task ${launcher} launcher is no longer live`);
+      });
+      const { runWindowsGatewayTaskSupervisor } = await import("./task-supervisor.js");
+      await runWindowsGatewayTaskSupervisor();
+      expect(spawn).not.toHaveBeenCalled();
+      expect(process.exitCode).toBe(1);
+      expect(JSON.stringify(log.error.mock.calls)).toContain(
+        `${launcher} launcher is no longer live`,
+      );
+      expect(process.env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER).toBeUndefined();
+    },
+  );
 
   it("runs the Gateway child through the anchored Job Object and waits for its tree", async () => {
     // A direct Startup fallback inherits the install preference, without a live WScript owner.
@@ -153,8 +158,13 @@ describe("Windows Gateway task supervisor", () => {
       return {
         cancel: vi.fn(),
         wait: async () => result,
-        waitForExtinction: async () => {},
+        waitForExtinction: async () => {
+          expect(process.exitCode).toBeUndefined();
+        },
       };
+    });
+    flushLogger.mockImplementationOnce(async () => {
+      expect(process.exitCode).toBeUndefined();
     });
 
     const { runWindowsGatewayTaskSupervisor } = await import("./task-supervisor.js");

@@ -16,7 +16,7 @@ vi.mock("../../infra/agent-events.js", () => ({
 }));
 
 import {
-  consumeRequesterFinalAttachment,
+  finalizeRequesterFinalAttachment,
   promoteRequesterFinalAttachment,
   registerRequesterFinalAttachment,
 } from "./requester-final-attachment.js";
@@ -30,6 +30,13 @@ const base = {
   timeoutMs: 60_000,
 };
 
+const deliveredFinal = {
+  ...base,
+  requesterYieldBatch: true,
+  pause: false,
+  delivered: true,
+};
+
 describe("requester final attachment", () => {
   beforeEach(() => {
     lifecycle.generation = "generation-1";
@@ -40,14 +47,13 @@ describe("requester final attachment", () => {
     const append = vi.fn(() => true);
     const registration = registerRequesterFinalAttachment({ ...base, append });
 
-    expect(
-      consumeRequesterFinalAttachment({
-        ...base,
-        batchRunIds: ["run-a", "run-b"],
-        rearmGeneration: 1,
-        text: "final",
-      }),
-    ).toBe("missing");
+    finalizeRequesterFinalAttachment({
+      ...deliveredFinal,
+      batchRunIds: ["run-a", "run-b"],
+      rearmGeneration: 1,
+      finalAssistantVisibleText: "final",
+    });
+    expect(append).not.toHaveBeenCalled();
     expect(
       promoteRequesterFinalAttachment({
         requesterAgentId: base.requesterAgentId,
@@ -59,23 +65,20 @@ describe("requester final attachment", () => {
     ).toBe(true);
     registration.releaseProvisional();
 
-    expect(
-      consumeRequesterFinalAttachment({
-        ...base,
-        batchRunIds: ["run-a", "run-b"],
-        rearmGeneration: 1,
-        text: "final",
-      }),
-    ).toBe("appended");
+    finalizeRequesterFinalAttachment({
+      ...deliveredFinal,
+      batchRunIds: ["run-a", "run-b"],
+      rearmGeneration: 1,
+      finalAssistantVisibleText: "final",
+    });
     expect(append).toHaveBeenCalledExactlyOnceWith("final");
-    expect(
-      consumeRequesterFinalAttachment({
-        ...base,
-        batchRunIds: ["run-a", "run-b"],
-        rearmGeneration: 1,
-        text: "replay",
-      }),
-    ).toBe("missing");
+    finalizeRequesterFinalAttachment({
+      ...deliveredFinal,
+      batchRunIds: ["run-a", "run-b"],
+      rearmGeneration: 1,
+      finalAssistantVisibleText: "replay",
+    });
+    expect(append).toHaveBeenCalledExactlyOnceWith("final");
   });
 
   it("rejects the wrong session or batch without consuming the owner", () => {
@@ -89,31 +92,27 @@ describe("requester final attachment", () => {
       rearmGeneration: 2,
     });
 
-    expect(
-      consumeRequesterFinalAttachment({
-        ...base,
-        requesterSessionId: "session-other",
-        batchRunIds: ["run-a"],
-        rearmGeneration: 2,
-        text: "wrong session",
-      }),
-    ).toBe("missing");
-    expect(
-      consumeRequesterFinalAttachment({
-        ...base,
-        batchRunIds: ["run-b"],
-        rearmGeneration: 2,
-        text: "wrong batch",
-      }),
-    ).toBe("missing");
-    expect(
-      consumeRequesterFinalAttachment({
-        ...base,
-        batchRunIds: ["run-a"],
-        rearmGeneration: 2,
-        text: "final",
-      }),
-    ).toBe("appended");
+    finalizeRequesterFinalAttachment({
+      ...deliveredFinal,
+      requesterSessionId: "session-other",
+      batchRunIds: ["run-a"],
+      rearmGeneration: 2,
+      finalAssistantVisibleText: "wrong session",
+    });
+    finalizeRequesterFinalAttachment({
+      ...deliveredFinal,
+      batchRunIds: ["run-b"],
+      rearmGeneration: 2,
+      finalAssistantVisibleText: "wrong batch",
+    });
+    expect(append).not.toHaveBeenCalled();
+    finalizeRequesterFinalAttachment({
+      ...deliveredFinal,
+      batchRunIds: ["run-a"],
+      rearmGeneration: 2,
+      finalAssistantVisibleText: "final",
+    });
+    expect(append).toHaveBeenCalledExactlyOnceWith("final");
   });
 
   it("replacement and lifecycle rotation revoke stale callbacks", () => {
@@ -138,15 +137,12 @@ describe("requester final attachment", () => {
 
     lifecycle.generation = "generation-2";
     lifecycle.rotate?.(lifecycle.generation);
-    expect(
-      consumeRequesterFinalAttachment({
-        ...base,
-        requesterSessionId: base.requesterSessionId,
-        batchRunIds: ["run-new-child"],
-        rearmGeneration: 1,
-        text: "stale",
-      }),
-    ).toBe("missing");
+    finalizeRequesterFinalAttachment({
+      ...deliveredFinal,
+      batchRunIds: ["run-new-child"],
+      rearmGeneration: 1,
+      finalAssistantVisibleText: "stale",
+    });
     expect(first).not.toHaveBeenCalled();
     expect(second).not.toHaveBeenCalled();
   });
@@ -171,24 +167,23 @@ describe("requester final attachment", () => {
         rearmGeneration: 3,
       }),
     ).toBe(true);
-    expect(
-      consumeRequesterFinalAttachment({
-        ...base,
-        batchRunIds: ["run-new-child"],
-        rearmGeneration: 3,
-        text: "new final",
-      }),
-    ).toBe("appended");
+    finalizeRequesterFinalAttachment({
+      ...deliveredFinal,
+      batchRunIds: ["run-new-child"],
+      rearmGeneration: 3,
+      finalAssistantVisibleText: "new final",
+    });
     expect(first).not.toHaveBeenCalled();
     expect(second).toHaveBeenCalledExactlyOnceWith("new final");
   });
 
-  it("consumes a throwing callback without changing durable completion", () => {
+  it("consumes a throwing callback without failing or replaying finalization", () => {
+    const append = vi.fn(() => {
+      throw new Error("socket closed");
+    });
     registerRequesterFinalAttachment({
       ...base,
-      append: () => {
-        throw new Error("socket closed");
-      },
+      append,
     });
     promoteRequesterFinalAttachment({
       requesterAgentId: base.requesterAgentId,
@@ -198,22 +193,19 @@ describe("requester final attachment", () => {
       rearmGeneration: 1,
     });
 
-    expect(
-      consumeRequesterFinalAttachment({
-        ...base,
-        batchRunIds: ["run-a"],
-        rearmGeneration: 1,
-        text: "final",
-      }),
-    ).toBe("rejected");
-    expect(
-      consumeRequesterFinalAttachment({
-        ...base,
-        batchRunIds: ["run-a"],
-        rearmGeneration: 1,
-        text: "replay",
-      }),
-    ).toBe("missing");
+    finalizeRequesterFinalAttachment({
+      ...deliveredFinal,
+      batchRunIds: ["run-a"],
+      rearmGeneration: 1,
+      finalAssistantVisibleText: "final",
+    });
+    finalizeRequesterFinalAttachment({
+      ...deliveredFinal,
+      batchRunIds: ["run-a"],
+      rearmGeneration: 1,
+      finalAssistantVisibleText: "replay",
+    });
+    expect(append).toHaveBeenCalledExactlyOnceWith("final");
   });
 
   it("drops an expired provisional attachment", () => {

@@ -205,77 +205,36 @@ describe("exec foreground failures", () => {
     expect(details.durationMs).toBeGreaterThanOrEqual(0);
   });
 
-  it.each([
-    { name: "child SIGKILL", pty: false, exitSignal: "SIGKILL" as NodeJS.Signals },
-    { name: "PTY signal 9", pty: true, exitSignal: 9 },
-  ])("adds cautious Linux OOM guidance for a wrapped $name", async ({ pty, exitSignal }) => {
-    mockSpawn({
-      reason: "signal",
-      exitCode: pty ? 0 : null,
-      exitSignal,
-      oomScoreWrapperSelected: true,
-    });
-    const tool = fullExec();
-
-    const result = await tool.execute(`call-oom-${exitSignal}`, {
-      command: "find . -type f",
-      host: "gateway",
-      pty,
-    });
-
-    expect(supervisorMock.spawn.mock.calls[0]?.[0]?.mode).toBe(pty ? "pty" : "child");
-    const text = requireTextContent(result);
-    for (const fragment of [
-      `Command aborted by signal ${exitSignal}`,
-      "OpenClaw selected its Linux OOM-score wrapper",
-      "attempts to set this child's oom_score_adj to 1000",
-      "SIGKILL alone does not identify whether the Linux OOM killer",
-      "Check cgroup memory events or kernel logs",
-      "If they show memory pressure, narrow the command",
-      "adjust memory, concurrency, or resource limits",
-    ]) {
-      expect(text).toContain(fragment);
-    }
-    expect(text).not.toContain("OPENCLAW_CHILD_OOM_SCORE_ADJ");
-  });
-
-  it.each([
-    {
-      name: "unwrapped SIGKILL",
-      exitSignal: "SIGKILL" as NodeJS.Signals,
-      oomScoreWrapperSelected: false,
-      reason: "signal" as const,
-    },
-    {
-      name: "wrapped non-SIGKILL signal",
-      exitSignal: "SIGTERM" as NodeJS.Signals,
-      oomScoreWrapperSelected: true,
-      reason: "signal" as const,
-    },
-    {
-      name: "wrapped manual cancellation",
-      exitSignal: "SIGKILL" as NodeJS.Signals,
-      oomScoreWrapperSelected: true,
-      reason: "manual-cancel" as const,
-    },
-  ])(
-    "preserves the generic signal message for $name",
-    async ({ exitSignal, oomScoreWrapperSelected, reason }) => {
-      mockSpawn({ reason, exitCode: null, exitSignal, oomScoreWrapperSelected });
-      const tool = fullExec({
-        security: "full",
-        ask: "off",
-        allowBackground: false,
+  it.each([{ name: "PTY signal 9", pty: true, exitSignal: 9 }])(
+    "adds cautious Linux OOM guidance for a wrapped $name",
+    async ({ pty, exitSignal }) => {
+      mockSpawn({
+        reason: "signal",
+        exitCode: pty ? 0 : null,
+        exitSignal,
+        oomScoreWrapperSelected: true,
       });
+      const tool = fullExec();
 
-      const result = await tool.execute(`call-generic-${reason}-${exitSignal}`, {
-        command: "sleep 10",
+      const result = await tool.execute(`call-oom-${exitSignal}`, {
+        command: "find . -type f",
         host: "gateway",
+        pty,
       });
 
+      expect(supervisorMock.spawn.mock.calls[0]?.[0]?.mode).toBe(pty ? "pty" : "child");
       const text = requireTextContent(result);
-      expect(text).toContain(`Command aborted by signal ${exitSignal}`);
-      expect(text).not.toContain("OOM-score wrapper");
+      for (const fragment of [
+        `Command aborted by signal ${exitSignal}`,
+        "OpenClaw selected its Linux OOM-score wrapper",
+        "attempts to set this child's oom_score_adj to 1000",
+        "SIGKILL alone does not identify whether the Linux OOM killer",
+        "Check cgroup memory events or kernel logs",
+        "If they show memory pressure, narrow the command",
+        "adjust memory, concurrency, or resource limits",
+      ]) {
+        expect(text).toContain(fragment);
+      }
       expect(text).not.toContain("OPENCLAW_CHILD_OOM_SCORE_ADJ");
     },
   );

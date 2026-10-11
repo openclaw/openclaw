@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { ensureMemoryIndexSchema } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  configureMemorySqliteWalMaintenance,
+  ensureMemoryIndexSchema,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
@@ -57,6 +60,32 @@ function sessionReplacement(sessionId: string, text: string): MemorySourceIndexR
 }
 
 describe("private shadow admission", () => {
+  it("joins the WAL owner before closing a shadow database", async () => {
+    const owner = await createShadow("retiring.sqlite");
+    const maintenance = configureMemorySqliteWalMaintenance(owner.db);
+    const stop = maintenance.stop;
+    const entered = createDeferred<void>();
+    const released = createDeferred<void>();
+    vi.spyOn(maintenance, "stop").mockImplementationOnce(async () => {
+      entered.resolve();
+      await released.promise;
+      await stop();
+    });
+    const closing = owner.closeShadow();
+    try {
+      await entered.promise;
+      expect(owner.db.isOpen).toBe(true);
+      expect(owner.shadowReleased).toBe(false);
+      released.resolve();
+      await closing;
+      expect(owner.db.isOpen).toBe(false);
+      expect(owner.shadowReleased).toBe(true);
+    } finally {
+      released.resolve();
+      await closing;
+    }
+  });
+
   it("queues inherited reentrant callbacks until the native writer settles", async () => {
     const owner = new MemoryIndexDatabase(new DatabaseSync(":memory:"));
     owners.push(owner);
@@ -124,6 +153,7 @@ describe("private shadow admission", () => {
     ).resolves.toEqual({
       beforeRevision: expect.any(Number),
       databaseRevision: expect.any(Number),
+      retainedDrift: false,
     });
     expect(owner.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
       { text: "retained text" },

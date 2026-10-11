@@ -37,7 +37,8 @@
             "strict": false
           }
         }
-      ]
+      ],
+      "reasoning_effort": "medium"
     },
     "eventTrace": [
       {
@@ -102,6 +103,14 @@
         "output": 4,
         "cacheRead": 2,
         "cacheWrite": 0,
+        "cacheTelemetry": {
+          "state": "available"
+        },
+        "contextUsage": {
+          "state": "available",
+          "promptTokens": 8,
+          "totalTokens": 12
+        },
         "totalTokens": 12,
         "cost": {
           "input": 0,
@@ -154,7 +163,8 @@
           }
         }
       ],
-      "max_completion_tokens": 4096
+      "max_completion_tokens": 4096,
+      "reasoning_effort": "medium"
     },
     "eventTrace": [
       {
@@ -168,11 +178,6 @@
         "type": "thinking_delta",
         "contentIndex": 0,
         "delta": "Think."
-      },
-      {
-        "type": "thinking_delta",
-        "contentIndex": 0,
-        "delta": ""
       },
       {
         "type": "text_start",
@@ -214,7 +219,15 @@
         "output": 4,
         "cacheRead": 2,
         "cacheWrite": 0,
+        "cacheTelemetry": {
+          "state": "available"
+        },
         "reasoningTokens": 1,
+        "contextUsage": {
+          "state": "available",
+          "promptTokens": 8,
+          "totalTokens": 12
+        },
         "totalTokens": 12,
         "cost": {
           "input": 0,

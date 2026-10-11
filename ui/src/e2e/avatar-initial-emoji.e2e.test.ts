@@ -96,7 +96,7 @@ suite.define(() => {
         await sidebar.getByRole("button", { name: /Switch agent/ }).click();
         const emojiRow = sidebar
           .locator("wa-dropdown.sidebar-agent-menu")
-          .getByRole("menuitemradio", { name: "🚀Rocket", exact: true });
+          .getByRole("menuitem", { name: "🚀Rocket", exact: true });
         const menuAvatar = emojiRow.locator(".identity-avatar__text");
         await expect.poll(() => menuAvatar.getAttribute("data-avatar")).toBe(emojiGrapheme);
         // The shared picker paints its text through CSS, not a text node.
@@ -179,7 +179,7 @@ suite.define(() => {
             value: undefined,
           });
         });
-        const config = { agents: { list: [{ id: "main" }, { id: "emoji" }] } };
+        const config = { agents: { entries: { main: {}, emoji: {} } } };
         const hydratedEmojiAgent = { id: "emoji", identity: { name: "Rocket" }, name: "Rocket" };
         const gateway = await installMockGateway(page, {
           defaultAgentId: "main",

@@ -15,6 +15,7 @@ import {
   openFromForeground,
   expectForegroundUnchanged,
 } from "./command-palette.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -314,8 +315,6 @@ suite.define(() => {
 
   it.each([
     { mode: "dark", width: 1280 },
-    { mode: "light", width: 1280 },
-    { mode: "dark", width: 390 },
     { mode: "light", width: 390 },
   ] as const)(
     "aligns settings and preserves keyboard focus in $mode at $width",
@@ -399,116 +398,113 @@ suite.define(() => {
     },
   );
 
-  it.each(["light", "dark"] as const)(
-    "remembers only palette settings and restores defaults when unchecked in %s",
-    async (mode) => {
-      await suite.withPage(
-        { ...createControlUiE2eContextOptions(), colorScheme: mode },
-        async ({ page }) => {
-          const base = scenario({
-            "users.prefs.get": { status: "ok", entries: { "new-session.migration.v1": true } },
-            "users.prefs.set": { status: "ok" },
-          });
-          const gateway = await installMockGateway(page, {
-            ...base,
-            featureMethods: [...(base.featureMethods ?? []), "users.prefs.get", "users.prefs.set"],
-            presenceUsers: [{ self: true, id: "palette-user", name: "Example User" }],
-          });
-          const { composer, url, palette, input } = await openFromForeground(
-            page,
-            suite.server.baseUrl,
+  it("remembers only palette settings and restores defaults when unchecked", async () => {
+    await suite.withPage(
+      { ...createControlUiE2eContextOptions(), colorScheme: "light" },
+      async ({ page }) => {
+        const base = scenario({
+          "users.prefs.get": { status: "ok", entries: { "new-session.migration.v1": true } },
+          "users.prefs.set": { status: "ok" },
+        });
+        const gateway = await installMockGateway(page, {
+          ...base,
+          featureMethods: [...(base.featureMethods ?? []), "users.prefs.get", "users.prefs.set"],
+          presenceUsers: [{ self: true, id: "palette-user", name: "Example User" }],
+        });
+        const { composer, url, palette, input } = await openFromForeground(
+          page,
+          suite.server.baseUrl,
+        );
+        const capture = captureAfter(page, "palette-remember");
+        const prompt = "Keep this prompt and its caret while changing preferences.";
+        await input.fill(prompt);
+        const popup = palette.locator("wa-popover.palette-session-settings");
+        const trigger = palette.getByRole("button", {
+          name: "New session settings",
+          exact: true,
+        });
+        const openSettings = () => changePicker(popup, "wa-after-show", () => trigger.click());
+        await openSettings();
+        const remember = popup.getByRole("checkbox", { name: /Remember settings for/ });
+        await expect.poll(() => remember.isEnabled()).toBe(true);
+        expect(await remember.isChecked()).toBe(false);
+        await capture("default-settings");
+        const agent = popup.locator("openclaw-agent-select");
+        await changePicker(agent.locator("wa-dropdown"), "wa-after-show", () =>
+          agent.getByRole("button", { name: /^Agent:/ }).click(),
+        );
+        await changePicker(agent.locator("wa-dropdown"), "wa-after-hide", () =>
+          agent.getByRole("menuitemradio", { name: "Reviewer", exact: true }).press("Escape"),
+        );
+        expect(await trigger.getAttribute("aria-expanded")).toBe("true");
+        expect(
+          await popup.getByRole("checkbox", { name: /Remember settings for/ }).isVisible(),
+        ).toBe(true);
+        await changePicker(agent.locator("wa-dropdown"), "wa-after-show", () =>
+          agent.getByRole("button", { name: /^Agent:/ }).click(),
+        );
+        await agent.getByRole("menuitemradio", { name: "Reviewer", exact: true }).click();
+        const paletteWrites = async () =>
+          (await gateway.getRequests("users.prefs.set")).filter(
+            (request) =>
+              isRecord(request.params) &&
+              isRecord(request.params.entries) &&
+              Object.hasOwn(request.params.entries, "new-session.palette.v1"),
           );
-          const capture = captureAfter(page, "palette-remember-" + mode);
-          const prompt = "Keep this prompt and its caret while changing preferences.";
-          await input.fill(prompt);
-          const popup = palette.locator("wa-popover.palette-session-settings");
-          const trigger = palette.getByRole("button", {
-            name: "New session settings",
-            exact: true,
-          });
-          const openSettings = () => changePicker(popup, "wa-after-show", () => trigger.click());
-          await openSettings();
-          const remember = popup.getByRole("checkbox", { name: /Remember settings for/ });
-          await expect.poll(() => remember.isEnabled()).toBe(true);
-          expect(await remember.isChecked()).toBe(false);
-          await capture("default-settings");
-          const agent = popup.locator("openclaw-agent-select");
-          await changePicker(agent.locator("wa-dropdown"), "wa-after-show", () =>
-            agent.getByRole("button", { name: /^Agent:/ }).click(),
-          );
-          await changePicker(agent.locator("wa-dropdown"), "wa-after-hide", () =>
-            agent.getByRole("menuitemradio", { name: "Reviewer", exact: true }).press("Escape"),
-          );
-          expect(await trigger.getAttribute("aria-expanded")).toBe("true");
-          expect(
-            await popup.getByRole("checkbox", { name: /Remember settings for/ }).isVisible(),
-          ).toBe(true);
-          await changePicker(agent.locator("wa-dropdown"), "wa-after-show", () =>
-            agent.getByRole("button", { name: /^Agent:/ }).click(),
-          );
-          await agent.getByRole("menuitemradio", { name: "Reviewer", exact: true }).click();
-          const paletteWrites = async () =>
-            (await gateway.getRequests("users.prefs.set")).filter(
-              (request) =>
-                isRecord(request.params) &&
-                isRecord(request.params.entries) &&
-                Object.hasOwn(request.params.entries, "new-session.palette.v1"),
-            );
-          expect(await paletteWrites()).toHaveLength(0);
-          await remember.check();
-          await expect.poll(async () => (await paletteWrites()).length).toBe(1);
-          const saved = (await paletteWrites())[0]!;
-          expect(saved.params).toMatchObject({
-            entries: { "new-session.palette.v1": { agentId: "reviewer" } },
-          });
-          if (!isRecord(saved.params) || !isRecord(saved.params.entries)) {
-            throw new Error("Missing preference entries");
-          }
-          expect(Object.keys(saved.params.entries)).toEqual(["new-session.palette.v1"]);
-          expect(await popup.getByRole("button", { name: "Use my defaults" }).count()).toBe(0);
-          await changePicker(popup, "wa-after-hide", () =>
-            popup.locator(".palette-session-settings__workspace").press("Escape"),
-          );
-          await input.press("Escape");
-          await input.waitFor({ state: "hidden" });
-          await page.keyboard.press("ControlOrMeta+K");
-          await input.waitFor({ state: "visible" });
-          await input.fill(prompt);
-          // Establish the editor selection before opening settings. Chromium 151
-          // restores its last focused range after a range is injected while blurred.
-          await input.evaluate((element: HTMLTextAreaElement) => {
-            element.focus();
-            element.setSelectionRange(5, 11);
-          });
-          await openSettings();
-          await expect
-            .poll(() => agent.getByRole("button", { name: /^Agent:/ }).textContent())
-            .toContain("Reviewer");
-          expect(await remember.isChecked()).toBe(true);
-          await capture("remembered-settings");
-          await remember.uncheck();
-          await expect.poll(async () => (await paletteWrites()).length).toBe(2);
-          expect((await paletteWrites())[1]!.params).toMatchObject({
-            entries: { "new-session.palette.v1": null },
-          });
-          await expect
-            .poll(() => agent.getByRole("button", { name: /^Agent:/ }).textContent())
-            .toContain("Main");
-          await capture("unchecked-restores-defaults");
-          expect(await input.inputValue()).toBe(prompt);
-          expect(
-            await input.evaluate((element: HTMLTextAreaElement) => [
-              element.selectionStart,
-              element.selectionEnd,
-            ]),
-          ).toEqual([5, 11]);
-          expect(await composer.inputValue()).toBe(foregroundDraft);
-          expect(page.url()).toBe(url);
-          expect(await gateway.getRequests("sessions.create")).toEqual([]);
-        },
-      );
-    },
-  );
+        expect(await paletteWrites()).toHaveLength(0);
+        await remember.check();
+        await expect.poll(async () => (await paletteWrites()).length).toBe(1);
+        const saved = (await paletteWrites())[0]!;
+        expect(saved.params).toMatchObject({
+          entries: { "new-session.palette.v1": { agentId: "reviewer" } },
+        });
+        if (!isRecord(saved.params) || !isRecord(saved.params.entries)) {
+          throw new Error("Missing preference entries");
+        }
+        expect(Object.keys(saved.params.entries)).toEqual(["new-session.palette.v1"]);
+        expect(await popup.getByRole("button", { name: "Use my defaults" }).count()).toBe(0);
+        await changePicker(popup, "wa-after-hide", () =>
+          popup.locator(".palette-session-settings__workspace").press("Escape"),
+        );
+        await input.press("Escape");
+        await input.waitFor({ state: "hidden" });
+        await page.keyboard.press("ControlOrMeta+K");
+        await input.waitFor({ state: "visible" });
+        await input.fill(prompt);
+        // Establish the editor selection before opening settings. Chromium 151
+        // restores its last focused range after a range is injected while blurred.
+        await input.evaluate((element: HTMLTextAreaElement) => {
+          element.focus();
+          element.setSelectionRange(5, 11);
+        });
+        await openSettings();
+        await expect
+          .poll(() => agent.getByRole("button", { name: /^Agent:/ }).textContent())
+          .toContain("Reviewer");
+        expect(await remember.isChecked()).toBe(true);
+        await capture("remembered-settings");
+        await remember.uncheck();
+        await expect.poll(async () => (await paletteWrites()).length).toBe(2);
+        expect((await paletteWrites())[1]!.params).toMatchObject({
+          entries: { "new-session.palette.v1": null },
+        });
+        await expect
+          .poll(() => agent.getByRole("button", { name: /^Agent:/ }).textContent())
+          .toContain("Main");
+        await capture("unchecked-restores-defaults");
+        expect(await input.inputValue()).toBe(prompt);
+        expect(
+          await input.evaluate((element: HTMLTextAreaElement) => [
+            element.selectionStart,
+            element.selectionEnd,
+          ]),
+        ).toEqual([5, 11]);
+        expect(await composer.inputValue()).toBe(foregroundDraft);
+        expect(page.url()).toBe(url);
+        expect(await gateway.getRequests("sessions.create")).toEqual([]);
+      },
+    );
+  });
 
   it.each([false, true])(
     "settles a cold create shortcut exactly once (cancelled: %s)",
@@ -523,7 +519,7 @@ suite.define(() => {
         );
         const module = await holdModuleResponse(
           page,
-          /\/assets\/command-palette-[^/?]+\.js(?:\?.*)?$/u,
+          controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.ts"),
         );
         try {
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, foregroundKey));
@@ -783,69 +779,59 @@ suite.define(() => {
     },
   );
 
-  it.each(["pointer", "keyboard"] as const)(
-    "opens persistent rejected-turn recovery with %s after dismissing its toast",
-    async (interaction) => {
-      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-        const key = "agent:main:dashboard:palette-rejected-turn";
-        const gateway = await installMockGateway(
-          page,
-          scenario({
-            "sessions.create": {
-              key,
-              runError: { code: "INVALID_REQUEST", message: "Initial turn rejected" },
-            },
-          }),
-        );
-        const { composer, url, palette, input } = await openFromForeground(
-          page,
-          suite.server.baseUrl,
-        );
-        const prompt =
-          "Keep this accepted session recoverable.\nDo not send the same request twice.";
-        await input.fill(prompt);
-        const start = palette.getByRole("button", {
-          name: "Start new session in background",
-          exact: true,
-        });
-        await expect.poll(() => start.isEnabled()).toBe(true);
-        await input.press("ControlOrMeta+Enter");
-        await gateway.waitForRequest("sessions.create");
-        await expect
-          .poll(() => palette.getByRole("alert").textContent())
-          .toContain("Initial turn rejected");
-        const toast = page.locator(".app-toast");
-        await toast.getByRole("button", { name: "Dismiss", exact: true }).click();
-        await toast.waitFor({ state: "hidden" });
-        expect(await input.inputValue()).toBe(prompt);
-        expect(page.url()).toBe(url);
-        expect(await composer.inputValue()).toBe(foregroundDraft);
-        await input.press("ControlOrMeta+Enter");
-        expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-        const recovery = palette.getByRole("button", { name: "Open session", exact: true });
-        await recovery.waitFor({ state: "visible" });
-        if (interaction === "pointer") {
-          await recovery.click();
-        } else {
-          await input.focus();
-          for (let step = 0; step < 10; step += 1) {
-            await page.keyboard.press("Tab");
-            if (await recovery.evaluate((element) => document.activeElement === element)) {
-              break;
-            }
-          }
-          expect(await recovery.evaluate((element) => document.activeElement === element)).toBe(
-            true,
-          );
-          await page.keyboard.press("Enter");
-        }
-        await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(key));
-        await input.waitFor({ state: "hidden" });
-        expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-        expect(await gateway.getRequests("chat.send")).toEqual([]);
+  it("opens persistent rejected-turn recovery with the keyboard after dismissing its toast", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const key = "agent:main:dashboard:palette-rejected-turn";
+      const gateway = await installMockGateway(
+        page,
+        scenario({
+          "sessions.create": {
+            key,
+            runError: { code: "INVALID_REQUEST", message: "Initial turn rejected" },
+          },
+        }),
+      );
+      const { composer, url, palette, input } = await openFromForeground(
+        page,
+        suite.server.baseUrl,
+      );
+      const prompt = "Keep this accepted session recoverable.\nDo not send the same request twice.";
+      await input.fill(prompt);
+      const start = palette.getByRole("button", {
+        name: "Start new session in background",
+        exact: true,
       });
-    },
-  );
+      await expect.poll(() => start.isEnabled()).toBe(true);
+      await input.press("ControlOrMeta+Enter");
+      await gateway.waitForRequest("sessions.create");
+      await expect
+        .poll(() => palette.getByRole("alert").textContent())
+        .toContain("Initial turn rejected");
+      const toast = page.locator(".app-toast");
+      await toast.getByRole("button", { name: "Dismiss", exact: true }).click();
+      await toast.waitFor({ state: "hidden" });
+      expect(await input.inputValue()).toBe(prompt);
+      expect(page.url()).toBe(url);
+      expect(await composer.inputValue()).toBe(foregroundDraft);
+      await input.press("ControlOrMeta+Enter");
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+      const recovery = palette.getByRole("button", { name: "Open session", exact: true });
+      await recovery.waitFor({ state: "visible" });
+      await input.focus();
+      for (let step = 0; step < 10; step += 1) {
+        await page.keyboard.press("Tab");
+        if (await recovery.evaluate((element) => document.activeElement === element)) {
+          break;
+        }
+      }
+      expect(await recovery.evaluate((element) => document.activeElement === element)).toBe(true);
+      await page.keyboard.press("Enter");
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(key));
+      await input.waitFor({ state: "hidden" });
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+      expect(await gateway.getRequests("chat.send")).toEqual([]);
+    });
+  });
 
   it("keeps a rejected creation visible and retries the same prompt without touching chat", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {

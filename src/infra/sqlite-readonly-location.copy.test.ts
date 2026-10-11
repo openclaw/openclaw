@@ -1,17 +1,23 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
+  inspectSqliteSchemaHeaderInProcess,
+  prepareSqliteReadOnlyCopyInProcess,
   prepareSqliteReadOnlyLocationInProcess,
   prepareSqliteReadOnlyLocationSyncInProcess,
 } from "./sqlite-readonly-location.js";
+import { MAX_SNAPSHOT_ATTEMPTS } from "./sqlite-snapshot-policy.js";
+import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 
 const MIB = 1024 * 1024;
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
+    __setFsSafeTestHooksForTest(undefined);
     vi.restoreAllMocks();
     cleanup();
   });
@@ -67,6 +73,28 @@ function afterFirstCopy(operation: () => void): () => boolean {
     }
   });
   return () => injected;
+}
+
+function createWalActivationFixture() {
+  const fixture = createFixture(Buffer.alloc(0));
+  const sqlite = requireNodeSqlite();
+  const seed = new sqlite.DatabaseSync(fixture.sourcePath);
+  seed.exec("PRAGMA journal_mode=WAL; PRAGMA user_version=7;");
+  seed.close();
+  const activatedPath = path.join(fixture.sourceRoot, "activated.sqlite");
+  const activated = new sqlite.DatabaseSync(activatedPath);
+  activated.exec("PRAGMA journal_mode=WAL; PRAGMA user_version=8;");
+  const family = ["", "-wal", "-shm"].map((suffix) => ({
+    suffix,
+    bytes: fs.readFileSync(activatedPath + suffix),
+  }));
+  activated.close();
+  const injected = afterFirstCopy(() => {
+    for (const { suffix, bytes } of family) {
+      fs.writeFileSync(fixture.sourcePath + suffix, bytes);
+    }
+  });
+  return { family, fixture, injected };
 }
 
 function afterPrivateCopy(stagingRoot: string, operation: (pathname: string) => void): void {
@@ -138,19 +166,80 @@ function interceptSourceReads(
 }
 
 describe("stable read-only snapshot copies", () => {
-  it.each([
-    { label: "empty", size: 0 },
-    { label: "partial chunk", size: 4099 },
-    { label: "exact chunk", size: MIB },
-    { label: "multiple chunks and a tail", size: 2 * MIB + 37 },
-  ])("preserves every byte of an equal $label source", ({ size }) => {
-    const bytes = patternedBytes(size);
-    const fixture = createFixture(bytes);
-    expectSnapshot(fixture, bytes);
-    expect(fs.readdirSync(fixture.sourceRoot)).toEqual(["source.sqlite"]);
+  it("rechecks journal state when an inactive WAL family gains sidecars during schema inspection", async () => {
+    const { family, fixture, injected } = createWalActivationFixture();
+
+    await expect(
+      inspectSqliteSchemaHeaderInProcess(fixture.sourcePath, fixture.stagingRoot),
+    ).resolves.toMatchObject({ userVersion: 8 });
+    expect(injected()).toBe(true);
+    expect(fs.readdirSync(fixture.stagingRoot)).toEqual([]);
+    for (const { suffix, bytes } of family.filter((file) => file.suffix !== "-shm")) {
+      expect(fs.readFileSync(fixture.sourcePath + suffix)).toEqual(bytes);
+    }
   });
 
-  it.each([0, 512])("preserves a malformed catalog beside a cold %i-byte journal", (bytes) => {
+  it.each(["raw-copy", "online-backup"] as const)(
+    "does not retry %s when preparation and cleanup both fail",
+    async (mode) => {
+      const fixture =
+        mode === "raw-copy" ? createWalActivationFixture().fixture : createFixture(Buffer.alloc(0));
+      if (mode === "online-backup") {
+        const seed = new (requireNodeSqlite().DatabaseSync)(fixture.sourcePath);
+        seed.exec("CREATE TABLE probe (value TEXT);");
+        seed.close();
+        const open = fs.openSync.bind(fs);
+        const fsync = fs.fsyncSync.bind(fs);
+        const snapshotDescriptors = new Set<number>();
+        vi.spyOn(fs, "openSync").mockImplementation((pathname, flags, permissions) => {
+          const descriptor = open(pathname, flags, permissions);
+          if (
+            flags === "r+" &&
+            path.resolve(String(pathname)).startsWith(`${fixture.stagingRoot}${path.sep}`)
+          ) {
+            snapshotDescriptors.add(descriptor);
+          }
+          return descriptor;
+        });
+        vi.spyOn(fs, "fsyncSync").mockImplementation((descriptor) => {
+          if (snapshotDescriptors.has(descriptor)) {
+            throw Object.assign(new Error("SQLite destination is read-only"), { errcode: 8 });
+          }
+          fsync(descriptor);
+        });
+      }
+      const allocations = vi.spyOn(fs, "mkdtempSync");
+      const cleanupError = Object.assign(new Error("snapshot cleanup denied"), { code: "EACCES" });
+      vi.spyOn(fs.promises, "rm").mockImplementation(async () => {
+        if (mode === "online-backup") {
+          fs.renameSync(fixture.sourcePath, `${fixture.sourcePath}.replaced`);
+        }
+        throw cleanupError;
+      });
+      const prepare =
+        mode === "raw-copy"
+          ? inspectSqliteSchemaHeaderInProcess
+          : prepareSqliteReadOnlyLocationInProcess;
+      const error = await prepare(fixture.sourcePath, fixture.stagingRoot).catch(
+        (cause: unknown) => cause,
+      );
+      expect(error).toBeInstanceOf(AggregateError);
+      expect(error).toMatchObject({
+        message: expect.stringContaining(
+          mode === "raw-copy"
+            ? "SQLite journal state changed while copying"
+            : "SQLite destination is read-only",
+        ),
+      });
+      if (!(error instanceof AggregateError)) {
+        throw new Error("Expected aggregated cleanup failure", { cause: error });
+      }
+      expect(error.errors).toContain(cleanupError);
+      expect(allocations).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([512])("preserves a malformed catalog beside a cold %i-byte journal", (bytes) => {
     const fixture = createFixture(Buffer.alloc(0));
     const sqlite = requireNodeSqlite();
     const seed = new sqlite.DatabaseSync(fixture.sourcePath);
@@ -207,60 +296,8 @@ describe("stable read-only snapshot copies", () => {
     }
   });
 
-  it("continues after unequal positive short source and private-copy reads", () => {
-    const bytes = patternedBytes(MIB + 37);
-    const fixture = createFixture(bytes);
-    const open = fs.openSync.bind(fs);
-    const close = fs.closeSync.bind(fs);
-    const read = fs.readSync.bind(fs);
-    const files = {
-      source: { maxBytes: 8191, shortReads: 0 },
-      copy: { maxBytes: 4093, shortReads: 0 },
-    };
-    const descriptors = new Map<number, (typeof files)[keyof typeof files]>();
-    vi.spyOn(fs, "openSync").mockImplementation((pathname, flags, mode) => {
-      const descriptor = open(pathname, flags, mode);
-      const resolved = path.resolve(String(pathname));
-      if (resolved === fixture.sourcePath) {
-        descriptors.set(descriptor, files.source);
-      } else if (flags === "r" && resolved.startsWith(`${fixture.stagingRoot}${path.sep}`)) {
-        descriptors.set(descriptor, files.copy);
-      }
-      return descriptor;
-    });
-    vi.spyOn(fs, "closeSync").mockImplementation((descriptor) => {
-      close(descriptor);
-      descriptors.delete(descriptor);
-    });
-    vi.spyOn(fs, "readSync").mockImplementation(
-      (
-        descriptor: number,
-        buffer: NodeJS.ArrayBufferView,
-        offsetOrOptions: number | fs.ReadOptions = {},
-        length?: number,
-        position?: fs.ReadPosition | null,
-      ) => {
-        const options =
-          typeof offsetOrOptions === "number"
-            ? { offset: offsetOrOptions, length, position }
-            : offsetOrOptions;
-        const file = descriptors.get(descriptor);
-        const requested = options.length ?? buffer.byteLength - (options.offset ?? 0);
-        if (file && requested > file.maxBytes) {
-          file.shortReads += 1;
-          return read(descriptor, buffer, { ...options, length: file.maxBytes });
-        }
-        return read(descriptor, buffer, options);
-      },
-    );
-
-    expectSnapshot(fixture, bytes);
-    expect(files.source.shortReads).toBeGreaterThan(0);
-    expect(files.copy.shortReads).toBeGreaterThan(0);
-    expect(descriptors.size).toBe(0);
-  });
-
-  it("captures a bounded committed WAL prefix while later commits keep appending", () => {
+  it("captures a bounded committed WAL prefix while later commits append", () => {
+    const prepare = prepareSqliteReadOnlyLocationSyncInProcess;
     const fixture = createFixture(Buffer.alloc(0));
     const sqlite = requireNodeSqlite();
     const writer = new sqlite.DatabaseSync(fixture.sourcePath);
@@ -350,10 +387,7 @@ describe("stable read-only snapshot copies", () => {
         }
       });
 
-      prepared = prepareSqliteReadOnlyLocationSyncInProcess(
-        fixture.sourcePath,
-        fixture.stagingRoot,
-      );
+      prepared = prepare(fixture.sourcePath, fixture.stagingRoot);
       expect(appendedDuringCopy).toBe(true);
       expect(appendedAfterCopy).toBeGreaterThan(0);
       expect(shortReads.source).toBeGreaterThan(0);
@@ -386,7 +420,8 @@ describe("stable read-only snapshot copies", () => {
     }
   });
 
-  it("rejects a reset WAL paired with main bytes restored by a later checkpoint", () => {
+  it("rejects a reset WAL paired with checkpoint-restored main bytes during native copying", async () => {
+    const prepare = prepareSqliteReadOnlyCopyInProcess;
     const fixture = createFixture(Buffer.alloc(0));
     const sqlite = requireNodeSqlite();
     const writer = new sqlite.DatabaseSync(fixture.sourcePath);
@@ -405,7 +440,7 @@ describe("stable read-only snapshot copies", () => {
       let reset = false;
       let restored = false;
       let sourceAfterWrites = snapshotSqliteFamily(fixture.sourcePath);
-      afterPrivateCopy(fixture.stagingRoot, (target) => {
+      const afterCopy = (target: string) => {
         if (!reset && target.endsWith(".partial")) {
           reset = true;
           writer.exec(`
@@ -430,12 +465,17 @@ describe("stable read-only snapshot copies", () => {
           ).toEqual(copiedWal);
           sourceAfterWrites = snapshotSqliteFamily(fixture.sourcePath);
         }
+      };
+      afterPrivateCopy(fixture.stagingRoot, afterCopy);
+      __setFsSafeTestHooksForTest({
+        beforeRootStatObservation: (pathname) => {
+          if (pathname === fixture.sourceRoot) {
+            afterCopy("database.sqlite.partial");
+          }
+        },
       });
 
-      prepared = prepareSqliteReadOnlyLocationSyncInProcess(
-        fixture.sourcePath,
-        fixture.stagingRoot,
-      );
+      prepared = await prepare(fixture.sourcePath, fixture.stagingRoot);
       expect(reset).toBe(true);
       expect(restored).toBe(true);
       const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
@@ -463,58 +503,66 @@ describe("stable read-only snapshot copies", () => {
     }
   });
 
-  it("reports source replacement after one acquisition and removes its incomplete copy", async () => {
-    const fixture = createFixture(Buffer.alloc(0));
-    let replacements = 0;
-    afterPrivateCopy(fixture.stagingRoot, () => {
-      fs.renameSync(fixture.sourcePath, `${fixture.sourcePath}.displaced-${replacements++}`);
-      fs.writeFileSync(fixture.sourcePath, "");
-    });
-
-    await expect(
-      prepareSqliteReadOnlyLocationInProcess(fixture.sourcePath, fixture.stagingRoot),
-    ).rejects.toThrow("SQLite source changed while copying");
-    expect(replacements).toBe(1);
-    expect(fs.readdirSync(fixture.stagingRoot)).toEqual([]);
-  });
-
-  it.each(["overwrite", "append", "truncate"] as const)(
-    "retries a source that stabilizes after an intervening %s",
-    (mutation) => {
-      const before = patternedBytes(MIB);
-      const fixture = createFixture(before);
-      const after =
-        mutation === "append"
-          ? Buffer.concat([before, Buffer.from([251])])
-          : mutation === "truncate"
-            ? before.subarray(0, -1)
-            : Buffer.from(before);
-      if (mutation === "overwrite") {
-        after.writeUInt8(after.readUInt8(after.length - 1) ^ 0xff, after.length - 1);
+  it.each(["source replacement", "cancel", "io-error"])(
+    "cleans incomplete snapshots and bounds retries after %s",
+    async (failure) => {
+      const fixture = createFixture(Buffer.alloc(0));
+      const controller = new AbortController();
+      const error = Object.assign(new Error("inspection terminated"), { code: "EIO" });
+      let copies = 0;
+      __setFsSafeTestHooksForTest({
+        beforeRootStatObservation: (pathname) => {
+          if (pathname !== fixture.sourceRoot) {
+            return;
+          }
+          copies += 1;
+          if (failure === "io-error") {
+            throw error;
+          }
+          if (failure === "cancel") {
+            controller.abort(error);
+          }
+          fs.renameSync(fixture.sourcePath, `${fixture.sourcePath}.displaced-${copies}`);
+          fs.writeFileSync(fixture.sourcePath, "");
+        },
+      });
+      const result = prepareSqliteReadOnlyLocationInProcess(
+        fixture.sourcePath,
+        fixture.stagingRoot,
+        controller.signal,
+      );
+      if (failure === "cancel") {
+        await expect(result).rejects.toBe(error);
+      } else {
+        await expect(result).rejects.toThrow(
+          failure === "io-error" ? /EIO/u : "SQLite source changed while copying",
+        );
       }
-      const injected = afterFirstCopy(() => fs.writeFileSync(fixture.sourcePath, after));
-
-      expectSnapshot(fixture, after);
-      expect(injected()).toBe(true);
-      expect(fs.readdirSync(fixture.sourceRoot)).toEqual(["source.sqlite"]);
+      expect(copies).toBe(failure === "source replacement" ? MAX_SNAPSHOT_ATTEMPTS : 1);
+      expect(fs.readdirSync(fixture.stagingRoot)).toEqual([]);
     },
   );
 
-  it.each(["header", "copy"] as const)(
-    "waits out a transient writer during synchronous %s inspection",
-    (phase) => {
-      const bytes = patternedBytes(4099);
+  it.each(["overwrite", "transient missing pathname"] as const)(
+    "retries a source after %s until it stabilizes",
+    (change) => {
+      const bytes = patternedBytes(change === "overwrite" ? MIB : 4099);
       const fixture = createFixture(bytes);
-      const open = fs.openSync.bind(fs);
-      const fsync = fs.fsyncSync.bind(fs);
-      const canonicalPath = fs.realpathSync.native(fixture.sourcePath);
-      let elapsedMs = 0;
-      let changes = 0;
-      vi.spyOn(Atomics, "wait").mockImplementation((_array, _index, _value, timeout) => {
-        elapsedMs += timeout ?? 0;
-        return "timed-out";
-      });
-      if (phase === "header") {
+      if (change === "overwrite") {
+        const after = Buffer.from(bytes);
+        after.writeUInt8(after.readUInt8(after.length - 1) ^ 0xff, after.length - 1);
+        const injected = afterFirstCopy(() => fs.writeFileSync(fixture.sourcePath, after));
+        expectSnapshot(fixture, after);
+        expect(injected()).toBe(true);
+      } else {
+        const open = fs.openSync.bind(fs);
+        const canonicalPath = fs.realpathSync.native(fixture.sourcePath);
+        let elapsedMs = 0;
+        let changes = 0;
+        vi.spyOn(Atomics, "wait").mockImplementation((_array, _index, _value, timeout) => {
+          elapsedMs += timeout ?? 0;
+          return "timed-out";
+        });
         vi.spyOn(fs, "openSync").mockImplementation((pathname, flags, mode) => {
           if (String(pathname) === canonicalPath && elapsedMs < 30) {
             changes += 1;
@@ -522,19 +570,9 @@ describe("stable read-only snapshot copies", () => {
           }
           return open(pathname, flags, mode);
         });
-      } else {
-        vi.spyOn(fs, "fsyncSync").mockImplementation((descriptor) => {
-          fsync(descriptor);
-          if (elapsedMs < 30) {
-            changes += 1;
-            bytes.writeUInt8(bytes.readUInt8(bytes.length - 1) ^ 0xff, bytes.length - 1);
-            fs.writeFileSync(fixture.sourcePath, bytes);
-          }
-        });
+        expectSnapshot(fixture, bytes);
+        expect(changes).toBeGreaterThan(0);
       }
-
-      expectSnapshot(fixture, bytes);
-      expect(changes).toBeGreaterThan(0);
     },
   );
 
@@ -704,4 +742,102 @@ describe("stable read-only snapshot copies", () => {
     expect(descriptors.size).toBe(0);
     expect(fs.readdirSync(fixture.sourceRoot)).toEqual(["source.sqlite"]);
   });
+});
+
+it("copies the admitted source and rejects an identical successor at every observed main open", () => {
+  const bytes = Buffer.alloc(4099, 42);
+  const { sourcePath: source, sourceRoot, stagingRoot: staging } = createFixture(bytes);
+  const replacement = path.join(sourceRoot, "replacement.sqlite");
+  const archived = path.join(sourceRoot, "original.sqlite");
+  fs.writeFileSync(replacement, bytes);
+  const files = { source, replacement, archived, staging, bytes };
+  const identity = readDatabasePathIdentitySync(files.source);
+  expect(readDatabasePathIdentitySync(files.replacement).key).not.toBe(identity.key);
+  const canonicalSource = fs.realpathSync.native(files.source);
+  const open = fs.openSync.bind(fs);
+  const close = fs.closeSync.bind(fs);
+  let observedOpens = 0;
+  const census = vi.spyOn(fs, "openSync").mockImplementation((pathname, flags, mode) => {
+    const descriptor = open(pathname, flags, mode);
+    if (String(pathname) === canonicalSource) {
+      observedOpens += 1;
+    }
+    return descriptor;
+  });
+  let baseline: ReturnType<typeof prepareSqliteReadOnlyLocationSyncInProcess>;
+  try {
+    baseline = prepareSqliteReadOnlyLocationSyncInProcess(files.source, files.staging, identity);
+  } finally {
+    census.mockRestore();
+  }
+  try {
+    expect(fs.readFileSync(baseline.location)).toEqual(files.bytes);
+    expect(fs.readFileSync(files.source)).toEqual(files.bytes);
+    expect(readDatabasePathIdentitySync(files.source)).toEqual(identity);
+  } finally {
+    expect(baseline.cleanup()).toBe(true);
+  }
+  expect(observedOpens).toBeGreaterThanOrEqual(1);
+  expect(fs.readdirSync(files.staging)).toEqual([]);
+
+  for (let targetOpen = 1; targetOpen <= observedOpens; targetOpen += 1) {
+    const label = `main descriptor ${targetOpen} of ${observedOpens}`;
+    let sourceOpens = 0;
+    let replacementDescriptor: number | undefined;
+    let injected = false;
+    // Keep the successor installed for the real descriptor's entire lifetime;
+    // the original pathname identity is restored before overall acceptance.
+    const opening = vi.spyOn(fs, "openSync").mockImplementation((pathname, flags, mode) => {
+      if (String(pathname) === canonicalSource && ++sourceOpens === targetOpen) {
+        fs.renameSync(files.source, files.archived);
+        fs.renameSync(files.replacement, files.source);
+        injected = true;
+        replacementDescriptor = open(pathname, flags, mode);
+        return replacementDescriptor;
+      }
+      return open(pathname, flags, mode);
+    });
+    const closing = vi.spyOn(fs, "closeSync").mockImplementation((descriptor) => {
+      close(descriptor);
+      if (descriptor === replacementDescriptor) {
+        replacementDescriptor = undefined;
+        fs.renameSync(files.source, files.replacement);
+        fs.renameSync(files.archived, files.source);
+      }
+    });
+    const wait = vi.spyOn(Atomics, "wait");
+    let prepared: ReturnType<typeof prepareSqliteReadOnlyLocationSyncInProcess> | undefined;
+    let failure: unknown;
+    try {
+      try {
+        prepared = prepareSqliteReadOnlyLocationSyncInProcess(
+          files.source,
+          files.staging,
+          identity,
+        );
+      } catch (error) {
+        failure = error;
+      } finally {
+        if (prepared) {
+          expect(prepared.cleanup(), label).toBe(true);
+        }
+      }
+      expect(injected, label).toBe(true);
+      expect(failure, label).toBeInstanceOf(Error);
+      expect(failure, label).toHaveProperty(
+        "message",
+        expect.stringMatching(/file identity changed/),
+      );
+      expect(wait, label).not.toHaveBeenCalled();
+      expect(replacementDescriptor, label).toBeUndefined();
+      expect(readDatabasePathIdentitySync(files.source), label).toEqual(identity);
+      expect(fs.readFileSync(files.source), label).toEqual(files.bytes);
+      expect(fs.readFileSync(files.replacement), label).toEqual(files.bytes);
+      expect(fs.readdirSync(files.staging), label).toEqual([]);
+    } finally {
+      opening.mockRestore();
+      closing.mockRestore();
+      wait.mockRestore();
+    }
+  }
 });

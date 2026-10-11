@@ -8,25 +8,25 @@ import { discoverConfiguredPluginLoadPaths } from "../plugins/discovery.js";
 import { inspectPluginSourceDependencies } from "../plugins/plugin-generation-source-inspection.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
-import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
+import { isPathInside } from "./path-guards.js";
+import { ignoreMissingUpdateCandidateFile } from "./update-candidate-files.js";
 import {
   resolveUpdateCandidatePluginPath,
   resolveUpdateCandidatePluginSourcePath,
 } from "./update-candidate-paths.js";
-import { resolveUpdateCandidatePluginSourceEntries } from "./update-candidate-plugin-sources.js";
+import {
+  inspectUpdateCandidatePluginSource,
+  resolveUpdateCandidatePluginSourceEntries,
+} from "./update-candidate-plugin-sources.js";
 import {
   copyUpdateCandidatePluginTrees,
   prepareUpdateCandidatePluginTrees,
 } from "./update-candidate-plugin-tree.js";
 import { resolveUpdateRehearsalRoot } from "./update-rehearsal-paths.js";
+import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 
 async function readOptionalFile(file: string): Promise<Buffer | undefined> {
-  return fs.readFile(file).catch((error: unknown) => {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  });
+  return fs.readFile(file).catch(ignoreMissingUpdateCandidateFile);
 }
 
 /** Complete a published driver's private snapshot before candidate Doctor loads plugins. */
@@ -113,16 +113,20 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
   for (const entry of entries) {
     assertPrivate(entry.rootDir);
     assertPrivate(entry.entryFile);
-    let copiedGraph: ReturnType<typeof inspectPluginSourceDependencies>;
-    try {
-      copiedGraph = inspectPluginSourceDependencies([entry]);
-    } catch (error) {
-      if (!(error instanceof SyntaxError)) {
-        throw error;
-      }
-      warnings.push(
-        `Update checks could not inspect plugin ${entry.pluginId} (${entry.entryFile}): ${error.message}. Continuing without dependency repair for this entry.`,
-      );
+    const copiedGraph = inspectUpdateCandidatePluginSource(entry, warnings, {
+      root: privateRoot,
+      onUnresolvable: (name, importer) => {
+        if (warnings.length < UPDATE_RUN_DIAGNOSTIC_LIMIT) {
+          warnings.push(
+            `Plugin dependency ${name} is unresolvable inside the temporary update copy: undeclared ancestor lookup from ${importer}. Continuing without this optional dependency.`.slice(
+              0,
+              UPDATE_RUN_TEXT_LIMIT,
+            ),
+          );
+        }
+      },
+    });
+    if (!copiedGraph) {
       continue;
     }
     for (const reference of copiedGraph.references) {
@@ -157,12 +161,7 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
         return original ? [JSON.stringify([original, specifier])] : [];
       }),
     );
-    const canonicalSource = await fs.realpath(entryFile).catch((error: unknown) => {
-      if (hasNodeErrorCode(error, "ENOENT")) {
-        return undefined;
-      }
-      throw error;
-    });
+    const canonicalSource = await fs.realpath(entryFile).catch(ignoreMissingUpdateCandidateFile);
     if (!canonicalSource) {
       warnings.push(`Plugin source for update checks is no longer available: ${entryFile}.`);
       continue;
@@ -239,12 +238,7 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
   for (const entry of plan.entries) {
     const destination = project(entry.path);
     assertPrivate(destination);
-    const existing = await fs.lstat(destination).catch((error: unknown) => {
-      if (hasNodeErrorCode(error, "ENOENT")) {
-        return undefined;
-      }
-      throw error;
-    });
+    const existing = await fs.lstat(destination).catch(ignoreMissingUpdateCandidateFile);
     if (!existing) {
       missing.push(entry);
     } else if (

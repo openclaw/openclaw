@@ -27,7 +27,7 @@ plugins.
 | `api.registerTrustedToolPolicy(...)`                                                 | Manifest-gated trusted pre-plugin tool policy that can block or rewrite tool params                                                                        |
 | `api.registerToolMetadata(...)`                                                      | Tool catalog display metadata without changing the tool implementation                                                                                     |
 | `api.registerCommand(...)`                                                           | Scoped plugin commands; command results can set `continueAgent: true` or `suppressReply: true`; Discord native commands support `descriptionLocalizations` |
-| `api.session.controls.registerControlUiDescriptor(...)`                              | Control UI contribution descriptors for session, tool, run, settings, or tab surfaces                                                                      |
+| `api.session.controls.registerControlUiDescriptor(...)`                              | Control UI contribution descriptors; the `tab`, `widget`, and `link-reader` surfaces are rendered                                                          |
 | `api.lifecycle.registerRuntimeLifecycle(...)`                                        | Cleanup callbacks for plugin-owned runtime resources on reset/delete/reload paths                                                                          |
 | `api.agent.events.registerAgentEventSubscription(...)`                               | Sanitized event subscriptions for workflow state and monitors                                                                                              |
 | `api.runContext.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)`  | Per-run plugin scratch state cleared on terminal run lifecycle                                                                                             |
@@ -183,7 +183,7 @@ cannot be combined with `placement: "route:<pluginId>"`. Registration rejects
 duplicate slugs from another active plugin (the first registration wins) and
 Gateway-owned names: `api`, `plugins`, `plugin`, `focus`, `approve`, `ask`, `share`,
 `j`, `v1`, `ui`, `mcp-app-sandbox`, `__openclaw__`, `__openclaw`, `sessions`,
-`agent`, `agents`, and probe names `health`, `healthz`, `ready`, `readyz`, `startup`,
+`agent`, `agents`, and check names `health`, `healthz`, `ready`, `readyz`, `startup`,
 and `startupz`.
 
 The Control UI ignores slugs matching the first segment of any native route or
@@ -200,7 +200,7 @@ short-lived, HttpOnly grant scoped to that plugin and route root so the
 sandboxed frame can load without copying the Gateway bearer token into its URL
 or JavaScript. The authenticated parent renews the grant while the external tab
 is active and before mounting it after navigation or browser resume. It also
-probes the grant from the same opaque sandbox before mounting, so browser
+checks the grant from the same opaque sandbox before mounting, so browser
 privacy modes that block the cookie fail closed with an unavailable panel.
 The frame grant accepts only `GET` and `HEAD` and always carries
 `operator.read`; `requiredScopes` controls tab visibility but never widens the
@@ -424,7 +424,7 @@ when it follows a failed or revoked core operation.
 
 The Crabbox adapter uses `crabbox exec --id <lease-id> [--pty] -- /bin/sh -c ...`
 and `stop --current-repo --id <lease-id>` from the original owning workspace. Its
-pre-allocation `exec --check` probe requires `execution` and `currentRepoStop` to
+pre-allocation `exec --check` check requires `execution` and `currentRepoStop` to
 both be true; initial support is for direct Daytona leases. Static SSH continues
 to use its existing settings through an adapter into the same workspace owner.
 

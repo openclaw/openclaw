@@ -1,5 +1,6 @@
 /** Native harness hook event relay and public Plugin SDK facade. */
 import { randomUUID } from "node:crypto";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   MAX_TIMER_TIMEOUT_MS,
   resolveExpiresAtMsFromDurationMs,
@@ -11,6 +12,7 @@ import { retainBeforeToolCallForNativeHookRelay } from "./host-private-capabilit
 import { formatPermissionApprovalDescription as formatPermissionApprovalDescriptionForTests } from "./native-hook-relay-approval-presentation.js";
 import {
   clearNativeHookRelayBridgesForTests,
+  handleNativeHookRelayBridgeRequest,
   NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS,
   NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
   readNativeHookRelayBridgeRecordIfExists,
@@ -21,7 +23,6 @@ import {
   isRetryableNativeHookRelayBridgeLookupError,
 } from "./native-hook-relay-bridge.js";
 import {
-  codexNativeHookRelayProviderAdapter,
   normalizeNativeHookInvocation,
   normalizeNativeHookToolName,
   readNativeHookRelayApprovalMode,
@@ -265,6 +266,15 @@ function registerNativeHookRelayInternal(
         return deferMcpToolApprovals;
       },
       ready,
+      enableRemoteCallback: () => {
+        const lifetime = readRelayLifetime(registration);
+        if (!lifetime) {
+          throw new Error("native hook relay registration is inactive");
+        }
+        assertNativeHookRelayForegroundCurrent(registration, lifetime, lifetime.foregroundToken);
+        bridge.remoteEnabled = true;
+        return { token: bridge.token };
+      },
       prepareInvocation: async () => {
         const lifetime = readRelayLifetime(registration);
         if (!lifetime) {
@@ -501,7 +511,6 @@ export async function invokeNativeHookRelay(
     processNativeHookRelayInvocation({
       registration: effectiveRegistration,
       invocation: normalized,
-      adapter: codexNativeHookRelayProviderAdapter,
       executionAdmission: readRelayLifetime(registration)?.executionAdmission,
       assertExecutionAdmissionCurrent,
     }),
@@ -666,3 +675,31 @@ export const testing = {
   setNativeHookRelayPermissionApprovalRequesterForTests,
   setNativeHookRelayDeferredToolApprovalRequesterForTests,
 } as const;
+
+/** Token-scoped dedicated-harness callback; never accepts Gateway operator credentials. */
+export async function dispatchNativeHookRelayHttpCallback(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  const match = /^\/__openclaw__\/native-hook\/([A-Za-z0-9_-]+)$/.exec(req.url ?? "");
+  const relayId = match?.[1];
+  const registration = relayId ? relays.get(relayId) : undefined;
+  const bridge = relayId ? nativeHookRelayState.relayBridges.get(relayId) : undefined;
+  if (req.method !== "POST" || !match) {
+    res.writeHead(404).end();
+    return;
+  }
+  if (!registration || !bridge?.remoteEnabled) {
+    res.writeHead(403).end();
+    return;
+  }
+  await handleNativeHookRelayBridgeRequest(req, res, {
+    provider: registration.provider,
+    relayId: registration.relayId,
+    token: bridge.token,
+    registration,
+    bridge,
+    invokeRelay: invokeNativeHookRelay,
+    remote: true,
+  });
+}

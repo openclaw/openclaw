@@ -48,31 +48,3 @@ export type ManagedImageRecordAttachment = {
   messageId: string;
   updatedAt: string;
 };
-
-export type ManagedImageRecordWorkerOperations = {
-  "managedImages.insert": { input: ManagedImageRecord; output: boolean };
-  "managedImages.attach": { input: ManagedImageRecordAttachment; output: boolean };
-  "managedImages.claimCleanup": { input: ManagedImageRecord; output: boolean };
-  "managedImages.deleteClaimed": { input: ManagedImageRecord; output: boolean };
-  "managedImages.read": { input: { attachmentId: string }; output: ManagedImageRecord | null };
-  "managedImages.entries": { input: { sessionKey?: string }; output: ManagedImageRecordEntry[] };
-  "managedImages.originalMediaIds": { input: undefined; output: string[] };
-};
-
-export type ManagedImageRecordCommand = {
-  [Key in keyof ManagedImageRecordWorkerOperations]: {
-    type: Key;
-    input: ManagedImageRecordWorkerOperations[Key]["input"];
-  };
-}[keyof ManagedImageRecordWorkerOperations];
-
-export type ManagedImageRecordMutation = Extract<
-  ManagedImageRecordCommand,
-  {
-    type:
-      | "managedImages.insert"
-      | "managedImages.attach"
-      | "managedImages.claimCleanup"
-      | "managedImages.deleteClaimed";
-  }
->;

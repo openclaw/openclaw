@@ -9,11 +9,9 @@ import {
   type SqliteLockFailureReporting,
 } from "../infra/sqlite-busy-timeout.js";
 import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
-import {
-  assertSqliteIntegrity,
-  isTerminalSqliteIntegrityError,
-} from "../infra/sqlite-integrity.js";
+import { isTerminalSqliteIntegrityError } from "../infra/sqlite-integrity.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
+import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { prepareSqliteDatabaseDirectory } from "../infra/sqlite-wal-filesystem.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
@@ -22,9 +20,11 @@ import {
   configureSqlitePreSchemaPragmas,
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
+import { readDatabaseIdentityBirthtime } from "../infra/sqlite-worker-identity.js";
 import { getSqliteWorkerExistingDatabaseIdentity } from "../infra/sqlite-worker-state-context.js";
 import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getStateRuntimeSchemaAdmission } from "./openclaw-state-db-admission.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
   OPENCLAW_STATE_SCHEMA_VERSION,
@@ -35,10 +35,11 @@ import {
   prepareStateDatabaseInitialization,
   type StateDatabaseInitialization,
 } from "./openclaw-state-db-initialization.js";
+import { assertStateDatabaseIntegrityOnce } from "./openclaw-state-db-integrity-admission.js";
 import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
 import {
   assertSupportedStateSchemaVersion,
-  readStateSchemaMigrationVersion,
+  readStateSchemaContentVersion,
 } from "./openclaw-state-db-schema-version.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 
@@ -48,7 +49,10 @@ function assertStateDatabaseIntegrityBeforeMutation(
   database: DatabaseSync,
   pathname: string,
 ): void {
-  const contentVersion = readStateSchemaMigrationVersion(database);
+  if (getStateRuntimeSchemaAdmission(database)) {
+    return;
+  }
+  const contentVersion = readStateSchemaContentVersion(database);
   const hasApplicationSchema = database // sqlite-allow-raw -- Cold-open schema presence probe before Kysely exposure.
     .prepare("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1")
     .get();
@@ -63,8 +67,8 @@ function assertStateDatabaseIntegrityBeforeMutation(
     });
   }
   if (contentVersion !== OPENCLAW_STATE_SCHEMA_VERSION) {
-    // Every physical open proves the full file before schema mutation or exposure.
-    assertSqliteIntegrity(database, pathname);
+    // Older content is verified before the migration owner can mutate it.
+    assertStateDatabaseIntegrityOnce(database, pathname);
   }
 }
 
@@ -131,7 +135,7 @@ function openNativeStateDatabase(
         !current.isFile() ||
         current.dev !== original.dev ||
         current.ino !== original.ino ||
-        current.birthtimeNs !== original.birthtimeNs
+        readDatabaseIdentityBirthtime(current) !== readDatabaseIdentityBirthtime(original)
       ) {
         throw new Error(`Existing shared-state database generation changed: ${params.pathname}`);
       }
@@ -147,6 +151,9 @@ function openNativeStateDatabase(
     assertSameFile();
     enableNodeSqliteKyselyStatementCache(db);
     setSqliteBusyTimeout(db, busyTimeoutMs);
+    if (getStateRuntimeSchemaAdmission(db)) {
+      admitSqliteSchema(db);
+    }
     assertOpenClawStateWriteAllowed({
       database: db,
       databasePath: params.pathname,
@@ -161,6 +168,7 @@ function openNativeStateDatabase(
         path: params.pathname,
         walMaintenance: {
           checkpoint: () => false,
+          stop: async () => {},
           close: () => true,
           reclaimFreePages: createSqliteWalReclamationResult,
         },

@@ -4,6 +4,7 @@
 // independent of the Kysely value graph.
 import type { DatabaseSync, SQLInputValue, StatementSync } from "node:sqlite";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { registerListener } from "../shared/listeners.js";
 import { pruneMapToMaxSize } from "./map-size.js";
 
 export const { kyselyByDatabase, queryErrorHandlerByDatabase } = resolveGlobalSingleton(
@@ -49,11 +50,7 @@ export function registerNodeSqliteDisposeCallback(
 ): () => void {
   const owner: StatementCacheOwner = db;
   installStatementInvalidation(owner);
-  const callbacks = (owner[disposeCallbacksSymbol] ??= new Set());
-  callbacks.add(callback);
-  return () => {
-    callbacks.delete(callback);
-  };
+  return registerListener((owner[disposeCallbacksSymbol] ??= new Set()), callback);
 }
 
 export function disposeNodeSqliteDependents(

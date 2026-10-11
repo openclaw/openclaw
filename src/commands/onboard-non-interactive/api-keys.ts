@@ -52,7 +52,6 @@ async function resolveApiKeyFromProfiles(params: {
   return null;
 }
 
-/** Resolves an API key for non-interactive setup without prompting the user. */
 export async function resolveNonInteractiveApiKey(params: {
   provider: string;
   cfg: OpenClawConfig;
@@ -111,29 +110,21 @@ export async function resolveNonInteractiveApiKey(params: {
     );
   }
 
-  if (useSecretRefMode) {
-    const resolvedEnv = resolveEnvKey();
-    if (resolvedEnv.key) {
-      if (!resolvedEnv.envVarName) {
-        // Provider auto-detection can return a key without a concrete env var
-        // name; ref mode needs the name because the config stores the reference.
-        return reject(
-          [
-            `--secret-input-mode ref requires an explicit environment variable for provider "${params.provider}".`,
-            `Set ${params.envVar} in env and retry, or use --secret-input-mode plaintext.`,
-          ].join("\n"),
-        );
-      }
-      return returnOperatorKey(resolvedEnv.key, "env", resolvedEnv.envVarName);
-    }
-  }
-
   if (flagKey) {
     return returnOperatorKey(flagKey, "flag");
   }
 
   const resolvedEnv = resolveEnvKey();
   if (resolvedEnv.key) {
+    if (useSecretRefMode && !resolvedEnv.envVarName) {
+      // Ref mode needs a concrete env var name for the stored reference.
+      return reject(
+        [
+          `--secret-input-mode ref requires an explicit environment variable for provider "${params.provider}".`,
+          `Set ${params.envVar} in env and retry, or use --secret-input-mode plaintext.`,
+        ].join("\n"),
+      );
+    }
     return returnOperatorKey(resolvedEnv.key, "env", resolvedEnv.envVarName);
   }
 

@@ -3,7 +3,7 @@
 // Run bounded test graphs in fresh processes so one shard's checker heap cannot
 // accumulate while the next shard loads.
 import { randomUUID } from "node:crypto";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 import type { CoreTsgoGraph } from "./check-tsgo-core-boundary.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
@@ -170,17 +170,46 @@ export function createChangedCoreTestCheck(
 /** Preflight selects compiler consumers once; executing rows retain their existing owners. */
 export async function createChangedCiTypeCheckPlan(
   paths: readonly string[],
-  options: { cwd?: string } = {},
+  options: { cwd?: string; coreBoundaryOwner?: "additional-checks" } = {},
 ) {
   const cwd = realpathSync(options.cwd ?? repoRoot);
-  if (!resolveChangedCiTsgoInputs(paths, (file) => existsSync(path.resolve(cwd, file)))) {
+  const compilerPaths = resolveChangedCiTsgoInputs(paths, (file) =>
+    existsSync(path.resolve(cwd, file)),
+  );
+  if (!compilerPaths) {
+    return { mode: "full", graphs: TSGO_CI_GRAPHS };
+  }
+  const scope =
+    options.coreBoundaryOwner === "additional-checks" &&
+    compilerPaths.every((file) => file.startsWith("extensions/"))
+      ? "noncore"
+      : "all";
+  // Only ordinary extension paths can rely on the parallel core boundary.
+  // Aliases can have different names in compiler inventories; retain all graphs.
+  const physicalExtensionInputs = () => {
+    try {
+      return compilerPaths.every((file) => {
+        const absolute = path.resolve(cwd, file);
+        return (
+          path.relative(cwd, absolute).split(path.sep).join("/") === file &&
+          lstatSync(absolute).isFile() &&
+          realpathSync(absolute) === absolute
+        );
+      });
+    } catch {
+      return false;
+    }
+  };
+  if (scope === "noncore" && !physicalExtensionInputs()) {
     return { mode: "full", graphs: TSGO_CI_GRAPHS };
   }
   const { inspectCiTsgoCheckGraphs } = await import("./check-tsgo-core-boundary.mts");
-  const inspected = await inspectCiTsgoCheckGraphs({ cwd });
-  const selected = paths.every((file) => existsSync(path.resolve(cwd, file)))
-    ? selectChangedCiTsgoGraphs(paths, inspected)
-    : undefined;
+  const inspected = await inspectCiTsgoCheckGraphs({ cwd, scope });
+  const selected =
+    paths.every((file) => existsSync(path.resolve(cwd, file))) &&
+    (scope !== "noncore" || physicalExtensionInputs())
+      ? selectChangedCiTsgoGraphs(paths, inspected, { scope })
+      : undefined;
   return { mode: selected ? "changed" : "full", graphs: selected ?? TSGO_CI_GRAPHS };
 }
 

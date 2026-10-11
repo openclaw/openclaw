@@ -1,19 +1,33 @@
-// tools.web.fetch.headers tests cover operator header delivery, transport
-// constraints, sensitive capture metadata, and cache partitioning.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LookupFn } from "../../infra/net/ssrf.js";
 import * as logger from "../../logger.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import "./web-fetch.test-mocks.js";
 import { createWebFetchTool } from "./web-fetch.js";
+import { createBaseWebFetchToolConfig } from "./web-fetch.test-harness.js";
 import * as webGuardedFetch from "./web-guarded-fetch.js";
 
 const lookupMock = vi.fn();
+const baseToolConfig = createBaseWebFetchToolConfig({ lookupFn: lookupMock });
 
-function markdownResponse(body: string): Response {
+function markdownResponse(body: string, extraHeaders: Record<string, string> = {}): Response {
   return new Response(body, {
     status: 200,
-    headers: { "content-type": "text/markdown; charset=utf-8" },
+    headers: { "content-type": "text/markdown; charset=utf-8", ...extraHeaders },
+  });
+}
+
+function htmlResponse(body: string, contentType = "text/html; charset=utf-8"): Response {
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": contentType },
+  });
+}
+
+function jsonResponse(body: string, contentType = "application/json; charset=utf-8"): Response {
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": contentType },
   });
 }
 
@@ -44,7 +58,7 @@ function getRequestHeaders(
   return (call[1] as { headers?: Record<string, string> } | undefined)?.headers ?? {};
 }
 
-describe("web_fetch configured request headers", () => {
+describe("web_fetch headers and response extraction", () => {
   const priorFetch = global.fetch;
 
   beforeEach(() => {
@@ -225,5 +239,117 @@ describe("web_fetch configured request headers", () => {
     )?.execute?.("call", { url });
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("handles structured +json subtypes as JSON", async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValue(jsonResponse('{"patch":true}', "Application/JSON-Patch+JSON"));
+    global.fetch = withFetchPreconnect(fetchSpy);
+
+    const tool = createWebFetchTool(baseToolConfig);
+
+    const result = await tool?.execute?.("call", { url: "https://example.com/json-patch" });
+    const details = result?.details as
+      | { extractor?: string; contentType?: string; text?: string }
+      | undefined;
+    expect(details?.extractor).toBe("json");
+    expect(details?.contentType).toBe("application/json-patch+json");
+    expect(details?.text).toContain('"patch": true');
+  });
+
+  it("bypasses Firecrawl when runtime metadata marks Firecrawl inactive", async () => {
+    // Runtime metadata is authoritative for the current credential snapshot; a
+    // stale configured provider should not force provider fallback.
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValue(
+        htmlResponse(
+          "<html><body><article><h1>Runtime Off</h1><p>Use direct fetch.</p></article></body></html>",
+        ),
+      );
+    global.fetch = withFetchPreconnect(fetchSpy);
+
+    const tool = createWebFetchTool({
+      lookupFn: lookupMock as unknown as LookupFn,
+      config: {
+        plugins: {
+          entries: {
+            firecrawl: {
+              config: {
+                webFetch: {
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "MISSING_FIRECRAWL_KEY_REF",
+                  },
+                },
+              },
+            },
+          },
+        },
+        tools: {
+          web: {
+            fetch: {
+              provider: "firecrawl",
+            },
+          },
+        },
+      },
+      sandboxed: false,
+      runtimeWebFetch: {
+        providerConfigured: "firecrawl",
+        providerSource: "configured",
+        diagnostics: [],
+      },
+    });
+
+    await tool?.execute?.("call", { url: "https://example.com/runtime-firecrawl-off" });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://example.com/runtime-firecrawl-off");
+  });
+
+  it("logs x-markdown-tokens when header is present", async () => {
+    // Token diagnostics are useful, but the logged URL must be scrubbed before
+    // query strings or private paths reach debug output.
+    const logSpy = vi.spyOn(logger, "logDebug").mockImplementation(() => {});
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValue(markdownResponse("# Tokens Test", { "x-markdown-tokens": "1500" }));
+    global.fetch = withFetchPreconnect(fetchSpy);
+
+    const tool = createWebFetchTool(baseToolConfig);
+
+    await tool?.execute?.("call", { url: "https://example.com/tokens/private?token=secret" });
+
+    const tokenLogs = logSpy.mock.calls
+      .map(([message]) => message)
+      .filter((message) => message.includes("x-markdown-tokens"));
+    expect(tokenLogs).toEqual(["[web-fetch] x-markdown-tokens: 1500 (https://example.com/...)"]);
+    expect(tokenLogs[0]).not.toContain("token=secret");
+    expect(tokenLogs[0]).not.toContain("/tokens/private");
+  });
+
+  it("converts markdown to text when extractMode is text", async () => {
+    const md = "# Heading\n\n**Bold text** and [a link](https://example.com).";
+    const fetchSpy = vi.fn().mockResolvedValue(markdownResponse(md));
+    global.fetch = withFetchPreconnect(fetchSpy);
+
+    const tool = createWebFetchTool(baseToolConfig);
+
+    const result = await tool?.execute?.("call", {
+      url: "https://example.com/text-mode",
+      extractMode: "text",
+    });
+    const details = result?.details as
+      | { extractor?: string; extractMode?: string; text?: string }
+      | undefined;
+    expect(details?.extractor).toBe("cf-markdown");
+    expect(details?.extractMode).toBe("text");
+    // Text mode strips header markers (#) and link syntax
+    expect(details?.text).not.toContain("# Heading");
+    expect(details?.text).toContain("Heading");
+    expect(details?.text).not.toContain("[a link](https://example.com)");
   });
 });

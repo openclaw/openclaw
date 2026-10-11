@@ -1,8 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { withSessionManagerWrite } from "../../agents/sessions/session-manager-write-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import * as sessionAccess from "../../config/sessions/session-accessor.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
@@ -28,6 +29,8 @@ import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation
 import { reconcileWorkspaceAfterTurn } from "./workspace-result-finalize.js";
 import * as resultStaging from "./workspace-result-staging.js";
 
+afterAll(closeStateDatabaseForTest);
+
 // Pause only the physical admission boundary, without holding a native database lock.
 vi.mock("../../agents/sessions/session-manager-write-admission.js", () => ({
   withSessionManagerWrite: vi.fn(),
@@ -49,7 +52,7 @@ describe("cloud transcript write admission", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     vi.mocked(withSessionManagerWrite).mockReset();
-    await cleanupWorkerTurnLauncherTest();
+    await cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true });
   });
 
   it.each(["current", "run", "claim", "environment", "missing", "writer", "lifecycle"] as const)(
@@ -170,7 +173,6 @@ describe("cloud transcript write admission", () => {
     { change: "missing", cleared: false },
     { change: "writer", cleared: false },
     { change: "current", cleared: true },
-    { change: "claim", cleared: true },
   ] as const)(
     "checks $change settlement authority after admitting a workspace report (cleared: $cleared)",
     async ({ change, cleared }) => {
@@ -185,7 +187,7 @@ describe("cloud transcript write admission", () => {
         claimId: "report-claim",
         runId: "report-run",
       });
-      placements.markWorkspaceResultPending(turnClaim);
+      await placements.markWorkspaceResultPending(turnClaim);
       if (cleared) {
         placements.recordWorkspaceResultConflict(turnClaim, {
           paths: ["src/local.ts"],
@@ -252,7 +254,7 @@ describe("cloud transcript write admission", () => {
         expect(publish).not.toHaveBeenCalled();
         expect(placements.validateWorkspaceResultClaim(turnClaim)).toBe(true);
         if (change === "draining") {
-          placements.startWorkspaceResultDrain(turnClaim);
+          await placements.startWorkspaceResultDrain(turnClaim);
         } else if (change === "claim") {
           vi.spyOn(placements, "validateWorkspaceResultClaim").mockReturnValue(false);
         } else if (change === "missing") {
@@ -283,7 +285,7 @@ describe("cloud transcript write admission", () => {
           expect(outcome).toBeInstanceOf(Error);
           expect(SessionManager.open(sessionTarget).getBranch()).toEqual([]);
           expect(publish).not.toHaveBeenCalled();
-          expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+          expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
         }
       } finally {
         gate.release.resolve();

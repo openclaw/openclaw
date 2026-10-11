@@ -7,6 +7,7 @@ import {
 import {
   prepareGitHubPublicationWorkspaceOwner,
   type PublicationSessionIdentity,
+  readGitHubPublicationSession,
 } from "./github-publication-availability.js";
 import { GitHubPublicationSessionChangedError } from "./github-publication-failure.js";
 import { projectGitHubPublicationResult } from "./github-publication-store.js";
@@ -15,25 +16,11 @@ import {
   type GitHubRepositoryPublicationSnapshot,
 } from "./github-repository-publication-snapshot.js";
 import { failRepositoryGitHubPublicationPreparation } from "./github-repository-publication-store.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { withSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
-
-export type PreparedRepositoryPublicationSnapshot = {
-  snapshot: GitHubRepositoryPublicationSnapshot;
-  snapshotRoot: string;
-  checkpointRef: string;
-  digest: string;
-};
 
 export async function prepareRepositoryOwner(session: PublicationSessionIdentity) {
   const current = await prepareGitHubPublicationWorkspaceOwner(session);
-  return () => {
-    const owner = current();
-    if (owner.kind !== "repository") {
-      throw new Error("GitHub publication repository owner changed.");
-    }
-    return owner;
-  };
+  return current.currentRepository;
 }
 
 export function resolveReceiptOwner(
@@ -48,7 +35,7 @@ export function resolveReceiptOwner(
   >,
   prepared: PreparedRepositoryWorkspace,
 ) {
-  const loaded = loadGatewaySessionEntryReadOnly(row.session_key, { agentId: row.agent_id });
+  const loaded = readGitHubPublicationSession(row.session_key, { agentId: row.agent_id });
   const workspace = prepared.current();
   if (
     loaded.entry?.sessionId !== row.session_id ||
@@ -91,33 +78,48 @@ export async function captureCheckpoint<T>(
       | "source_index_tree"
       | "workspace_tree"
     >,
-    prepared: PreparedRepositoryPublicationSnapshot,
+    prepared: { snapshot: GitHubRepositoryPublicationSnapshot; snapshotRoot: string },
   ) => Promise<T>,
 ): Promise<T | SessionGitHubPublicationResult> {
-  const preparedOwner = await getSessionRepositoryWorkspaceStore().prepare(row.workspace_id);
-  assertCurrent();
-  const { workspace } = assertReceiptOwner(row, preparedOwner);
-  if (!workspace.checkpointRef) {
-    throw new Error("GitHub publication is waiting for the first accepted repository checkpoint.");
-  }
-  const assertSelected = () => {
+  let checkpointRef = row.checkpoint_ref;
+  let assertSelected = assertCurrent;
+  if (!checkpointRef) {
+    const preparedOwner = await getSessionRepositoryWorkspaceStore().prepare(row.workspace_id);
     assertCurrent();
-    const { workspace: current } = assertReceiptOwner(row, preparedOwner);
-    if (
-      current.revision !== workspace.revision ||
-      current.checkpointRef !== workspace.checkpointRef
-    ) {
-      throw new Error("GitHub publication checkpoint changed during preparation.");
+    const { workspace } = assertReceiptOwner(row, preparedOwner);
+    checkpointRef = workspace.checkpointRef ?? null;
+    if (!checkpointRef) {
+      throw new Error(
+        "GitHub publication is waiting for the first accepted repository checkpoint.",
+      );
     }
-  };
+    assertSelected = () => {
+      assertCurrent();
+      const { workspace: current } = assertReceiptOwner(row, preparedOwner);
+      if (
+        current.revision !== workspace.revision ||
+        current.checkpointRef !== workspace.checkpointRef
+      ) {
+        throw new Error("GitHub publication checkpoint changed during preparation.");
+      }
+    };
+  }
   return await withSessionRepositoryCheckpoint(
     {
-      workspaceId: workspace.workspaceId,
-      checkpointRef: workspace.checkpointRef,
+      workspaceId: row.workspace_id,
+      checkpointRef,
       includePublication: true,
     },
     async (payload) => {
       assertSelected();
+      if (
+        row.checkpoint_ref &&
+        (!payload.publicationStagingRoot ||
+          !payload.publicationDigest ||
+          payload.publicationDigest !== row.checkpoint_digest)
+      ) {
+        throw new Error("GitHub publication accepted checkpoint is unavailable.");
+      }
       if (!payload.publicationStagingRoot || !payload.publicationDigest) {
         return projectGitHubPublicationResult(
           failRepositoryGitHubPublicationPreparation(
@@ -134,18 +136,13 @@ export async function captureCheckpoint<T>(
       assertSelected();
       return await use(
         {
-          checkpoint_ref: workspace.checkpointRef,
+          checkpoint_ref: checkpointRef,
           checkpoint_digest: payload.publicationDigest,
           source_head_commit: snapshot.baseCommit,
           source_index_tree: snapshot.baseTree,
           workspace_tree: snapshot.workspaceTree,
         },
-        {
-          snapshot,
-          snapshotRoot: payload.publicationStagingRoot,
-          checkpointRef: workspace.checkpointRef!,
-          digest: payload.publicationDigest,
-        },
+        { snapshot, snapshotRoot: payload.publicationStagingRoot },
       );
     },
   );

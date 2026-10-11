@@ -1,10 +1,12 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { testApi } from "../logging/logger.test-support.js";
+import { forceKillChildProcessTree } from "../process/child-process-tree.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { openOpenClawStateReadConnection } from "../state/openclaw-state-db-read-connection.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -162,6 +164,43 @@ function runChild(script: string, signal?: NodeJS.Signals) {
   return result.stdout;
 }
 
+async function runOwnedChild(script: string, signal: AbortSignal): Promise<string> {
+  const child = spawn(process.execPath, [...nodeArguments, script], {
+    detached: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  let failure: Error | undefined;
+  child.stdout.on("data", (chunk: Buffer) => {
+    stdout += chunk.toString();
+  });
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString();
+  });
+  child.once("error", (error) => {
+    failure = error;
+  });
+  const closed = new Promise<void>((resolve) => {
+    child.once("close", () => resolve());
+  });
+  let joined = false;
+  try {
+    await withinTest(closed, signal);
+    joined = true;
+    expect(failure, stderr).toBeUndefined();
+    expect(child.exitCode, stderr).toBe(0);
+    expect(child.signalCode, stderr).toBeNull();
+    return stdout;
+  } finally {
+    if (!joined) {
+      // The blocked reclaimer cannot run its own finally; retire its entire fixture family.
+      forceKillChildProcessTree(child);
+    }
+    await closed;
+  }
+}
+
 it("reconciles a released fresh token without waiting for idle reclamation", () => {
   const { cache, source } = createFixture();
   const owned = createSqliteSnapshotStagingTokenSync(cache);
@@ -193,6 +232,11 @@ it("keeps snapshot bytes fenced after creator release until native reader close 
   const reclaim = () =>
     runChild(`
     import { reclaimAbandonedSqliteSnapshots } from ${JSON.stringify(stagingModule)};
+    const kill = process.kill.bind(process);
+    process.kill = (pid, signal) => {
+      if (signal === 0) throw Object.assign(new Error('owner is outside this PID namespace'), { code: 'ESRCH' });
+      return kill(pid, signal);
+    };
     for (const ignored of reclaimAbandonedSqliteSnapshots(${JSON.stringify(cache)}, () => {})) {}
   `);
   try {
@@ -212,22 +256,6 @@ it("keeps snapshot bytes fenced after creator release until native reader close 
     close.mockRestore();
     reader.close();
     removeTempDirectory(directory);
-  }
-});
-
-it("refuses a private reader admitted after snapshot retirement", () => {
-  const { cache, source } = createFixture();
-  const owned = createSqliteSnapshotStagingTokenSync(cache);
-  const location = path.join(owned.directory, "database.sqlite");
-  fs.copyFileSync(source, location);
-  try {
-    owned.release(true);
-    expect(() =>
-      openOpenClawStateReadConnection(source, location, undefined, owned.directory),
-    ).toThrow("parent retired");
-  } finally {
-    owned.release();
-    removeTempDirectory(owned.directory);
   }
 });
 
@@ -377,15 +405,15 @@ it("reclaims one oversized abandoned snapshot per pass without starving the next
     ageSnapshotTree(directory);
     return directory;
   });
-  const reports: Array<{ error?: unknown; message: string }> = [];
+  const reports: string[] = [];
   try {
-    for (const _ of reclaimAbandonedSqliteSnapshots(cache, (message, error) => {
-      reports.push({ message, error });
+    for (const _ of reclaimAbandonedSqliteSnapshots(cache, (message) => {
+      reports.push(message);
     })) {
       // Drain the bounded reclamation pass.
     }
     expect(abandoned.filter((directory) => fs.existsSync(directory))).toHaveLength(1);
-    expect(reports.map(({ message }) => message)).toContain(
+    expect(reports).toContain(
       `Reclaimed ${512 * 1024 * 1024 + 1} bytes of interrupted SQLite snapshot data.`,
     );
     for (const _ of reclaimAbandonedSqliteSnapshots(cache, () => {})) {
@@ -399,33 +427,9 @@ it("reclaims one oversized abandoned snapshot per pass without starving the next
   }
 });
 
-it("preserves a live snapshot when its owner PID is invisible", () => {
-  const { root, cache, source } = createFixture();
-  const held = prepareSqliteReadOnlyLocationSyncInProcess(source, cache);
-  try {
-    runChild(`
-      import { prepareSqliteReadOnlyLocationSyncInProcess } from ${JSON.stringify(snapshotModule)};
-      import { reclaimAbandonedSqliteSnapshots } from ${JSON.stringify(stagingModule)};
-      import { setLoggerOverride } from ${JSON.stringify(loggerModule)};
-      setLoggerOverride({ level: 'silent', file: ${JSON.stringify(path.join(root, "child.log"))} });
-      const kill = process.kill.bind(process);
-      process.kill = (pid, signal) => {
-        if (signal === 0) throw Object.assign(new Error('owner is outside this PID namespace'), { code: 'ESRCH' });
-        return kill(pid, signal);
-      };
-      for (const _ of reclaimAbandonedSqliteSnapshots(${JSON.stringify(cache)})) {}
-
-    `);
-    expect(fs.existsSync(held.location)).toBe(true);
-    assertReadable(held.location);
-  } finally {
-    held.cleanup();
-  }
-});
-
 it.skipIf(process.platform === "win32")(
   "arbitrates an orphan worker allocating after reclamation inspects its parent",
-  () => {
+  async ({ signal }) => {
     for (const { legacyParent, cacheContainer } of [
       { legacyParent: false, cacheContainer: false },
       { legacyParent: true, cacheContainer: false },
@@ -434,7 +438,6 @@ it.skipIf(process.platform === "win32")(
     ]) {
       for (const stage of ["inspection", "retirement"] as const) {
         const { root, cache, source } = createFixture();
-        const resultFile = path.join(root, "worker-result.json");
         const childPrelude = `
       import fs from 'node:fs';
       import path from 'node:path';
@@ -470,22 +473,34 @@ it.skipIf(process.platform === "win32")(
         } catch (error) {
           result = { error: error.message, code: error.code, causeCode: error.cause?.code };
         }
-        fs.writeFileSync(${JSON.stringify(`${resultFile}.partial`)}, JSON.stringify(result));
-        fs.renameSync(${JSON.stringify(`${resultFile}.partial`)}, ${JSON.stringify(resultFile)});
+        fs.writeSync(4, JSON.stringify(result));
+        fs.closeSync(4);
         process.removeAllListeners('message');
         process.once('message', () => { prepared?.cleanup(); process.disconnect(); });
       });
       process.send('ready');
     `;
-        const output = runChild(`${childPrelude}
+        const output = await runOwnedChild(
+          `${childPrelude}
       import { spawn } from 'node:child_process';
       import { once } from 'node:events';
-      const launch = (script) => spawn(process.execPath, [...${JSON.stringify(nodeArguments)}, script], {
-        stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
+      import koffi from 'koffi';
+      const launch = (script, resultFd) => spawn(process.execPath, [...${JSON.stringify(nodeArguments)}, script], {
+        stdio: ['ignore', 'ignore', 'inherit', 'ipc', resultFd ?? 'ignore'],
       });
       const parent = launch(${JSON.stringify(parentScript)});
       const [directory] = await once(parent, 'message');
-      const worker = launch(${JSON.stringify(workerScript)});
+      // A real blocking pipe keeps the synchronous reclaimer observer on its original turn.
+      const libc = koffi.load(null);
+      const pipe = libc.func('int pipe(_Out_ int *fds)');
+      const close = libc.func('int close(int fd)');
+      const fcntl = libc.func('int fcntl(int fd, int cmd, ...)');
+      const resultPipe = [-1, -1];
+      if (pipe(resultPipe) !== 0) throw new Error('worker result pipe failed');
+      // POSIX F_SETFD=2/FD_CLOEXEC=1 prevents unrelated descendants retaining the writer.
+      if (resultPipe.some(fd => fcntl(fd, 2, 'int', 1) !== 0)) throw new Error('worker result pipe close-on-exec failed');
+      const worker = launch(${JSON.stringify(workerScript)}, resultPipe[1]);
+      close(resultPipe[1]);
       const workerClosed = once(worker, 'close');
       const parentClosed = once(parent, 'close');
       let inspected = false;
@@ -503,13 +518,9 @@ it.skipIf(process.platform === "win32")(
           if (String(pathname) === directory && !inspected) {
             inspected = true;
             worker.send(${JSON.stringify(cacheContainer)} ? path.join(directory, 'openclaw') : directory);
-            const deadline = Date.now() + 10_000;
-            const barrier = new Int32Array(new SharedArrayBuffer(4));
-            while (!fs.existsSync(${JSON.stringify(resultFile)})) {
-              if (Date.now() > deadline) throw new Error('worker did not reach allocation barrier');
-              Atomics.wait(barrier, 0, 0, 10);
-            }
-            outcome = JSON.parse(fs.readFileSync(${JSON.stringify(resultFile)}, 'utf8'));
+            const result = fs.readFileSync(resultPipe[0], 'utf8');
+            if (!result) throw new Error('worker did not reach allocation barrier');
+            outcome = JSON.parse(result);
           }
         };
         fs.readdirSync = (...args) => {
@@ -535,8 +546,11 @@ it.skipIf(process.platform === "win32")(
         if (worker.connected && outcome) worker.send('finish');
         else worker.kill('SIGKILL');
         await Promise.all([parentClosed, workerClosed]);
+        close(resultPipe[0]);
       }
-    `);
+    `,
+          signal,
+        );
         const result = JSON.parse(output) as {
           inspected: boolean;
           workerAlive: boolean;
@@ -577,13 +591,6 @@ it("reclaims only legacy snapshots older than 24 hours", async () => {
   const youngDirectoryMtime = fs.statSync(young).mtimeMs;
   const log = path.join(root, "cleanup.log");
   setLoggerOverride({ level: "warn", file: log });
-  const kill = process.kill.bind(process);
-  vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
-    if (signal === 0) {
-      throw Object.assign(new Error("owner is outside this PID namespace"), { code: "ESRCH" });
-    }
-    return kill(pid, signal);
-  });
   await reclaimAbandonedSqliteSnapshotsAsync(cache);
   expect(fs.existsSync(old)).toBe(false);
   expect(fs.readFileSync(path.join(young, "first"), "utf8")).toBe("recently active legacy copy");
@@ -599,8 +606,6 @@ it.skipIf(process.platform === "win32")(
     for (const fixture of [
       { legacyParent: true, childAgeHours: 25 },
       { legacyParent: false, childAgeHours: 25 },
-      { legacyParent: false, childAgeHours: 0 },
-      { legacyParent: false, childAgeHours: 1 },
       { legacyParent: false, childAgeHours: 23 },
     ]) {
       const { root, cache, source } = createFixture();

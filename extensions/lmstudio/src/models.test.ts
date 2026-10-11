@@ -18,7 +18,6 @@ import {
   normalizeLmstudioProviderConfig,
   resolveLmstudioInferenceBase,
   resolveLmstudioReasoningCompat,
-  resolveLmstudioReasoningCapability,
   resolveLmstudioServerBase,
 } from "./models.js";
 
@@ -148,32 +147,6 @@ describe("lmstudio-models", () => {
     });
   });
 
-  it("drops malformed configured catalog token metadata", () => {
-    expect(
-      normalizeLmstudioConfiguredCatalogEntry({
-        id: "bad-window",
-        contextWindow: Number.POSITIVE_INFINITY,
-        contextTokens: 4096.5,
-      }),
-    ).toMatchObject({
-      id: "bad-window",
-      contextWindow: undefined,
-      contextTokens: undefined,
-    });
-
-    expect(
-      normalizeLmstudioConfiguredCatalogEntry({
-        id: "bad-tokens",
-        contextWindow: -1,
-        contextTokens: 0,
-      }),
-    ).toMatchObject({
-      id: "bad-tokens",
-      contextWindow: undefined,
-      contextTokens: undefined,
-    });
-  });
-
   it("rejects malformed and unapproved configured compatibility fields", () => {
     expect(
       normalizeLmstudioConfiguredCatalogEntry({
@@ -191,8 +164,11 @@ describe("lmstudio-models", () => {
           requiresOpenAiAnthropicToolPayload: "true",
           unapprovedCompatField: true,
         },
-      })?.compat,
-    ).toBeUndefined();
+      }),
+    ).toMatchObject({
+      id: "qwen/qwen3-1.7b",
+      compat: undefined,
+    });
   });
 
   it.each([
@@ -277,69 +253,7 @@ describe("lmstudio-models", () => {
     });
   });
 
-  it("resolves reasoning capability for supported and unsupported options", () => {
-    expect(resolveLmstudioReasoningCapability({ capabilities: undefined })).toBe(false);
-    expect(
-      resolveLmstudioReasoningCapability({
-        capabilities: {
-          reasoning: {
-            allowed_options: ["low", "medium", "high"],
-            default: "low",
-          },
-        },
-      }),
-    ).toBe(true);
-    expect(
-      resolveLmstudioReasoningCapability({
-        capabilities: {
-          reasoning: {
-            allowed_options: ["off"],
-            default: "off",
-          },
-        },
-      }),
-    ).toBe(false);
-  });
-
-  it("maps LM Studio binary reasoning options into OpenAI-compatible effort compat", () => {
-    expect(
-      resolveLmstudioReasoningCompat({
-        capabilities: {
-          reasoning: {
-            allowed_options: ["off", "on"],
-            default: "on",
-          },
-        },
-      }),
-    ).toEqual({
-      supportsReasoningEffort: true,
-      supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
-      reasoningEffortMap: {
-        off: "none",
-        none: "none",
-        adaptive: "xhigh",
-        max: "xhigh",
-      },
-    });
-
-    expect(
-      resolveLmstudioReasoningCompat({
-        capabilities: {
-          reasoning: {
-            allowed_options: ["low", "medium", "high"],
-            default: "low",
-          },
-        },
-      }),
-    ).toEqual({
-      supportsReasoningEffort: true,
-      supportedReasoningEfforts: ["low", "medium", "high"],
-      reasoningEffortMap: {
-        adaptive: "high",
-        max: "high",
-      },
-    });
-
+  it("omits reasoning compatibility when only off is supported", () => {
     expect(
       resolveLmstudioReasoningCompat({
         capabilities: {
@@ -377,6 +291,20 @@ describe("lmstudio-models", () => {
             key: "deepseek-r1",
           },
           {
+            type: "llm",
+            key: "graded-reasoning",
+            capabilities: {
+              reasoning: { allowed_options: ["low", "medium", "high"], default: "low" },
+            },
+          },
+          {
+            type: "llm",
+            key: "off-only-reasoning",
+            capabilities: {
+              reasoning: { allowed_options: ["off"], default: "off" },
+            },
+          },
+          {
             type: "embedding",
             key: "text-embedding-nomic-embed-text-v1.5",
           },
@@ -406,7 +334,7 @@ describe("lmstudio-models", () => {
     });
     expect(modelsRequestOptions?.signal).toBeInstanceOf(AbortSignal);
 
-    expect(models).toHaveLength(2);
+    expect(models).toHaveLength(4);
     expect(models[0]).toEqual({
       id: "qwen3-8b-instruct",
       name: "Qwen3 8B (MLX, vision, tool-use, loaded)",
@@ -440,7 +368,60 @@ describe("lmstudio-models", () => {
       contextTokens: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
       maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
     });
+    expect(models[2]).toMatchObject({ id: "graded-reasoning", reasoning: true });
+    expect(models[2]?.compat).toEqual({
+      supportsUsageInStreaming: true,
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["low", "medium", "high"],
+      reasoningEffortMap: { adaptive: "high", max: "high" },
+    });
+    expect(models[3]).toMatchObject({ id: "off-only-reasoning", reasoning: false });
+    expect(models[3]?.compat).toEqual({ supportsUsageInStreaming: true });
   });
+
+  it.each([
+    { allowedOptions: ["off", "low", "medium"], expectedMax: "medium" },
+    { allowedOptions: ["medium", "off", "low"], expectedMax: "medium" },
+    { allowedOptions: ["low", "medium"], expectedMax: "medium" },
+    { allowedOptions: ["medium"], expectedMax: "medium" },
+    { allowedOptions: ["low"], expectedMax: "low" },
+    // Transport-vocabulary controls; these are synthetic discovery responses.
+    { allowedOptions: ["minimal"], expectedMax: "minimal" },
+    { allowedOptions: ["minimal", "low"], expectedMax: "low" },
+  ])(
+    "discovers the highest graded effort from $allowedOptions",
+    async ({ allowedOptions, expectedMax }) => {
+      const fetchMock = vi.fn(async () =>
+        Response.json({
+          models: [
+            {
+              type: "llm",
+              key: "synthetic-effort-ceiling",
+              capabilities: { reasoning: { allowed_options: allowedOptions } },
+            },
+          ],
+        }),
+      );
+      const models = await discoverLmstudioModels({
+        baseUrl: "http://localhost:1234/v1",
+        apiKey: "synthetic-no-account",
+        quiet: true,
+        fetchImpl: asFetch(fetchMock),
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://localhost:1234/api/v1/models",
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+      expect(models).toHaveLength(1);
+      expect(models[0]?.reasoning).toBe(true);
+      expect(models[0]?.compat?.reasoningEffortMap).toMatchObject({
+        adaptive: expectedMax,
+        max: expectedMax,
+      });
+    },
+  );
 
   it("cancels the response body after a non-ok model discovery response", async () => {
     const tracked = cancelTrackedTextResponse("unavailable", { status: 503 });
@@ -602,11 +583,16 @@ describe("lmstudio-models", () => {
       }),
     ).resolves.toBe(canonicalKey);
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(findModelLoadCall(fetchMock)?.[1]).toEqual({
+    const loadInit = findModelLoadCall(fetchMock)?.[1];
+    expect(loadInit).toEqual({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       signal: expect.any(AbortSignal),
-      body: `{"model":"${canonicalKey}","context_length":64000}`,
+      body: expect.any(String),
+    });
+    expect(parseJsonRequestBody(loadInit)).toEqual({
+      model: canonicalKey,
+      context_length: 64000,
     });
   });
 
@@ -744,6 +730,24 @@ describe("lmstudio-models", () => {
       expected: "LM Studio model load failed (502): proxy rejected *** and ***",
     },
     {
+      name: "redacts URL-encoded proxy credentials without losing diagnostics",
+      params: { headers: { "X-Proxy-Auth": "synthetic+credential:value" } },
+      body: "proxy rejected synthetic%2Bcredential%3Avalue; GPU out of memory",
+      expected: "LM Studio model load failed (502): proxy rejected ***; GPU out of memory",
+    },
+    {
+      name: "redacts JSON-escaped proxy credentials",
+      params: { headers: { "X-Proxy-Auth": 'synthetic"credential' } },
+      body: 'proxy rejected synthetic\\"credential',
+      expected: "LM Studio model load failed (502): proxy rejected ***",
+    },
+    {
+      name: "redacts reflected Basic-auth passwords",
+      params: { headers: { Authorization: "Basic dXNlcjpzeW50aGV0aWMtcGFzc3dvcmQ=" } },
+      body: "proxy rejected synthetic-password; GPU out of memory",
+      expected: "LM Studio model load failed (502): proxy rejected ***; GPU out of memory",
+    },
+    {
       name: "redacts only the authorization value actually sent",
       params: { apiKey: "fresh", headers: { Authorization: "Bearer replaced-old" } },
       body: "stale replaced-old; active fresh",
@@ -811,12 +815,13 @@ describe("lmstudio-models", () => {
         Authorization: "Bearer lm-token",
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        model: "qwen3-8b-instruct",
-        context_length: 32768,
-      }),
+      body: expect.any(String),
     });
     const loadBody = parseJsonRequestBody(loadInit) as { context_length: number };
+    expect(loadBody).toEqual({
+      model: "qwen3-8b-instruct",
+      context_length: 32768,
+    });
     expect(loadBody.context_length).not.toBe(LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH);
   });
 

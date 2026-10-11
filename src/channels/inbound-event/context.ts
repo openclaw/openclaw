@@ -171,23 +171,23 @@ export type FinalizeChannelInboundContextResult<T extends Record<string, unknown
   threadHidden: boolean;
 };
 
-function filterSupplementalContext<T extends { senderAllowed?: boolean }>(params: {
-  mode?: ContextVisibilityMode;
-  kind: "quote" | "forwarded" | "thread";
-  context: T | undefined;
-}): T | undefined {
-  if (!params.mode || params.mode === "all") {
-    return params.context;
+function filterSupplementalContext<T extends { senderAllowed?: boolean }>(
+  mode: ContextVisibilityMode | undefined,
+  kind: "quote" | "forwarded" | "thread",
+  context: T | undefined,
+): T | undefined {
+  if (!mode || mode === "all") {
+    return context;
   }
-  if (params.context?.senderAllowed === undefined) {
+  if (context?.senderAllowed === undefined) {
     return undefined;
   }
   return shouldIncludeSupplementalContext({
-    mode: params.mode,
-    kind: params.kind,
-    senderAllowed: params.context.senderAllowed,
+    mode,
+    kind,
+    senderAllowed: context.senderAllowed,
   })
-    ? params.context
+    ? context
     : undefined;
 }
 
@@ -201,21 +201,13 @@ export function filterChannelInboundSupplementalContext(params: {
   }
   return {
     ...supplemental,
-    quote: filterSupplementalContext({
-      mode: params.contextVisibility,
-      kind: "quote",
-      context: supplemental.quote,
-    }),
-    forwarded: filterSupplementalContext({
-      mode: params.contextVisibility,
-      kind: "forwarded",
-      context: supplemental.forwarded,
-    }),
-    thread: filterSupplementalContext({
-      mode: params.contextVisibility,
-      kind: "thread",
-      context: supplemental.thread,
-    }),
+    quote: filterSupplementalContext(params.contextVisibility, "quote", supplemental.quote),
+    forwarded: filterSupplementalContext(
+      params.contextVisibility,
+      "forwarded",
+      supplemental.forwarded,
+    ),
+    thread: filterSupplementalContext(params.contextVisibility, "thread", supplemental.thread),
   };
 }
 
@@ -236,13 +228,7 @@ export function filterChannelInboundQuoteContext(
   contextVisibility: ContextVisibilityMode | undefined,
   quote: SupplementalContextFacts["quote"] | undefined,
 ): SupplementalContextFacts["quote"] | undefined {
-  return filterSupplementalContext({ mode: contextVisibility, kind: "quote", context: quote });
-}
-
-function definedFields<T extends Record<string, unknown>>(fields: T): Partial<T> {
-  return Object.fromEntries(
-    Object.entries(fields).filter((entry) => entry[1] !== undefined),
-  ) as Partial<T>;
+  return filterSupplementalContext(contextVisibility, "quote", quote);
 }
 
 function resolveChannelInboundSupplementalForFinalizer(params: {
@@ -312,7 +298,11 @@ function finalizePreparedChannelInboundContext<T extends Record<string, unknown>
   finalizeOptions?: FinalizeInboundContextOptions;
 }): FinalizeChannelInboundContextResult<T> {
   const mediaPayload = params.media
-    ? definedFields(buildChannelInboundMediaPayload(params.media))
+    ? Object.fromEntries(
+        Object.entries(buildChannelInboundMediaPayload(params.media)).filter(
+          ([, value]) => value !== undefined,
+        ),
+      )
     : {};
   const baseContext = {
     ...params.originalContext,
@@ -482,12 +472,7 @@ function buildChannelInboundEventContextValue(
     Partial<ChannelInboundSupplementalResolutionOptions>,
 ): MaybePromise<BuiltChannelInboundEventContext> {
   const body = params.message.body ?? params.message.rawBody;
-  const commandTurn = resolveChannelCommandContext({
-    command: params.command,
-    commandTurn: params.commandTurn,
-    message: params.message,
-    access: params.access,
-  });
+  const commandTurn = resolveChannelCommandContext(params);
 
   const context = {
     Body: body,

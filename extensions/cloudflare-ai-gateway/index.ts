@@ -23,9 +23,6 @@ import { wrapCloudflareAiGatewayProviderStream } from "./stream-wrappers.js";
 const PROVIDER_ID = "cloudflare-ai-gateway";
 const PROVIDER_ENV_VAR = "CLOUDFLARE_AI_GATEWAY_API_KEY";
 const PROFILE_ID = "cloudflare-ai-gateway:default";
-function readRequiredTextInput(value: unknown): string {
-  return normalizeOptionalString(value) ?? "";
-}
 
 async function resolveCloudflareGatewayMetadataInteractive(
   ctx: Pick<ProviderAuthContext, "prompter"> & { accountId?: string; gatewayId?: string },
@@ -35,16 +32,16 @@ async function resolveCloudflareGatewayMetadataInteractive(
   if (!accountId) {
     const value = await ctx.prompter.text({
       message: "Enter Cloudflare Account ID",
-      validate: (val) => (readRequiredTextInput(val) ? undefined : "Account ID is required"),
+      validate: (val) => (normalizeOptionalString(val) ? undefined : "Account ID is required"),
     });
-    accountId = readRequiredTextInput(value);
+    accountId = normalizeOptionalString(value) ?? "";
   }
   if (!gatewayId) {
     const value = await ctx.prompter.text({
       message: "Enter Cloudflare AI Gateway ID",
-      validate: (val) => (readRequiredTextInput(val) ? undefined : "Gateway ID is required"),
+      validate: (val) => (normalizeOptionalString(val) ? undefined : "Gateway ID is required"),
     });
-    gatewayId = readRequiredTextInput(value);
+    gatewayId = normalizeOptionalString(value) ?? "";
   }
   return { accountId, gatewayId };
 }
@@ -123,11 +120,9 @@ export default definePluginEntry({
               normalizeOptionalSecretInput(ctx.opts.cloudflareAiGatewayGatewayId) ??
               storedMetadata.gatewayId;
             if (!accountId || !gatewayId) {
-              ctx.runtime.error(
+              throw new Error(
                 "Cloudflare AI Gateway setup requires --cloudflare-ai-gateway-account-id and --cloudflare-ai-gateway-gateway-id.",
               );
-              ctx.runtime.exit(1);
-              return null;
             }
             const resolved = await ctx.resolveApiKey({
               provider: PROVIDER_ID,

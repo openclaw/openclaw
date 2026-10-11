@@ -6,18 +6,13 @@ import { getSafeLocalStorage } from "../local-storage.ts";
 
 const LOCAL_ASSISTANT_IDENTITY_KEY = "openclaw.control.assistant.v1";
 
-type LocalAssistantIdentity = { avatar: string | null; agentId?: string | null };
+type LocalAssistantIdentity = { avatar: string | null };
 
 type PersistedLocalAssistantIdentities = {
   avatars?: Record<string, unknown>;
-  avatar?: unknown;
-  agentId?: unknown;
 };
 
-function parseLocalAssistantAvatarMap(raw: string): {
-  avatars: Record<string, string>;
-  legacyAvatar: string | null;
-} {
+function parseLocalAssistantAvatarMap(raw: string): Record<string, string> {
   const parsed = JSON.parse(raw) as PersistedLocalAssistantIdentities;
   const avatars = Object.create(null) as Record<string, string>;
   if (parsed.avatars && typeof parsed.avatars === "object" && !Array.isArray(parsed.avatars)) {
@@ -29,20 +24,7 @@ function parseLocalAssistantAvatarMap(raw: string): {
       }
     }
   }
-  const legacyAvatar = normalizeOptionalString(parsed.avatar);
-  const legacyAgentId = normalizeOptionalString(parsed.agentId);
-  if (legacyAvatar && legacyAgentId && !Object.hasOwn(avatars, legacyAgentId)) {
-    avatars[legacyAgentId] = legacyAvatar;
-  }
-  return { avatars, legacyAvatar: legacyAgentId ? null : (legacyAvatar ?? null) };
-}
-
-function persistLocalAssistantAvatarMap(storage: Storage | null, avatars: Record<string, string>) {
-  if (Object.keys(avatars).length === 0) {
-    storage?.removeItem(LOCAL_ASSISTANT_IDENTITY_KEY);
-    return;
-  }
-  storage?.setItem(LOCAL_ASSISTANT_IDENTITY_KEY, JSON.stringify({ avatars }));
+  return avatars;
 }
 
 export function loadLocalAssistantIdentity(opts?: {
@@ -58,13 +40,8 @@ export function loadLocalAssistantIdentity(opts?: {
     if (!raw) {
       return { avatar: null };
     }
-    const { avatars, legacyAvatar } = parseLocalAssistantAvatarMap(raw);
-    if (!Object.hasOwn(avatars, agentId) && legacyAvatar) {
-      // Assign the old global override to the first concrete agent that loads it.
-      avatars[agentId] = legacyAvatar;
-      persistLocalAssistantAvatarMap(storage, avatars);
-    }
-    return { avatar: Object.hasOwn(avatars, agentId) ? (avatars[agentId] ?? null) : null, agentId };
+    const avatars = parseLocalAssistantAvatarMap(raw);
+    return { avatar: avatars[agentId] ?? null };
   } catch {
     return { avatar: null };
   }

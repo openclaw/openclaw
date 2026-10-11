@@ -1,4 +1,5 @@
 import { isRfc1918Ipv4Address } from "@openclaw/net-policy/ip";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { normalizeLowercaseStringOrEmpty as normalizeInterfaceName } from "@openclaw/normalization-core/string-coerce";
 import { runCommandWithTimeout as defaultRunCommandWithTimeout } from "../process/exec.js";
 import {
@@ -16,7 +17,6 @@ const WINDOWS_DEFAULT_ROUTE_COMMAND =
 type AdvertisedLanHostCommandResult = {
   code: number | null;
   stdout: string;
-  stderr?: string;
 };
 
 type AdvertisedLanHostCommandRunner = (
@@ -62,13 +62,7 @@ function parseWindowsDefaultRouteHints(stdout: string): string[] {
     return [];
   }
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    return [];
-  }
-
+  const parsed = safeParseJson(trimmed);
   const rankedRows: RankedWindowsRouteRow[] = [];
   const rows = Array.isArray(parsed) ? parsed : [parsed];
   for (const [order, row] of rows.entries()) {

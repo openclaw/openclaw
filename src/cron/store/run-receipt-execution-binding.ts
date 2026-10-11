@@ -27,19 +27,11 @@ export async function bindCronRunReceiptExecution(params: {
     context.admission.assertCurrent();
     assertOwnerCurrent?.();
   };
-  const [{ runOpenClawStateWorkerOperation }, { createSqliteWorkerWriteAdmission }] =
-    await Promise.all([
-      import("../../state/openclaw-state-worker-store.js"),
-      import("../../infra/sqlite-worker-store.js"),
-    ]);
-  return runOpenClawStateWorkerOperation(
-    context,
-    (scope) => scope.execute({ type: "cron.bindReceiptExecution", input }),
-    {
-      assertCurrent,
-      createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
-        context.admission.databasePath,
-      ]),
-    },
-  );
+  const { runOpenClawStateWorkerOperation } =
+    await import("../../state/openclaw-state-worker-store.js");
+  return runOpenClawStateWorkerOperation(context, (scope) => {
+    assertCurrent();
+    // Execution may retire after dispatch; the binding still identifies that admitted run.
+    return scope.execute({ type: "cron.bindReceiptExecution", input });
+  });
 }

@@ -389,7 +389,10 @@ export function resolveUpdateStatusBanner(params: {
 }): ApplicationStatusBanner {
   const status = (params.status ?? "error").trim() || "error";
   const reason = (params.reason ?? "unexpected-error").trim() || "unexpected-error";
-  const guidance = t(UPDATE_FAILURE_REASON_KEYS[reason] ?? "updates.failureReasons.default");
+  const guidanceKey = Object.hasOwn(UPDATE_FAILURE_REASON_KEYS, reason)
+    ? UPDATE_FAILURE_REASON_KEYS[reason]
+    : undefined;
+  const guidance = t(guidanceKey ?? "updates.failureReasons.default");
   const cause = params.cause;
   return {
     tone: status === "skipped" ? "warn" : "danger",

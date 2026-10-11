@@ -5,8 +5,12 @@ import path from "node:path";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
+import {
+  createNodeBootstrapFixture,
+  createWorkerArchiveFixture,
+} from "./crabbox-worker-node-enrollment.test-support.js";
 import { operationLeaseId, operationSlug } from "./crabbox-worker-profile.js";
-import { commandResult } from "./crabbox-worker-provider.test-support.js";
+import { destroyAndWait, commandResult } from "./crabbox-worker-provider.test-support.js";
 import {
   listCrabboxWarmImages,
   recoverCrabboxWarmImageCapture,
@@ -18,6 +22,7 @@ import {
   CHECKPOINT_ID,
   CLASSLESS_PROFILE,
   LEASE_ID,
+  NODE_RUNTIME_IDENTITY,
   OPERATION_ID,
   PROFILE,
   tempDirs,
@@ -64,7 +69,12 @@ describe("Crabbox profile warm images", () => {
       ...profile,
       setupEnv: [...profile.setupEnv],
     });
+    expect(identical.calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(CHECKPOINT_ID);
+    expect(identical.calls.some(({ argv }) => argv[1] === "warmup")).toBe(false);
     expect(identical.calls.some(({ argv }) => argv[2] === "create")).toBe(false);
+    expect(
+      identical.calls.some(({ options }) => String(options.input ?? "").includes("install-node")),
+    ).toBe(false);
 
     vi.stubEnv("WARM_A", "changed-secret");
     const changedValues = createWarmProvider(undefined, initial.stateDir);
@@ -173,7 +183,7 @@ describe("Crabbox profile warm images", () => {
         const lease = await provisionWarmProfile(provider, profile, OPERATION_ID, placementClass);
         // Teardown uses enrolled sizing and declared setup names, never their host values.
         vi.stubEnv("WARM_POLICY_INPUT", undefined);
-        await provider.destroy({ leaseId: lease.leaseId, profile });
+        await destroyAndWait(provider, { leaseId: lease.leaseId, profile });
         const warmup = calls.find(({ argv }) => argv[1] === "warmup")?.argv;
         expect(warmup).toBeDefined();
         if (effectiveClass === undefined) {
@@ -204,7 +214,7 @@ describe("Crabbox profile warm images", () => {
       };
       const lease = await provisionWarmProfile(provider, profile);
 
-      await provider.destroy({ leaseId: lease.leaseId, profile });
+      await destroyAndWait(provider, { leaseId: lease.leaseId, profile });
 
       expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
       expect(calls.at(-1)?.argv[1]).toBe("stop");
@@ -220,7 +230,7 @@ describe("Crabbox profile warm images", () => {
     const lease = await provisionWarmProfile(provider);
     calls.length = 0;
 
-    await provider.destroy({ leaseId: lease.leaseId, profile: PROFILE });
+    await destroyAndWait(provider, { leaseId: lease.leaseId, profile: PROFILE });
 
     expect(calls.map(({ argv }) => argv.slice(1, argv[1] === "checkpoint" ? 3 : 2))).toEqual([
       ["run"],
@@ -376,6 +386,12 @@ describe("Crabbox profile warm images", () => {
   it.each([
     { backend: "aws", kind: "aws-ebs-snapshot", nativeState: "completed", sourceLifecycleMs: 0 },
     {
+      backend: "azure",
+      kind: "azure-os-disk-snapshot",
+      nativeState: "available",
+      sourceLifecycleMs: 0,
+    },
+    {
       backend: "daytona",
       kind: "daytona-snapshot",
       nativeState: "active",
@@ -430,7 +446,7 @@ describe("Crabbox profile warm images", () => {
         "--wait-timeout",
         "2700000ms",
         "--json",
-        ...(backend === "daytona" ? ["--no-reboot=false"] : []),
+        ...(["azure", "daytona"].includes(backend) ? ["--no-reboot=false"] : []),
         ...(backend === "machine0" ? ["--strategy", "image"] : []),
       ]);
       // Native capture gets Crabbox's 45m plus command overhead and separate source recovery.
@@ -507,7 +523,7 @@ describe("Crabbox profile warm images", () => {
     tearingDown = true;
 
     await expect(
-      provider.destroy({ leaseId: lease.leaseId, profile: PROFILE }),
+      destroyAndWait(provider, { leaseId: lease.leaseId, profile: PROFILE }),
     ).resolves.toBeUndefined();
 
     expect(warn).toHaveBeenCalledOnce();
@@ -605,7 +621,7 @@ describe("Crabbox profile warm images", () => {
 
       const restarted = createWarmProvider(undefined, initial.stateDir);
       await restarted.provider.inspect({ leaseId: lease.leaseId, profile });
-      await restarted.provider.destroy({
+      await destroyAndWait(restarted.provider, {
         leaseId: lease.leaseId,
         profile,
       });
@@ -648,10 +664,39 @@ describe("Crabbox profile warm images", () => {
       };
 
       await provider.inspect(lease);
-      await provider.destroy(lease);
+      await destroyAndWait(provider, lease);
 
       expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
       expect(calls.at(-1)?.argv[1]).toBe("stop");
+    },
+  );
+
+  it.each([
+    ["the captured runtime", NODE_RUNTIME_IDENTITY, false],
+    [
+      "a different runtime",
+      { ...NODE_RUNTIME_IDENTITY, nodeBootstrapSha256: "f".repeat(64) },
+      true,
+    ],
+  ] as const)(
+    "prepares the node runtime on a fork only for %s",
+    async (_label, identity, prepares) => {
+      const initial = createWarmProvider();
+      await captureWarmImage(initial.provider);
+      const { provider, calls } = createWarmProvider(undefined, initial.stateDir);
+      const prepareNodeRuntime = vi.fn(async () => ({
+        nodeBootstrap: createNodeBootstrapFixture(),
+        workerBundle: createWorkerArchiveFixture(),
+      }));
+
+      await provisionWarmProfile(provider, PROFILE, OPERATION_ID, undefined, {
+        assertCurrent: () => {},
+        nodeRuntimeIdentity: identity,
+        prepareNodeRuntime,
+      });
+
+      expect(calls.some(({ argv }) => argv[2] === "fork")).toBe(true);
+      expect(prepareNodeRuntime).toHaveBeenCalledTimes(prepares ? 1 : 0);
     },
   );
 
@@ -677,6 +722,8 @@ describe("Crabbox profile warm images", () => {
       "--tailscale=false",
       "--class",
       "standard",
+      "--target",
+      "linux",
       "--ttl",
       "24h",
       "--idle-timeout",
@@ -755,11 +802,11 @@ describe("Crabbox profile warm images", () => {
         calls.some(({ argv }) => argv[1] === expectedCommand || argv[2] === expectedCommand),
       ).toBe(true);
       if (retained) {
-        await provider.destroy({ leaseId: lease.leaseId, profile: PROFILE });
+        await destroyAndWait(provider, { leaseId: lease.leaseId, profile: PROFILE });
         expect(calls.some(({ argv }) => argv[2] === "create")).toBe(false);
       } else {
         expect(calls.some(({ argv }) => argv[2] === "delete")).toBe(true);
-        await provider.destroy({ leaseId: lease.leaseId, profile: PROFILE });
+        await destroyAndWait(provider, { leaseId: lease.leaseId, profile: PROFILE });
         expect(calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
       }
     },

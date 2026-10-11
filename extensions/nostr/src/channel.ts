@@ -112,9 +112,8 @@ const nostrPluginOutboundAdapter: ChannelOutboundAdapter = {
         error: missingTargetError("Nostr", NOSTR_TARGET_HINT),
       };
     }
-    const normalized = normalizeNostrTarget(trimmed);
     try {
-      return { ok: true, to: normalizePubkey(normalized) };
+      return { ok: true, to: normalizePubkey(stripNostrTargetPrefix(trimmed)) };
     } catch {
       return {
         ok: false,
@@ -218,11 +217,7 @@ export async function publishNostrProfile(
   return bus.publishProfile(profile);
 }
 
-export async function getNostrProfileState(accountId: string = DEFAULT_ACCOUNT_ID): Promise<{
-  lastPublishedAt: number | null;
-  lastPublishedEventId: string | null;
-  lastPublishResults: Record<string, "ok" | "failed" | "timeout"> | null;
-} | null> {
+export async function getNostrProfileState(accountId: string = DEFAULT_ACCOUNT_ID) {
   const bus = getActiveNostrBuses().get(accountId);
   if (!bus) {
     return null;

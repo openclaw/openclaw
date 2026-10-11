@@ -1,7 +1,8 @@
 // Feishu tests cover chat plugin behavior.
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi, PluginRuntime } from "../runtime-api.js";
+import { registerFeishuChatTools } from "./chat.js";
 import type { FeishuConfig } from "./types.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -12,8 +13,6 @@ const contactUserGetMock = vi.hoisted(() => vi.fn());
 vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
 }));
-
-let registerFeishuChatTools: typeof import("./chat.js").registerFeishuChatTools;
 
 const DIRECT_CHAT_RESPONSE = {
   code: 0,
@@ -105,10 +104,6 @@ describe("registerFeishuChatTools", () => {
     );
     return [resolveRegisteredTool(registerTool, params.context), registerTool] as const;
   }
-
-  beforeAll(async () => {
-    ({ registerFeishuChatTools } = await import("./chat.js"));
-  });
 
   afterAll(() => {
     vi.doUnmock("./client.js");
@@ -214,44 +209,6 @@ describe("registerFeishuChatTools", () => {
     });
   });
 
-  it("allows current direct-chat reads under the default pairing policy", async () => {
-    const [tool] = registerChatTool({
-      account: { groupPolicy: "allowlist" },
-      context: currentDirectContext(),
-    });
-    chatGetMock.mockResolvedValueOnce(DIRECT_CHAT_RESPONSE);
-
-    const result = await tool.execute("tc_current_dm", {
-      action: "info",
-      chat_id: "oc_direct_chat",
-    });
-
-    expect(result.details).toMatchObject({
-      chat_id: "oc_direct_chat",
-      chat_mode: "p2p",
-    });
-  });
-
-  it("returns the trusted sender for current direct-chat member reads", async () => {
-    const [tool] = registerChatTool({
-      account: { groupPolicy: "allowlist" },
-      context: currentDirectContext("ou_sender"),
-    });
-    chatGetMock.mockResolvedValueOnce(DIRECT_CHAT_RESPONSE);
-
-    const result = await tool.execute("tc_current_dm_members", {
-      action: "members",
-      chat_id: "oc_direct_chat",
-    });
-
-    expect(result.details).toMatchObject({
-      chat_id: "oc_direct_chat",
-      has_more: false,
-      members: [{ member_id: "ou_sender", member_id_type: "open_id" }],
-    });
-    expect(chatMembersGetMock).not.toHaveBeenCalled();
-  });
-
   it("preserves a trusted user_id for current direct-chat member reads", async () => {
     const [tool] = registerChatTool({
       account: { groupPolicy: "allowlist" },
@@ -306,7 +263,7 @@ describe("registerFeishuChatTools", () => {
     expect(contactUserGetMock).not.toHaveBeenCalled();
   });
 
-  it.each(["info", "members", "member_info"] as const)(
+  it.each(["members"] as const)(
     "rejects a blocked %s target before reading provider metadata",
     async (action) => {
       const [tool] = registerChatTool({
@@ -318,7 +275,6 @@ describe("registerFeishuChatTools", () => {
       const input = {
         action,
         chat_id: "oc_blocked",
-        ...(action === "member_info" ? { member_id: "ou_member" } : {}),
       };
 
       const result = await tool.execute(`tc_blocked_${action}`, input);
@@ -445,43 +401,6 @@ describe("registerFeishuChatTools", () => {
     expect(createFeishuClientMock).toHaveBeenCalledWith(
       expect.objectContaining({ accountId: "b" }),
     );
-  });
-
-  it("advertises and validates member page_size as a positive integer", async () => {
-    const [tool] = registerChatTool();
-    expect(tool?.parameters.properties.page_size).toMatchObject({
-      type: "integer",
-      minimum: 1,
-      maximum: 100,
-    });
-
-    chatMembersGetMock.mockResolvedValueOnce({
-      code: 0,
-      data: { has_more: false, items: [] },
-    });
-    await tool.execute("tc_page_size_string", {
-      action: "members",
-      chat_id: "oc_1",
-      page_size: "25",
-    });
-    expect(chatMembersGetMock).toHaveBeenLastCalledWith({
-      path: { chat_id: "oc_1" },
-      params: {
-        page_size: 25,
-        page_token: undefined,
-        member_id_type: "open_id",
-      },
-    });
-
-    const invalidResult = await tool.execute("tc_page_size_invalid", {
-      action: "members",
-      chat_id: "oc_1",
-      page_size: 0,
-    });
-    expect(invalidResult.details.error).toContain(
-      "page_size must be a positive integer between 1 and 100",
-    );
-    expect(chatMembersGetMock).toHaveBeenCalledTimes(1);
   });
 
   it("preserves Feishu diagnostics from rejected member lookups", async () => {

@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -6,10 +7,12 @@ import { expect, it, vi, type Mock } from "vitest";
 import type { UpdateCommandOptions } from "../cli/update-cli/shared.js";
 import { validateUpdateCandidateWithProgress } from "../cli/update-cli/update-command-candidate-validation.js";
 import { createUpdateCommandExecutionGuards } from "../cli/update-cli/update-command-execution-guards.js";
+import * as bundledDirectory from "../plugins/bundled-dir.js";
 import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
 } from "../process/exec-result.js";
+import { defaultRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -24,6 +27,15 @@ import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
 type CanaryProgressMocks = { spawn: Mock; snapshot: Mock };
 
+async function readSqliteSidecarIdentities(databasePath: string) {
+  return Promise.all(
+    ["-wal", "-shm"].map(async (suffix) => {
+      const { dev, ino, birthtimeNs } = await fs.stat(`${databasePath}${suffix}`, { bigint: true });
+      return { dev, ino, birthtimeNs };
+    }),
+  );
+}
+
 export function registerCanaryProgressWorkerTests(
   getRoot: () => string,
   mocks: CanaryProgressMocks,
@@ -31,9 +43,9 @@ export function registerCanaryProgressWorkerTests(
 ) {
   it.each([
     "recorded",
+    "recorded-text",
     "reopened",
     "source-replaced",
-    "revoked-at-commit",
     "interrupted-after-acceptance",
     "uncertain",
   ] as const)(
@@ -41,6 +53,20 @@ export function registerCanaryProgressWorkerTests(
     async (outcome) => {
       const root = getRoot();
       stubHealthyGateway();
+      const sourcePackageRoot = path.join(root, "serving-runtime");
+      const sourceBundle = path.join(sourcePackageRoot, "dist", "extensions");
+      vi.spyOn(bundledDirectory, "resolveBundledPluginsDir").mockReturnValue(sourceBundle);
+      const json = outcome !== "recorded-text";
+      const stdout = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      const stderr = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const announcements: unknown[] = [];
+      const spawn = mocks.spawn.getMockImplementation()!;
+      mocks.spawn.mockImplementation((...args) => {
+        announcements.push((json ? stderr : stdout).mock.calls.at(-1)?.[0]);
+        return spawn(...args);
+      });
+      let beforeInventory: Awaited<ReturnType<typeof readSqliteSidecarIdentities>> | undefined;
+      let pressurePublished = false;
       const snapshot = mocks.snapshot.getMockImplementation()!;
       mocks.snapshot.mockImplementation(
         async (
@@ -51,9 +77,25 @@ export function registerCanaryProgressWorkerTests(
           },
         ) => {
           const request: unknown = JSON.parse(options.input);
+          if (isRecord(request) && request.mode === "inventory") {
+            expect(request.sourceBundledPlugins).toEqual({
+              packageRoot: sourcePackageRoot,
+              directory: sourceBundle,
+            });
+          }
+          if (outcome === "reopened" && isRecord(request) && request.mode === "inventory") {
+            beforeInventory = await readSqliteSidecarIdentities(
+              writeOptions.context.admission.databasePath,
+            );
+          }
           if (isRecord(request) && request.mode === "snapshot") {
             if (outcome === "reopened") {
-              await closeStateDatabaseForTest();
+              expect(beforeInventory).toBeDefined();
+              const pressure = channel("openclaw.memory.critical");
+              expect(pressure.hasSubscribers).toBe(true);
+              // Retirement removes idle actors synchronously; following writes join their cleanup.
+              pressure.publish({});
+              pressurePublished = true;
             }
             for (const status of ["copying", "completed"]) {
               const frame = Buffer.from(
@@ -79,6 +121,9 @@ export function registerCanaryProgressWorkerTests(
       );
       const env = { HOME: root, OPENCLAW_STATE_DIR: path.join(root, "source-state") };
       const created = createUpdateRun({ trigger: "cli" }, { env });
+      if (outcome === "reopened") {
+        await closeStateDatabaseForTest();
+      }
       const run: NonNullable<UpdateCommandOptions["run"]> = { runId: created.runId, env };
       const opts = { run };
       const guards = createUpdateCommandExecutionGuards(opts, root);
@@ -113,20 +158,23 @@ export function registerCanaryProgressWorkerTests(
         "receipt acknowledgement unavailable",
         "outcome-unknown",
       );
+      const runWorker = stateWorker.runOpenClawStateWorkerOperation;
       const worker = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
       if (outcome === "uncertain") {
-        worker.mockRejectedValueOnce(unknown);
+        worker.mockImplementationOnce(runWorker).mockRejectedValueOnce(unknown);
       }
       let checkedCommit = false;
+      let commits = 0;
       admission.beforeGrant = (stage) => {
         if (stage === "commit") {
+          // Initial admission warms the writer before streamed snapshot receipts.
+          if (++commits === 1) {
+            return;
+          }
           const firstCommit = !checkedCommit;
           checkedCommit = true;
           if (outcome === "interrupted-after-acceptance" && firstCommit) {
             run.interrupted = true;
-          }
-          if (outcome === "revoked-at-commit") {
-            opts.run = { ...run };
           }
         }
       };
@@ -135,12 +183,13 @@ export function registerCanaryProgressWorkerTests(
         validateUpdateCandidateWithProgress(
           {
             root,
+            sourcePackageRoot,
             config: {},
             env,
             assertCurrent: guards.assertCurrent,
             writeOptions,
           },
-          { opts: { json: true }, progress: { onStepComplete } },
+          { opts: { json }, progress: { onStepComplete } },
           run,
         ),
       );
@@ -162,21 +211,17 @@ export function registerCanaryProgressWorkerTests(
           expect(mocks.spawn).not.toHaveBeenCalled();
           return;
         }
-        if (outcome === "revoked-at-commit" || outcome === "interrupted-after-acceptance") {
+        if (outcome === "interrupted-after-acceptance") {
           await expect(pending).rejects.toBeInstanceOf(UpdateRequesterRevokedError);
           expect(checkedCommit).toBe(true);
           const saved = await getUpdateRunAsync(run.runId, { env });
-          if (outcome === "revoked-at-commit") {
-            expect(saved).toEqual(created);
-          } else {
-            expect(saved?.steps).toContainEqual(
-              expect.objectContaining({
-                step: "candidate-state-snapshot",
-                status: "in_progress",
-                detail: expect.stringContaining("completed, attempt 1, 920445/920445 pages"),
-              }),
-            );
-          }
+          expect(saved?.steps).toContainEqual(
+            expect.objectContaining({
+              step: "candidate-state-snapshot",
+              status: "in_progress",
+              detail: expect.stringContaining("completed, attempt 1, 920445/920445 pages"),
+            }),
+          );
           expect(onStepComplete).toHaveBeenCalledWith(
             expect.objectContaining({
               name: "candidate-state-snapshot",
@@ -192,9 +237,32 @@ export function registerCanaryProgressWorkerTests(
           return;
         }
         const result = await pending;
+        if (outcome === "reopened") {
+          expect(pressurePublished).toBe(true);
+          expect(
+            await readSqliteSidecarIdentities(writeOptions.context.admission.databasePath),
+          ).toEqual(beforeInventory);
+        }
         expect(checkedCommit).toBe(true);
         const saved = await getUpdateRunAsync(run.runId, { env });
         expect(result.status).toBe("ok");
+        const checks = [
+          "candidate-doctor",
+          "candidate-doctor-lint",
+          "candidate-config",
+          "candidate-plugins",
+          "candidate-recovery",
+          "candidate-gateway-startup",
+        ];
+        expect(announcements).toEqual(
+          checks.map((name) => expect.stringMatching(new RegExp(`^${name}: \\S`))),
+        );
+        expect(json ? stdout : stderr).not.toHaveBeenCalled();
+        for (const step of checks) {
+          expect(saved?.steps).toContainEqual(
+            expect.objectContaining({ step, status: "in_progress" }),
+          );
+        }
         expect(saved?.steps).toContainEqual(
           expect.objectContaining({
             step: "candidate-state-snapshot",
@@ -222,6 +290,8 @@ export function registerCanaryProgressWorkerTests(
         prepare.mockRestore();
         exec.mockRestore();
         worker.mockRestore();
+        stdout.mockRestore();
+        stderr.mockRestore();
         // Effect guards still read recovery on the host; only ledger DML and worker admission are fenced here.
         expect(hostWrites).toEqual([]);
         expect(admissionSql).toEqual([]);
@@ -319,9 +389,11 @@ export function registerCanaryUncertainReceiptTests({
         }
       });
     const onStep = vi.fn();
-    const onProgress = vi.fn((step: { step: string }) =>
-      step.step === "candidate-state-snapshot" ? receipt.promise : undefined,
-    );
+    const onProgress = vi
+      .fn((step: { step: string }) =>
+        step.step === "candidate-state-snapshot" ? receipt.promise : undefined,
+      )
+      .mockImplementationOnce(() => undefined);
     if (ordering === "earlier-progress-failed") {
       onProgress.mockImplementationOnce(() => earlierReceipt.promise);
     }
@@ -342,7 +414,7 @@ export function registerCanaryUncertainReceiptTests({
     );
     try {
       await operationSettled.promise;
-      expect(onProgress).toHaveBeenCalledTimes(ordering === "earlier-progress-failed" ? 2 : 1);
+      expect(onProgress).toHaveBeenCalledTimes(ordering === "earlier-progress-failed" ? 3 : 2);
       expect(onStep).not.toHaveBeenCalled();
       expect(mocks.spawn).not.toHaveBeenCalled();
       if (ordering === "cancelled") {

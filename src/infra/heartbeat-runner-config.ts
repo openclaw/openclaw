@@ -9,7 +9,8 @@ import {
 import { resolveDefaultModel } from "../auto-reply/reply/directive-handling.defaults.js";
 import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
-import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.public.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getActivePluginChannelRegistry } from "../plugins/runtime.js";
@@ -73,26 +74,6 @@ function resolveHeartbeatModelRef(params: {
   };
 }
 
-function usesCodexHarness(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  heartbeat?: HeartbeatConfig;
-  entry?: SessionEntry;
-  sessionKey?: string;
-}): boolean {
-  const modelRef = resolveHeartbeatModelRef(params);
-  return (
-    resolveEffectiveAgentRuntime({
-      cfg: params.cfg,
-      provider: modelRef.provider,
-      modelId: modelRef.model,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      sessionEntry: params.entry,
-    }) === "codex"
-  );
-}
-
 export function shouldUseHeartbeatResponseToolPrompt(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -112,7 +93,17 @@ export function shouldUseHeartbeatResponseToolPrompt(params: {
   if (visibleReplies === "automatic") {
     return false;
   }
-  return usesCodexHarness(params);
+  const modelRef = resolveHeartbeatModelRef(params);
+  return (
+    resolveEffectiveAgentRuntime({
+      cfg: params.cfg,
+      provider: modelRef.provider,
+      modelId: modelRef.model,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sessionEntry: params.entry,
+    }) === "codex"
+  );
 }
 
 export function isHeartbeatTypingEnabled(params: {

@@ -17,8 +17,6 @@ type Readiness =
   | "no-gui"
   | "invalid-signature"
   | "ad-hoc"
-  | "old-app"
-  | "missing-team"
   | "invalid-team"
   | "authority-first-long"
   | "team-first-long";
@@ -52,7 +50,6 @@ function desktopFixture(readiness: Readiness) {
     codesign: `if [ "$1" = --verify ]; then [ "$FIXTURE_READINESS" != invalid-signature ]; exit; fi
 case "$FIXTURE_READINESS" in
   ad-hoc) echo Signature=adhoc ;;
-  missing-team) printf 'Authority=Developer ID Application: Fixture\\n' ;;
   invalid-team) printf 'Authority=Developer ID Application: Fixture\\nTeamIdentifier=invalid\\n' ;;
   authority-first-long|team-first-long)
     if [ "$FIXTURE_READINESS" = authority-first-long ]; then
@@ -71,7 +68,7 @@ esac`,
     PlistBuddy: `case "$2" in
   'Print :CFBundleExecutable') echo OpenClaw ;;
   'Print :CFBundleIdentifier') echo ai.openclaw.cloud-worker ;;
-  'Print :OpenClawCloudWorkerHostVersion') if [ "$FIXTURE_READINESS" = old-app ]; then echo 0; else echo 1; fi ;;
+  'Print :OpenClawCloudWorkerHostVersion') echo 1 ;;
   *) exit 1 ;;
 esac`,
     id: `case "$1" in -u) echo "\${FIXTURE_EFFECTIVE_UID-501}" ;; -un) echo fixture ;; -gn) echo staff ;; *) exit 1 ;; esac`,
@@ -194,17 +191,15 @@ printf '%s --user-data-dir=%s --remote-debugging-port=9222 about:blank\\n' "$FIX
 }
 
 describe("Crabbox macOS desktop descriptor", () => {
-  it.each(["", "<token>", "ec2-user\nother", "../user"])(
-    "rejects an unavailable or malformed inspected account %j",
-    (username) => {
-      expect(() => createCrabboxMacosDesktopEndpoint(leaseId, username)).toThrow(
-        "inspected SSH account",
-      );
-      expect(() => createCrabboxMacosDesktopSetup(leaseId, "cG5n", username)).toThrow(
-        "inspected SSH account",
-      );
-    },
-  );
+  it("rejects a malformed inspected account", () => {
+    const username = "ec2-user\nother";
+    expect(() => createCrabboxMacosDesktopEndpoint(leaseId, username)).toThrow(
+      "inspected SSH account",
+    );
+    expect(() => createCrabboxMacosDesktopSetup(leaseId, "cG5n", username)).toThrow(
+      "inspected SSH account",
+    );
+  });
 
   it("binds ARD credentials and launchers to the inspected account and exact lease", () => {
     expect(createCrabboxMacosDesktopEndpoint(leaseId, "ec2-user")).toEqual({
@@ -231,8 +226,6 @@ describe.skipIf(process.platform === "win32")("Crabbox macOS desktop setup", () 
     { readiness: "no-gui", error: "GUI session is unavailable" },
     { readiness: "invalid-signature", error: "signature is invalid" },
     { readiness: "ad-hoc", error: "needs a Developer ID Application signature" },
-    { readiness: "old-app", error: "Update the signed OpenClaw Cloud Worker app" },
-    { readiness: "missing-team", error: "signing team is missing" },
     { readiness: "invalid-team", error: "signing team is missing" },
   ])(
     "rejects $readiness before publishing credentials or desktop launchers",

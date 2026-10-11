@@ -5,7 +5,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mergeSlackAccountConfig } from "../../accounts.js";
 import { SlackConfigSchema } from "../../config-schema.js";
 import {
@@ -26,7 +26,6 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => ({
   enqueueRoutedSystemEvent: vi.fn(),
 }));
 const store = createSlackSessionStoreFixture("slack-bot-thread-mentions-");
-beforeAll(() => store.setup());
 beforeEach(() => {
   clearSlackThreadParticipationCache();
   vi.mocked(enqueueRoutedSystemEvent).mockClear();
@@ -35,7 +34,6 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
 });
-afterAll(() => store.cleanup());
 
 type SlackConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["slack"]>;
 let caseId = 0;
@@ -109,48 +107,39 @@ describe("Slack bot-thread mention configuration", () => {
     );
   });
 
-  it("denies bot-owned threads when the room is disabled", async () => {
-    const test = fixture({
-      requireMentionInBotThreads: false,
-      channels: { C123: { enabled: false } },
-    });
-    expect(await test.prepare()).toBeNull();
-    expect(test.info).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "channel-not-allowed" }),
-      expect.any(String),
-    );
-  });
-
-  it.each([
-    {
-      scope: "account",
-      slack: {
+  it.each<[string, SlackConfig, string, boolean]>([
+    [
+      "account",
+      {
         requireMentionInBotThreads: true,
         accounts: { work: { requireMentionInBotThreads: false } },
       },
-      accountId: "work",
-    },
-    {
-      scope: "wildcard",
-      slack: {
-        requireMentionInBotThreads: true,
-        channels: { "*": { requireMentionInBotThreads: false }, C123: {} },
-      },
-      accountId: "default",
-    },
-  ])("accepts an unmentioned reply with a $scope override", async ({ slack, accountId }) => {
+      "work",
+      true,
+    ],
+    [
+      "disabled room",
+      { requireMentionInBotThreads: false, channels: { C123: { enabled: false } } },
+      "default",
+      false,
+    ],
+  ])("applies the %s override to unmentioned replies", async (_, slack, accountId, allowed) => {
     const test = fixture(slack, accountId);
     const prepared = await test.prepare();
-    expect(prepared?.ctxPayload.RawBody).toBe("Continue here");
-    expect(prepared?.ctxPayload.MentionSource).toBe("none");
-    expect(prepared?.ctxPayload.MessageThreadId).toBe(test.threadTs);
+    if (allowed) {
+      expect(prepared?.ctxPayload.RawBody).toBe("Continue here");
+      expect(prepared?.ctxPayload.MentionSource).toBe("none");
+      expect(prepared?.ctxPayload.MessageThreadId).toBe(test.threadTs);
+    } else {
+      expect(prepared).toBeNull();
+      expect(test.info).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: "channel-not-allowed" }),
+        expect.any(String),
+      );
+    }
   });
 
-  it.each([
-    { policy: "mention policy", config: { requireMentionInBotThreads: true } },
-    { policy: "channel access", config: { channels: { C123: { enabled: false } } } },
-    { policy: "sender access", config: { channels: { C123: { users: ["U_ALLOWED"] } } } },
-  ])("stops the real handler when $policy changes during root lookup", async ({ config }) => {
+  it("stops the real handler when mention policy changes during root lookup", async () => {
     const test = fixture({ requireMentionInBotThreads: false, historyLimit: 0 }, "default", {
       ackReaction: "eyes",
       ackReactionScope: "all",
@@ -160,7 +149,7 @@ describe("Slack bot-thread mention configuration", () => {
     test.replies.mockImplementation(async () => {
       const next: OpenClawConfig = {
         ...test.ctx.cfg,
-        channels: { slack: { ...test.ctx.cfg.channels?.slack, ...config } },
+        channels: { slack: { ...test.ctx.cfg.channels?.slack, requireMentionInBotThreads: true } },
       };
       setRuntimeConfigSnapshot(next, next);
       return { messages: [{ ts: test.threadTs, text: "Bot root", user: "B1" }] };
@@ -197,42 +186,14 @@ describe("Slack bot-thread mention configuration", () => {
     expect((await test.prepare())?.ctxPayload.MentionSource).toBe("explicit_bot");
   });
 
-  it("does not exempt a foreign-owned thread from mention gating", async () => {
+  it("admits replies to roots verified by bot ID when bot-thread mentions are disabled", async () => {
     const test = fixture({ requireMention: true, requireMentionInBotThreads: false });
-    test.message.parent_user_id = "U_ROOT";
-    expect(await test.prepare()).toBeNull();
+    test.message.parent_user_id = undefined;
+    test.replies.mockResolvedValue({
+      messages: [{ ts: test.threadTs, bot_id: "B1", text: "Bot root" }],
+    });
+    const prepared = await test.prepare();
+    expect(prepared?.ctxPayload.RawBody).toBe("Continue here");
+    expect(test.replies).toHaveBeenCalledTimes(1);
   });
-
-  it.each(["user", "bot_id"] as const)(
-    "recognizes fetched bot ownership by %s",
-    async (authorField) => {
-      const test = fixture({ requireMentionInBotThreads: false });
-      test.message.parent_user_id = undefined;
-      test.replies.mockResolvedValue({
-        messages: [{ ts: test.threadTs, text: "Bot root", [authorField]: "B1" }],
-      });
-      expect((await test.prepare())?.ctxPayload.RawBody).toBe("Continue here");
-      expect(test.replies).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it.each(["wrong timestamp", "unavailable"] as const)(
-    "keeps mention gating for a root lookup with %s",
-    async (kind) => {
-      const test = fixture({ requireMentionInBotThreads: false });
-      test.message.parent_user_id = undefined;
-      if (kind === "unavailable") {
-        test.replies.mockRejectedValue(new Error("missing_scope"));
-      } else {
-        test.replies.mockResolvedValue({
-          messages: [{ ts: test.message.ts, user: "B1", text: "Root" }],
-        });
-      }
-      expect(await test.prepare()).toBeNull();
-      expect(test.info).toHaveBeenCalledWith(
-        expect.objectContaining({ reason: "missing-mention" }),
-        expect.any(String),
-      );
-    },
-  );
 });

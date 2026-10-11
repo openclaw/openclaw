@@ -5,10 +5,11 @@ import { redactToolPayloadText } from "../../logging/redact.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
-import { optionalPositiveIntegerSchema } from "../schema/typebox.js";
+import { optionalPositiveIntegerSchema, requesterProfileSchema } from "../schema/typebox.js";
 import {
   describeSessionLinkRule,
   describeSessionsSearchTool,
+  SESSION_LINK_RULE_DESCRIPTION,
   SESSIONS_SEARCH_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
@@ -30,6 +31,7 @@ import {
 import {
   createSessionVisibilityRowChecker,
   formatSessionToolAccessDenial,
+  isSessionToolMainAlias,
   resolveDisplaySessionKey,
   resolveSessionReference,
   resolveSessionToolAccess,
@@ -48,13 +50,12 @@ const SESSIONS_SEARCH_INDEXING_WARNING =
   "Transcript indexing is in progress; results may be incomplete. Retry sessions_search shortly.";
 
 const SessionsSearchToolSchema = Type.Object({
-  user: Type.Optional(
-    Type.String({
-      description:
-        "The person's requester_profile.id, required when several people have steered this turn.",
-    }),
-  ),
-  query: Type.String({ maxLength: SESSIONS_SEARCH_MAX_QUERY_CHARS }),
+  user: requesterProfileSchema(),
+  query: Type.String({
+    minLength: 1,
+    maxLength: SESSIONS_SEARCH_MAX_QUERY_CHARS,
+    description: "Required non-empty keywords to match in past user and assistant text.",
+  }),
   sessionKey: Type.Optional(Type.String()),
   limit: optionalPositiveIntegerSchema({
     maximum: SESSIONS_SEARCH_MAX_LIMIT,
@@ -79,11 +80,7 @@ const SessionsSearchOutputSchema = Type.Union([
   Type.Object(
     {
       results: Type.Array(SessionsSearchHitSchema),
-      sessionLinkRule: Type.Optional(
-        Type.String({
-          description: "How to build Control UI URLs for sessionKey values in this result.",
-        }),
-      ),
+      sessionLinkRule: Type.Optional(Type.String({ description: SESSION_LINK_RULE_DESCRIPTION })),
       indexing: Type.Optional(Type.Literal(true)),
       archivedTranscriptsExcluded: Type.Optional(Type.Integer({ minimum: 1 })),
       warning: Type.Optional(Type.String()),
@@ -105,12 +102,8 @@ type GatewaySearchHit = Partial<Record<keyof SanitizedSearchHit, unknown>>;
 
 type SearchSessionCandidate = {
   key: string;
-  access: "authorized" | "row";
   agentId?: string;
   expectedSessionId?: string;
-  ownerSessionKey?: string;
-  parentSessionKey?: string;
-  spawnedBy?: string;
 };
 
 function sanitizeHit(params: {
@@ -187,7 +180,6 @@ async function listVisibleSearchSessions(params: {
   ) {
     const requesterCandidate = {
       key: params.effectiveRequesterKey,
-      access: "row",
       ...(params.effectiveRequesterAgentId ? { agentId: params.effectiveRequesterAgentId } : {}),
     } satisfies SearchSessionCandidate;
     candidates.set(candidateId(requesterCandidate), requesterCandidate);
@@ -244,9 +236,8 @@ async function listVisibleSearchSessions(params: {
           if (params.rowGuard.check(visibilityRow).allowed) {
             const id = candidateId(visibilityRow);
             candidates.set(id, {
-              ...candidates.get(id),
-              ...visibilityRow,
-              access: "row",
+              key: visibilityRow.key,
+              agentId: visibilityRow.agentId,
             });
           }
         }
@@ -324,7 +315,9 @@ export function createSessionsSearchTool(opts?: {
       const params = args as Record<string, unknown>;
       const query = readToolStringParam(params, "query") ?? "";
       if (!query) {
-        throw new ToolInputError("query must not be empty");
+        throw new ToolInputError(
+          "query must not be empty; retry with non-empty keywords to match in past session text",
+        );
       }
       if (query.length > SESSIONS_SEARCH_MAX_QUERY_CHARS) {
         throw new ToolInputError(
@@ -368,10 +361,7 @@ export function createSessionsSearchTool(opts?: {
         const semanticTargetAgentId =
           normalizedRequestedKey === "current"
             ? requesterAgentId
-            : normalizedRequestedKey === "main" ||
-                normalizedRequestedKey === "global" ||
-                normalizedRequestedKey === mainKey ||
-                normalizedRequestedKey === alias ||
+            : isSessionToolMainAlias(normalizedRequestedKey, { mainKey, alias }) ||
                 Boolean(parseAgentSessionKey(normalizedRequestedKey))
               ? resolveSessionToolTargetAgentId({
                   cfg,
@@ -464,7 +454,6 @@ export function createSessionsSearchTool(opts?: {
           ? [
               {
                 key: sessionTarget.key,
-                access: "authorized" as const,
                 ...(sessionTarget.expectedSessionId
                   ? { expectedSessionId: sessionTarget.expectedSessionId }
                   : {}),
@@ -551,13 +540,6 @@ export function createSessionsSearchTool(opts?: {
             if (!candidate) {
               continue;
             }
-            const access =
-              candidate.access === "authorized"
-                ? { allowed: true as const }
-                : rowGuard.check(candidate);
-            if (!access.allowed) {
-              continue;
-            }
             const sanitized = sanitizeHit({
               alias,
               hit: { ...hit, sessionKey: candidate.key },
@@ -572,6 +554,12 @@ export function createSessionsSearchTool(opts?: {
       visibleHits.sort(compareSearchHits);
       const limited = visibleHits.slice(0, limit);
       const capped = capSearchHits(limited);
+      const warnings = [
+        indexing ? SESSIONS_SEARCH_INDEXING_WARNING : undefined,
+        archivedTranscriptsExcluded > 0
+          ? `Search excludes ${archivedTranscriptsExcluded} archived transcripts. Restore a transcript to include it in search.`
+          : undefined,
+      ].filter(Boolean);
       return jsonResult({
         results: capped.items,
         ...(opts?.sessionLinkBase
@@ -579,18 +567,7 @@ export function createSessionsSearchTool(opts?: {
           : {}),
         ...(indexing ? { indexing: true } : {}),
         ...(archivedTranscriptsExcluded > 0 ? { archivedTranscriptsExcluded } : {}),
-        ...(indexing || archivedTranscriptsExcluded > 0
-          ? {
-              warning: [
-                ...(indexing ? [SESSIONS_SEARCH_INDEXING_WARNING] : []),
-                ...(archivedTranscriptsExcluded > 0
-                  ? [
-                      `Search excludes ${archivedTranscriptsExcluded} archived transcripts. Restore a transcript to include it in search.`,
-                    ]
-                  : []),
-              ].join(" "),
-            }
-          : {}),
+        ...(warnings.length ? { warning: warnings.join(" ") } : {}),
         ...(backendTruncated || visibleHits.length > limit || capped.truncated
           ? { truncated: true }
           : {}),

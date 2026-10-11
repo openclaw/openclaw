@@ -33,6 +33,8 @@ const FEATURED_MODEL_MAX_ID_LENGTH = 200;
 const FEATURED_MODEL_MAX_NAME_LENGTH = 200;
 const FEATURED_MODEL_MAX_CONTEXT_WINDOW = 10_000_000;
 const FEATURED_MODEL_MAX_OUTPUT_TOKENS = 1_000_000;
+const INVALID_FEATURED_MODEL_ID_CHARS = new RegExp(String.raw`[\u0000-\u0020\u007f]`);
+const INVALID_FEATURED_MODEL_NAME_CHARS = new RegExp(String.raw`[\u0000-\u001f\u007f]`);
 const FEATURED_MODEL_COST = {
   input: 0,
   output: 0,
@@ -62,15 +64,13 @@ const lookupNvidiaFeaturedModelHostname = (async (
 }) as LookupFn;
 
 export function buildNvidiaProvider(): ModelProviderConfig {
-  const provider = {
-    ...buildManifestModelProviderConfig({
-      providerId: "nvidia",
-      catalog: manifest.modelCatalog.providers.nvidia,
-    }),
-    apiKey: "NVIDIA_API_KEY",
-  };
+  const provider = buildManifestModelProviderConfig({
+    providerId: "nvidia",
+    catalog: manifest.modelCatalog.providers.nvidia,
+  });
   return {
     ...provider,
+    apiKey: "NVIDIA_API_KEY",
     models: applyNvidiaModelDefaults(provider.models),
   };
 }
@@ -228,8 +228,8 @@ function parseNvidiaFeaturedModel(row: unknown): ModelDefinitionConfig | null {
     !name ||
     !contextWindow ||
     !maxTokens ||
-    hasControlCharacter(id, true) ||
-    hasControlCharacter(name)
+    INVALID_FEATURED_MODEL_ID_CHARS.test(id) ||
+    INVALID_FEATURED_MODEL_NAME_CHARS.test(name)
   ) {
     return null;
   }
@@ -245,14 +245,4 @@ function parseNvidiaFeaturedModel(row: unknown): ModelDefinitionConfig | null {
       requiresStringContent: true,
     },
   };
-}
-
-function hasControlCharacter(value: string, includeSpace = false): boolean {
-  for (const char of value) {
-    const code = char.charCodeAt(0);
-    if (code <= (includeSpace ? 32 : 31) || code === 127) {
-      return true;
-    }
-  }
-  return false;
 }

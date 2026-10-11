@@ -1,9 +1,12 @@
 /** Tests CLI runner integration with context-engine lifecycle hooks. */
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import type { ContextEngine } from "../context-engine/types.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
-import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
+import { prepareSystemAgentRunAdmission, type AdmittedRunContext } from "./admitted-run-context.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 import { waitForDeferredTurnMaintenanceForSession } from "./embedded-agent-runner/context-engine-maintenance.js";
 
@@ -19,8 +22,9 @@ const { executeMock, historyMock, hookHistoryMock, hookRunnerMock, beforeReplyMo
 
 let runCliAgent: typeof import("./cli-runner.js").runCliAgent;
 let runPreparedCliAgent: typeof import("./cli-runner.js").runPreparedCliAgent;
-let restoreCliRunnerTestDeps: typeof import("./cli-runner.js").restoreCliRunnerTestDeps;
-let setCliRunnerTestDeps: typeof import("./cli-runner.js").setCliRunnerTestDeps;
+let cliTranscript: typeof import("./command/attempt-execution.helpers.js");
+let testAdmission: ReturnType<typeof prepareSystemAgentRunAdmission>;
+let testAdmittedRunContext: AdmittedRunContext;
 
 vi.mock("./cli-runner/execute.runtime.js", () => ({
   executePreparedCliRun: executeMock,
@@ -116,7 +120,7 @@ function buildPreparedContext(contextEngine: ContextEngine): PreparedCliRunConte
 
   return {
     params: {
-      admittedRunContext: createTestAdmittedRunContext("run-1"),
+      admittedRunContext: testAdmittedRunContext,
       sessionId: "openclaw-session-1",
       sessionKey: "agent:main:main",
       agentId: "main",
@@ -164,11 +168,13 @@ function buildPreparedContext(contextEngine: ContextEngine): PreparedCliRunConte
 
 describe("runPreparedCliAgent context engine lifecycle", () => {
   beforeAll(async () => {
-    ({ restoreCliRunnerTestDeps, runCliAgent, runPreparedCliAgent, setCliRunnerTestDeps } =
-      await import("./cli-runner.js"));
+    ({ runCliAgent, runPreparedCliAgent } = await import("./cli-runner.js"));
+    cliTranscript = await import("./command/attempt-execution.helpers.js");
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    testAdmission = prepareSystemAgentRunAdmission({}, "run-1", "main", "cli-context-engine-test");
+    testAdmittedRunContext = await testAdmission.admit("embedded");
     executeMock.mockReset().mockResolvedValue({
       text: " final answer ",
       rawText: " final answer ",
@@ -187,14 +193,12 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     hookRunnerMock.mockReset().mockReturnValue(null);
     beforeReplyMock.mockClear();
     prepareMock.mockReset();
-    restoreCliRunnerTestDeps();
-    setCliRunnerTestDeps({
-      claudeCliSessionTranscriptHasContent: vi.fn(async () => true),
-    });
+    vi.spyOn(cliTranscript, "claudeCliSessionTranscriptHasContent").mockResolvedValue(true);
   });
 
   afterEach(() => {
-    restoreCliRunnerTestDeps();
+    testAdmission.close();
+    vi.mocked(cliTranscript.claudeCliSessionTranscriptHasContent).mockRestore();
   });
 
   it("keeps valid-empty isolated completion outside the turn lifecycle", async () => {
@@ -314,27 +318,98 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     expect(dispose).not.toHaveBeenCalled();
   });
 
-  it.each(["admission", "terminal"] as const)(
-    "does not emit CLI turn facts without %s",
-    async (missing) => {
-      const { afterTurn, maintain, dispose } = createLifecycle();
-      const context = buildPreparedContext(createContextEngine({ afterTurn, maintain, dispose }));
-      const onContextEngineTurnCandidate = vi.fn();
-      context.params.onContextEngineTurnCandidate = onContextEngineTurnCandidate;
-      if (missing === "terminal") {
-        context.params.userTurnTranscriptRecorder = createAdmittedCliRecorder("cli-user").recorder;
-        context.params.persistAssistantTranscript = false;
-      }
-      prepareMock.mockResolvedValue(context);
+  it("keeps the admitted source in its exact transcript fence until bootstrap settles", async () => {
+    const { admission, recorder } = createAdmittedCliRecorder("cli-scoped-user");
+    const enteredBootstrap = createDeferred();
+    const finishBootstrap = createDeferred();
+    const lifecycle: string[] = [];
+    let requireScopedSource = false;
+    const source = composeSessionSourceAssertion([
+      Object.assign(
+        () => {
+          if (requireScopedSource) {
+            throw new Error("bootstrap requires its prepared source");
+          }
+        },
+        {
+          prepareSessionSourceScope: async () => {
+            expect(resolveSessionTranscriptReadFence(sessionTarget)).toBe(admission);
+            lifecycle.push("open");
+            let active = true;
+            return {
+              checks: [],
+              assertCurrent: () => {
+                if (!active) {
+                  throw new Error("source released before bootstrap settled");
+                }
+              },
+              release: () => {
+                active = false;
+                lifecycle.push("release");
+              },
+            };
+          },
+        },
+      ),
+    ]);
+    const prepared = prepareSystemAgentRunAdmission(
+      {},
+      "cli-scoped-source",
+      "main",
+      "test",
+      source,
+    );
+    const context = buildPreparedContext(
+      createContextEngine({
+        bootstrap: async () => {
+          requireScopedSource = true;
+          source();
+          enteredBootstrap.resolve();
+          await finishBootstrap.promise;
+          source();
+          requireScopedSource = false;
+          lifecycle.push("bootstrap-settled");
+          return { bootstrapped: true };
+        },
+      }),
+    );
+    context.params.runId = "cli-scoped-source";
+    context.params.admittedRunContext = await prepared.admit("embedded");
+    context.params.userTurnTranscriptRecorder = recorder;
+    const run = runPreparedCliAgent(context);
+    try {
+      await awaitGateBeforeSettlement(
+        enteredBootstrap.promise,
+        run,
+        "CLI completed without entering a fenced bootstrap",
+      );
+      expect(lifecycle).toEqual(["open"]);
+      finishBootstrap.resolve();
+      await run;
+      expect(lifecycle).toEqual(["open", "bootstrap-settled", "release"]);
+    } finally {
+      finishBootstrap.resolve();
+      await run.catch(() => {});
+      prepared.close();
+    }
+  });
 
-      await runCliAgent(context.params);
+  it("does not emit CLI turn facts without a terminal transcript", async () => {
+    const { afterTurn, maintain, dispose } = createLifecycle();
+    const context = buildPreparedContext(createContextEngine({ afterTurn, maintain, dispose }));
+    const onContextEngineTurnCandidate = vi.fn();
+    context.params.onContextEngineTurnCandidate = onContextEngineTurnCandidate;
+    context.params.userTurnTranscriptRecorder = createAdmittedCliRecorder("cli-user").recorder;
+    context.params.persistAssistantTranscript = false;
+    prepareMock.mockResolvedValue(context);
 
-      expect(onContextEngineTurnCandidate).not.toHaveBeenCalled();
-      expect(afterTurn).not.toHaveBeenCalled();
-      expect(maintain).toHaveBeenCalledTimes(1);
-      expect(dispose).not.toHaveBeenCalled();
-    },
-  );
+    await runCliAgent(context.params);
+
+    expect(onContextEngineTurnCandidate).not.toHaveBeenCalled();
+    expect(afterTurn).not.toHaveBeenCalled();
+    expect(maintain).toHaveBeenCalledTimes(1);
+    expect(dispose).not.toHaveBeenCalled();
+  });
 
   it.each(["messaging", "room_event"] as const)(
     "uses the admitted user anchor for transcriptless %s",
@@ -345,7 +420,11 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
       context.params.onContextEngineTurnCandidate = candidate;
       context.params.userTurnTranscriptRecorder = recorder;
       if (kind === "messaging") {
-        executeMock.mockResolvedValue({ text: "", didSendViaMessagingTool: true });
+        executeMock.mockResolvedValue({
+          text: "",
+          didSendViaMessagingTool: true,
+          sourceReplyDelivered: true,
+        });
       } else {
         context.params.currentInboundEventKind = "room_event";
         context.params.persistAssistantTranscript = false;

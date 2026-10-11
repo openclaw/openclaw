@@ -90,7 +90,7 @@ suite.define(() => {
               localStorage.setItem(key, JSON.stringify(prefs));
               localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
               localStorage.setItem(
-                "openclaw:control-ui:community-invite",
+                "openclaw:control-ui:community-invite:v2",
                 JSON.stringify({ dismissedAtMs: Date.now() }),
               );
             },
@@ -134,12 +134,14 @@ suite.define(() => {
           const group = sidebar.locator('[data-agent-group="main"]');
           const parent = group.locator('[data-session-key="agent:main:parent"]');
           await parent.waitFor({ state: "visible" });
+          // The saved list width includes shell borders; the rail adds its own 52px slot.
           expect(
-            await sidebar.evaluate((el) => el.parentElement?.getBoundingClientRect().width),
-          ).toBe(width);
+            await page.locator(".shell-nav").evaluate((el) => el.getBoundingClientRect().width),
+          ).toBe(width + 52);
           const workspaceName = sidebar.locator(
             ".sidebar-workspace-header .sidebar-agent-card__name-text",
           );
+          await captureSidebarUiProof(suite, page, `agent-first-${mode}-${width}-ready.png`);
           expect(await workspaceName.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
           const headerControls = await sidebar
             .locator(".sidebar-brand__actions .sidebar-brand__header-control")
@@ -192,9 +194,16 @@ suite.define(() => {
           const actionBounds = (await group
             .locator(".sidebar-agent-roster__actions")
             .boundingBox())!;
-          expect(attentionBounds.x + attentionBounds.width).toBeLessThanOrEqual(actionBounds.x);
-          expect((await group.locator(".sidebar-agent-roster__header").boundingBox())?.height).toBe(
-            48,
+          const headerBounds = (await group
+            .locator(".sidebar-agent-roster__header")
+            .boundingBox())!;
+          expect(attentionBounds.x).toBeGreaterThanOrEqual(headerBounds.x);
+          expect(attentionBounds.x + attentionBounds.width).toBeLessThanOrEqual(
+            headerBounds.x + headerBounds.width,
+          );
+          expect(attentionBounds.y).toBeGreaterThanOrEqual(actionBounds.y + actionBounds.height);
+          expect(attentionBounds.y + attentionBounds.height).toBeLessThanOrEqual(
+            headerBounds.y + headerBounds.height,
           );
           await page.keyboard.press("Escape");
           await group.locator('[data-agent-collapse="main"]').click();
@@ -250,6 +259,9 @@ suite.define(() => {
                 };
               });
               return {
+                agentRowLeft: element
+                  .querySelector(".sidebar-agent-roster__row")!
+                  .getBoundingClientRect().left,
                 avatarLeft: avatar.left,
                 avatarWidth: avatar.width,
                 headerHeight: header.height,
@@ -259,7 +271,7 @@ suite.define(() => {
           const beforeFocus = await geometry();
           expect(beforeFocus.avatarWidth).toBe(36);
           expect(beforeFocus.headerHeight).toBe(48);
-          expect(beforeFocus.rows[0]!.iconLeft).toBeCloseTo(beforeFocus.avatarLeft, 1);
+          expect(beforeFocus.rows[0]!.iconLeft).toBeCloseTo(beforeFocus.agentRowLeft, 1);
           expect(beforeFocus.rows[1]!.left - beforeFocus.rows[0]!.left).toBeCloseTo(16, 1);
           expect(beforeFocus.rows[2]!.left - beforeFocus.rows[1]!.left).toBeCloseTo(16, 1);
           for (const row of beforeFocus.rows) {
@@ -340,7 +352,10 @@ suite.define(() => {
           const summaryActions = (await group
             .locator(".sidebar-agent-roster__actions")
             .boundingBox())!;
-          expect(summaryBounds.x + summaryBounds.width).toBeLessThanOrEqual(summaryActions.x);
+          expect(summaryBounds.y).toBeGreaterThanOrEqual(summaryActions.y + summaryActions.height);
+          expect(summaryBounds.x + summaryBounds.width).toBeLessThanOrEqual(
+            beforeFocus.rows[0]!.right,
+          );
           expect(summaryActions.x + summaryActions.width).toBeCloseTo(
             beforeFocus.rows[0]!.right,
             1,

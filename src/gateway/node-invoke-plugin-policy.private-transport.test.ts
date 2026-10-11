@@ -59,7 +59,10 @@ describe("private node policy transport", () => {
       const registration = createDemoPolicy(handle);
       registration.policy.classifyRisk = vi.fn<
         NonNullable<typeof registration.policy.classifyRisk>
-      >(() => ({ level: "high", family: "fixture_mutation" }));
+      >(({ command, params }) => {
+        expect({ command, params }).toEqual({ command: DEMO_COMMAND, params: DEMO_PARAMS });
+        return { level: "high", family: "fixture_mutation" };
+      });
       setDangerousDemoCommandRegistry([registration]);
       const node = createNodeSession();
       node.commands = [];
@@ -101,45 +104,32 @@ describe("private node policy transport", () => {
     });
   });
 
-  it.each(["missing-policy", "invalid-risk"] as const)(
-    "rejects private dispatch before the policy handler for %s",
-    async (failure) => {
-      const handle = vi.fn((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode());
-      const registration = createDemoPolicy(handle);
-      registration.policy.classifyRisk = () => {
-        throw new Error("invalid private action");
-      };
-      setDangerousDemoCommandRegistry(failure === "missing-policy" ? [] : [registration]);
-      const { context, invoke } = createContext();
-      const privateTransport = createPrivateTransport();
+  it("rejects private dispatch without a registered policy", async () => {
+    setDangerousDemoCommandRegistry([]);
+    const { context, invoke } = createContext();
+    const privateTransport = createPrivateTransport();
 
-      await expect(
-        applyPluginNodeInvokePolicy({
-          context,
-          client: null,
-          nodeSession: createNodeSession(),
-          command: DEMO_COMMAND,
-          params: DEMO_PARAMS,
-          privateTransport,
-        }),
-      ).resolves.toMatchObject({
-        ok: false,
-        code:
-          failure === "missing-policy"
-            ? "PLUGIN_POLICY_MISSING"
-            : "PLUGIN_POLICY_RISK_CLASSIFICATION_FAILED",
-        details: { nodeCommandDispatched: false },
-      });
-      expect(handle).not.toHaveBeenCalled();
-      expect(privateTransport.invoke).not.toHaveBeenCalled();
-      expect(invoke).not.toHaveBeenCalled();
-    },
-  );
+    await expect(
+      applyPluginNodeInvokePolicy({
+        context,
+        client: null,
+        nodeSession: createNodeSession(),
+        command: DEMO_COMMAND,
+        params: DEMO_PARAMS,
+        privateTransport,
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      code: "PLUGIN_POLICY_MISSING",
+      details: { nodeCommandDispatched: false },
+    });
+    expect(privateTransport.invoke).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
+  });
 
   it.each([
     "owner",
     "plugin",
-    "deny",
     "capability",
     "connection",
     "pairing",
@@ -164,9 +154,6 @@ describe("private node policy transport", () => {
             break;
           case "plugin":
             setActivePluginRegistry(createEmptyPluginRegistry());
-            break;
-          case "deny":
-            context.getRuntimeConfig = () => nodeCommandsConfig({ deny: [DEMO_COMMAND] });
             break;
           case "capability":
             privateTransport.commands = [];

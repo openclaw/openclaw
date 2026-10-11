@@ -2,6 +2,7 @@ import { afterEach, beforeEach, vi } from "vitest";
 import * as gatewayBindings from "../../daemon/managed-gateway-bindings.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
+import type { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import type { executeMutableUpdate } from "./update-command-execution.js";
 import type { PreManagedServiceStop } from "./update-command-service.js";
 
@@ -28,8 +29,6 @@ const mocks = vi.hoisted(() => ({
   runGitUpdate: vi.fn(),
   runPackageUpdate: vi.fn(),
   runtimeError: vi.fn(),
-  revalidateSchemaContext:
-    vi.fn<typeof import("./update-command-managed-context.js").revalidateUpdateDatabaseContext>(),
   validateCanary: vi.fn(),
   nativeSupport:
     vi.fn<
@@ -103,7 +102,6 @@ vi.mock("./update-command-managed-context.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-managed-context.js")>()),
   captureOwnedManagedUpdateContext: mocks.captureManagedContext,
   captureOwnedManagedUpdatePreflightContext: mocks.captureManagedPreflight,
-  revalidateUpdateDatabaseContext: mocks.revalidateSchemaContext,
 }));
 
 vi.mock("./update-command-package.js", async (importOriginal) => ({
@@ -137,7 +135,7 @@ const successfulUpdate: UpdateRunResult = {
 
 function executionParams(
   updateInstallKind: "git" | "package",
-): Parameters<typeof executeMutableUpdate>[0] {
+): Omit<Parameters<typeof executeMutableUpdate>[0], "executionGuards"> {
   return {
     root: "/opt/openclaw",
     installKind: updateInstallKind,
@@ -159,6 +157,19 @@ function executionParams(
     recoveryState: { triageTarget: { env: {} } },
     prepareMutableUpdate: mocks.prepareMutableUpdate,
     packageTargetSchemaVersions: { state: 15, agent: 19 },
+  };
+}
+
+async function bindExecutionGuards(
+  params: Omit<Parameters<typeof executeMutableUpdate>[0], "executionGuards">,
+): Promise<Parameters<typeof executeMutableUpdate>[0]> {
+  const finalParams = { ...params };
+  const createGuards: typeof createUpdateCommandExecutionGuards = (
+    await import("./update-command-execution-guards.js")
+  ).createUpdateCommandExecutionGuards;
+  return {
+    ...finalParams,
+    executionGuards: createGuards(finalParams.opts, finalParams.root),
   };
 }
 
@@ -221,7 +232,6 @@ beforeEach(() => {
   mocks.captureManagedContext.mockResolvedValue(undefined);
   mocks.captureManagedPreflight.mockResolvedValue(schemaContext("default"));
   mocks.captureSchemaContext.mockResolvedValue(schemaContext("invoker"));
-  mocks.revalidateSchemaContext.mockImplementation(async (context) => context);
   mocks.checkTargetSchemas.mockResolvedValue({ incompatible: [], indeterminate: [] });
   mocks.formatSchemaRefusalLines.mockReturnValue(["schema refused"]);
   mocks.hasSchemaRefusal.mockImplementation(
@@ -238,4 +248,11 @@ beforeEach(() => {
   mocks.verifyPackageRecovery.mockResolvedValue({ serviceRestartSafe: true });
 });
 
-export { executionParams, inspectOrStopService, mocks, schemaContext, successfulUpdate };
+export {
+  bindExecutionGuards,
+  executionParams,
+  inspectOrStopService,
+  mocks,
+  schemaContext,
+  successfulUpdate,
+};

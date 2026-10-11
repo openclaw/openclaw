@@ -4,6 +4,7 @@ import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../session-agent-status.js";
 import { closedObject } from "./closed-object.js";
 import { ErrorShapeSchema } from "./frames.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
+import { SessionCommunicationPatchSchema } from "./sessions-communication.js";
 import { SessionPermissionModeSchema, SessionToolOverridesSchema } from "./sessions-row.js";
 
 export const SESSIONS_PATCH_MANY_MAX_TARGETS = 100;
@@ -40,6 +41,14 @@ const SessionsPatchMutationProperties = {
   ttlMinutes: Type.Optional(Type.Integer({ minimum: 1, maximum: 120 })),
   archived: Type.Optional(Type.Boolean()),
   pinned: Type.Optional(Type.Boolean()),
+  /** Independent sidebar placement without changing origin or execution ownership. */
+  sidebarRoot: Type.Optional(Type.Boolean()),
+  snoozedUntil: Type.Optional(
+    Type.Union([Type.Integer({ minimum: 1 }), Type.Null()], {
+      description:
+        "Epoch ms wake time that hides the session from active lists until then; null wakes it.",
+    }),
+  ),
   unread: Type.Optional(
     Type.Boolean({ description: "Set true to mark unread; false records the session as read." }),
   ),
@@ -70,6 +79,7 @@ const SessionsPatchMutationProperties = {
   execAsk: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   execNode: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   permissionMode: Type.Optional(Type.Union([SessionPermissionModeSchema, Type.Null()])),
+  communication: Type.Optional(Type.Union([SessionCommunicationPatchSchema, Type.Null()])),
   /** Null restores configured containment; required session isolation cannot be relaxed. */
   sandboxMode: Type.Optional(Type.Union([Type.Literal("off"), Type.Null()])),
   nativeRuntimeConsent: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
@@ -83,6 +93,27 @@ const SessionsPatchMutationProperties = {
   sendPolicy: Type.Optional(Type.Union([Type.Literal("allow"), Type.Literal("deny"), Type.Null()])),
   groupActivation: Type.Optional(
     Type.Union([Type.Literal("mention"), Type.Literal("always"), Type.Null()]),
+  ),
+};
+
+const SessionSidebarAncestorExpectationSchema = closedObject({
+  key: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  expectedSessionId: NonEmptyString,
+  expectedSidebarRoot: Type.Boolean(),
+  expectedCategory: Type.Union([SessionLabelString, Type.Null()]),
+});
+
+const SessionOrganizationExpectations = {
+  /** False also matches an absent promotion flag. */
+  expectedSidebarRoot: Type.Optional(Type.Boolean()),
+  /** Null asserts no organization bucket. */
+  expectedCategory: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
+  /** Compare archive state before any cancellation or mutation. */
+  expectedArchived: Type.Optional(Type.Boolean()),
+  /** Nearest persistent parent first through the tree root; all intervening ancestors must remain unarchived. */
+  expectedSidebarAncestors: Type.Optional(
+    Type.Array(SessionSidebarAncestorExpectationSchema, { maxItems: 128 }),
   ),
 };
 
@@ -103,6 +134,7 @@ export const SessionsPatchParamsSchema = closedObject({
     }),
   ),
   expectedMarkedUnreadAt: ExpectedMarkedUnreadAt,
+  ...SessionOrganizationExpectations,
   ...SessionsPatchMutationProperties,
 });
 
@@ -113,6 +145,7 @@ export const SessionsPatchMutationSchema = Type.Object(SessionsPatchMutationProp
 
 export const SessionsPatchManyTargetSchema = closedObject({
   key: NonEmptyString,
+  ...SessionOrganizationExpectations,
   agentId: Type.Optional(NonEmptyString),
   expectedSessionId: Type.Optional(NonEmptyString),
   expectedLifecycleRevision: Type.Optional(NonEmptyString),

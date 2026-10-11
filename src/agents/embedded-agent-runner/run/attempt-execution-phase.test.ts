@@ -311,6 +311,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
           {
             options: {
               requestIndex: 1,
+              messageCount: 0,
               broke: false,
               previousCacheRead: undefined,
               input: 100,
@@ -365,6 +366,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     const releaseSummary = createDeferred();
     const events: EmbeddedContextAccountingEvent[] = [];
     const ends: AgentSessionEvent[] = [];
+    let summarySignalAborted: boolean | undefined;
     session.subscribe((event) => {
       if (event.type === "compaction_end") {
         ends.push(event);
@@ -375,7 +377,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
       }
     });
     let requests = 0;
-    streamMocks.streamSimple.mockImplementation(async (activeModel, _context, options) => {
+    streamMocks.streamSimple.mockImplementation((activeModel, _context, options) => {
       if (++requests === 1) {
         return createAssistantResultStream(
           createAssistant(
@@ -386,12 +388,17 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
           ),
         );
       }
+      const response = createAssistantMessageEventStream();
       summaryStarted.resolve();
-      await releaseSummary.promise;
-      expect(options?.signal?.aborted).toBe(false);
-      return createAssistantResultStream(
-        createAssistant(activeModel, [{ type: "text", text: "Blue Heron summary" }]),
-      );
+      void releaseSummary.promise.then(() => {
+        summarySignalAborted = options?.signal?.aborted;
+        const message = createAssistant(activeModel, [
+          { type: "text", text: "Blue Heron summary" },
+        ]);
+        response.push({ type: "done", reason: "stop", message });
+        response.end();
+      });
+      return response;
     });
     const network = vi
       .spyOn(globalThis, "fetch")
@@ -453,6 +460,9 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
       }
       releaseSummary.resolve();
       const error = await outcome;
+      if (phase === "during summarization") {
+        expect(summarySignalAborted).toBe(false);
+      }
       const compacted = sessionManager.getEntries().filter((entry) => entry.type === "compaction");
       expect(compacted).toHaveLength(owner === "active" ? 1 : 0);
       if (phase === "before installation") {

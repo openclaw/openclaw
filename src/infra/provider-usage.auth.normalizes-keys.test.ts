@@ -9,6 +9,7 @@ import type {
 } from "../plugins/types.js";
 import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { resolveProviderAuths } from "./provider-usage.auth.js";
 
 const authProfileMocks = vi.hoisted(() => {
   const store: AuthProfileStore = { version: 1, profiles: {} };
@@ -23,10 +24,11 @@ const authProfileMocks = vi.hoisted(() => {
   };
 });
 
+// mock-isolation: Normalization fixtures require their prepared credential map and reject real auth-store reads.
 vi.mock("../agents/auth-profiles.js", () => ({
   ensureAuthProfileStore: authProfileMocks.unexpectedStoreRead,
   ensureAuthProfileStoreWithoutExternalProfiles: authProfileMocks.unexpectedStoreRead,
-  hasAnyAuthProfileStoreSource: authProfileMocks.unexpectedStoreRead,
+  hasAnyAuthProfileStoreSourceAsync: authProfileMocks.unexpectedStoreRead,
   dedupeProfileIds: (profileIds: string[]) => [...new Set(profileIds)],
   listProfilesForProvider: (_store: unknown, provider: string) =>
     authProfileMocks.orders[provider] ?? [],
@@ -77,7 +79,6 @@ vi.mock("../agents/auth-profiles/external-cli-sync.js", () => ({
   syncExternalCliCredentials: () => false,
 }));
 
-let resolveProviderAuths: typeof import("./provider-usage.auth.js").resolveProviderAuths;
 let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
 let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
 const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-provider-auth-suite-" });
@@ -98,7 +99,6 @@ describe("resolveProviderAuths key normalization", () => {
 
   beforeAll(async () => {
     await suiteRootTracker.setup();
-    ({ resolveProviderAuths } = await import("./provider-usage.auth.js"));
     ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
   });
 

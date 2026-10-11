@@ -122,7 +122,7 @@ describe("memory retrieval thread ownership", () => {
     closeAllMemorySearchManagers,
   });
 
-  it("offloads ranked retrieval with bounded session-only metadata reads", async () => {
+  it("offloads ranked retrieval and session-only metadata together", async () => {
     const cfg = fixture.createConfig({
       vectorEnabled: false,
       sources: ["memory", "sessions"],
@@ -231,9 +231,7 @@ describe("memory retrieval thread ownership", () => {
             }),
           );
         }
-        if (!baseline && operation.name === "sessions") {
-          expect(measured.statements / iterations).toBe(2);
-        } else if (baseline) {
+        if (baseline) {
           expect(
             measured.statements,
             `${operation.name} must observe its retained synchronous SQLite execution`,

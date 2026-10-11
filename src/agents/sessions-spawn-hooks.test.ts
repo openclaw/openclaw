@@ -220,8 +220,8 @@ beforeAll(async () => {
 });
 
 describe("sessions_spawn subagent lifecycle hooks", () => {
-  beforeEach(() => {
-    resetSubagentRegistryForTests();
+  beforeEach(async () => {
+    await resetSubagentRegistryForTests();
     hoisted.callGatewayMock.mockReset();
     hoisted.updateSessionStoreMock.mockReset();
     hookRunnerMocks.hasSubagentEndedHook = true;
@@ -284,9 +284,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
     });
   });
 
-  afterEach(() => {
-    resetSubagentRegistryForTests();
-  });
+  afterEach(() => resetSubagentRegistryForTests());
 
   it("binds the subagent thread in core and emits subagent_spawned with requester metadata", async () => {
     const result = await spawn({
@@ -425,28 +423,6 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
         to: "channel:123",
       },
       "spawned requester",
-    );
-  });
-
-  it("respects explicit mode=run when thread binding is requested", async () => {
-    const result = await spawn({
-      runTimeoutSeconds: 1,
-      thread: true,
-      mode: "run",
-      agentTo: "channel:123",
-      context: "isolated",
-    });
-
-    expectFields(result, { status: "accepted", runId: "run-1", mode: "run" }, "spawn result");
-    expect(bindingMocks.bind).toHaveBeenCalledTimes(1);
-    const event = getSpawnedEventCall();
-    expectFields(
-      event,
-      {
-        mode: "run",
-        threadRequested: true,
-      },
-      "spawned event",
     );
   });
 

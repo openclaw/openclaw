@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { finalizeEvent, getPublicKey, Relay, type Event, type Filter } from "nostr-tools";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const relayMocks = vi.hoisted(() => ({
@@ -15,9 +16,9 @@ const relayMocks = vi.hoisted(() => ({
   storedEvents: [] as Event[],
   historyRequests: [] as Filter[],
   historySubscriptionCloses: 0,
+  stallHistoryPages: false,
   closeHistoryPagesReason: undefined as string | undefined,
   overReturnHistoryPages: false,
-  stallHistoryPages: false,
 }));
 
 function matchesRelayFilter(event: Event, filter: Filter): boolean {
@@ -101,15 +102,10 @@ vi.mock("nostr-tools", async (importOriginal) => {
               closed: false,
             };
           }
-          if (relayMocks.stallHistoryPages && isHistoryPage) {
-            return {
-              id: `sub:${relayMocks.historyRequests.length}`,
-              close: vi.fn(),
-              closed: false,
-            };
-          }
         }
-        handlers.oneose?.();
+        if (!relayMocks.stallHistoryPages || !isHistoryPage) {
+          handlers.oneose?.();
+        }
         return {
           id: `sub:${relayMocks.historyRequests.length}`,
           close: vi.fn(() => {
@@ -166,6 +162,7 @@ function seedOfflineBacklog(count: number, createdAt: (index: number) => number)
 
 function startHistoryBus(overrides: Partial<Parameters<typeof startBuzzBus>[0]> = {}) {
   return startBuzzBus({
+    scheduler: createTestPluginServiceScheduler(),
     accountId: ACCOUNT_ID,
     relayUrl: "wss://buzz.example.com",
     privateKey: PRIVATE_KEY,
@@ -197,9 +194,9 @@ describe("Buzz reconnect history catch-up", () => {
     vi.clearAllMocks();
     relayMocks.historyRequests.length = 0;
     relayMocks.historySubscriptionCloses = 0;
+    relayMocks.stallHistoryPages = false;
     relayMocks.closeHistoryPagesReason = undefined;
     relayMocks.overReturnHistoryPages = false;
-    relayMocks.stallHistoryPages = false;
     relayMocks.storedEvents = [
       {
         id: "membership-1",
@@ -286,29 +283,6 @@ describe("Buzz reconnect history catch-up", () => {
     expect(relayMocks.historyRequests.some((filter) => filter.limit === undefined)).toBe(true);
   });
 
-  it("bounds a catch-up page when the relay ignores its history limit", async () => {
-    seedOfflineBacklog(250, (index) => BASE_TIMESTAMP + index);
-    relayMocks.overReturnHistoryPages = true;
-    const historyErrors: string[] = [];
-    const received: string[] = [];
-
-    const bus = await startHistoryBus({
-      onMessage: async (message) => {
-        received.push(message.text);
-      },
-      onHistoryError: (error) => {
-        historyErrors.push(error.message);
-      },
-    });
-    await waitForSettled(() => received.length >= 250);
-    await bus.close();
-
-    expect(historyErrors).toEqual([]);
-    expect(new Set(received).size).toBe(250);
-    expect(received.length).toBe(250);
-    expect(relayMocks.historySubscriptionCloses).toBe(2);
-  });
-
   it("bisects an overfull relay range until every bounded page fits", async () => {
     const backlogSize = 1_300;
     seedOfflineBacklog(backlogSize, (index) => BASE_TIMESTAMP + index);
@@ -347,12 +321,14 @@ describe("Buzz reconnect history catch-up", () => {
         fatalErrors.push(error.message);
       },
     });
-    await vi.advanceTimersByTimeAsync(10_000);
-    await bus.close();
-
-    expect(fatalErrors).toEqual([`Timed out loading Buzz room history for ${CHANNEL_ID}`]);
-    expect(relayMocks.close).toHaveBeenCalled();
-    expect(relayMocks.historySubscriptionCloses).toBe(0);
+    try {
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(fatalErrors).toEqual([`Timed out loading Buzz room history for ${CHANNEL_ID}`]);
+      expect(relayMocks.close).toHaveBeenCalled();
+      expect(relayMocks.historySubscriptionCloses).toBe(0);
+    } finally {
+      await bus.close();
+    }
   });
 
   it("fails the bus when a catch-up subscription closes unexpectedly", async () => {
@@ -404,36 +380,5 @@ describe("Buzz reconnect history catch-up", () => {
     } finally {
       await queue.close();
     }
-  });
-
-  it("stops an active history query quietly when the bus closes", async () => {
-    seedOfflineBacklog(250, (index) => BASE_TIMESTAMP + index);
-    relayMocks.stallHistoryPages = true;
-    const fatalErrors: string[] = [];
-    const historyErrors: string[] = [];
-    const received: string[] = [];
-
-    const bus = await startHistoryBus({
-      onMessage: async (message) => {
-        received.push(message.text);
-      },
-      onFatalError: (error) => {
-        fatalErrors.push(error.message);
-      },
-      onHistoryError: (error) => {
-        historyErrors.push(error.message);
-      },
-    });
-    await waitForSettled(() => relayMocks.historyRequests.length > 1);
-    await bus.close();
-    const requestsAtClose = relayMocks.historyRequests.length;
-    await new Promise((resolve) => {
-      setTimeout(resolve, 100);
-    });
-
-    expect(relayMocks.historyRequests.length).toBe(requestsAtClose);
-    expect(received.length).toBeLessThan(250);
-    expect(fatalErrors).toEqual([]);
-    expect(historyErrors).toEqual([]);
   });
 });

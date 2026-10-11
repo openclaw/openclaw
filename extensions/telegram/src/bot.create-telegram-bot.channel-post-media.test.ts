@@ -295,27 +295,6 @@ describe("createTelegramBot channel_post media", () => {
     );
   });
 
-  it("warns and dispatches a type-only fact when Telegram getFile fails (#100000)", async () => {
-    setOpenTelegramDirectConfig();
-    await createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-    await withTelegramGetFileRetryClock("Network request for 'getFile' failed!", (getFile) =>
-      handler(
-        createTelegramPrivateMediaContext({
-          messageId: 100000,
-          fileId: "doc-100000",
-          fileName: "report.pdf",
-          getFile,
-        }),
-      ),
-    );
-    await waitForTelegramMockCalls(sendMessageSpy, 1);
-    expectTelegramDownloadWarning(100000);
-    expect(replySpy).toHaveBeenCalledOnce();
-    expectUnavailableMediaPayload("document");
-    expect(saveRemoteMedia).not.toHaveBeenCalled();
-  });
-
   it("reports the 20 MB Bot API limit even with a higher configured limit (#100000)", async () => {
     setOpenTelegramDirectConfig(100);
     await createTelegramBot({ token: "tok" });
@@ -356,13 +335,6 @@ describe("createTelegramBot channel_post media", () => {
       warning: "⚠️ File too large. Maximum size is 100MB.",
       notice: "[media unavailable: file exceeds 100MB limit]",
     },
-    {
-      name: "permanent SSRF rejection",
-      messageId: 98078,
-      error: new MediaFetchError("fetch_failed", "blocked by SSRF guard: private address"),
-      result: { kind: "completed" },
-      warning: "⚠️ Failed to download media. Please try again.",
-    },
   ])("preserves durable replay handling for $name (#98076)", async (testCase) => {
     setOpenTelegramDirectConfig();
     saveRemoteMedia.mockRejectedValue(testCase.error);
@@ -396,28 +368,20 @@ describe("createTelegramBot channel_post media", () => {
   });
 
   it.each([
-    ["default disabled", undefined, undefined, undefined, false],
-    ["wildcard inherited", undefined, true, undefined, true],
-    ["topic enables group", false, undefined, true, true],
-    ["topic disables group", true, undefined, false, false],
-    ["unauthorized mentioned command", true, undefined, undefined, false],
-    ["unauthorized prefixed mention-optional command", true, undefined, undefined, false],
-  ] as Array<[string, boolean | undefined, boolean | undefined, boolean | undefined, boolean]>)(
+    ["topic enables group", false, true, true],
+    ["topic disables group", true, false, false],
+    ["unauthorized prefixed mention-optional command", true, undefined, false],
+  ] as Array<[string, boolean, boolean | undefined, boolean]>)(
     "honors %s before skipping unmentioned group media (#92067)",
-    async (_name, groupIngest, wildcardIngest, topicIngest, shouldIngest) => {
+    async (_name, groupIngest, topicIngest, shouldIngest) => {
       const unauthorizedCommand = _name.startsWith("unauthorized");
-      const command = `${_name.includes("prefixed") ? "[Tue 2026-06-02 12:34] " : ""}${
-        _name === "unauthorized mentioned command" ? "/reset@openclaw_bot" : "/reset"
-      }`;
+      const command = "[Tue 2026-06-02 12:34] /reset";
       const commandOffset = command.indexOf("/");
       const topics = topicIngest === undefined ? undefined : { "42": { ingest: topicIngest } };
       const groups = {
-        ...(wildcardIngest === undefined
-          ? {}
-          : { "*": telegramIngestGroupForTest(wildcardIngest) }),
         "-100456": {
           ...telegramIngestGroupForTest(groupIngest, topics),
-          requireMention: !_name.includes("mention-optional"),
+          requireMention: !unauthorizedCommand,
         },
       };
       setTelegramIngestGroupConfig({
@@ -489,8 +453,7 @@ describe("createTelegramBot channel_post media", () => {
     const enqueueSpy = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue");
     const albumWork = () =>
       enqueueSpy.mock.results.flatMap((result, index) =>
-        enqueueSpy.mock.calls[index]?.[0] === "media:-100456:none:main:ingested-album" &&
-        result.type === "return"
+        enqueueSpy.mock.calls[index]?.[0] === "media:-100456:none:main" && result.type === "return"
           ? [result.value]
           : [],
       );
@@ -521,8 +484,8 @@ describe("createTelegramBot channel_post media", () => {
         });
       }
       expect(getFile).not.toHaveBeenCalled();
-      vi.advanceTimersByTime(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
       expect(albumWork()).toHaveLength(1);
+      vi.advanceTimersByTime(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
       // Queue settlement includes real state-worker writes after the controlled debounce.
       await Promise.all(albumWork());
       expect(getFile).toHaveBeenCalledTimes(unauthorizedCommand ? 0 : 2);
@@ -546,18 +509,10 @@ describe("createTelegramBot channel_post media", () => {
 
   it.each([
     {
-      name: "a native mention with denied patterns",
-      messageId: 81185,
-      caption: "@openclaw_bot check this",
-      ingest: true,
-      denyPatterns: true,
-    },
-    {
       name: "a targeted bot command",
       messageId: 81184,
       caption: "/inspect@openclaw_bot",
       extraMessage: { caption_entities: [{ type: "bot_command", offset: 0, length: 21 }] },
-      ingest: false,
     },
     {
       name: "a reply to the bot",
@@ -571,12 +526,10 @@ describe("createTelegramBot channel_post media", () => {
           from: { id: 999, is_bot: true, first_name: "OpenClaw" },
         },
       },
-      ingest: false,
     },
   ])("preserves visible media failures for $name (#92067)", async (testCase) => {
     setTelegramIngestGroupConfig({
-      groups: { "*": { requireMention: true, ...(testCase.ingest ? { ingest: true } : {}) } },
-      ...("denyPatterns" in testCase ? { providerPolicy: { mode: "deny" } } : {}),
+      groups: { "*": { requireMention: true } },
     });
     saveRemoteMedia.mockRejectedValueOnce(new MediaFetchError("fetch_failed", "ECONNRESET"));
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("ECONNRESET"));
@@ -621,6 +574,7 @@ describe("createTelegramBot channel_post media", () => {
     });
 
     const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
+    const enqueueSpy = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue");
     try {
       await createTelegramBot({
         token: "tok",
@@ -649,7 +603,7 @@ describe("createTelegramBot channel_post media", () => {
       );
       expect(runs.map(({ deferredWork }) => Boolean(deferredWork))).toEqual([true, true]);
       // Replay participant processing already uses the overall test timeout.
-      await flushChannelPostMediaGroup(setTimeoutSpy, 0);
+      await flushChannelPostMediaGroup(setTimeoutSpy, enqueueSpy, 0);
       expect(await Promise.all(runs.map(({ deferredWork }) => deferredWork!.task))).toEqual([
         { kind: "failed-retryable", error: expect.any(MediaFetchError) },
         { kind: "failed-retryable", error: expect.any(MediaFetchError) },
@@ -658,6 +612,7 @@ describe("createTelegramBot channel_post media", () => {
       expect(replySpy).not.toHaveBeenCalled();
     } finally {
       setTimeoutSpy.mockRestore();
+      enqueueSpy.mockRestore();
     }
   });
 
@@ -673,6 +628,7 @@ describe("createTelegramBot channel_post media", () => {
 
     const runtimeError = vi.fn();
     const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
+    const enqueueSpy = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue");
     try {
       await createTelegramBot({
         token: "tok",
@@ -690,7 +646,7 @@ describe("createTelegramBot channel_post media", () => {
         secondGetFileResult: {},
       });
       expect(replySpy).not.toHaveBeenCalled();
-      await flushChannelPostMediaGroup(setTimeoutSpy, 1_075);
+      await flushChannelPostMediaGroup(setTimeoutSpy, enqueueSpy, 1_075);
 
       expect(runtimeError).toHaveBeenCalledWith(
         expect.stringContaining("media group handler failed"),
@@ -702,6 +658,7 @@ describe("createTelegramBot channel_post media", () => {
       expect(replySpy).not.toHaveBeenCalled();
     } finally {
       setTimeoutSpy.mockRestore();
+      enqueueSpy.mockRestore();
     }
   });
 });

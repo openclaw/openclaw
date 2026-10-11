@@ -385,7 +385,7 @@ async function createPreparedNodeAcknowledgement(root: string) {
         agentId: "main",
       });
       for (const to of ["provisioning", "syncing"] as const) {
-        placement = startup.placementStore.transition({
+        placement = await startup.placementStore.transition({
           sessionId: binding.sessionId,
           from: placement.state,
           to,

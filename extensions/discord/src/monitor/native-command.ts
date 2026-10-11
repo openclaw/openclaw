@@ -1,7 +1,8 @@
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
 import { loadPreparedModelCatalog, resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveDirectStatusReplyForSession } from "openclaw/plugin-sdk/command-status-runtime";
+import { ensureConfiguredBindingRouteReady } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
-import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import {
   buildCommandTextFromArgs,
@@ -15,19 +16,9 @@ import {
 import type { PluginCommandNativeCandidate } from "openclaw/plugin-sdk/plugin-command-runtime";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
-import { resolveDiscordAccountAllowFrom, resolveDiscordAccountDmPolicy } from "../accounts.js";
-import {
-  Button,
-  Command,
-  StringSelectMenu,
-  type CommandInteraction,
-  type CommandOptions,
-} from "../internal/discord.js";
-import {
-  resolveDiscordChannelPolicyCommandAuthorizer,
-  resolveDiscordOwnerAccess,
-} from "./allow-list.js";
+import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { resolveDiscordAccountDmPolicy } from "../accounts.js";
+import { Command, type CommandInteraction, type CommandOptions } from "../internal/discord.js";
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
 import { readDiscordInteractionPolicy } from "./live-policy-interaction.js";
@@ -39,7 +30,7 @@ import {
 import {
   resolveDiscordGuildNativeCommandAuthorized,
   resolveDiscordNativeAutocompleteAuthorized,
-  resolveDiscordNativeCommandChannelAccessContext,
+  resolveDiscordNativeCommandAccessContext,
   createDiscordNativeCommandAuthority,
   resolveDiscordNativeGroupDmAccess,
   resolveDiscordNativePolicyReader,
@@ -70,6 +61,7 @@ import {
   safeDiscordInteractionCall,
   settleDiscordInteractionWithoutVisibleReply,
 } from "./native-command-reply.js";
+import { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
 import { maybeDeliverDiscordDirectStatus } from "./native-command-status.js";
 import type { DiscordCommandArgContext } from "./native-command-ui.types.js";
 import { createNativeCommandDefinition, readDiscordCommandArgs } from "./native-command.args.js";
@@ -78,7 +70,6 @@ import {
   truncateDiscordCommandDescriptionLocalizations,
   truncateDiscordCommandDescription,
 } from "./native-command.options.js";
-import { nativeCommandRuntime } from "./native-command.runtime.js";
 import { resolveDiscordNativeInteractionChannelContext } from "./native-interaction-channel-context.js";
 import { resolveDiscordSenderIdentity } from "./sender-identity.js";
 
@@ -92,17 +83,8 @@ export function createDiscordNativeCommand(
     ephemeralDefault: boolean;
   },
 ): Command {
-  const {
-    command,
-    cfg,
-    discordConfig,
-    accountId,
-    sessionPrefix,
-    ephemeralDefault,
-    threadBindings,
-    buildContext,
-    dispatchReplyFromConfig,
-  } = params;
+  const { command, ephemeralDefault, ...ctx } = params;
+  const { cfg, accountId, threadBindings } = ctx;
   const fallbackCommandDefinition = createNativeCommandDefinition(command);
   const pluginCommandCandidate = "prepareDispatch" in command ? command : undefined;
   const commandDefinition = pluginCommandCandidate
@@ -127,9 +109,9 @@ export function createDiscordNativeCommand(
         ...policy,
         isPolicyCurrent: policy.isCurrent,
         accountId,
-        sessionPrefix,
+        sessionPrefix: ctx.sessionPrefix,
         threadBindings,
-        buildContext,
+        buildContext: ctx.buildContext,
         skipCommandOwnerAllowFrom: pluginCommandCandidate !== undefined,
       });
     },
@@ -191,22 +173,16 @@ export function createDiscordNativeCommand(
         commandArgsWithRaw?.raw,
       );
       await dispatchDiscordCommandInteraction({
+        ...ctx,
         readPolicy,
         interaction,
         prompt,
         command: commandDefinition,
         commandArgs: commandArgsWithRaw,
-        cfg,
-        discordConfig,
-        accountId,
-        sessionPrefix,
         // Slash commands are deferred up front, so all later responses must use
         // follow-up/edit semantics instead of the initial reply endpoint.
         preferFollowUp: true,
-        threadBindings,
         responseEphemeral: ephemeralDefault,
-        buildContext,
-        dispatchReplyFromConfig,
         pluginCommandDispatch: preparedPluginCommand ?? NON_PLUGIN_COMMAND_DISPATCH,
       });
     }
@@ -246,19 +222,17 @@ async function dispatchDiscordCommandInteraction(
       await interaction[preferFollowUp ? "followUp" : "reply"](payload);
     });
   };
+  const reject = async (content: string, ephemeral?: boolean) => {
+    await respond(content, { ephemeral });
+    return { accepted: false };
+  };
 
   const user = interaction.user;
   if (!user) {
     return { accepted: false };
   }
   const sender = resolveDiscordSenderIdentity({ author: user, pluralkitInfo: null });
-  const channel = interaction.channel;
-  const channelContext = await resolveDiscordNativeInteractionChannelContext({
-    channel,
-    client: interaction.client,
-    hasGuild: Boolean(interaction.guild),
-    channelIdFallback: interaction.rawData.channel_id ?? "",
-  });
+  const channelContext = await resolveDiscordNativeInteractionChannelContext(interaction, "");
   const {
     isDirectMessage,
     isGroupDm,
@@ -269,36 +243,23 @@ async function dispatchDiscordCommandInteraction(
     threadParentId,
   } = channelContext;
   if (policy?.isCurrent() === false) {
-    await respond("Access policy changed. Try this interaction again.", { ephemeral: true });
-    return { accepted: false };
+    return reject("Access policy changed. Try this interaction again.", true);
   }
   const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
-    ? interaction.rawData.member.roles.map((roleId: string) => roleId)
+    ? interaction.rawData.member.roles.slice()
     : [];
-  const allowNameMatching = isDangerousNameMatchingEnabled(discordConfig);
-  const configuredDmAllowFrom =
-    resolveDiscordAccountAllowFrom({
-      cfg,
-      accountId,
-    }) ?? [];
-  const { ownerAllowList, ownerAllowed } = resolveDiscordOwnerAccess({
-    allowFrom: configuredDmAllowFrom,
+  const channelAccess = resolveDiscordNativeCommandAccessContext({
+    cfg,
+    accountId,
+    discordConfig,
     sender,
-    allowNameMatching,
+    ...channelContext,
+    guild: interaction.guild ?? null,
   });
-  const { commandsAllowFromAccess, guildInfo, channelConfig } =
-    resolveDiscordNativeCommandChannelAccessContext({
-      cfg,
-      discordConfig,
-      sender,
-      ...channelContext,
-      guild: interaction.guild ?? null,
-    });
-  let nativeRouteState:
-    | ReturnType<typeof nativeCommandRuntime.resolveDiscordNativeInteractionRouteState>
-    | undefined;
+  const { guildInfo, channelConfig } = channelAccess;
+  let nativeRouteState: ReturnType<typeof resolveDiscordNativeInteractionRouteState> | undefined;
   const getNativeRouteState = () =>
-    (nativeRouteState ??= nativeCommandRuntime.resolveDiscordNativeInteractionRouteState({
+    (nativeRouteState ??= resolveDiscordNativeInteractionRouteState({
       cfg,
       accountId,
       guildId: interaction.guild?.id ?? undefined,
@@ -321,58 +282,34 @@ async function dispatchDiscordCommandInteraction(
       routeState.configuredBinding != null
     );
   };
-  if (channelConfig?.enabled === false && !canBypassConfiguredAcpGuildGuards()) {
-    await respond("This channel is disabled.");
-    return { accepted: false };
-  }
-  if (
-    interaction.guild &&
-    channelConfig?.allowed === false &&
-    !canBypassConfiguredAcpGuildGuards()
-  ) {
-    await respond("This channel is not allowed.");
-    return { accepted: false };
-  }
-  if (interaction.guild) {
-    const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
-      providerConfigPresent: cfg.channels?.discord !== undefined,
-      groupPolicy: discordConfig?.groupPolicy,
-      defaultGroupPolicy: cfg.channels?.defaults?.groupPolicy,
-    });
-    const policyAuthorizer = resolveDiscordChannelPolicyCommandAuthorizer({
-      groupPolicy,
-      guildInfo,
-      channelConfig,
-    });
-    if (!policyAuthorizer.allowed && !canBypassConfiguredAcpGuildGuards()) {
-      await respond("This channel is not allowed.");
-      return { accepted: false };
-    }
+  if (channelAccess.channelDenial && !canBypassConfiguredAcpGuildGuards()) {
+    return reject(
+      channelAccess.channelDenial === "disabled"
+        ? "This channel is disabled."
+        : "This channel is not allowed.",
+    );
   }
   if (policy?.isCurrent() === false) {
-    await respond("Access policy changed. Try this interaction again.", { ephemeral: true });
-    return { accepted: false };
+    return reject("Access policy changed. Try this interaction again.", true);
   }
   const dmEnabled = discordConfig?.dm?.enabled ?? true;
   const dmPolicy = resolveDiscordAccountDmPolicy({ cfg, accountId }) ?? "pairing";
   let commandAuthorized = true;
   if (isDirectMessage) {
     if (!dmEnabled || dmPolicy === "disabled") {
-      await respond("Discord DMs are disabled.");
-      return { accepted: false };
+      return reject("Discord DMs are disabled.");
     }
     const dmAccess = await resolveDiscordDmCommandAccess({
       accountId,
       dmPolicy,
-      configuredAllowFrom: configuredDmAllowFrom,
+      configuredAllowFrom: channelAccess.configuredDmAllowFrom,
       sender,
-      allowNameMatching,
+      allowNameMatching: channelAccess.allowNameMatching,
       cfg,
       rest: interaction.client.rest,
     });
     if (policy?.isCurrent() === false) {
-      await respond("Access policy changed. Try this interaction again.", { ephemeral: true });
-      return { accepted: false };
+      return reject("Access policy changed. Try this interaction again.", true);
     }
     commandAuthorized = dmAccess.senderAccess.allowed ? dmAccess.commandAccess.authorized : false;
     if (dmAccess.senderAccess.decision !== "allow") {
@@ -410,35 +347,26 @@ async function dispatchDiscordCommandInteraction(
     channelSlug,
   });
   if (!groupDmAccess.allowed) {
-    await respond(
+    return reject(
       groupDmAccess.reason === "disabled"
         ? "Discord group DMs are disabled."
         : "This group DM is not allowed.",
     );
-    return { accepted: false };
   }
   if (!isDirectMessage) {
     commandAuthorized = await resolveDiscordGuildNativeCommandAuthorized({
-      cfg,
-      discordConfig,
-      commandsAllowFromAccess,
-      guildInfo,
-      channelConfig,
+      ...channelAccess,
       memberRoleIds,
       sender,
-      allowNameMatching,
-      ownerAllowListConfigured: ownerAllowList != null,
-      ownerAllowed,
+      ownerAllowListConfigured: channelAccess.ownerAllowList != null,
     });
     if (!commandAuthorized && !canBypassConfiguredAcpGuildGuards()) {
-      await respond("You are not authorized to use this command.", { ephemeral: true });
-      return { accepted: false };
+      return reject("You are not authorized to use this command.", true);
     }
   }
 
   if (policy?.isCurrent() === false) {
-    await respond("Access policy changed. Try this interaction again.", { ephemeral: true });
-    return { accepted: false };
+    return reject("Access policy changed. Try this interaction again.", true);
   }
   const routeState = getNativeRouteState();
   const effectiveRoute = routeState.effectiveRoute;
@@ -454,7 +382,7 @@ async function dispatchDiscordCommandInteraction(
       commandArgs: commandArgs ?? {},
       channelConfig,
       guildInfo,
-      allowNameMatching,
+      allowNameMatching: channelAccess.allowNameMatching,
       commandAuthorized,
       user,
       sender,
@@ -462,15 +390,14 @@ async function dispatchDiscordCommandInteraction(
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, effectiveRoute.agentId);
 
   if (policy?.isCurrent() === false) {
-    await respond("Access policy changed. Try this interaction again.", { ephemeral: true });
-    return { accepted: false };
+    return reject("Access policy changed. Try this interaction again.", true);
   }
-  const authority = createDiscordNativeCommandAuthority({
+  const authority = await createDiscordNativeCommandAuthority({
     cfg,
     ctx: ctxPayload,
     commandAuthorized,
     sender,
-    allowNameMatching,
+    allowNameMatching: channelAccess.allowNameMatching,
     isPolicyCurrent: policy?.isCurrent,
     accountId,
     guildId: interaction.guild?.id,
@@ -478,13 +405,12 @@ async function dispatchDiscordCommandInteraction(
     pluginCommand: params.pluginCommandDispatch.kind === "plugin",
   });
   if (!authority.isAllowed()) {
-    await respond("You are not authorized to use this command.", { ephemeral: true });
-    return { accepted: false };
+    return reject("You are not authorized to use this command.", true);
   }
 
   const bindingReadiness =
     routeState.configuredBinding && !shouldBypassConfiguredAcpEnsure(commandName)
-      ? await nativeCommandRuntime.ensureConfiguredBindingRouteReady({
+      ? await ensureConfiguredBindingRouteReady({
           cfg,
           bindingResolution: routeState.configuredBinding,
           assertActive: authority.assertActive,
@@ -492,8 +418,7 @@ async function dispatchDiscordCommandInteraction(
       : null;
 
   if (!authority.isAllowed()) {
-    await respond("You are not authorized to use this command.", { ephemeral: true });
-    return { accepted: false };
+    return reject("You are not authorized to use this command.", true);
   }
 
   const isGuild = Boolean(interaction.guild);
@@ -506,7 +431,7 @@ async function dispatchDiscordCommandInteraction(
   const menuModelContext =
     menuNeedsModelContext && bindingReadiness?.ok !== false
       ? await resolveDiscordNativeChoiceContext({
-          interaction: interaction as CommandInteraction,
+          interaction,
           cfg,
           accountId,
           threadBindings,
@@ -542,14 +467,13 @@ async function dispatchDiscordCommandInteraction(
           catalog: menuModelCatalog,
         });
   if (policy?.isCurrent() === false) {
-    await respond("Access policy changed. Try this interaction again.", { ephemeral: true });
-    return { accepted: false };
+    return reject("Access policy changed. Try this interaction again.", true);
   }
   if (menu) {
     const menuPayload = buildDiscordCommandArgMenu({
       command,
       menu,
-      interaction: interaction as CommandInteraction,
+      userId: interaction.user?.id ?? "",
       ctx: {
         cfg,
         discordConfig,
@@ -585,7 +509,7 @@ async function dispatchDiscordCommandInteraction(
       (isThreadChannel ? threadBindings.getByThreadId(rawChannelId)?.agentId : undefined) ||
       routeState.configuredBinding?.statefulTarget.agentId ||
       effectiveRoute.agentId;
-    const targetSessionEntry = nativeCommandRuntime.getSessionEntry({
+    const targetSessionEntry = getSessionEntry({
       agentId: pluginCommandAgentId,
       sessionKey: effectiveRoute.sessionKey,
     });
@@ -655,21 +579,19 @@ async function dispatchDiscordCommandInteraction(
       logVerbose(
         `discord native command: configured ACP binding unavailable for channel ${configuredBinding.record.conversation.conversationId}: ${bindingReadiness.error}`,
       );
-      await respond("Configured ACP binding is unavailable right now. Please try again.");
-      return { accepted: false };
+      return reject("Configured ACP binding is unavailable right now. Please try again.");
     }
   }
 
   const directStatusResult = await maybeDeliverDiscordDirectStatus({
     commandName,
     suppressReplies,
-    resolveDirectStatusReplyForSession: nativeCommandRuntime.resolveDirectStatusReplyForSession,
+    resolveDirectStatusReplyForSession,
     cfg,
     discordConfig,
     accountId,
     sessionKey,
     commandTargetSessionKey,
-    channel: "discord",
     senderId: sender.id,
     senderIsOwner: authority.senderIsOwner(),
     isAuthorizedSender: commandAuthorized,
@@ -707,29 +629,23 @@ async function dispatchDiscordCommandInteraction(
   return { accepted: dispatched, effectiveRoute, hiddenFinalReply };
 }
 
-export function createDiscordCommandArgFallbackButton(params: DiscordCommandArgContext): Button {
-  return createDiscordCommandArgFallbackButtonUi({
-    ctx: { ...params, readPolicy: resolveDiscordNativePolicyReader(params) },
-    safeInteractionCall: safeDiscordInteractionCall,
-    dispatchCommandInteraction: dispatchDiscordCommandInteraction,
-  });
+function bindDiscordCommandControl<T>(
+  createControl: (params: Parameters<typeof createDiscordCommandArgFallbackButtonUi>[0]) => T,
+): (params: DiscordCommandArgContext) => T {
+  return (params) =>
+    createControl({
+      ctx: { ...params, readPolicy: resolveDiscordNativePolicyReader(params) },
+      safeInteractionCall: safeDiscordInteractionCall,
+      dispatchCommandInteraction: dispatchDiscordCommandInteraction,
+    });
 }
 
-export function createDiscordModelPickerFallbackButton(params: DiscordCommandArgContext): Button {
-  return createDiscordModelPickerFallbackButtonUi({
-    ctx: { ...params, readPolicy: resolveDiscordNativePolicyReader(params) },
-    safeInteractionCall: safeDiscordInteractionCall,
-    dispatchCommandInteraction: dispatchDiscordCommandInteraction,
-  });
-}
-
-export function createDiscordModelPickerFallbackSelect(
-  params: DiscordCommandArgContext,
-): StringSelectMenu {
-  return createDiscordModelPickerFallbackSelectUi({
-    ctx: { ...params, readPolicy: resolveDiscordNativePolicyReader(params) },
-    safeInteractionCall: safeDiscordInteractionCall,
-    dispatchCommandInteraction: dispatchDiscordCommandInteraction,
-  });
-}
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+export const createDiscordCommandArgFallbackButton = bindDiscordCommandControl(
+  createDiscordCommandArgFallbackButtonUi,
+);
+export const createDiscordModelPickerFallbackButton = bindDiscordCommandControl(
+  createDiscordModelPickerFallbackButtonUi,
+);
+export const createDiscordModelPickerFallbackSelect = bindDiscordCommandControl(
+  createDiscordModelPickerFallbackSelectUi,
+);

@@ -9,6 +9,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import { t } from "../../i18n/index.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { setChatHistoryLoad } from "./chat-history-state.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
@@ -25,6 +26,7 @@ import {
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { cancelChatStreamRenderFrame } from "./chat-state-render.ts";
 import { renderChat } from "./chat-view.ts";
+import { questionPanelIn } from "./components/chat-question-card.test-support.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -32,23 +34,44 @@ import {
 import { projectSessionApprovalReplay } from "./session-approval-projection.ts";
 
 describe("chat pane assistant identity snapshots", () => {
-  it("keeps an explicitly owned global Home pane on its agent across work selection", () => {
-    const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({
-      client,
-      sessions: createSessionCapabilityFixture(),
-    });
-    (pane as TestChatPane & { agentId: string }).agentId = "personal";
-    pane.sessionKey = "global";
-    state.sessionKey = "global";
-    state.assistantAgentId = "personal";
-    state.agentsList = { defaultId: "main", mainKey: "main", scope: "global", agents: [] };
-    pane.context.agentSelection.set("work");
+  it("keeps an unknown transcript loading before hello and reconciles cached or live history", () => {
+    installTranscriptDomMocks();
+    const pane = createRenderTestChatPane();
+    const state = pane.initialize(createInitializationContext());
+    state.sessionKey = "agent:main:dashboard:first-paint";
+    const container = document.createElement("div");
+    const draw = () => {
+      pane.render();
+      render(renderChat(pane.chatProps!), container);
+    };
+    try {
+      draw();
+      expect(container.querySelector(".agent-chat__welcome")).toBeNull();
+      expect(container.querySelector("openclaw-panel-loading-skeleton")).not.toBeNull();
 
-    pane.applyGatewaySnapshot(pane.context.gateway.snapshot);
+      state.currentSessionId = "cached-session";
+      state.chatMessages = [{ role: "assistant", content: "Cached mission briefing." }];
+      draw();
+      expect(container.textContent).toContain("Cached mission briefing.");
+      expect(container.querySelector(".agent-chat__welcome")).toBeNull();
 
-    expect(state.assistantAgentId).toBe("personal");
-    expect(pane.context.agentSelection.state.selectedId).toBe("work");
+      state.chatMessages = [];
+      draw();
+      expect(container.querySelector(".agent-chat__welcome")).not.toBeNull();
+
+      state.currentSessionId = null;
+      state.connected = true;
+      state.chatLoading = true;
+      draw();
+      expect(container.querySelector(".agent-chat__welcome")).toBeNull();
+
+      state.chatLoading = false;
+      draw();
+      expect(container.querySelector(".agent-chat__welcome")).not.toBeNull();
+    } finally {
+      render(html``, container);
+      resetTranscriptTestDom();
+    }
   });
 
   it("rebinds agent-owned presentation when a retained fixed route changes owner", () => {
@@ -519,17 +542,13 @@ describe("global chat pane feature ownership", () => {
           },
         });
       }
-      const container = document.body.appendChild(document.createElement("div"));
+      const container = document.body.appendChild(createApplicationContextProvider(context));
       const draw = async () => {
         await pane.updateComplete;
         render(renderChat(pane.chatProps!), container);
-        await (
-          container.querySelector("openclaw-chat-question-panel") as
-            | (HTMLElement & {
-                updateComplete?: Promise<unknown>;
-              })
-            | null
-        )?.updateComplete;
+        if (container.querySelector("openclaw-chat-question-card")) {
+          await questionPanelIn(container);
+        }
       };
       const expectStableQuestions = async () => {
         const previous = pane.chatProps?.gatewayQuestionPrompts;
@@ -628,18 +647,32 @@ describe("global chat pane feature ownership", () => {
     expect(request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
   });
 
-  it("loads, refreshes and dismisses the selected agent's global progress card", async () => {
+  it("keeps revision-checked shared clearing behind a separate writer action", async () => {
+    const card = globalProgressCard("research");
+    const request = vi.fn(async (method: string) =>
+      method === "progressCard.put" ? { card: null } : { card },
+    );
+    const { pane } = createGlobalFeaturePane(request, ["progressCard.get", "progressCard.put"]);
+    await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(card));
+    expect(pane.chatProps?.onClearSavedProgressCard).toBeDefined();
+    pane.chatProps!.onClearSavedProgressCard!(pane.chatProps!.progressCard!);
+    await vi.waitFor(() => expect(pane.chatProps?.progressCard).toBeNull());
+    expect(request).toHaveBeenCalledWith("progressCard.put", {
+      sessionKey: "global",
+      agentId: "research",
+      expectedRevision: card.revision,
+    });
+  });
+
+  it("hides only this pane's selected agent progress without clearing its card", async () => {
     let card: ProgressCard | null = globalProgressCard("research");
     const request = vi.fn(async (method: string) => {
-      if (method === "progressCard.put") {
-        card = null;
+      if (method !== "progressCard.get") {
+        throw new Error(`Unexpected progress-card write: ${method}`);
       }
       return { card };
     });
-    const { pane, emit } = createGlobalFeaturePane(request, [
-      "progressCard.get",
-      "progressCard.put",
-    ]);
+    const { pane, emit } = createGlobalFeaturePane(request, ["progressCard.get"]);
     await pane.updateComplete;
     expect(request).toHaveBeenCalledWith("progressCard.get", {
       sessionKey: "global",
@@ -658,11 +691,57 @@ describe("global chat pane feature ownership", () => {
     }
     pane.chatProps!.onDismissProgressCard!(displayedCard);
     await vi.waitFor(() => expect(pane.chatProps?.progressCard).toBeNull());
-    expect(request).toHaveBeenLastCalledWith("progressCard.put", {
-      sessionKey: "global",
-      agentId: "research",
-      expectedRevision: 2,
+    expect(request.mock.calls.every(([method]) => method === "progressCard.get")).toBe(true);
+
+    card = globalProgressCard("research", 3);
+    emit({ sessionKey: card.sessionKey, revision: card.revision });
+    await vi.waitFor(() =>
+      expect(request.mock.calls.filter(([method]) => method === "progressCard.get")).toHaveLength(
+        3,
+      ),
+    );
+    expect(pane.chatProps?.progressCard).toBeNull();
+
+    card = null;
+    emit({ sessionKey: "agent:research:global", revision: null });
+    await vi.waitFor(() =>
+      expect(request.mock.calls.filter(([method]) => method === "progressCard.get")).toHaveLength(
+        4,
+      ),
+    );
+    card = globalProgressCard("research", 5);
+    emit({ sessionKey: card.sessionKey, revision: card.revision });
+    await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(card));
+  });
+
+  it("keeps each hidden card hidden when the same pane switches agents", async () => {
+    const research = globalProgressCard("research");
+    const main = globalProgressCard("main");
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method !== "progressCard.get") {
+        throw new Error(`Unexpected progress-card write: ${method}`);
+      }
+      const agentId = (params as { agentId?: string } | undefined)?.agentId;
+      return { card: agentId === "main" ? main : research };
     });
+    const { pane, select } = createGlobalFeaturePane(request, ["progressCard.get"]);
+    await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(research));
+    pane.chatProps!.onDismissProgressCard!(pane.chatProps!.progressCard!);
+    await vi.waitFor(() => expect(pane.chatProps?.progressCard).toBeNull());
+
+    select("main");
+    await pane.updateComplete;
+    await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(main));
+    pane.chatProps!.onDismissProgressCard!(pane.chatProps!.progressCard!);
+    await vi.waitFor(() => expect(pane.chatProps?.progressCard).toBeNull());
+
+    select("research");
+    await pane.updateComplete;
+    expect(pane.chatProps?.progressCard).toBeNull();
+    select("main");
+    await pane.updateComplete;
+    expect(pane.chatProps?.progressCard).toBeNull();
+    expect(request.mock.calls.every(([method]) => method === "progressCard.get")).toBe(true);
   });
 
   it("keeps Main progress when an old Research response arrives for the same raw global key", async () => {

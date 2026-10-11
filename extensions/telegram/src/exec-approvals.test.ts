@@ -5,13 +5,8 @@ import {
   normalizeSessionDeliveryState,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import {
-  resolvePreferredOpenClawTmpDir,
-  tempWorkspaceSync,
-  type TempWorkspaceSync,
-} from "openclaw/plugin-sdk/temp-path";
-import { afterEach, describe, expect, it } from "vitest";
+import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterAll, describe, expect, it } from "vitest";
 import {
   getTelegramExecApprovalApprovers,
   isTelegramExecApprovalAuthorizedSender,
@@ -22,18 +17,11 @@ import {
   shouldInjectTelegramExecApprovalButtons,
 } from "./exec-approvals.js";
 
-const tempWorkspaces: TempWorkspaceSync[] = [];
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-telegram-exec-approvals-");
 
 type TelegramExecApprovalRequest = Parameters<
   typeof shouldHandleTelegramExecApprovalRequest
 >[0]["request"];
-
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  for (const workspace of tempWorkspaces.splice(0)) {
-    workspace.cleanup();
-  }
-});
 
 function buildConfig(
   execApprovals?: NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>["execApprovals"],
@@ -139,12 +127,7 @@ describe("telegram exec approvals", () => {
   });
 
   it("scopes non-telegram turn sources to the stored telegram account", async () => {
-    const workspace = tempWorkspaceSync({
-      rootDir: resolvePreferredOpenClawTmpDir(),
-      prefix: "openclaw-telegram-exec-approvals-",
-    });
-    tempWorkspaces.push(workspace);
-    const tmpDir = workspace.dir;
+    const tmpDir = sessionDirs.make();
     const storePath = path.join(tmpDir, "sessions.json");
     await upsertSessionEntry({
       storePath,

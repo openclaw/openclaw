@@ -4,7 +4,6 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import {
   admitFollowupRunLifecycle,
-  clearSessionQueues,
   completeFollowupRunLifecycle,
   enqueueFollowupRun,
   scheduleFollowupDrain,
@@ -15,8 +14,9 @@ import {
   createDrainRecorder,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
+import { clearFollowupDrainCallback } from "./queue/drain.js";
 import { resetRecentQueuedMessageIdDedupe } from "./queue/enqueue.test-support.js";
-import { getExistingFollowupQueue } from "./queue/state.js";
+import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 
 installQueueRuntimeErrorSilencer();
 const settings = createQueueSettings();
@@ -38,7 +38,8 @@ beforeEach(() => {
   resetRecentQueuedMessageIdDedupe();
 });
 afterEach(() => {
-  clearSessionQueues([key]);
+  clearFollowupQueue(key);
+  clearFollowupDrainCallback(key);
   vi.useRealTimers();
 });
 
@@ -59,18 +60,9 @@ describe("followup queue deduplication", () => {
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
+    expect(getExistingFollowupQueue(key)).toBeUndefined();
     expect(enqueueB.enqueueFollowupRun(key, source("redelivery"), settings)).toBe(false);
     expect(calls).toHaveLength(1);
-  });
-
-  it("rejects a drained redelivery without recreating an empty registry entry", async () => {
-    const { calls, done, runFollowup } = createDrainRecorder();
-    expect(enqueueFollowupRun(key, source("original"), settings)).toBe(true);
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
-    await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
-    expect(calls).toHaveLength(1);
-    expect(enqueueFollowupRun(key, source("redelivery"), settings)).toBe(false);
     expect(getExistingFollowupQueue(key)).toBeUndefined();
   });
 
@@ -157,22 +149,6 @@ describe("followup queue deduplication", () => {
     },
   );
 
-  it("releases a compacted source's message identity through its cloned lifecycle", () => {
-    const capped: QueueSettings = { ...settings, cap: 1 };
-    const onAbandoned = vi.fn();
-    const first = source("first");
-    first.turnAdoptionLifecycle = { onAdopted: () => {}, onAbandoned };
-    expect(enqueueFollowupRun(key, first, capped)).toBe(true);
-    for (const messageId of ["m2", "m3"]) {
-      expect(enqueueFollowupRun(key, source(messageId, { messageId }), capped)).toBe(true);
-    }
-    clearSessionQueues([key]);
-    expect(onAbandoned).toHaveBeenCalledOnce();
-    const retry = source("first");
-    retry.turnAdoptionLifecycle = { onAdopted: () => {} };
-    expect(enqueueFollowupRun(key, retry, capped)).toBe(true);
-  });
-
   it("does not let a stale abandoned lifecycle release a newer same-id owner", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-30T00:00:00Z"));
@@ -185,7 +161,8 @@ describe("followup queue deduplication", () => {
     expect(enqueueFollowupRun(key, first, settings)).toBe(true);
     const admission = admitFollowupRunLifecycle(first);
     await vi.advanceTimersByTimeAsync(0);
-    clearSessionQueues([key]);
+    clearFollowupQueue(key);
+    clearFollowupDrainCallback(key);
     await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
     const replacement = source("replacement");
     replacement.turnAdoptionLifecycle = { onAdopted: () => {} };
@@ -204,7 +181,8 @@ describe("followup queue deduplication", () => {
     await admitFollowupRunLifecycle(run);
     completeFollowupRunLifecycle(run);
     expect(onAbandoned).not.toHaveBeenCalled();
-    clearSessionQueues([key]);
+    clearFollowupQueue(key);
+    clearFollowupDrainCallback(key);
     expect(enqueueFollowupRun(key, source("redelivery"), settings)).toBe(false);
   });
 });

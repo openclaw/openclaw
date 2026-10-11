@@ -8,6 +8,7 @@ import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import { chatCommentLineEnd, resolveChatCommentAnchor } from "./chat-comment-anchor.ts";
 import { currentChatComments } from "./chat-comment-controller.ts";
+import { dispatchChatCommentAction } from "./chat-selection-annotations.ts";
 import "../../../styles/chat/selection-annotations.css";
 
 registerChatMessageMetadataEnglish();
@@ -159,13 +160,7 @@ class ChatCommentPins extends OpenClawLightDomElement {
         @click=${(event: MouseEvent) => {
           event.stopPropagation();
           if (event.currentTarget instanceof HTMLElement) {
-            event.currentTarget.dispatchEvent(
-              new CustomEvent("openclaw-comment-action", {
-                bubbles: true,
-                composed: true,
-                detail: { id: attachment.id, action: "edit" },
-              }),
-            );
+            dispatchChatCommentAction(event, attachment.id, "edit");
           }
         }}
       >

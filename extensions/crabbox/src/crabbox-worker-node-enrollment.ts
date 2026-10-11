@@ -36,6 +36,7 @@ export function createCrabboxNodeRuntimeSetup(params: {
   nodeBootstrap: CrabboxWorkerNodeEnrollment["nodeBootstrap"];
   workerBundle: CrabboxWorkerNodeRuntimePreparation["workerBundle"];
   leaseId: string;
+  target?: CrabboxOperatingSystem;
 }): { command: string; forwardedEnv: Record<string, string> } {
   return createCrabboxNodeSetup(params);
 }
@@ -88,6 +89,7 @@ delete process.env.${CLOUD_BOOTSTRAP_TOKEN_ENV};
 delete process.env.${CLOUD_SETUP_CODE_ENV};
 if (process.platform !== "win32") process.umask(0o077);
 let phase;
+const failureMessage = (artifact, failedPhase, code, origin) => "Cloud worker " + artifact + " " + failedPhase + " failed" + (code ? " (" + code + ")" : "") + (origin ? " from " + origin : "");
 const setPhase = (next) => {
   if (phase === next) return;
   phase = next;
@@ -108,6 +110,27 @@ setPhase("preparation");
   const setupFile = path.join(stateDir, "setup-code");
   const runtimeLink = path.join(stateDir, "runtime");
   const nodeEnv = { ...process.env, ...(mode ? { OPENCLAW_STATE_DIR: stateDir } : {}) };
+  // Tools travel inside the verified full-node artifact and share its preparation identity.
+  if (process.platform !== "win32") {
+    nodeEnv.PATH = path.join(runtimeDir, "node_modules", "openclaw", "dist", "worker-tools", "bin") + path.delimiter + (nodeEnv.PATH || "");
+  }
+  const subprocessError = (message, result) => {
+    let detail = [result.error?.message, result.stderr].filter(Boolean).join("\\n");
+    // Sanitize complete values before truncation can leave an unrecognizable credential fragment.
+    const privateValues = [credentials, setupCode, ...Object.values(tokens), ...Object.values(nodeEnv)]
+      .filter((value) => typeof value === "string" && value.length > 0)
+      .sort((a, b) => b.length - a.length);
+    for (const value of privateValues) detail = detail.replaceAll(value, "[redacted]");
+    detail = detail
+      .replace(/\\b(?:Bearer|Basic)\\s+\\S+/gi, "[redacted]")
+      .replace(/([A-Za-z_][A-Za-z0-9_]*\\s*=\\s*)(?:"[^"]*"|'[^']*'|[^\\s]+)/g, "$1[redacted]")
+      .replace(/\\s+/g, " ").trim();
+    const bytes = Buffer.from(detail);
+    let start = Math.max(0, bytes.length - 512);
+    while (start < bytes.length && (bytes[start] & 0xc0) === 0x80) start++;
+    const cause = new Error("exit code " + (result.status ?? "unknown") + ", signal " + (result.signal ?? "none") + (detail ? ": " + bytes.subarray(start).toString("utf8") : ""));
+    return new Error(message + ": " + cause.message, { cause });
+  };
   const finishDesktopSetup = () => {
     if (!desktopSetup) return;
     setPhase("desktop setup");
@@ -152,7 +175,7 @@ setPhase("preparation");
     const probe = spawnSync(process.execPath, [path.join(packageRoot, "openclaw.mjs"), "--version"], { env: nodeEnv, encoding: "utf8", timeout: 60000 });
     const version = probe.stdout?.trim();
     const expected = "OpenClaw " + bootstrap.openclawVersion;
-    if (probe.status !== 0 || (version !== expected && !version?.startsWith(expected + " "))) throw new Error("Cloud worker bootstrap CLI could not verify its Gateway version");
+    if (probe.status !== 0 || (version !== expected && !version?.startsWith(expected + " "))) throw subprocessError("Cloud worker bootstrap CLI could not verify its Gateway version", probe);
   };
   const verifyArchive = async (source, artifact) => {
     const hash = crypto.createHash("sha256");
@@ -165,11 +188,8 @@ setPhase("preparation");
     if (bytes !== artifact.bytes || hash.digest("hex") !== artifact.sha256) throw new Error("Cloud worker bootstrap archive failed integrity verification");
   };
   const downloadAbort = new AbortController();
-  const downloadAttempt = async (artifact, token, archive, reportPhase) => {
+  const downloadAttempt = async (artifact, token, archive, offset, reportPhase) => {
     reportPhase("download connection");
-    let offset = 0;
-    try { offset = (await fsp.stat(archive)).size; }
-    catch (error) { if (error.code !== "ENOENT") throw error; }
     // A reset after the final bytes needs verification, not an unsatisfiable range.
     if (offset >= artifact.bytes) {
       await verifyArchive(fs.createReadStream(archive), artifact);
@@ -252,33 +272,51 @@ setPhase("preparation");
   };
   const downloadArchive = async (artifact, token, archive, reportPhase = setPhase) => {
     let downloadPhase;
+    let origin;
+    const downloadArtifact = artifact === workerBundle ? "archive" : "node bootstrap";
     const progress = (next) => { downloadPhase = next; reportPhase(next); };
     let attempt = 1;
     let retries = 0;
+    let noProgressFailures = 0;
+    let offset = 0;
+    let retainedAnyBytes = false;
     const partial = archive + ".partial";
     try {
+      origin = new URL(artifact.url).origin;
       for (;;) {
         try {
           if (retries > 0) await delay(Math.round(250 * 2 ** Math.min(retries - 1, 3) * (0.5 + Math.random())), undefined, { signal: downloadAbort.signal });
           downloadAbort.signal.throwIfAborted();
-          await downloadAttempt(artifact, token, partial, progress);
+          await downloadAttempt(artifact, token, partial, offset, progress);
           fs.renameSync(partial, archive);
           return;
         } catch (error) {
           if (downloadAbort.signal.aborted) throw downloadAbort.signal.reason;
           const busy = error.code === "TRANSFER_IN_PROGRESS";
           const transient = busy || ["ARTIFACT_RANGE_MISMATCH", "ECONNRESET", "ECONNREFUSED", "ECONNABORTED", "ENETUNREACH", "EHOSTUNREACH", "ENETDOWN", "EPIPE", "ERR_STREAM_PREMATURE_CLOSE", "ABORT_ERR", "ETIMEDOUT", "ESOCKETTIMEDOUT", "EAI_AGAIN"].includes(error.code) || [502, 503, 504].includes(error.statusCode);
-          if (!transient || (!busy && attempt === 3)) {
-            throw Object.assign(new Error(error.message + " (download attempt " + attempt + "/3)", { cause: error }), { code: error.code });
+          if (transient && !busy) {
+            let retainedBytes = 0;
+            try { retainedBytes = (await fsp.stat(partial)).size; }
+            catch (statError) { if (statError.code !== "ENOENT") throw statError; }
+            // Count retained progress, not bytes replayed by a proxy that ignores Range.
+            noProgressFailures = retainedBytes > offset ? 0 : noProgressFailures + 1;
+            offset = retainedBytes;
+            retainedAnyBytes ||= retainedBytes > 0;
+          }
+          if (!transient || noProgressFailures === 3) {
+            const hint = !retainedAnyBytes && ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EHOSTUNREACH", "ENETUNREACH", "EAI_AGAIN"].includes(error.code)
+              ? " The worker could not reach the Gateway public origin <" + origin + ">; verify the provider's network can reach it (for example with curl from a sandbox) or configure gateway.publicOrigin on a reachable hostname."
+              : "";
+            throw Object.assign(new Error(error.message + " (download attempt " + attempt + (noProgressFailures === 3 ? "; 3 consecutive no-progress failures" : "") + ")" + hint, { cause: error }), { code: error.code });
           }
           if (!busy) attempt++;
           retries++;
-          console.error("Cloud worker bootstrap " + downloadPhase + " failed (" + (error.code || "HTTP_" + error.statusCode) + "); retrying download attempt " + attempt + "/3");
+          console.error(failureMessage("bootstrap", downloadPhase, error.code || "HTTP_" + error.statusCode, origin) + "; retrying download attempt " + attempt + " (" + noProgressFailures + "/3 consecutive no-progress failures)");
         }
       }
     } catch (error) {
       if (!downloadAbort.signal.aborted) {
-        downloadAbort.abort(Object.assign(error, { downloadPhase, downloadArtifact: artifact === workerBundle ? "archive" : "node bootstrap" }));
+        downloadAbort.abort(Object.assign(new Error(failureMessage(downloadArtifact, downloadPhase || phase, error.code, origin) + ": " + error.message, { cause: error }), { code: error.code, downloadPhase, downloadArtifact }));
       }
       throw downloadAbort.signal.reason;
     } finally { fs.rmSync(partial, { force: true }); }
@@ -351,10 +389,35 @@ setPhase("preparation");
           const npmCli = path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
           if (process.platform === "win32" && !fs.existsSync(npmCli)) throw new Error("Cloud worker requires npm beside node.exe; update the Crabbox Windows bootstrap image and reprovision the worker");
           installed = await new Promise((resolve) => {
-            const child = spawn(process.platform === "win32" ? process.execPath : "npm", [...(process.platform === "win32" ? [npmCli] : []), "install", "--prefix", installDir, "--omit=dev", "--no-save", "--package-lock=false", "--no-audit", "--no-fund", "--ignore-scripts=false", archive], { cwd: stage, env: nodeEnv, windowsHide: true, stdio: ["ignore", log, log], timeout: 600000 });
+            const child = spawn(process.platform === "win32" ? process.execPath : "npm", [...(process.platform === "win32" ? [npmCli] : []), "install", "--prefix", installDir, "--omit=dev", "--no-save", "--package-lock=false", "--no-audit", "--no-fund", "--ignore-scripts=false", archive], { cwd: stage, env: nodeEnv, detached: process.platform !== "win32", windowsHide: true, stdio: ["ignore", log, log] });
             let error;
+            const stopInstall = () => {
+              if (!child.pid) return;
+              // Kill the owned npm group, including lifecycle scripts, then join close below.
+              try {
+                if (process.platform === "win32") {
+                  const stopped = spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { env: nodeEnv, windowsHide: true, stdio: "ignore", timeout: 10000 });
+                  if (stopped.error) error = stopped.error;
+                } else process.kill(-child.pid, "SIGKILL");
+              } catch (cause) { if (cause.code !== "ESRCH") error = cause; }
+            };
+            const timeout = setTimeout(() => {
+              error = new Error("Cloud worker bootstrap package installation timed out");
+              stopInstall();
+            }, 600000);
+            const cancelInstall = () => downloadAbort.abort(new Error("Cloud worker bootstrap installation cancelled"));
+            process.once("SIGTERM", cancelInstall);
+            process.once("SIGINT", cancelInstall);
             child.once("error", (cause) => { error = cause; });
-            child.once("close", (status, signal) => resolve({ status, signal, error }));
+            child.once("close", (status, signal) => {
+              clearTimeout(timeout);
+              process.removeListener("SIGTERM", cancelInstall);
+              process.removeListener("SIGINT", cancelInstall);
+              downloadAbort.signal.removeEventListener("abort", stopInstall);
+              resolve({ status, signal, error });
+            });
+            downloadAbort.signal.addEventListener("abort", stopInstall, { once: true });
+            if (downloadAbort.signal.aborted) stopInstall();
           });
         } finally { fs.closeSync(log); }
         downloadAbort.signal.throwIfAborted();
@@ -392,7 +455,7 @@ setPhase("preparation");
   if (pluginIds.length > 0) {
     // One CLI process retains the combined per-plugin time and output allowances.
     const enabled = spawnSync(process.execPath, [cli, "plugins", "enable", ...pluginIds], { env: nodeEnv, encoding: "utf8", timeout: 60000 * pluginIds.length, maxBuffer: 1024 * 1024 * pluginIds.length });
-    if (enabled.status !== 0) throw new Error("Cloud worker bootstrap could not enable plugins " + pluginIds.join(", "));
+    if (enabled.status !== 0) throw subprocessError("Cloud worker bootstrap could not enable plugins " + pluginIds.join(", "), enabled);
   }
   // Publishing this pointer earlier makes fresh state look like a legacy installation.
   fs.symlinkSync(runtimeDir, runtimeLink, process.platform === "win32" ? "junction" : "dir");
@@ -403,7 +466,7 @@ setPhase("preparation");
   await launchNodeProcess();
   if (desktopTarget !== "macos") finishDesktopSetup();
   setPhase("complete");
-})().catch((error) => { console.error("Cloud worker " + (error.downloadArtifact || "node bootstrap") + " " + (error.downloadPhase || phase) + " failed" + (error.code ? " (" + error.code + ")" : "") + ": " + error.message); process.exitCode = 1; });
+})().catch((error) => { console.error(error.downloadArtifact ? error.message : failureMessage("node bootstrap", error.downloadPhase || phase, error.code) + ": " + error.message); process.exitCode = 1; });
 `;
   return {
     command: wrapCrabboxNodeScript(

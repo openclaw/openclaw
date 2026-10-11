@@ -8,11 +8,12 @@ import {
   createSseByteGuard,
   parseStreamingJson,
   parseTerminalToolCallArguments,
-  type SseByteGuard,
   type ToolArgumentPreviewSchedule,
 } from "@openclaw/ai/internal/runtime";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { resolvePositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { readResponseWithLimit } from "../../infra/http-body.js";
+import { withResponseBodyTimeout } from "../../infra/http-response-body-timeout.js";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
@@ -124,21 +125,13 @@ function sanitizeProxyModel(model: Model): Model {
   return safeModel;
 }
 
-type ProxyRequestAbort = {
-  signal: AbortSignal;
-  clear: () => void;
-};
-
 function createProxyRequestTimeoutError(timeoutMs: number): Error {
   const error = new Error(`Proxy request timed out after ${timeoutMs}ms`);
   error.name = "TimeoutError";
   return error;
 }
 
-function buildProxyRequestAbort(
-  callerSignal: AbortSignal | undefined,
-  timeoutMs: number,
-): ProxyRequestAbort {
+function buildProxyRequestAbort(callerSignal: AbortSignal | undefined, timeoutMs: number) {
   const timeoutController = new AbortController();
   const timeoutId = setTimeout(() => {
     timeoutController.abort(createProxyRequestTimeoutError(timeoutMs));
@@ -153,24 +146,6 @@ function buildProxyRequestAbort(
   };
 }
 
-function isProxyRequestTimeoutError(params: {
-  error: unknown;
-  callerSignal: AbortSignal | undefined;
-  requestSignal: AbortSignal;
-}): boolean {
-  if (params.callerSignal?.aborted || !params.requestSignal.aborted) {
-    return false;
-  }
-  if (!(params.error instanceof Error)) {
-    return false;
-  }
-  return (
-    params.error.name === "AbortError" ||
-    params.error.name === "TimeoutError" ||
-    params.error.message === "Request was aborted"
-  );
-}
-
 async function readProxyErrorData(
   response: Response,
   readIdleTimeoutMs: number,
@@ -182,38 +157,6 @@ async function readProxyErrorData(
       new Error(`Proxy error body stalled: no data received for ${chunkTimeoutMs}ms`),
   });
   return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as { error?: string };
-}
-
-async function readProxySseChunk(
-  reader: Pick<SseByteGuard, "read">,
-  readIdleTimeoutMs: number,
-  cancel: (reason?: unknown) => Promise<void>,
-): Promise<ReadableStreamReadResult<Uint8Array>> {
-  let timedOut = false;
-  return await new Promise((resolve, reject) => {
-    const timeoutError = new Error(
-      `Proxy SSE stream stalled: no data received for ${readIdleTimeoutMs}ms`,
-    );
-    const timeoutId = setTimeout(() => {
-      timedOut = true;
-      void cancel(timeoutError);
-      reject(timeoutError);
-    }, readIdleTimeoutMs);
-    void reader.read().then(
-      (result) => {
-        clearTimeout(timeoutId);
-        if (!timedOut) {
-          resolve(result);
-        }
-      },
-      (error: unknown) => {
-        clearTimeout(timeoutId);
-        if (!timedOut) {
-          reject(error instanceof Error ? error : new Error(String(error)));
-        }
-      },
-    );
-  });
 }
 
 function assertProxySsePendingBufferWithinLimit(buffer: string): void {
@@ -273,14 +216,15 @@ export function streamProxy(
       })
         .catch((error: unknown) => {
           if (
-            isProxyRequestTimeoutError({
-              error,
-              callerSignal: options.signal,
-              requestSignal: requestAbort.signal,
-            })
+            !options.signal?.aborted &&
+            requestAbort.signal.aborted &&
+            error instanceof Error &&
+            (error.name === "AbortError" ||
+              error.name === "TimeoutError" ||
+              error.message === "Request was aborted")
           ) {
             throw new Error(`Proxy request timed out after ${readIdleTimeoutMs}ms`, {
-              cause: error instanceof Error ? error : undefined,
+              cause: error,
             });
           }
           throw error;
@@ -334,7 +278,16 @@ export function streamProxy(
       };
 
       while (!terminalEventSeen) {
-        const { done, value } = await readProxySseChunk(sseReader, readIdleTimeoutMs, cancelReader);
+        const { done, value } = await withResponseBodyTimeout({
+          timeoutMs: readIdleTimeoutMs,
+          onTimeout: () =>
+            new Error(`Proxy SSE stream stalled: no data received for ${readIdleTimeoutMs}ms`),
+          cancel: cancelReader,
+          read: () =>
+            sseReader.read().catch((error: unknown) => {
+              throw toStringifiedError(error);
+            }),
+        });
         if (done) {
           readerReachedEof = cancellation === undefined;
           break;
@@ -420,67 +373,68 @@ function processProxyEvent(
       };
       return { type: "text_start", contentIndex: proxyEvent.contentIndex, partial };
 
-    case "text_delta": {
+    case "text_delta":
+    case "thinking_delta":
+    case "toolcall_delta": {
       const content = partial.content[proxyEvent.contentIndex];
-      if (content?.type === "text") {
-        content.text += proxyEvent.delta;
-        return {
-          type: "text_delta",
-          contentIndex: proxyEvent.contentIndex,
-          delta: proxyEvent.delta,
-          partial,
-        };
+      const expectedType =
+        proxyEvent.type === "text_delta"
+          ? "text"
+          : proxyEvent.type === "thinking_delta"
+            ? "thinking"
+            : "toolCall";
+      if (content?.type !== expectedType) {
+        throw new Error(`Received ${proxyEvent.type} for non-${expectedType} content`);
       }
-      throw new Error("Received text_delta for non-text content");
+      if (content.type === "text") {
+        content.text += proxyEvent.delta;
+      } else if (content.type === "thinking") {
+        content.thinking += proxyEvent.delta;
+      } else {
+        const streamingContent = content as StreamingToolCall;
+        streamingContent.partialJson += proxyEvent.delta;
+        const previewSchedule = toolArgumentPreviewSchedules.get(proxyEvent.contentIndex);
+        if (!previewSchedule) {
+          throw new Error("Received toolcall_delta without a preview schedule");
+        }
+        if (previewSchedule(streamingContent.partialJson.length)) {
+          content.arguments = parseStreamingJson(streamingContent.partialJson);
+        }
+        partial.content[proxyEvent.contentIndex] = { ...content }; // Trigger reactivity
+      }
+      return {
+        type: proxyEvent.type,
+        contentIndex: proxyEvent.contentIndex,
+        delta: proxyEvent.delta,
+        partial,
+      };
     }
 
-    case "text_end": {
+    case "text_end":
+    case "thinking_end": {
       const content = partial.content[proxyEvent.contentIndex];
-      if (content?.type === "text") {
+      const expectedType = proxyEvent.type === "text_end" ? "text" : "thinking";
+      if (content?.type !== expectedType) {
+        throw new Error(`Received ${proxyEvent.type} for non-${expectedType} content`);
+      }
+      if (content.type === "text") {
         if (proxyEvent.contentSignature !== undefined) {
           content.textSignature = proxyEvent.contentSignature;
         }
-        return {
-          type: "text_end",
-          contentIndex: proxyEvent.contentIndex,
-          content: content.text,
-          partial,
-        };
+      } else {
+        content.thinkingSignature = proxyEvent.contentSignature;
       }
-      throw new Error("Received text_end for non-text content");
+      return {
+        type: proxyEvent.type,
+        contentIndex: proxyEvent.contentIndex,
+        content: content.type === "text" ? content.text : content.thinking,
+        partial,
+      };
     }
 
     case "thinking_start":
       partial.content[proxyEvent.contentIndex] = { type: "thinking", thinking: "" };
       return { type: "thinking_start", contentIndex: proxyEvent.contentIndex, partial };
-
-    case "thinking_delta": {
-      const content = partial.content[proxyEvent.contentIndex];
-      if (content?.type === "thinking") {
-        content.thinking += proxyEvent.delta;
-        return {
-          type: "thinking_delta",
-          contentIndex: proxyEvent.contentIndex,
-          delta: proxyEvent.delta,
-          partial,
-        };
-      }
-      throw new Error("Received thinking_delta for non-thinking content");
-    }
-
-    case "thinking_end": {
-      const content = partial.content[proxyEvent.contentIndex];
-      if (content?.type === "thinking") {
-        content.thinkingSignature = proxyEvent.contentSignature;
-        return {
-          type: "thinking_end",
-          contentIndex: proxyEvent.contentIndex,
-          content: content.thinking,
-          partial,
-        };
-      }
-      throw new Error("Received thinking_end for non-thinking content");
-    }
 
     case "toolcall_start": {
       const content = {
@@ -496,29 +450,6 @@ function processProxyEvent(
         createToolArgumentPreviewSchedule(),
       );
       return { type: "toolcall_start", contentIndex: proxyEvent.contentIndex, partial };
-    }
-
-    case "toolcall_delta": {
-      const content = partial.content[proxyEvent.contentIndex];
-      if (content?.type === "toolCall") {
-        const streamingContent = content as StreamingToolCall;
-        streamingContent.partialJson += proxyEvent.delta;
-        const previewSchedule = toolArgumentPreviewSchedules.get(proxyEvent.contentIndex);
-        if (!previewSchedule) {
-          throw new Error("Received toolcall_delta without a preview schedule");
-        }
-        if (previewSchedule(streamingContent.partialJson.length)) {
-          content.arguments = parseStreamingJson(streamingContent.partialJson);
-        }
-        partial.content[proxyEvent.contentIndex] = { ...content }; // Trigger reactivity
-        return {
-          type: "toolcall_delta",
-          contentIndex: proxyEvent.contentIndex,
-          delta: proxyEvent.delta,
-          partial,
-        };
-      }
-      throw new Error("Received toolcall_delta for non-toolCall content");
     }
 
     case "toolcall_end": {

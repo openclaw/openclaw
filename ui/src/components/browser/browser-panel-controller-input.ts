@@ -15,6 +15,7 @@ import {
 } from "./browser-client.ts";
 import type { BrowserPanelOperationOwnership } from "./browser-panel-operation-ownership.ts";
 import type { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
+import type { BrowserPanelStream } from "./browser-panel-stream.ts";
 import {
   browserPanelInspectHighlightRegion,
   browserPanelNormalizedPoint,
@@ -26,6 +27,8 @@ import {
 } from "./browser-panel-surface.ts";
 
 const INSPECT_THROTTLE_MS = 120;
+const STREAM_WHEEL_INTERVAL_MS = 50;
+const SNAPSHOT_WHEEL_INTERVAL_MS = 150;
 
 type BrowserPanelInputState = {
   mode: "interact" | "annotate" | "inspect";
@@ -41,6 +44,7 @@ type BrowserPanelInputState = {
 };
 
 interface BrowserPanelInputHost extends BrowserPanelInputState {
+  readonly stream: Pick<BrowserPanelStream, "ownsView">;
   readonly host: {
     readonly renderRoot: HTMLElement | DocumentFragment;
     readonly updateComplete: Promise<boolean>;
@@ -179,7 +183,11 @@ export class BrowserPanelInputController {
       return false;
     }
     const epoch = this.host.operations.epoch;
-    this.host.pendingInput.queueWheel(horizontal, vertical, 150, (deltaX, deltaY) => {
+    // Match the live stream's frame cadence; screenshot fallback keeps its lower request rate.
+    const interval = this.host.stream.ownsView(targetId)
+      ? STREAM_WHEEL_INTERVAL_MS
+      : SNAPSHOT_WHEEL_INTERVAL_MS;
+    this.host.pendingInput.queueWheel(horizontal, vertical, interval, (deltaX, deltaY) => {
       if (
         !this.host.operations.isLive(epoch, client) ||
         this.host.activeTargetId !== targetId ||
@@ -227,7 +235,11 @@ export class BrowserPanelInputController {
       return;
     }
     this.suppressStageClick = false;
-    if (event.pointerType !== "touch" || this.host.mode !== "interact") {
+    // Pen contact drags scroll like fingers; mouse drags stay clicks and wheel scrolls.
+    if (
+      (event.pointerType !== "touch" && event.pointerType !== "pen") ||
+      this.host.mode !== "interact"
+    ) {
       return;
     }
     const point = this.remotePoint(event);

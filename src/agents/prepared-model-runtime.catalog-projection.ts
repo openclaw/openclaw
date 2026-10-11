@@ -1,7 +1,9 @@
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
+import { projectClaudeCliNativeCatalog } from "./model-catalog-cli-wildcard.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
+import { getPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
 import type {
   PreparedModelRuntimeAgentFacts,
   PreparedModelRuntimeCatalogFacts,
@@ -31,8 +33,14 @@ export function createPreparedModelCatalogProjection(params: {
       configured,
       params.agentFacts.runtimeCapabilityModels,
     );
-    const projected = materializePreparedModelCatalog(
+    // Retain source-owned rows before projecting native IDs onto their public provider.
+    const nativeCatalog = projectClaudeCliNativeCatalog(
       catalog,
+      !(getPreparedModelFullCatalogAuth(catalog)?.credentials ?? params.agentFacts.credentials)
+        .anthropic,
+    );
+    const projected = materializePreparedModelCatalog(
+      nativeCatalog,
       params.agentFacts.runtimeCapabilityModels,
       current.staticEntries,
     );
@@ -55,7 +63,7 @@ export function createPreparedModelCatalogProjection(params: {
     prepareModelCatalogThinkingPolicies({
       catalog: projected,
       metadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
-      providers: params.pluginGeneration.pluginRegistry?.providers,
+      pluginRegistry: params.pluginGeneration.pluginRegistry,
     });
     return projected;
   };

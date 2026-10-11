@@ -9,7 +9,7 @@ import {
   invokeChatAbortHandler,
 } from "./chat.abort.test-helpers.js";
 
-export type AbortResponsePayload = { aborted?: boolean; runIds?: string[] };
+type AbortResponsePayload = { aborted?: boolean; runIds?: string[] };
 type AbortRespond = Awaited<ReturnType<typeof invokeChatAbortHandler>>;
 
 export async function invokeAbort({

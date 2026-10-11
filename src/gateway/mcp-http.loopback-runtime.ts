@@ -1,4 +1,6 @@
 // Process-local MCP loopback runtime state for owner/non-owner HTTP access.
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 type McpLoopbackRuntime = {
   port: number;
@@ -270,22 +272,16 @@ async function waitForMcpLoopbackToolCallCaptureActivity(
   capture: McpLoopbackToolCallCapture,
   timeoutMs: number,
 ): Promise<boolean> {
-  return await new Promise<boolean>((resolve) => {
-    let settled = false;
-    const finish = (active: boolean) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      capture.activityWaiters.delete(resolveActivity);
-      resolve(active);
-    };
-    const resolveActivity = () => finish(true);
-    const timer = setTimeout(() => finish(false), Math.max(0, timeoutMs));
-    timer.unref?.();
-    capture.activityWaiters.add(resolveActivity);
-  });
+  const activity = createDeferredCore<boolean>();
+  const resolveActivity = () => activity.resolve(true);
+  capture.activityWaiters.add(resolveActivity);
+  try {
+    return await raceWithTimeout(activity.promise, Math.max(0, timeoutMs), () => false, {
+      ref: false,
+    });
+  } finally {
+    capture.activityWaiters.delete(resolveActivity);
+  }
 }
 
 /** Wait for admitted calls to settle and for a quiet request-admission grace. */

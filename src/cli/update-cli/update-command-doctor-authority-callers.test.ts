@@ -3,6 +3,7 @@ import os from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as doctorMaintenance from "../../commands/doctor-maintenance.js";
+import { createDoctorMaintenanceFixture } from "../../commands/doctor-maintenance.test-support.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { recordDeferredPluginMigrations } from "../../infra/deferred-plugin-migrations.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
@@ -17,9 +18,11 @@ import * as requesterAuthority from "../../infra/update-requester-authority.js";
 import {
   adoptUpdateRun,
   createUpdateRun,
+  finishUpdateRun,
   getUpdateRun,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
+import { recordCommandProcessFailure } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -47,10 +50,14 @@ vi.mock("../../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../process/exec.js")>()),
   runExec: mocks.runExec,
   runUtf8CommandWithTimeout: async ([command, ...args]: string[], options: unknown) => ({
-    ...(await mocks.runExec(command, args, options)),
+    ...(await mocks.runExec(command, args, options).catch((error: unknown) => {
+      // This caller fixture has no native child; the rejection belongs to its command adapter.
+      throw recordCommandProcessFailure(error, { code: 1, cleanup: "normal", termination: "exit" });
+    })),
     code: 0,
     signal: null,
     killed: false,
+    cleanup: "normal",
     termination: "exit",
   }),
 }));
@@ -97,6 +104,7 @@ import * as executorOwner from "./update-command-executor.js";
 import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
 import * as postCore from "./update-command-post-core.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
+import { withUpdateEnv } from "./update-command-service-env.js";
 
 const pluginUpdate: PostCorePluginUpdateResult = {
   status: "ok",
@@ -161,6 +169,15 @@ function resume() {
   });
 }
 
+function createResumingRun(params: Omit<Parameters<typeof createUpdateRun>[0], "trigger">) {
+  const run = createUpdateRun({ trigger: "cli", ...params });
+  recordUpdateRunStep(run.runId, { step: "openclaw doctor", status: "completed" });
+  recordUpdateRunStep(run.runId, { step: "post-update verification", status: "in_progress" });
+  vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
+  vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", "1");
+  return run;
+}
+
 function firstRefusal() {
   const error = new Error("original authority refusal");
   let armed = false;
@@ -184,15 +201,10 @@ describe("unproved Doctor authority callers", () => {
     "rechecks legacy requester authority after executor settlement (revoked=%s)",
     async (revoked) => {
       const requester = { channel: "test", senderId: "owner" };
-      const run = createUpdateRun({
-        trigger: "cli",
+      const run = createResumingRun({
         before: { version: "2026.9.2" },
         origin: { requester },
       });
-      recordUpdateRunStep(run.runId, { step: "openclaw doctor", status: "completed" });
-      recordUpdateRunStep(run.runId, { step: "post-update verification", status: "in_progress" });
-      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
-      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", "1");
       const resultPath = state.statePath("post-core-result.json");
       vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", resultPath);
       vi.spyOn(packageRoot, "resolveOpenClawPackageRootSync").mockReturnValue(state.root);
@@ -236,10 +248,8 @@ describe("unproved Doctor authority callers", () => {
   );
 
   it("defers the published parent-owned continuation before preparing an older schema", async () => {
-    const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.5" } });
+    const run = createResumingRun({ before: { version: "2026.9.5" } });
     expect(adoptUpdateRun(run.runId).origin.driver?.pid).toBe(process.pid);
-    recordUpdateRunStep(run.runId, { step: "openclaw doctor", status: "completed" });
-    recordUpdateRunStep(run.runId, { step: "post-update verification", status: "in_progress" });
     await recordDeferredPluginMigrations({
       pending: [
         {
@@ -252,8 +262,6 @@ describe("unproved Doctor authority callers", () => {
     });
     const resultPath = state.statePath("parent-owned-result.json");
     await state.writeJson("handoff.json", { completionOwner: "parent" });
-    vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
-    vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", "1");
     vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
     vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", resultPath);
     const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
@@ -339,12 +347,8 @@ describe("unproved Doctor authority callers", () => {
   ] as const)(
     "settles the published parent's %s maintenance outcome before publication",
     async (boundary) => {
-      const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.5" } });
+      const run = createResumingRun({ before: { version: "2026.9.5" } });
       expect(adoptUpdateRun(run.runId).origin.driver?.pid).toBe(process.pid);
-      recordUpdateRunStep(run.runId, { step: "openclaw doctor", status: "completed" });
-      recordUpdateRunStep(run.runId, { step: "post-update verification", status: "in_progress" });
-      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
-      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", "1");
       const resultPath = state.statePath("maintenance-result.json");
       vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", resultPath);
       const unsafe = boundary === "incomplete-migration";
@@ -354,14 +358,7 @@ describe("unproved Doctor authority callers", () => {
           ? { kind: "data-at-risk", reason: "incomplete-migration" }
           : { kind: "deferred", reason: "coordinator-contention" },
       );
-      const maintenance = {
-        signal: new AbortController().signal,
-        run: <T>(operation: () => T) => operation(),
-        repairSqliteNoCow: async () => {},
-        releaseState: vi.fn(async () => {}),
-        finish: vi.fn(async () => {}),
-        release: vi.fn(async () => {}),
-      };
+      const maintenance = createDoctorMaintenanceFixture();
       vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockImplementation(async () => {
         if (boundary === "parent-admission" || unsafe) {
           throw refusal;
@@ -431,12 +428,7 @@ describe("unproved Doctor authority callers", () => {
   );
 
   it("keeps the shipped 9.3 child-owned completion route outside the 9.2 bridge", async () => {
-    const version = "2026.9.3";
-    const run = createUpdateRun({ trigger: "cli", before: { version } });
-    recordUpdateRunStep(run.runId, { step: "openclaw doctor", status: "completed" });
-    recordUpdateRunStep(run.runId, { step: "post-update verification", status: "in_progress" });
-    vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
-    vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", "1");
+    const run = createResumingRun({ before: { version: "2026.9.3" } });
     await resume();
     expect(dispatched).toEqual(["repair", "validate", "readiness"]);
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
@@ -467,17 +459,14 @@ describe("unproved Doctor authority callers", () => {
       await fs.mkdir(state.path("phase-artifacts"));
       vi.spyOn(os, "tmpdir").mockReturnValue(state.path("phase-artifacts"));
       let restored = false;
-      const maintenance = vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockResolvedValue({
-        signal: new AbortController().signal,
-        run: (operation) => operation(),
-        repairSqliteNoCow: async () => {},
-        releaseState: async () => {},
-        release: async () => {},
-        finish: async () => {
-          await Promise.resolve();
-          restored = true;
-        },
-      });
+      const maintenance = vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockResolvedValue(
+        createDoctorMaintenanceFixture({
+          finish: vi.fn(async () => {
+            await Promise.resolve();
+            restored = true;
+          }),
+        }),
+      );
       let phasePath: string | undefined;
       vi.mocked(defaultRuntime.error).mockImplementation((line) => {
         const prefix = "Post-plugin Doctor report (update completion pending): ";
@@ -539,14 +528,62 @@ describe("unproved Doctor authority callers", () => {
       });
       const result = completePostCorePluginUpdate({
         root: state.root,
-        pluginUpdate,
-        freshDoctorRequired: true,
+        pluginUpdate: { ...pluginUpdate, changed: true },
         yes: true,
         json: true,
         assertCurrent: authority.assertCurrent,
       });
       await expect(result).rejects.toBe(authority.error);
       expect(dispatched).toEqual(["repair"]);
+    },
+  );
+
+  it.each([
+    { owner: "parent", selected: "deferred", ambient: "missing" },
+    { owner: "parent", selected: "deferred", ambient: "foreign" },
+    { owner: "parent", selected: "clear", ambient: "foreign" },
+    { owner: "parent", selected: "terminal", ambient: "foreign" },
+    { owner: "standalone", selected: "deferred", ambient: "missing" },
+  ] as const)(
+    "completes only the selected retirement ($owner, $selected, ambient=$ambient)",
+    async ({ owner, selected, ambient }) => {
+      const env = { ...process.env };
+      const run = createUpdateRun({ trigger: "cli" }, { env });
+      const deferred = { step: "finalize:doctor:model-retirement", status: "skipped" as const };
+      if (selected !== "clear") {
+        recordUpdateRunStep(run.runId, deferred, { env });
+      }
+      if (selected === "terminal") {
+        finishUpdateRun(run.runId, { status: "succeeded" }, { env });
+      }
+      const unrelated = createUpdateRun({ trigger: "cli" }, { env });
+      recordUpdateRunStep(unrelated.runId, deferred, { env });
+      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", ambient === "foreign" ? unrelated.runId : undefined);
+      vi.stubEnv(UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV, undefined);
+
+      await completePostCorePluginUpdate({
+        root: state.root,
+        ...(owner === "parent"
+          ? {
+              opts: { run: { runId: run.runId, env, executorFence: firstRefusal() } },
+              // A caller's admitted run takes precedence over the standalone hint too.
+              runId: unrelated.runId,
+            }
+          : { runId: run.runId }),
+        pluginUpdate,
+        yes: true,
+        json: true,
+        timeoutMs: 5_000,
+      });
+
+      const repairs = mocks.runExec.mock.calls.filter(([, args]) => args.includes("--repair"));
+      expect(repairs).toHaveLength(selected === "deferred" ? 1 : 0);
+      if (repairs.length) {
+        expect(repairs[0]?.[2].env.OPENCLAW_UPDATE_RUN_ID).toBe(run.runId);
+      }
+      expect(getUpdateRun(unrelated.runId, { env })?.steps).toContainEqual(
+        expect.objectContaining(deferred),
+      );
     },
   );
 
@@ -559,7 +596,6 @@ describe("unproved Doctor authority callers", () => {
         step: "finalize:doctor:model-retirement",
         status: "skipped",
       });
-      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
       // The modern child publishes plugin work without starting Doctor. Exercise
       // deferred retirement through the real parent that consumes that result.
       vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", state.statePath("post-core-result.json"));
@@ -576,7 +612,10 @@ describe("unproved Doctor authority callers", () => {
       const handoff = vi
         .spyOn(postCore, "continuePostCoreUpdateInFreshProcess")
         .mockImplementationOnce(async (params) => {
-          await resumePostCoreUpdate(params);
+          // The transport correlates its child; the admitted parent keeps its run in opts.
+          await withUpdateEnv({ OPENCLAW_UPDATE_RUN_ID: run.runId }, () =>
+            resumePostCoreUpdate(params),
+          );
           expect(dispatched).toEqual([]);
           expect(defaultRuntime.exit).not.toHaveBeenCalled();
           const published = publication.mock.lastCall?.[1];

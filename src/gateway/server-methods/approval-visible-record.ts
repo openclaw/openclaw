@@ -52,24 +52,28 @@ export async function loadVisibleApproval(params: {
     params.execApprovalManager.getLiveSnapshot(params.id) ??
     params.pluginApprovalManager.getLiveSnapshot(params.id) ??
     params.systemAgentApprovalManager?.getLiveSnapshot(params.id);
-  if (
-    liveRecord &&
-    !canAccessApprovalSession({
+  // Config and policy callbacks can reenter; defer source and reviewer reads to their use sites.
+  const canAccess = (
+    source: () => Pick<Parameters<typeof canAccessApprovalSession>[0], "sessionKey" | "agentId">,
+    reviewerDeviceIds: () => readonly string[] | null | undefined,
+  ) =>
+    canAccessApprovalSession({
       cfg: params.getCfg(),
       client: params.client,
-      sessionKey: liveRecord.request.sessionKey,
-      agentId: liveRecord.request.agentId,
-    })
-  ) {
-    return null;
-  }
-  if (
-    liveRecord &&
-    !canAccessOperatorApproval({
+      sessionKey: source().sessionKey,
+      agentId: source().agentId,
+    }) &&
+    canAccessOperatorApproval({
       client: params.client,
       allowApprovalRuntime: params.allowApprovalRuntime,
-      binding: { reviewerDeviceIds: liveRecord.approvalReviewerDeviceIds },
-    })
+      binding: { reviewerDeviceIds: reviewerDeviceIds() },
+    });
+  if (
+    liveRecord &&
+    !canAccess(
+      () => liveRecord.request,
+      () => liveRecord.approvalReviewerDeviceIds,
+    )
   ) {
     return null;
   }
@@ -170,22 +174,12 @@ export async function loadVisibleApproval(params: {
     return null;
   }
   if (lookup.outcome === "found") {
+    const found = lookup;
     if (
-      !canAccessApprovalSession({
-        cfg: params.getCfg(),
-        client: params.client,
-        sessionKey: lookup.record.source.sessionKey,
-        agentId: lookup.record.source.agentId,
-      })
-    ) {
-      return null;
-    }
-    if (
-      !canAccessOperatorApproval({
-        client: params.client,
-        allowApprovalRuntime: params.allowApprovalRuntime,
-        binding: { reviewerDeviceIds: lookup.record.reviewerDeviceIds },
-      })
+      !canAccess(
+        () => found.record.source,
+        () => found.record.reviewerDeviceIds,
+      )
     ) {
       return null;
     }
@@ -234,17 +228,10 @@ export async function loadVisibleApproval(params: {
         params.authority.isCurrent() &&
         (reconciled.status !== "pending" || isLookupCurrent()) &&
         !params.client?.invalidated &&
-        canAccessApprovalSession({
-          cfg: params.getCfg(),
-          client: params.client,
-          sessionKey: reconciled.source.sessionKey,
-          agentId: reconciled.source.agentId,
-        }) &&
-        canAccessOperatorApproval({
-          client: params.client,
-          allowApprovalRuntime: params.allowApprovalRuntime,
-          binding: { reviewerDeviceIds: reconciled.reviewerDeviceIds },
-        })
+        canAccess(
+          () => reconciled.source,
+          () => reconciled.reviewerDeviceIds,
+        )
           ? reconciled
           : null,
     };

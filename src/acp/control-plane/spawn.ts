@@ -85,7 +85,7 @@ export async function cleanupFailedAcpSpawn(params: {
       cancellation.abort(error);
     }
     if (!deletionStarted && params.closeRuntimeOnFailure) {
-      await runExclusiveSessionLifecycleMutation({
+      await runExclusiveSessionLifecycleMutation("acp-spawn-cleanup", {
         scope: storePath,
         identities: [params.sessionKey, sessionId],
         run: async () => {

@@ -3,15 +3,8 @@
  */
 
 export function detectLineEnding(content: string): "\r\n" | "\n" {
-  const crlfIdx = content.indexOf("\r\n");
   const lfIdx = content.indexOf("\n");
-  if (lfIdx === -1) {
-    return "\n";
-  }
-  if (crlfIdx === -1) {
-    return "\n";
-  }
-  return crlfIdx < lfIdx ? "\r\n" : "\n";
+  return lfIdx > 0 && content[lfIdx - 1] === "\r" ? "\r\n" : "\n";
 }
 
 export function normalizeToLF(text: string): string {

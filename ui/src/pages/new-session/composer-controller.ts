@@ -145,9 +145,6 @@ export class NewSessionComposerTextareaController {
   }
 
   /**
-   * Writes a transcript into the draft at the remembered caret and returns the
-   * new draft, or null when there is nothing to insert.
-   *
    * The captured element value includes keystrokes not yet committed upward.
    * Writing the final insertion directly grows the box before the next render
    * commits that same value into the page-owned draft.
@@ -198,11 +195,7 @@ export class NewSessionComposerTextareaController {
     draftOwnerKey: string,
   ) {
     const normalizedAgentId = agentId.trim();
-    if (
-      this.skillCommandClient === client &&
-      this.skillCommandAgentId === normalizedAgentId &&
-      this.skillCommandDraftOwnerKey === draftOwnerKey
-    ) {
+    if (this.ownsSkillCommands(client, normalizedAgentId, draftOwnerKey)) {
       return;
     }
     // The controller survives route, agent, and Gateway changes. Invalidate its
@@ -214,7 +207,11 @@ export class NewSessionComposerTextareaController {
     resetSkillMenuState(this.skillMenuState);
   }
 
-  ownsSkillCommands(client: GatewayBrowserClient, agentId: string, draftOwnerKey: string): boolean {
+  ownsSkillCommands(
+    client: GatewayBrowserClient | null,
+    agentId: string,
+    draftOwnerKey: string,
+  ): boolean {
     return (
       this.skillCommandClient === client &&
       this.skillCommandAgentId === agentId.trim() &&

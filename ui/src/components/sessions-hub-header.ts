@@ -1,6 +1,9 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { shellLayoutTraits } from "../app/shell-layout-traits.ts";
-import { renderSessionsHubTabs, type SessionsHubTab } from "./sessions-hub-tabs.ts";
+import { t } from "../i18n/index.ts";
+import { renderHubTabs } from "./hub-tabs.ts";
+
+type SessionsHubTab = "sessions" | "worktrees";
 
 type SessionsHubHeaderProps = {
   active: SessionsHubTab;
@@ -21,7 +24,17 @@ export function renderSessionsHubHeader(props: SessionsHubHeaderProps): Template
         ${props.subtitle ? html`<div class="page-subtitle">${props.subtitle}</div>` : nothing}
       </div>
       <div class="hub-page-header__tabs">
-        ${renderSessionsHubTabs({ active: props.active, onSelect: props.onSelect })}
+        ${renderHubTabs<SessionsHubTab>({
+          id: "sessions",
+          active: props.active,
+          tabs: [
+            { value: "sessions", label: t("tabs.sessions") },
+            { value: "worktrees", label: t("tabs.worktrees") },
+          ],
+          ariaLabel: t("sessionsPage.hubTablistLabel"),
+          panelId: "sessions-hub-panel",
+          onSelect: props.onSelect,
+        })}
       </div>
       <div class="hub-page-header__actions">${props.actions ?? nothing}</div>
     </section>

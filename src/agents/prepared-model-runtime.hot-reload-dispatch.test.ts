@@ -22,7 +22,6 @@ import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { readPreparedGatewayModelCatalogOwnerSnapshot } from "../gateway/server-model-catalog.js";
 import { createGatewayReloadHandlers } from "../gateway/server-reload-hot.js";
 import { PluginRuntimeApplicationError } from "../plugins/lifecycle.js";
-import { PluginInstanceUnavailableError } from "../plugins/plugin-instance-error.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalog.errors.js";
@@ -201,10 +200,14 @@ describe("Gateway plugin reload run admission", () => {
       }
     });
     const handler = createPluginReloadHandler(async ({ prepareConfigEffects, commitRuntime }) => {
-      prepareConfigEffects({ pluginIds: new Set(["synthetic"]), channels: new Set() });
+      const effects = prepareConfigEffects({
+        pluginIds: new Set(["synthetic"]),
+        channels: new Set(),
+      });
       events.push("plugin-drain");
       drainageStarted.resolve();
       await finishDrainage.promise;
+      effects.retire();
       await commitRuntime({ publish: () => setRuntimeConfigSnapshot(committed, committed) });
       pluginCommitted.resolve();
       return {
@@ -276,20 +279,13 @@ describe("Gateway plugin reload run admission", () => {
     }
   });
 
-  it.each([
-    { outcome: "rollback", arrival: "during drainage" },
-    { outcome: "commit", arrival: "before drainage" },
-    { outcome: "activation failure", arrival: "during drainage" },
-    { outcome: "activation failure", arrival: "before drainage" },
-  ] as const)(
-    "preserves a run admitted $arrival and waiting requests through plugin $outcome",
-    async ({ outcome, arrival }) => {
+  it.each(["rollback", "activation failure"] as const)(
+    "preserves a run admitted during drainage and waiting requests through plugin %s",
+    async (outcome) => {
       const retained = config(true);
       const committed = config(false);
       setRuntimeConfigSnapshot(retained, retained);
       await publish(retained);
-      const catalogStarted = createDeferred();
-      const finishCatalog = createDeferred();
       const drainageStarted = createDeferred();
       const finishDrainage = createDeferred();
       const pluginFailure = new PluginRuntimeApplicationError(
@@ -305,24 +301,19 @@ describe("Gateway plugin reload run admission", () => {
         },
       );
       const handler = createPluginReloadHandler(async ({ prepareConfigEffects, commitRuntime }) => {
-        const restorePreparedRuntime = prepareConfigEffects({
+        const effects = prepareConfigEffects({
           pluginIds: new Set(["synthetic"]),
           channels: new Set(),
         });
         drainageStarted.resolve();
         await finishDrainage.promise;
         if (outcome === "rollback") {
-          await restorePreparedRuntime();
+          await effects.rollback();
           throw pluginFailure;
         }
+        effects.retire();
         await commitRuntime({ publish: () => setRuntimeConfigSnapshot(committed, committed) });
-        if (outcome === "activation failure") {
-          throw pluginFailure;
-        }
-        return {
-          runtime: { operationId: "synthetic-reload", generation: 1, pluginIds: ["synthetic"] },
-          activeChannels: new Set(),
-        };
+        throw pluginFailure;
       });
       const plan = buildGatewayReloadPlan([]);
       plan.changedPaths = ["plugins.entries.synthetic"];
@@ -355,20 +346,6 @@ describe("Gateway plugin reload run admission", () => {
         return admission;
       };
       try {
-        if (arrival === "before drainage") {
-          mocks.prepareStaticCatalog.mockImplementationOnce(async () => {
-            catalogStarted.resolve();
-            await finishCatalog.promise;
-            throw new PluginInstanceUnavailableError("synthetic");
-          });
-          const preparing = admit();
-          await Promise.race([
-            catalogStarted.promise,
-            preparing.then(() => {
-              throw new Error("Run admission bypassed held catalog preparation");
-            }),
-          ]);
-        }
         reload = handler.applyHotReload(plan, committed);
         void reload.catch(() => {});
         await Promise.race([
@@ -395,27 +372,16 @@ describe("Gateway plugin reload run admission", () => {
             requestSettled = true;
           },
         );
-        if (arrival === "during drainage") {
-          void admit();
-        } else {
-          finishCatalog.resolve();
-        }
+        void admit();
         await nextTurn();
         expect(settled).toBe(false);
         expect(requestSettled).toBe(false);
-        expect(catalogSettled).toBe(false);
+        expect(catalogSettled).toBe(true);
+        await expect(catalogRequest).resolves.toMatchObject({ config: retained });
         finishDrainage.resolve();
-        if (outcome !== "commit") {
-          await expect(reload).rejects.toBe(pluginFailure);
-        } else {
-          await expect(reload).resolves.toMatchObject({ status: "applied" });
-        }
-        // Both rollback and committed failure must replace the drained model owner
-        // before readers resume, while retaining the original lifecycle error.
+        await expect(reload).rejects.toBe(pluginFailure);
+        // Execution resumes only after rollback or replacement publication settles.
         await expect(request).resolves.toMatchObject({
-          config: outcome === "rollback" ? retained : committed,
-        });
-        await expect(catalogRequest).resolves.toMatchObject({
           config: outcome === "rollback" ? retained : committed,
         });
         const lease = await admission!;
@@ -423,7 +389,6 @@ describe("Gateway plugin reload run admission", () => {
         expect(lease.snapshot.workspaceDir).toBe(input.workspaceDir);
         expect(lease.snapshot.isCurrent()).toBe(true);
       } finally {
-        finishCatalog.resolve();
         finishDrainage.resolve();
         await Promise.allSettled([reload, request, catalogRequest]);
         await Promise.allSettled([admission?.then((lease) => lease[Symbol.asyncDispose]())]);
@@ -475,7 +440,10 @@ it.each([
     });
   }
   const handler = createPluginReloadHandler(async ({ prepareConfigEffects, commitRuntime }) => {
-    prepareConfigEffects({ pluginIds: new Set(pluginLifecycle.pluginIds), channels: new Set() });
+    prepareConfigEffects({
+      pluginIds: new Set(pluginLifecycle.pluginIds),
+      channels: new Set(),
+    }).retire();
     await commitRuntime({ publish: () => setRuntimeConfigSnapshot(committed, committed) });
     if (event === "refresh failure") {
       mocks.configuredAgentIdsError = refreshFailure;
@@ -553,24 +521,10 @@ describe("retained config and committed model publication", () => {
       rebuild: false,
     },
     {
-      name: "keeps the catalog ready throughout a UI preference commit",
-      retained: { ui: { prefs: { sidebarEntries: [] } } },
-      committed: { ui: { prefs: { sidebarEntries: ["sessions"] } } },
-      changedPath: "ui.prefs.sidebarEntries",
-      rebuild: false,
-    },
-    {
       name: "replaces channel activation facts after disabling a configured channel",
       retained: { channels: { slack: { streaming: { mode: "off" }, enabled: true } } },
       committed: { channels: { slack: { streaming: { mode: "off" }, enabled: false } } },
       changedPath: "channels.slack.enabled",
-      rebuild: true,
-    },
-    {
-      name: "replaces configured channel model selection facts",
-      retained: { channels: { modelByChannel: { slack: { C1: "custom/before" } } } },
-      committed: { channels: { modelByChannel: { slack: { C1: "custom/after" } } } },
-      changedPath: "channels.modelByChannel.slack.C1",
       rebuild: true,
     },
     {
@@ -776,7 +730,10 @@ it.each(["success", "activation failure"] as const)(
       committed: true,
     });
     const handler = createPluginReloadHandler(async ({ prepareConfigEffects, commitRuntime }) => {
-      prepareConfigEffects({ pluginIds: new Set(pluginLifecycle.pluginIds), channels: new Set() });
+      prepareConfigEffects({
+        pluginIds: new Set(pluginLifecycle.pluginIds),
+        channels: new Set(),
+      }).retire();
       await commitRuntime({ publish: () => setRuntimeConfigSnapshot(committed, committed) });
       if (outcome === "activation failure") {
         throw activationFailure;

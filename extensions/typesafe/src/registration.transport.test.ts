@@ -21,10 +21,15 @@ const response = {
   model: "jev-test",
   answers: {
     q: { type: "noul", noul: 0.37 },
-    c: { type: "choice", choice: "keep", confidence: 0.5, probabilities: { keep: 0.8, skip: 0.2 } },
+    c: {
+      type: "choice",
+      choice: "skip",
+      confidence: 0.5,
+      probabilities: { keep: 0.5, skip: 0.49 },
+    },
     s: {
       type: "score",
-      score: 0.6,
+      score: 0.607,
       confidence: 0.5,
       probabilities: { 0: 0.4, 1: 0.6 },
       legend: { 0: "Low", 1: "High" },
@@ -33,11 +38,10 @@ const response = {
   usage: { input_tokens: 12, output_tokens: 3 },
 };
 
-// Exercise the provider created by the actual plugin registration.
-function registeredProvider() {
+function registeredProvider(config: Record<string, unknown> = {}) {
   const registerDecisionProvider = vi.fn<OpenClawPluginApi["registerDecisionProvider"]>();
   plugin.register({
-    runtime: { config: { current: () => ({}) } },
+    runtime: { config: { current: () => ({ plugins: { entries: { typesafe: { config } } } }) } },
     registerDecisionProvider,
   } as unknown as OpenClawPluginApi);
   const provider = registerDecisionProvider.mock.calls[0]?.[0];
@@ -45,41 +49,48 @@ function registeredProvider() {
   return provider;
 }
 
+const context = (signal = new AbortController().signal) => ({
+  model: "jev-agent-selected",
+  agentId: "research",
+  signal,
+  deadlineMonotonicMs: performance.now() + 1000,
+});
+
 beforeEach(() => {
   vi.mocked(getPreparedPluginSecretInput).mockReturnValue({ revision: 1, value: "synthetic-key" });
 });
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
-it("runs the registered provider through the HTTP transport and back to host decisions", async () => {
+it("preserves mixed answers, rounded estimates, and the selected model through registered HTTP", async () => {
+  vi.stubEnv("TYPESAFE_BASE_URL", "https://invalid.example");
+  vi.stubEnv("TYPESAFE_DEFAULT_MODEL", "unexpected");
   const fetch = vi.fn(
     async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify(response)),
   );
   vi.stubGlobal("fetch", fetch);
   const provider = registeredProvider();
-  await expect(
-    provider.evaluate(batch, {
-      model: "jev-agent-selected",
-      agentId: "research",
-      signal: new AbortController().signal,
-      deadlineMonotonicMs: performance.now() + 1000,
-    }),
-  ).resolves.toEqual({
+  await expect(provider.evaluate(batch, context())).resolves.toEqual({
     status: "ok",
     result: {
       model: "jev-test",
       answers: {
         q: { type: "boolean", probabilityTrue: 0.37 },
         c: response.answers.c,
-        s: { type: "score", score: 0.6, confidence: 0.5, probabilities: [0.4, 0.6] },
+        s: { type: "score", score: 0.607, confidence: 0.5, probabilities: [0.4, 0.6] },
       },
       usage: { inputTokens: 12, outputTokens: 3 },
     },
   });
   expect(fetch).toHaveBeenCalledOnce();
   expect(fetch.mock.calls[0]?.[0]).toBe("https://api.typesafe.ai/v1/systemone");
+  expect(fetch.mock.calls[0]?.[1]?.method).toBe("POST");
+  expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(
+    "Bearer synthetic-key",
+  );
   const body = fetch.mock.calls[0]?.[1]?.body;
   assert(typeof body === "string");
   expect(JSON.parse(body)).toEqual({
@@ -89,60 +100,66 @@ it("runs the registered provider through the HTTP transport and back to host dec
   });
 });
 
-it.each([413, 422])(
-  "returns ordinary unsupported input for HTTP %s through registration, without retry or private details",
-  async (status) => {
-    const fetch = vi.fn(async () => new Response("synthetic-key: synthetic only", { status }));
-    vi.stubGlobal("fetch", fetch);
-    expect(
-      await registeredProvider().evaluate(batch, {
-        model: "jev-test",
-        signal: new AbortController().signal,
-        deadlineMonotonicMs: performance.now() + 1000,
+it.each([
+  [400, "unsupported-input"],
+  [401, "authentication"],
+  [403, "authentication"],
+  [413, "unsupported-input"],
+  [422, "unsupported-input"],
+  [429, "rate-limited"],
+  [500, "transport"],
+] as const)("classifies HTTP %s without retries or private details", async (status, reason) => {
+  const fetch = vi.fn(
+    async () =>
+      new Response("synthetic-key: synthetic only", {
+        status,
+        headers: { "retry-after-ms": "123" },
       }),
-    ).toEqual({ status: "unavailable", reason: "unsupported-input" });
-    expect(fetch).toHaveBeenCalledOnce();
-  },
-);
-
-it("preserves reported probability rounding and a non-argmax vendor choice", async () => {
-  const reported = structuredClone(response);
-  reported.answers.c.choice = "skip";
-  reported.answers.c.probabilities = { keep: 0.5, skip: 0.49 };
-  reported.answers.s.score = 0.607;
-  const fetch = vi.fn(async () => new Response(JSON.stringify(reported)));
+  );
   vi.stubGlobal("fetch", fetch);
-  await expect(
-    registeredProvider().evaluate(batch, {
-      model: "jev-agent-selected",
-      signal: new AbortController().signal,
-      deadlineMonotonicMs: performance.now() + 1000,
-    }),
-  ).resolves.toMatchObject({
-    status: "ok",
-    result: { answers: { c: reported.answers.c, s: { score: 0.607, probabilities: [0.4, 0.6] } } },
+  expect(await registeredProvider().evaluate(batch, context())).toEqual({
+    status: "unavailable",
+    reason,
+    ...(status === 429 ? { retryAfterMs: 123 } : {}),
   });
   expect(fetch).toHaveBeenCalledOnce();
 });
 
-it("does not dispatch when prepared credentials disappear or caller authority is canceled", async () => {
-  const fetch = vi.fn();
+it("observes prepared credential rotation, loss, recovery, and caller cancellation", async () => {
+  vi.stubEnv("TYPESAFE_API_KEY", "synthetic-ambient");
+  const fetch = vi.fn(
+    async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify(response)),
+  );
   vi.stubGlobal("fetch", fetch);
-  const provider = registeredProvider();
+  const provider = registeredProvider({ apiKey: "synthetic-unprepared" });
   const controller = new AbortController();
-  const context = {
-    model: "jev-agent-selected",
-    agentId: "research",
-    signal: controller.signal,
-    deadlineMonotonicMs: performance.now() + 1000,
-  };
-  vi.mocked(getPreparedPluginSecretInput).mockReturnValue({ revision: 2 });
-  await expect(provider.evaluate(batch, context)).resolves.toEqual({
-    status: "unavailable",
-    reason: "credentials-unavailable",
-  });
+  for (const [revision, key] of [
+    "synthetic-key",
+    "synthetic-rotated",
+    undefined,
+    "synthetic-recovered",
+  ].entries()) {
+    vi.mocked(getPreparedPluginSecretInput).mockReturnValue({ revision, value: key });
+    expect(provider.isReady?.()).toBe(Boolean(key));
+    fetch.mockClear();
+    const outcome = await provider.evaluate(batch, context(controller.signal));
+    if (key) {
+      expect(outcome.status).toBe("ok");
+      expect(new Headers(fetch.mock.lastCall?.[1]?.headers).get("authorization")).toBe(
+        `Bearer ${key}`,
+      );
+      expect(JSON.stringify(outcome)).not.toContain(key);
+      expect(fetch).toHaveBeenCalledOnce();
+    } else {
+      expect(outcome).toEqual({ status: "unavailable", reason: "credentials-unavailable" });
+      expect(fetch).not.toHaveBeenCalled();
+    }
+  }
+  fetch.mockClear();
   controller.abort(new Error("caller closed"));
-  await expect(provider.evaluate(batch, context)).rejects.toThrow("caller closed");
+  await expect(provider.evaluate(batch, context(controller.signal))).rejects.toThrow(
+    "caller closed",
+  );
   expect(fetch).not.toHaveBeenCalled();
 });
 
@@ -161,13 +178,10 @@ it.each<DecisionBatch>([
 ])("rejects unsupported vendor input without dispatch", async (input) => {
   const fetch = vi.fn();
   vi.stubGlobal("fetch", fetch);
-  await expect(
-    registeredProvider().evaluate(input, {
-      model: "jev-agent-selected",
-      signal: new AbortController().signal,
-      deadlineMonotonicMs: performance.now() + 1000,
-    }),
-  ).resolves.toEqual({ status: "unavailable", reason: "unsupported-input" });
+  await expect(registeredProvider().evaluate(input, context())).resolves.toEqual({
+    status: "unavailable",
+    reason: "unsupported-input",
+  });
   expect(fetch).not.toHaveBeenCalled();
 });
 
@@ -252,11 +266,7 @@ it.each(["inherited array serializer", "hidden serializer", "getter", "hidden ar
           state,
           questions: { q: { type: "boolean" } },
         },
-        {
-          model: "jev-agent-selected",
-          signal: new AbortController().signal,
-          deadlineMonotonicMs: performance.now() + 1000,
-        },
+        context(),
       ),
     ).resolves.toEqual({ status: "unavailable", reason: "unsupported-input" });
     expect(hook).not.toHaveBeenCalled();

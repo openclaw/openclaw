@@ -29,6 +29,8 @@ function keepSheetFocus(panel: HTMLElement, event: KeyboardEvent) {
 class SidebarSessionFilterPopover extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) anchor: HTMLElement | null = null;
   @property({ attribute: false }) label = "";
+  @property({ attribute: false }) initialFocusSelector =
+    '#sidebar-sessions-owner, #sidebar-sessions-status input[type="radio"]:checked';
   @property({ attribute: false }) content: unknown = nothing;
   @property({ attribute: false }) onClose: (restoreFocus: boolean) => void = () => {};
   private focused = false;
@@ -89,9 +91,7 @@ class SidebarSessionFilterPopover extends OpenClawLightDomContentsElement {
   private readonly focusInitialControl = () => {
     if (!this.focused) {
       this.focused = true;
-      this.querySelector<HTMLElement>(
-        "#sidebar-sessions-owner, #sidebar-sessions-status .settings-segmented__btn--active",
-      )?.focus({
+      this.querySelector<HTMLElement>(this.initialFocusSelector)?.focus({
         preventScroll: true,
       });
     }

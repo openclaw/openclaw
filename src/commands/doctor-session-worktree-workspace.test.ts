@@ -71,7 +71,7 @@ it("repairs discovered worktree sessions only through Doctor and releases their 
       env,
       sessionKey: `agent:${agentId}:legacy-worktree`,
     }));
-    insertRegistryWorktree(env, {
+    await insertRegistryWorktree(env, {
       id: "legacy",
       name: "legacy",
       repoFingerprint: "0123456789abcdef",
@@ -128,7 +128,7 @@ it("repairs discovered worktree sessions only through Doctor and releases their 
       expect(isOpenClawAgentDatabaseOpen(resolveOpenClawAgentSqlitePath(scope))).toBe(false);
     }
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("Repaired canonical workspace metadata for 2 of 2"),
+      expect.stringContaining("Repaired saved workspace metadata for 2 of 2"),
       "Session worktrees",
     );
   });

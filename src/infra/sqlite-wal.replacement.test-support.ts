@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
+import { observeSqliteWalPeriodicWork } from "./sqlite-wal-scheduler.test-support.js";
 import { configureSqliteWalMaintenance } from "./sqlite-wal.js";
 
 const [role, databasePath, staleCloseMarker] = process.argv.slice(2);
@@ -44,25 +45,16 @@ if (role === "worker") {
   if (agent) {
     openOpenClawStateDatabase({ env });
   }
-  let periodic: (() => void) | undefined;
-  const setIntervalNative = globalThis.setInterval;
-  globalThis.setInterval = (callback, delay, ...args) => {
-    if (delay === 30 * 60 * 1000 && typeof callback === "function") {
-      assert.equal(periodic, undefined, "Expected exactly one published WAL timer");
-      periodic = () => Reflect.apply(callback, undefined, args);
-    }
-    return setIntervalNative(callback, delay, ...args);
-  };
+  const scheduled = observeSqliteWalPeriodicWork();
   let stale: DatabaseSync;
   try {
     stale = agent
       ? agent.openOpenClawAgentDatabase({ agentId: "main", path: databasePath, env }).db
       : openOpenClawStateDatabase({ path: databasePath, env }).db;
   } finally {
-    globalThis.setInterval = setIntervalNative;
+    scheduled.restore();
   }
-  assert.ok(periodic, "Published database did not register WAL maintenance");
-  const tick = periodic;
+  const tick = scheduled.periodic;
   // sqlite-allow-raw -- The replacement must retain the canonical schema and checkpointed seed.
   stale.exec("PRAGMA wal_autocheckpoint=0; CREATE TABLE events (value TEXT PRIMARY KEY);");
   stale.prepare("INSERT INTO events VALUES (?)").run("base");
@@ -74,12 +66,13 @@ if (role === "worker") {
     fs.writeFileSync(staleCloseMarker, "closed");
     close();
   };
-  process.on("message", (message) => {
-    assert.equal(message, "tick");
-    tick();
-    process.send?.("survived-tick");
-  });
+  const nextMessage = once(process, "message");
   process.stdout.write("stale-ready\n");
+  const [message] = await nextMessage;
+  assert.equal(message, "tick");
+  const maintenance = tick();
+  process.send?.("survived-tick");
+  await maintenance;
 } else {
   const current = new DatabaseSync(databasePath);
   current.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;");

@@ -11,9 +11,10 @@ import type {
 import type { ApplicationContext } from "../../app/context.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { pathDisplayName } from "../../lib/path-display.ts";
 import { projectsForGateway, type ProjectCatalog } from "../../lib/projects.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
-import { folderDisplayName, isAbsolutePath, isKnownWorkspacePath } from "./path.ts";
+import { isAbsolutePath, isKnownWorkspacePath } from "./path.ts";
 import { PICKER_INPUT_DEBOUNCE_MS, PlaceBrowserState } from "./place-browser-state.ts";
 import { projectCloneInput, type DraftRemoteProject } from "./project-chip.ts";
 import { recentPlaces, type RecentPlaceSource } from "./recent-places.ts";
@@ -141,8 +142,31 @@ export class DraftPlaceBrowser {
     return this.projectCatalog?.snapshot.ready ?? false;
   }
 
+  get projectsLoading(): boolean {
+    return this.projectCatalog?.loading ?? false;
+  }
+
   get projectRecents(): readonly ProjectRecent[] | undefined {
     return this.projectCatalog?.snapshot.result?.recents;
+  }
+
+  get githubHost(): string | undefined {
+    return this.projectCatalog?.snapshot.result?.githubHost;
+  }
+
+  get defaultRemoteProject(): DraftRemoteProject | null {
+    const configured = this.projectCatalog?.snapshot.result?.defaultRepository;
+    return configured
+      ? {
+          identity: configured.identity,
+          cloneUrl: configured.url,
+          ...(configured.ref ? { defaultBranch: configured.ref } : {}),
+        }
+      : null;
+  }
+
+  get defaultRemoteProjectProfileId(): string {
+    return this.projectCatalog?.snapshot.result?.defaultRepository?.profileId ?? "";
   }
 
   get projectId(): string {
@@ -221,8 +245,8 @@ export class DraftPlaceBrowser {
       popoverOpen: this.popoverOpen(kind),
       popoverHiding: this.popoverHiding(kind),
       onGuardTransition: (event: MouseEvent) => this.guardPopoverTransition(event, kind),
-      onPopoverShow: () => this.onPopoverShow(kind),
-      onPopoverHide: () => this.onPopoverHide(kind),
+      onPopoverShow: () => this.transitionPopover(kind, true),
+      onPopoverHide: () => this.transitionPopover(kind, false),
       onPopoverAfterHide: () => this.onPopoverAfterHide(kind),
     };
   }
@@ -300,7 +324,7 @@ export class DraftPlaceBrowser {
       }).map<ProjectRecent>((recent) => ({
         kind: "folder",
         folder: recent.folder,
-        displayName: folderDisplayName(recent.folder),
+        displayName: pathDisplayName(recent.folder),
       }))
     );
   }
@@ -378,17 +402,9 @@ export class DraftPlaceBrowser {
 
   selectGatewayBrowser(path?: string) {
     this.browserOpenValue = true;
-    this.loadBrowser(path && isAbsolutePath(path) ? path : undefined);
-    this.focusProjectView(".new-session-page__browser-path");
-  }
-
-  loadBrowser(path: string | undefined) {
-    const snapshot = this.read().context?.gateway.snapshot;
-    if (snapshot?.phase !== "connected" || !snapshot.client || !this.browserOpenValue) {
-      return;
-    }
     this.browserProjectPathValue = null;
-    void this.browser.navigate(path);
+    void this.browser.navigate(path && isAbsolutePath(path) ? path : undefined, "initial");
+    this.focusProjectView(".new-session-page__browser-path");
   }
 
   async registerBrowserProject(path: string) {
@@ -440,23 +456,18 @@ export class DraftPlaceBrowser {
     }
   }
 
-  onPopoverShow(kind: DraftPickerKind) {
-    this.openPopoverValue = kind;
-    if (kind === "where") {
-      this.environmentQueryValue = "";
-    }
-    if (kind === "project") {
-      this.showRoot();
+  private transitionPopover(kind: DraftPickerKind, showing: boolean) {
+    if (showing) {
+      this.openPopoverValue = kind;
+      if (kind === "where") {
+        this.environmentQueryValue = "";
+      }
     } else {
-      this.callbacks.requestUpdate();
+      if (this.openPopoverValue === kind) {
+        this.openPopoverValue = null;
+      }
+      this.hidingPopovers.add(kind);
     }
-  }
-
-  onPopoverHide(kind: DraftPickerKind) {
-    if (this.openPopoverValue === kind) {
-      this.openPopoverValue = null;
-    }
-    this.hidingPopovers.add(kind);
     if (kind === "project") {
       this.showRoot();
     } else {
@@ -466,10 +477,13 @@ export class DraftPlaceBrowser {
 
   onPopoverAfterHide(kind: DraftPickerKind) {
     this.hidingPopovers.delete(kind);
-    this.restorePopoverTrigger(
-      `${this.callbacks.pickerIdPrefix ?? "new-session"}-${kind}-trigger`,
-      `.new-session-page__${kind}-popover`,
-    );
+    const id = `${this.callbacks.pickerIdPrefix ?? "new-session"}-${kind}-trigger`;
+    const active = this.callbacks.activeElement();
+    const popover = this.callbacks.querySelector(`.new-session-page__${kind}-popover`);
+    const body = this.callbacks.body();
+    if (!active || active === body || popover?.contains(active)) {
+      (this.callbacks.querySelector(`#${id}`) as HTMLButtonElement | null)?.focus();
+    }
     this.callbacks.requestUpdate();
   }
 
@@ -537,15 +551,5 @@ export class DraftPlaceBrowser {
         target.focus({ preventScroll: true });
       }
     });
-  }
-
-  private restorePopoverTrigger(id: string, popoverSelector: string) {
-    const active = this.callbacks.activeElement();
-    const popover = this.callbacks.querySelector(popoverSelector);
-    const body = this.callbacks.body();
-    if (active && active !== body && !popover?.contains(active)) {
-      return;
-    }
-    (this.callbacks.querySelector(`#${id}`) as HTMLButtonElement | null)?.focus();
   }
 }

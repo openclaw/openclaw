@@ -13,7 +13,9 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import type { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
+import { operatorApprovalTerminalFields } from "./operator-approval-store.fields.js";
+import { operatorApprovalPublication } from "./operator-approval-store.publication.js";
 import type {
   NewOperatorApproval,
   OperatorApprovalDatabase,
@@ -353,7 +355,7 @@ export function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApp
 }
 
 export function selectOperatorApprovalRow(
-  database: ReturnType<typeof openOpenClawStateDatabase>,
+  database: OpenClawStateDatabase,
   id: string,
 ): OperatorApprovalRow | undefined {
   const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
@@ -364,7 +366,7 @@ export function selectOperatorApprovalRow(
 }
 
 export function selectOperatorApprovalRowByLocator(
-  database: ReturnType<typeof openOpenClawStateDatabase>,
+  database: OpenClawStateDatabase,
   locator: string,
 ): OperatorApprovalRow | undefined {
   const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
@@ -380,7 +382,7 @@ export function selectOperatorApprovalRowByLocator(
 }
 
 export function hasApprovalLocatorNamespaceConflict(params: {
-  database: ReturnType<typeof openOpenClawStateDatabase>;
+  database: OpenClawStateDatabase;
   id: string;
   resolutionRef: string;
 }): boolean {
@@ -410,57 +412,45 @@ export function matchesExpectedApprovalOwner(params: {
 }
 
 export function denyCorruptPendingRow(params: {
-  database: ReturnType<typeof openOpenClawStateDatabase>;
+  database: OpenClawStateDatabase;
   id: string;
   nowMs: number;
   createdAtMs: number;
 }): void {
   const auditTimestampMs = clampAuditTimestamp(params.nowMs, params.createdAtMs);
   const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(params.database.db);
-  executeSqliteQuerySync(
+  const changed = executeSqliteQuerySync(
     params.database.db,
     stateDb
       .updateTable("operator_approvals")
-      .set({
-        status: "denied",
-        decision: "deny",
-        terminal_reason: "storage-corrupt",
-        resolved_at_ms: auditTimestampMs,
-        resolver_kind: "system",
-        resolver_id: null,
-        updated_at_ms: auditTimestampMs,
-      })
+      .set(operatorApprovalTerminalFields("denied", "storage-corrupt", auditTimestampMs))
       .where("approval_id", "=", params.id)
-      .where("status", "=", "pending"),
+      .where("status", "=", "pending")
+      .returningAll(),
   );
+  operatorApprovalPublication.stagePostimages(params.database.db, changed.rows);
 }
 
 export function expirePendingRow(params: {
-  database: ReturnType<typeof openOpenClawStateDatabase>;
+  database: OpenClawStateDatabase;
   id: string;
   nowMs: number;
   createdAtMs: number;
 }): OperatorApprovalRow | undefined {
   const auditTimestampMs = clampAuditTimestamp(params.nowMs, params.createdAtMs);
   const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(params.database.db);
-  executeSqliteQuerySync(
+  const changed = executeSqliteQuerySync(
     params.database.db,
     stateDb
       .updateTable("operator_approvals")
-      .set({
-        status: "expired",
-        decision: "deny",
-        terminal_reason: "timeout",
-        resolved_at_ms: auditTimestampMs,
-        resolver_kind: "system",
-        resolver_id: null,
-        updated_at_ms: auditTimestampMs,
-      })
+      .set(operatorApprovalTerminalFields("expired", "timeout", auditTimestampMs))
       .where("approval_id", "=", params.id)
       .where("status", "=", "pending")
-      .where("expires_at_ms", "<=", params.nowMs),
+      .where("expires_at_ms", "<=", params.nowMs)
+      .returningAll(),
   );
-  return selectOperatorApprovalRow(params.database, params.id);
+  operatorApprovalPublication.stagePostimages(params.database.db, changed.rows);
+  return changed.rows[0];
 }
 
 export function requireDecodedRecord(row: OperatorApprovalRow): OperatorApprovalRecord {

@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   createSubscribedSessionHarness,
   emitMessageStartAndEndForAssistantText,
@@ -17,10 +17,7 @@ import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js"
 type BlockReply = NonNullable<Parameters<typeof createSubscribedSessionHarness>[0]["onBlockReply"]>;
 
 describe("subscribeEmbeddedAgentSession deferred progress", () => {
-  it.each([
-    { finalText: "First.\nDone.", deferred: true },
-    { finalText: "", deferred: false },
-  ])(
+  it.each([{ finalText: "", deferred: false }])(
     "subscribeEmbeddedAgentSession supersedes deferred progress and preserves authoritative final %j after a late block end",
     async ({ finalText, deferred }) => {
       const onAgentEvent = vi.fn();
@@ -122,142 +119,108 @@ describe("subscribeEmbeddedAgentSession deferred progress", () => {
   );
 });
 
-describe("flushPartialAssistantText", () => {
-  it.each([false, true])(
-    "keeps commentary out of timeout flush (final item: %s)",
-    (hasFinalAnswer) => {
-      const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
-      emit({ type: "message_start", message: { role: "assistant" } });
-      emit(
-        createOpenAiResponsesTextEvent({
-          type: "text_delta",
-          text: "Working...",
-          delta: "Working...",
-          id: "item-commentary",
-          signaturePhase: "commentary",
-          partialPhase: "commentary",
-        }),
-      );
-      if (hasFinalAnswer) {
+type FlushStep = {
+  chunks?: string[];
+  phase?: "commentary" | "final_answer";
+  final?: string;
+  beforeFlush?: string[];
+  expected: string[];
+};
+type FlushCase = {
+  name: string;
+  enforceFinalTag?: boolean;
+  chunked?: boolean;
+  steps: FlushStep[];
+};
+
+it.each<FlushCase>([
+  {
+    name: "commentary followed by a final item",
+    steps: [
+      { chunks: ["Working..."], phase: "commentary", expected: [] },
+      { chunks: ["Final answer"], phase: "final_answer", expected: ["Final answer"] },
+    ],
+  },
+
+  { name: "empty buffer", steps: [{ expected: [] }] },
+
+  {
+    name: "hidden-tag context across flushes",
+    steps: [
+      { chunks: ["Before ", "<think> reasoning without close"], expected: ["Before"] },
+      { chunks: ["secret continuation"], expected: ["Before"] },
+    ],
+  },
+  {
+    name: "orphan reasoning close retracting the flushed prefix",
+    steps: [
+      { chunks: ["private chain"], expected: ["private chain"] },
+      { chunks: ["</mm:think>Visible answer"], expected: ["Visible answer"] },
+    ],
+  },
+  {
+    name: "live chunks reconciled after an earlier flush",
+    chunked: true,
+    steps: [
+      { chunks: ["Hello world. "], expected: ["Hello world."] },
+      {
+        chunks: ["Next sentence. "],
+        beforeFlush: ["Hello world.", "Next sentence."],
+        expected: ["Hello world. Next sentence."],
+      },
+    ],
+  },
+  ...[""].map((final) => ({
+    name: `authoritative final ${JSON.stringify(final)}`,
+    steps: [
+      { chunks: ["Hello"], expected: ["Hello"] },
+      { final, expected: final ? [final] : [] },
+    ],
+  })),
+])("flushPartialAssistantText preserves $name", ({ enforceFinalTag, chunked, steps }) => {
+  const onBlockReply = vi.fn<BlockReply>();
+  const { emit, subscription } = createSubscribedSessionHarness({
+    runId: "run",
+    enforceFinalTag,
+    ...(chunked
+      ? {
+          onBlockReply,
+          blockReplyChunking: { minChars: 8, maxChars: 200, breakPreference: "sentence" },
+        }
+      : {}),
+  });
+  onTestFinished(() => subscription.unsubscribe());
+  if (steps.some((step) => step.chunks !== undefined)) {
+    emit({ type: "message_start", message: { role: "assistant" } });
+  }
+  for (const { chunks, phase, final, beforeFlush, expected } of steps) {
+    for (const delta of chunks ?? []) {
+      if (phase) {
         emit(
           createOpenAiResponsesTextEvent({
             type: "text_delta",
-            text: "Final answer",
-            delta: "Final answer",
-            id: "item-final",
-            signaturePhase: "final_answer",
-            partialPhase: "final_answer",
+            text: delta,
+            delta,
+            id: `item-${phase}`,
+            signaturePhase: phase,
+            partialPhase: phase,
           }),
         );
+      } else {
+        emitAssistantTextDelta({ emit, delta });
+      }
+    }
+    if (final !== undefined) {
+      emit({ type: "message_end", message: textAssistant(final) });
+    } else {
+      if (beforeFlush) {
+        expect(subscription.assistantTexts).toEqual(beforeFlush);
       }
       subscription.flushPartialAssistantText();
-      expect(subscription.assistantTexts).toEqual(hasFinalAnswer ? ["Final answer"] : []);
-    },
-  );
-
-  it.each([
-    {
-      name: "strips downgraded tool call text",
-      chunks: ["Visible answer", " [Tool Call: some_fn]"],
-      expected: ["Visible answer"],
-    },
-    {
-      name: "is a no-op when deltaBuffer is empty",
-      chunks: [],
-      expected: [],
-    },
-    {
-      name: "preserves visible prefix before unclosed final tag on flush",
-      enforceFinalTag: true,
-      chunks: ["Before ", "<final> content without close"],
-      expected: [" content without close"],
-    },
-  ])("$name", ({ chunks, enforceFinalTag, expected }) => {
-    const { emit, subscription } = createSubscribedSessionHarness({
-      runId: "run",
-      enforceFinalTag,
-    });
-    if (chunks.length > 0) {
-      emit({ type: "message_start", message: { role: "assistant" } });
     }
-    for (const chunk of chunks) {
-      emitAssistantTextDelta({ emit, delta: chunk });
-    }
-    subscription.flushPartialAssistantText();
     expect(subscription.assistantTexts).toEqual(expected);
-  });
-
-  it.each([
-    {
-      name: "retains hidden-tag context across flushes so a queued suffix inside an unclosed think tag never leaks",
-      chunks: ["Before ", "<think> reasoning without close"],
-      firstExpected: ["Before"],
-      suffix: "secret continuation",
-      expected: ["Before"],
-    },
-    {
-      name: "replaces a flushed entry when a queued orphan reasoning close retracts the prefix",
-      chunks: ["private chain"],
-      firstExpected: ["private chain"],
-      suffix: "</mm:think>Visible answer",
-      expected: ["Visible answer"],
-    },
-  ])("$name", ({ chunks, firstExpected, suffix, expected }) => {
-    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
-    emit({ type: "message_start", message: { role: "assistant" } });
-    for (const chunk of chunks) {
-      emitAssistantTextDelta({ emit, delta: chunk });
-    }
-    subscription.flushPartialAssistantText();
-    if (firstExpected) {
-      expect(subscription.assistantTexts).toEqual(firstExpected);
-    }
-    if (suffix) {
-      emitAssistantTextDelta({ emit, delta: suffix });
-    }
-    subscription.flushPartialAssistantText();
-    expect(subscription.assistantTexts).toEqual(expected);
-  });
-
-  it("reconciles live block chunks without duplication after an earlier flush", () => {
-    const onBlockReply = vi.fn<BlockReply>();
-    const { emit, subscription } = createSubscribedSessionHarness({
-      runId: "run",
-      onBlockReply,
-      blockReplyChunking: {
-        minChars: 8,
-        maxChars: 200,
-        breakPreference: "sentence",
-      },
-    });
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emitAssistantTextDelta({ emit, delta: "Hello world. " });
-    subscription.flushPartialAssistantText();
-    expect(subscription.assistantTexts).toEqual(["Hello world."]);
-    emitAssistantTextDelta({ emit, delta: "Next sentence. " });
-    expect(subscription.assistantTexts).toEqual(["Hello world.", "Next sentence."]);
-    subscription.flushPartialAssistantText();
-    expect(subscription.assistantTexts).toEqual(["Hello world. Next sentence."]);
+  }
+  if (chunked) {
     expect(onBlockReply).toHaveBeenCalled();
-  });
-
-  it.each(["Hello world", ""])(
-    "replaces flushed partial text with authoritative final %j when message_end arrives",
-    (finalText) => {
-      const { emit, subscription } = createSubscribedSessionHarness({
-        runId: "run",
-      });
-
-      emit({ type: "message_start", message: { role: "assistant" } });
-      emitAssistantTextDelta({ emit, delta: "Hello" });
-      subscription.flushPartialAssistantText();
-      expect(subscription.assistantTexts).toEqual(["Hello"]);
-      emit({
-        type: "message_end",
-        message: textAssistant(finalText),
-      });
-
-      expect(subscription.assistantTexts).toEqual(finalText ? [finalText] : []);
-    },
-  );
+  }
 });

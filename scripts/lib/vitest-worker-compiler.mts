@@ -155,6 +155,18 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     ] satisfies NonNullable<Parameters<typeof build>[0]>["plugins"];
   };
   const commonPlugins = createInputPlugins("");
+  const maintenanceModuleBoundaries = new Map([
+    [path.join(root, "src/daemon/service.ts"), "triage-maintenance/service.js"],
+    [
+      path.join(root, "src/daemon/service-process-membership.ts"),
+      "daemon/service-process-membership.js",
+    ],
+    [path.join(root, "src/daemon/systemd-maintenance.ts"), "daemon/systemd-maintenance.js"],
+    [
+      path.join(root, "src/cli/update-cli/update-command-service-drain.ts"),
+      "cli/update-cli/update-command-service-drain.js",
+    ],
+  ]);
   const config: NonNullable<Parameters<typeof build>[0]> = {
     config: false,
     cwd: root,
@@ -217,25 +229,34 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
               expr: {
                 kind: "or",
                 args: [
-                  { kind: "id", pattern: /service\.[jt]s/, params: { cleanUrl: false } },
-                  { kind: "importerId", pattern: /service\.[jt]s/, params: { cleanUrl: false } },
+                  {
+                    kind: "id",
+                    pattern:
+                      /(?:service(?:-process-membership|-drain)?|systemd-maintenance)\.[jt]s/,
+                    params: { cleanUrl: false },
+                  },
+                  {
+                    kind: "importerId",
+                    pattern:
+                      /(?:service(?:-process-membership|-drain)?|systemd-maintenance)\.[jt]s/,
+                    params: { cleanUrl: false },
+                  },
                 ],
               },
             },
           ],
           handler(id, importer) {
-            if (
-              importer &&
-              id.startsWith(".") &&
-              path.resolve(path.dirname(importer), id).replace(/\.js$/u, ".ts") ===
-                path.join(root, "src/daemon/service.ts")
-            ) {
-              return {
-                id: pathToFileURL(path.join(outDir, "triage-maintenance/service.js")).href,
-                external: "absolute",
-              };
+            if (!importer || !id.startsWith(".")) {
+              return null;
             }
-            return null;
+            const source = path.resolve(path.dirname(importer), id).replace(/\.js$/u, ".ts");
+            const boundary = maintenanceModuleBoundaries.get(source);
+            return boundary
+              ? {
+                  id: pathToFileURL(path.join(outDir, boundary)).href,
+                  external: "absolute",
+                }
+              : null;
           },
         },
       },
@@ -383,9 +404,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     // Output paths stay relative to dist, including package-root runtime assets.
     outputs[path.relative(outDir, destination).replaceAll("\\", "/")] = hash;
   }
-  const manifest = await writeVitestWorkerManifest(directory, inputs, outputs, started, {
-    inputsChangedAfter: cache?.startedAt,
-  });
+  const manifest = await writeVitestWorkerManifest(directory, inputs, outputs, started);
   reportPhase("compiler outputs verified");
   if (cache) {
     manifest.cacheSignature = await cache.seal(manifest);
@@ -400,11 +419,7 @@ async function writeVitestWorkerManifest(
   inputs: Record<string, string>,
   outputs: Record<string, string>,
   started: number,
-  {
-    restored = false,
-    inputsChangedAfter,
-    cacheSignature,
-  }: { restored?: boolean; inputsChangedAfter?: number; cacheSignature?: string } = {},
+  { restored = false, cacheSignature }: { restored?: boolean; cacheSignature?: string } = {},
 ): Promise<VitestWorkerManifest> {
   const outDir = path.join(directory, "dist");
   // Version consumers need the built source identity without making this
@@ -428,7 +443,7 @@ async function writeVitestWorkerManifest(
   // Restoration verified these bytes before transferring exclusive ownership.
   // The borrower boundary still verifies the refreshed manifest before lending.
   if (!restored) {
-    await verifyVitestWorkerArtifacts(directory, manifest, { inputsChangedAfter });
+    await verifyVitestWorkerArtifacts(directory, manifest);
   }
   manifest.durationMs = performance.now() - started;
   fs.writeFileSync(

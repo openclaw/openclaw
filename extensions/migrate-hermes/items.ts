@@ -95,25 +95,14 @@ export function createHermesSecretItem(params: {
   });
 }
 
-export function readHermesSecretDetails(item: MigrationItem):
-  | {
-      envVar?: string;
-      provider: string;
-      profileId: string;
-      mode?: "token";
-      sourceKind?: string;
-      sourceProvider?: string;
-      sourceCredentialId?: string;
-      secretField?: string;
-    }
-  | undefined {
+export function readHermesSecretDetails(item: MigrationItem) {
   const envVar = normalizeOptionalString(item.details?.envVar);
   const provider = normalizeOptionalString(item.details?.provider);
   const profileId = normalizeOptionalString(item.details?.profileId);
   if (!provider || !profileId) {
     return undefined;
   }
-  const mode = item.details?.mode === "token" ? "token" : undefined;
+  const mode = item.details?.mode === "token" ? ("token" as const) : undefined;
   const sourceKind = normalizeOptionalString(item.details?.sourceKind);
   const sourceProvider = normalizeOptionalString(item.details?.sourceProvider);
   const sourceCredentialId = normalizeOptionalString(item.details?.sourceCredentialId);

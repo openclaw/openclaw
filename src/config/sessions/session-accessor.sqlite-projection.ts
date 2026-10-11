@@ -1,13 +1,6 @@
 import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import { isMainThread } from "node:worker_threads";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveStoredSessionOwnerAgentId } from "../../gateway/session-store-key.js";
-import {
-  resolveAgentHarnessSessionStoreError,
-  resolveAgentHarnessSessionStoreTransitionError,
-} from "../../sessions/agent-harness-session-key.js";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,
@@ -25,45 +18,25 @@ import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-ar
 import { withNativeSessionCommitContext } from "./session-accessor.sqlite-commit-context.js";
 import type {
   SessionLifecycleArchivedTranscript,
-  DeletedAgentSessionEntryPurgeParams,
   SessionEntryLifecycleMutationResult,
 } from "./session-accessor.sqlite-contract.js";
 import {
+  captureNativeSessionWorkerDeletion,
   hasPreparedNativeSessionDeletion,
   runPreparedSqliteSessionWrite,
   runSqliteSessionDeletionTransaction as runOpenClawAgentWriteTransaction,
-  withSqliteSessionDeletions,
 } from "./session-accessor.sqlite-deletion.js";
 import { assertSessionSubagentRunsCurrent } from "./session-accessor.sqlite-descendant-basis.js";
-import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
-import {
-  deleteSessionEntryRows,
-  readExactSessionEntryRow,
-  readSessionEntryCount,
-  readSessionEntryStore,
-  writeSessionEntry,
-} from "./session-accessor.sqlite-entry-store.js";
+import { readSessionEntryCount } from "./session-accessor.sqlite-entry-store.js";
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
-import {
-  prepareLifecycleIdentityPublication,
-  prepareCommittedSessionEntryRemovals,
-} from "./session-accessor.sqlite-identity.js";
-import {
-  assertPlannedLifecycleArtifactEntriesUnchanged,
-  collectProjectedReferencedSessionIds,
-  collectSessionStateIdsForEntry,
-  deleteMaterializedSessionStatePlans,
-  deletePlannedLifecycleArtifactEntries,
-  planSessionStateAfterEntryRemoval,
-  projectSessionEntryLifecycleMutation,
-} from "./session-accessor.sqlite-lifecycle-state.js";
+import { prepareLifecycleIdentityPublication } from "./session-accessor.sqlite-identity.js";
+import { projectSessionEntryLifecycleMutation } from "./session-accessor.sqlite-lifecycle-state.js";
 import type {
   ProjectedLifecycleCommitResult,
   ProjectedLifecycleMutation,
   SessionEntryLifecycleMutationParams,
   SessionEntryMaintenanceInput,
   SessionEntryMaintenancePlan,
-  SessionEntryRemovalPlan,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   applySessionEntryMaintenance,
@@ -77,161 +50,44 @@ import {
   captureLifecycleDatabaseScope,
   resolveSqliteScope,
   resolveSqliteTranscriptArchiveDirectory,
-  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
   withSqliteSessionDatabase,
 } from "./session-accessor.sqlite-scope.js";
-import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
+import {
+  commitSessionLifecycleProjectionInWorker,
+  projectSessionEntryLifecycleMutationInWorker,
+  readSessionEntryLifecycleCountInWorker,
+} from "./session-lifecycle-projection.js";
+import { assertMaintenancePreservationCompatible } from "./store-maintenance-preserve-snapshot.js";
+import {
+  prepareSessionMaintenancePreservation,
+  type PreparedSessionMaintenancePreservation,
+} from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import { normalizeResolvedMaintenanceConfigInput } from "./store-maintenance.js";
-import type { SessionEntry } from "./types.js";
+
+export { purgeDeletedAgentSessionEntries } from "./session-agent-purge.js";
 
 export { applySessionEntryExactReplacements as applySessionEntryReplacements } from "./session-accessor.sqlite-replacement-projection.js";
-
-type SessionArchiveRuntime = typeof import("../../gateway/session-archive.runtime.js");
-let sessionArchiveRuntimePromise: Promise<SessionArchiveRuntime> | undefined;
-
-function loadSessionArchiveRuntime() {
-  sessionArchiveRuntimePromise ??= import("../../gateway/session-archive.runtime.js");
-  return sessionArchiveRuntimePromise;
-}
-
-/**
- * Applies a detached whole-store projection under the SQLite writer lane.
- * This exists only for bounded compatibility adapters that must preserve a
- * legacy serialized callback without exposing mutable storage internals.
- */
-export async function applySessionStoreProjection<T>(params: {
-  activeSessionKey?: string;
-  agentId?: string;
-  skipMaintenance?: boolean;
-  storePath: string;
-  update: (store: Record<string, SessionEntry>) =>
-    | Promise<{ persist: boolean; result: T }>
-    | {
-        persist: boolean;
-        result: T;
-      };
-}): Promise<T> {
-  const resolved = resolveSqliteScope({
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    sessionKey: params.activeSessionKey ?? "",
-    storePath: params.storePath,
-  });
-  const preparedWrite = await runPreparedSqliteSessionWrite(
-    resolved,
-    async () => {
-      return withSqliteSessionDatabase(toDatabaseOptions(resolved), async (database) => {
-        const before = readSessionEntryStore(database);
-        const projected = structuredClone(before);
-        const operation = await params.update(projected);
-        if (!operation.persist) {
-          return {
-            deletedEntries: [],
-            commit: () => ({ maintenancePlans: [], result: operation.result }),
-          };
-        }
-        const lockedEntriesBefore = new Map(
-          Object.entries(before).filter(([, entry]) => entry.modelSelectionLocked === true),
-        );
-        const transitionError = resolveAgentHarnessSessionStoreTransitionError({
-          before: lockedEntriesBefore,
-          store: projected,
-        });
-        const storeError = resolveAgentHarnessSessionStoreError(projected);
-        if (transitionError || storeError) {
-          throw new Error(transitionError ?? storeError);
-        }
-
-        const changedKeys = uniqueStrings([
-          ...Object.keys(before),
-          ...Object.keys(projected),
-        ]).filter(
-          (sessionKey) => !sqliteSessionEntriesEqual(before[sessionKey], projected[sessionKey]),
-        );
-        if (changedKeys.length === 0) {
-          return {
-            deletedEntries: [],
-            commit: () => ({ maintenancePlans: [], result: operation.result }),
-          };
-        }
-
-        const maintenancePlans: SessionEntryMaintenancePlan[] = [];
-        const deletedOwners = changedKeys.flatMap((sessionKey) => {
-          const entry = before[sessionKey];
-          return entry && !projected[sessionKey] ? [{ entry, sessionKey }] : [];
-        });
-        return {
-          deletedEntries: deletedOwners,
-          commit: (assertSourceCurrent) =>
-            withSqliteSessionDatabase(toDatabaseOptions(resolved), () => {
-              runOpenClawAgentWriteTransaction(
-                (transactionDb) => {
-                  assertSourceCurrent?.();
-                  for (const sessionKey of changedKeys) {
-                    const current = readExactSessionEntryRow(transactionDb, sessionKey)?.entry;
-                    if (!sqliteSessionEntriesEqual(current, before[sessionKey])) {
-                      throw new Error(
-                        `SQLite session entry changed before store projection for ${sessionKey}`,
-                      );
-                    }
-                  }
-                  for (const sessionKey of changedKeys) {
-                    const entry = projected[sessionKey];
-                    if (entry) {
-                      writeSessionEntry(transactionDb, sessionKey, structuredClone(entry), {
-                        previousEntry: before[sessionKey] ?? null,
-                      });
-                    } else {
-                      deleteSessionEntryRows(transactionDb, sessionKey);
-                    }
-                  }
-                  maintenancePlans.push(
-                    applySessionEntryMaintenance(transactionDb, {
-                      activeSessionKey: params.activeSessionKey ?? "",
-                      archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
-                      skipMaintenance: params.skipMaintenance,
-                      storePath: params.storePath,
-                    }),
-                  );
-                },
-                toDatabaseOptions(resolved),
-                { operationLabel: "session.store-projection" },
-              );
-              return { maintenancePlans, result: operation.result };
-            }),
-        };
-      });
-    },
-    "session.store-projection",
-  );
-  const committed = preparedWrite.result;
-  await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
-    resolved,
-    committed.maintenancePlans,
-    { deletedEntriesBeforeMaintenance: preparedWrite.deletedEntries },
-  );
-  return committed.result;
-}
 
 /** Applies exact lifecycle removals/upserts using SQLite session rows. */
 export async function applySessionEntryLifecycleMutation(
   params: SessionEntryLifecycleMutationParams,
-): Promise<SessionEntryLifecycleMutationResult> {
-  const resolved = captureLifecycleDatabaseScope(
+  resolved = captureLifecycleDatabaseScope(
     resolveSqliteScope({
       ...(params.agentId ? { agentId: params.agentId } : {}),
       env: params.env,
       sessionKey: "",
       storePath: params.storePath,
     }),
-  );
+  ),
+): Promise<SessionEntryLifecycleMutationResult> {
   const removals = [...(params.removals ?? [])];
   const upserts = [...(params.upserts ?? [])];
   const databaseOptions = toDatabaseOptions(resolved);
   const useWorker =
     isMainThread &&
-    upserts.length === 0 &&
+    !params.allowCanonicalRepair &&
     !params.afterUpsertsInTransaction &&
     !params.afterFreshUpsertsInTransaction &&
     !params.beforeCommitInTransaction &&
@@ -269,20 +125,14 @@ export async function applySessionEntryLifecycleMutation(
             () => execution?.assertCurrent(),
             execution,
           );
-          const result = await runSqliteSessionReclamation({
-            forceInProcess: false,
-            assertCommitAllowed: () => execution?.assertCurrent(),
-            plan: {
-              kind: "lifecycle-projection-plan",
-              databaseOptions: reclamationOptions,
-              materializedPlans: [],
-              input: projectionInput,
-            },
+        }
+        if (reclamationOptions && execution) {
+          projected = await projectSessionEntryLifecycleMutationInWorker({
+            database: reclamationOptions,
+            execution,
+            input: projectionInput,
+            upserts,
           });
-          if (result.kind !== "lifecycle-projection-plan") {
-            throw new Error("SQLite lifecycle projection returned an unexpected planning result");
-          }
-          projected = result.value;
         } else {
           projected = await projectSessionEntryLifecycleMutation(databaseOptions, {
             ...projectionInput,
@@ -328,11 +178,17 @@ export async function applySessionEntryLifecycleMutation(
               }
             : {}),
           commit: async (assertSourceCurrent?: () => void) => {
-            if (reclamationOptions && !hasPreparedNativeSessionDeletion()) {
-              const preparedPreservation = params.skipMaintenance
-                ? undefined
-                : await prepareSessionMaintenancePreservation(params.storePath);
-              try {
+            const nativeMaintenance =
+              !reclamationOptions ||
+              (hasPreparedNativeSessionDeletion() &&
+                !captureNativeSessionWorkerDeletion(deletedOwners));
+            const preparedPreservation = params.skipMaintenance
+              ? undefined
+              : await prepareSessionMaintenancePreservation(params.storePath, {
+                  native: nativeMaintenance,
+                });
+            try {
+              if (reclamationOptions && !nativeMaintenance) {
                 const maintenance: SessionEntryMaintenanceInput | null = preparedPreservation
                   ? {
                       activeSessionKey: params.activeSessionKey ?? "",
@@ -350,19 +206,49 @@ export async function applySessionEntryLifecycleMutation(
                   execution?.assertCurrent();
                   params.commitGuard?.();
                   assertSourceCurrent?.();
-                  if (
-                    maintenance &&
-                    preparedPreservation &&
-                    !isDeepStrictEqual(maintenance.preservation, preparedPreservation.capture())
-                  ) {
-                    throw new Error(
-                      "Session maintenance protection changed before lifecycle removal",
+                };
+                const assertPreservationCurrent = (
+                  plans?: readonly SessionEntryMaintenancePlan[],
+                ) => {
+                  if (maintenance?.preservation && preparedPreservation) {
+                    assertMaintenancePreservationCompatible(
+                      maintenance.preservation,
+                      preparedPreservation.capture(),
+                      plans,
                     );
                   }
                 };
+                if (upserts.length > 0 && execution && !hasPreparedNativeSessionDeletion()) {
+                  return withArchivePublication(
+                    await commitSessionLifecycleProjectionInWorker({
+                      database: reclamationOptions,
+                      execution,
+                      assertCurrent,
+                      assertPrepared: () => {
+                        preparedPreservation?.capture();
+                      },
+                      assertCandidate: (candidate) =>
+                        assertPreservationCurrent(candidate.result.maintenancePlans),
+                      onLifecycleCommitted: params.onLifecycleCommitted,
+                      input: {
+                        agentId: resolved.agentId,
+                        projected,
+                        removalPlans: materializedRemovalPlans,
+                        materializationFailed: removalArchiveMaterializationFailed,
+                        allowCanonicalRepair: params.allowCanonicalRepair,
+                        maintenance,
+                        descendantRunBasis: params.descendantRunBasis,
+                        maintenanceRunBasis: preparedPreservation?.subagentRunBasis,
+                      },
+                    }),
+                  );
+                }
                 const result = await runSqliteSessionReclamation({
                   forceInProcess: false,
-                  assertCommitAllowed: assertCurrent,
+                  assertCommitAllowed: () => {
+                    assertCurrent();
+                    assertPreservationCurrent();
+                  },
                   onWorkerResult: (completed) => {
                     if (completed.kind === "lifecycle-projection-commit") {
                       params.onLifecycleCommitted?.();
@@ -389,39 +275,41 @@ export async function applySessionEntryLifecycleMutation(
                   );
                 }
                 return withArchivePublication(result.value);
-              } finally {
-                preparedPreservation?.dispose();
               }
+              return await withSqliteSessionDatabase(toDatabaseOptions(resolved), (database) =>
+                withNativeSessionCommitContext(
+                  database,
+                  resolved.env,
+                  (source) =>
+                    commitProjectedLifecycleMutation(
+                      materializedRemovalPlans,
+                      removalArchiveMaterializationFailed,
+                      preparedPreservation,
+                      () => {
+                        assertSourceCurrent?.();
+                        source?.assertCurrent();
+                      },
+                    ),
+                  params.afterCommitted,
+                ),
+              );
+            } finally {
+              preparedPreservation?.dispose();
             }
-            return withSqliteSessionDatabase(toDatabaseOptions(resolved), (database) =>
-              withNativeSessionCommitContext(
-                database,
-                resolved.env,
-                (source) =>
-                  commitProjectedLifecycleMutation(
-                    materializedRemovalPlans,
-                    removalArchiveMaterializationFailed,
-                    () => {
-                      assertSourceCurrent?.();
-                      source?.assertCurrent();
-                    },
-                  ),
-                params.afterCommitted,
-              ),
-            );
           },
         };
       },
       "session.lifecycle.mutate",
       params.withCommit,
       undefined,
-      useWorker ? "worker" : "foreground",
+      useWorker && upserts.length === 0 ? "worker" : "foreground",
     );
     const committed = preparedWrite.result;
 
     function commitProjectedLifecycleMutation(
       removalPlans: MaterializedSessionStateDeletePlan[],
       materializationFailed: boolean,
+      preservation: PreparedSessionMaintenancePreservation | undefined,
       assertSourceCurrent?: () => void,
     ) {
       const commitResult = runOpenClawAgentWriteTransaction(
@@ -450,7 +338,8 @@ export async function applySessionEntryLifecycleMutation(
                 maintenanceConfig: params.maintenanceOverride
                   ? { ...resolveMaintenanceConfig(), ...params.maintenanceOverride }
                   : undefined,
-                skipMaintenance: params.skipMaintenance,
+                preservation: preservation?.capture,
+                refreshCandidates: preservation?.refreshCandidates,
                 storePath: params.storePath,
               }),
           });
@@ -511,31 +400,18 @@ export async function applySessionEntryLifecycleMutation(
       captureArtifactCleanupError(error);
     }
     const archivedTranscripts = [...publishedRemovalTranscripts, ...maintenanceArchivedTranscripts];
-    let afterCount: number;
-    if (reclamationOptions) {
-      const result = await runSqliteSessionReclamation({
-        forceInProcess: false,
-        assertCommitAllowed: () => execution?.assertCurrent(),
-        plan: {
-          kind: "lifecycle-projection-count",
-          databaseOptions: reclamationOptions,
-          materializedPlans: [],
-        },
-      });
-      if (result.kind !== "lifecycle-projection-count") {
-        throw new Error("SQLite lifecycle projection returned an unexpected count result");
-      }
-      afterCount = result.value;
-    } else {
-      afterCount = readSessionEntryCount(openOpenClawAgentDatabase(databaseOptions));
-    }
+    const afterCount =
+      reclamationOptions && execution
+        ? await readSessionEntryLifecycleCountInWorker({ database: reclamationOptions, execution })
+        : readSessionEntryCount(openOpenClawAgentDatabase(databaseOptions));
     emitArchivedTranscriptUpdates(archivedTranscripts);
     const archivedTranscriptDirectories = uniqueStrings(
       archivedTranscripts.map((transcript) => path.dirname(transcript.archivedPath)),
     ).toSorted();
     if (archivedTranscriptDirectories.length > 0 && params.cleanupArchivedTranscripts) {
       try {
-        const { cleanupArchivedSessionTranscripts } = await loadSessionArchiveRuntime();
+        const { cleanupArchivedSessionTranscripts } =
+          await import("../../gateway/session-archive.runtime.js");
         await cleanupArchivedSessionTranscripts({
           directories: archivedTranscriptDirectories,
           rules: params.cleanupArchivedTranscripts.rules,
@@ -562,132 +438,4 @@ export async function applySessionEntryLifecycleMutation(
   } finally {
     await execution?.release();
   }
-}
-
-/** Purges entries owned by a deleted agent from SQLite session rows. */
-export async function purgeDeletedAgentSessionEntries(
-  params: DeletedAgentSessionEntryPurgeParams,
-): Promise<void> {
-  const resolved = resolveSqliteScope({
-    agentId: params.storeAgentId,
-    env: params.env,
-    sessionKey: "",
-    storePath: params.storePath,
-  });
-  const prepared = await runExclusiveSqliteSessionWrite(
-    resolved,
-    async () => {
-      const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-      const store = readSessionEntryStore(database);
-      const remainingStore = { ...store };
-      const entryRemovals: SessionEntryRemovalPlan[] = [];
-      const removedEntriesToArchive: SessionEntry[] = [];
-      for (const sessionKey of Object.keys(store)) {
-        const ownerAgentId = resolveStoredSessionOwnerAgentId({
-          cfg: params.cfg,
-          agentId: params.storeAgentId,
-          sessionKey,
-        });
-        if (ownerAgentId !== params.agentId) {
-          continue;
-        }
-        const entry = store[sessionKey];
-        if (!entry) {
-          continue;
-        }
-        entryRemovals.push({ expectedEntry: structuredClone(entry), sessionKey });
-        removedEntriesToArchive.push(entry);
-        delete remainingStore[sessionKey];
-      }
-      const referencedSessionIds = collectProjectedReferencedSessionIds({
-        database,
-        excludedSessionKeys: entryRemovals.map((removal) => removal.sessionKey),
-        projectedStore: remainingStore,
-        candidateSessionIds: removedEntriesToArchive.flatMap(collectSessionStateIdsForEntry),
-      });
-      const deletePlans = removedEntriesToArchive.flatMap((entry) =>
-        planSessionStateAfterEntryRemoval({
-          archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
-          database,
-          entry,
-          reason: "deleted",
-          referencedSessionIds,
-        }),
-      );
-      return { deletePlans, entryRemovals };
-    },
-    "session.agent-purge.prepare",
-  );
-  const materializedPlans = await materializeSessionStateDeletePlans(prepared.deletePlans);
-  const committed = await withSqliteSessionDeletions(
-    resolved,
-    prepared.entryRemovals.flatMap(({ expectedEntry: entry, sessionKey }) =>
-      entry ? [{ entry, sessionKey }] : [],
-    ),
-    async () =>
-      await runExclusiveSqliteSessionWrite(
-        resolved,
-        async () => {
-          let archivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
-          const maintenancePlans: SessionEntryMaintenancePlan[] = [];
-          const publishRemovals = runOpenClawAgentWriteTransaction(
-            (transactionDb) => {
-              const currentOwnedSessionKeys = Object.keys(readSessionEntryStore(transactionDb))
-                .filter(
-                  (sessionKey) =>
-                    resolveStoredSessionOwnerAgentId({
-                      cfg: params.cfg,
-                      agentId: params.storeAgentId,
-                      sessionKey,
-                    }) === params.agentId,
-                )
-                .toSorted();
-              const plannedSessionKeys = prepared.entryRemovals
-                .map((removal) => removal.sessionKey)
-                .toSorted();
-              if (JSON.stringify(currentOwnedSessionKeys) !== JSON.stringify(plannedSessionKeys)) {
-                throw new Error("SQLite deleted-agent session entries changed before purge");
-              }
-              assertPlannedLifecycleArtifactEntriesUnchanged(transactionDb, prepared.entryRemovals);
-              archivedTranscripts = deleteMaterializedSessionStatePlans(
-                transactionDb,
-                materializedPlans,
-                undefined,
-                new Set(prepared.entryRemovals.map((removal) => removal.sessionKey)),
-              );
-              deletePlannedLifecycleArtifactEntries(transactionDb, prepared.entryRemovals);
-              const publish = prepareCommittedSessionEntryRemovals(
-                resolved.agentId,
-                readOpenClawAgentDatabaseIdentity(transactionDb).identity,
-                prepared.entryRemovals,
-              );
-              maintenancePlans.push(
-                applySessionEntryMaintenance(transactionDb, {
-                  activeSessionKey: "",
-                  archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
-                  storePath: params.storePath,
-                }),
-              );
-              return publish;
-            },
-            toDatabaseOptions(resolved),
-            { operationLabel: "session.entry.purge-deleted-agent" },
-          );
-          publishRemovals();
-          return { archivedTranscripts, maintenancePlans };
-        },
-        "session.agent-purge.commit",
-      ),
-  );
-  const { archivedTranscripts: maintenanceArchivedTranscripts } =
-    await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
-      resolved,
-      committed.maintenancePlans,
-      { deletedEntriesBeforeMaintenance: prepared.entryRemovals.length },
-    );
-  const archivedTranscripts = [
-    ...(await publishSessionStateArchives(resolved, committed.archivedTranscripts)),
-    ...maintenanceArchivedTranscripts,
-  ];
-  emitArchivedTranscriptUpdates(archivedTranscripts);
 }

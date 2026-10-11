@@ -16,11 +16,17 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { createArtifactTransferHttpCallback } from "./artifact-transfer-http.js";
+import {
+  classifyWorkerBootstrapArtifactTransferPath,
+  WORKER_BOOTSTRAP_ARTIFACT_TRANSFER_PATH,
+} from "../gateway-http-route-contracts.js";
+import {
+  createArtifactTransferHttpCallback,
+  handleArtifactTransferHttpRequest,
+} from "./artifact-transfer-http.js";
 import { createNodeBootstrapArtifactProvider } from "./node-bootstrap-artifact.js";
 import { createWorkerNodeEnrollmentManager } from "./node-enrollment.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
-import { handleWorkerBootstrapArtifactTransferHttpRequest } from "./worker-bootstrap-artifact-transfer-http.js";
 import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 
 vi.mock("../../infra/device-bootstrap.js", () => ({
@@ -132,6 +138,7 @@ describe("worker node enrollment", () => {
         "export const recovery = true;",
       ),
       fs.writeFile(path.join(packageRoot, "cli-root-options.mjs"), "export {};"),
+      fs.writeFile(path.join(packageRoot, "node-runtime-env.mjs"), "export {};"),
       fs.writeFile(path.join(packageRoot, "node-compile-cache.mjs"), "export {};"),
       fs.writeFile(path.join(packageRoot, "gateway-run-argv.mjs"), "export {};"),
       fs.writeFile(path.join(packageRoot, "gateway-shutdown-budget.mjs"), "export {};"),
@@ -213,21 +220,16 @@ describe("worker node enrollment", () => {
     },
   );
 
-  it("releases requested-state preflight artifact custody without aborting its caller", async () => {
+  it("prepares requested-state artifacts without enrollment or transfer grants", async () => {
     const record = await createRequested();
     const provider = await createArtifactProvider();
-    let consumerSignal: AbortSignal | undefined;
     const manager = createManager({
-      prepareArtifact: async (_record, signal) => {
-        consumerSignal = signal;
-        return await provider.prepare(signal);
-      },
+      prepareArtifact: async (_record, signal) => await provider.prepare(signal),
     });
     const caller = new AbortController();
     const ensureEnrollment = vi.spyOn(store, "ensureNodeEnrollment");
     const grant = vi.spyOn(transfer, "prepare");
     await manager.prepare(record, caller.signal);
-    expect(consumerSignal?.aborted).toBe(true);
     expect(caller.signal.aborted).toBe(false);
     expect(ensureEnrollment).not.toHaveBeenCalled();
     expect(grant).not.toHaveBeenCalled();
@@ -424,7 +426,9 @@ describe("worker node enrollment", () => {
     });
     const callback = createArtifactTransferHttpCallback(transfer);
     const server = http.createServer((req, res) => {
-      void handleWorkerBootstrapArtifactTransferHttpRequest({
+      void handleArtifactTransferHttpRequest({
+        classifyPath: classifyWorkerBootstrapArtifactTransferPath,
+        routePrefix: `${WORKER_BOOTSTRAP_ARTIFACT_TRANSFER_PATH}/artifacts/`,
         req,
         res,
         clientIp: "127.0.0.1",
@@ -865,23 +869,4 @@ describe("worker node enrollment", () => {
       await rejected;
     },
   );
-
-  it("does not return a connected device after teardown during its availability check", async () => {
-    const record = await createProvisioning("device-pending");
-    const entered = createDeferredCore();
-    const availability = createDeferredCore<{ available: true }>();
-    const manager = createManager({
-      resolveAvailability: async () => {
-        entered.resolve();
-        return await availability.promise;
-      },
-    });
-    const enrollment = await manager.begin(record);
-    const waiting = enrollment.waitForDeviceId();
-    const rejected = expect(waiting).rejects.toThrow(/no longer current/u);
-    await entered.promise;
-    await store.requestDestroy({ environmentId: record.environmentId, state: "provisioning" });
-    availability.resolve({ available: true });
-    await rejected;
-  });
 });

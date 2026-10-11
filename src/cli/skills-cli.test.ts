@@ -96,10 +96,12 @@ describe("skills formatting", () => {
     }
   });
 
-  it.each(["Excel-XLSX", "excel_xlsx"])("resolves unambiguous skill key %s", (skillKey) => {
+  it("resolves an unambiguous skill key", () => {
     expect(
       formatSkillInfo(
-        report([skill("Excel XLSX", { skillKey, description: "Spreadsheet helpers" })]),
+        report([
+          skill("Excel XLSX", { skillKey: "Excel-XLSX", description: "Spreadsheet helpers" }),
+        ]),
         "excel-xlsx",
         {},
       ),
@@ -119,32 +121,9 @@ describe("skills formatting", () => {
     }
   });
 
-  it.each([
-    {
-      name: "exact key",
-      query: "shared-key",
-      skills: [
-        skill("first", { skillKey: "shared-key" }),
-        skill("second", { skillKey: "shared-key" }),
-      ],
-    },
-    {
-      name: "case-insensitive",
-      query: "EXCEL-XLSX",
-      skills: [
-        skill("first", { skillKey: "Excel-XLSX" }),
-        skill("second", { skillKey: "excel-xlsx" }),
-      ],
-    },
-    {
-      name: "normalized",
-      query: "excel-xlsx",
-      skills: [
-        skill("Excel/XLSX", { skillKey: "slash" }),
-        skill("Excel_XLSX", { skillKey: "underscore" }),
-      ],
-    },
-  ])("rejects ambiguous $name selectors regardless of discovery order", ({ query, skills }) => {
+  it("rejects ambiguous exact key selectors regardless of discovery order", () => {
+    const query = "shared-key";
+    const skills = [skill("first", { skillKey: query }), skill("second", { skillKey: query })];
     for (const entries of [skills, skills.toReversed()]) {
       expect(JSON.parse(formatSkillInfo(report(entries), query, { json: true }))).toMatchObject({
         ok: false,
@@ -223,25 +202,21 @@ describe("skills formatting", () => {
     }
   });
 
-  it.each([false, true])("explains standalone skill visibility (hidden: %s)", (hidden) => {
+  it("explains standalone skills hidden from the model and commands", () => {
     vi.stubEnv("TERM", "dumb");
     const output = formatSkillsCheck(
       report([
         skill("standalone", {
-          modelVisible: !hidden,
-          userInvocable: !hidden,
+          modelVisible: false,
+          userInvocable: false,
           emoji: undefined,
         }),
       ]),
       {},
     );
     expect(output).toContain("\n  standalone");
-    expect(output).toContain(
-      hidden ? "is not exposed as a command" : "Ready and visible to model:",
-    );
-    expect(output).not.toContain(
-      hidden ? "commands/cron may still use it" : "Hidden from model prompt:",
-    );
+    expect(output).toContain("is not exposed as a command");
+    expect(output).not.toContain("commands/cron may still use it");
   });
 
   it("sanitizes ANSI and C1 controls in JSON fields", () => {

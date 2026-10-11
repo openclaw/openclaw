@@ -24,7 +24,6 @@ class CameraHandler(
   private val appContext: Context,
   private val camera: CameraCaptureManager,
   private val setCameraAudioCaptureActive: (Boolean) -> Boolean,
-  private val invokeErrorFromThrowable: (err: Throwable) -> Pair<String, String>,
 ) {
   /** Handles camera.list by exposing CameraX devices through gateway metadata. */
   suspend fun handleList(_paramsJson: String?): GatewaySession.InvokeResult =
@@ -40,22 +39,14 @@ class CameraHandler(
 
   suspend fun handleSnap(paramsJson: String?): GatewaySession.InvokeResult {
     val logFile = if (BuildConfig.DEBUG) java.io.File(appContext.cacheDir, "camera_debug.log") else null
-
-    fun camLog(msg: String) {
-      if (!BuildConfig.DEBUG) return
-      val ts = java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US).format(java.util.Date())
-      logFile?.appendText("[$ts] $msg\n")
-      android.util.Log.w("openclaw", "camera.snap: $msg")
-    }
+    val camLog = cameraLogger(logFile, "camera.snap")
     try {
       logFile?.writeText("") // clear
       camLog("starting, params=$paramsJson")
       val res =
         try {
           camLog("calling camera.snap()")
-          val r = camera.snap(paramsJson)
-          camLog("success, payload size=${r.length}")
-          r
+          camera.snap(paramsJson).also { camLog("success, payload size=${it.length}") }
         } catch (err: CancellationException) {
           throw err
         } catch (err: Throwable) {
@@ -78,13 +69,7 @@ class CameraHandler(
   /** Handles camera.clip and keeps external audio capture paused while camera audio is active. */
   suspend fun handleClip(paramsJson: String?): GatewaySession.InvokeResult {
     val clipLogFile = if (BuildConfig.DEBUG) java.io.File(appContext.cacheDir, "camera_debug.log") else null
-
-    fun clipLog(msg: String) {
-      if (!BuildConfig.DEBUG) return
-      val ts = java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US).format(java.util.Date())
-      clipLogFile?.appendText("[CLIP $ts] $msg\n")
-      android.util.Log.w("openclaw", "camera.clip: $msg")
-    }
+    val clipLog = cameraLogger(clipLogFile, "camera.clip", "CLIP ")
     val includeAudio = parseJsonBooleanFlag(parseJsonParamsObject(paramsJson), "includeAudio") ?: true
     val ownsAudioCapture = includeAudio && setCameraAudioCaptureActive(true)
     if (includeAudio && !ownsAudioCapture) {
@@ -97,12 +82,10 @@ class CameraHandler(
       val filePayload =
         try {
           clipLog("calling camera.clip()")
-          val r =
-            camera.clip(paramsJson) { file ->
+          camera
+            .clip(paramsJson) { file ->
               check(ownedClipFile.compareAndSet(null, file)) { "camera clip already owns a file" }
-            }
-          clipLog("success, file size=${r.file.length()}")
-          r
+            }.also { clipLog("success, file size=${it.file.length()}") }
         } catch (err: CancellationException) {
           throw err
         } catch (err: Throwable) {
@@ -146,4 +129,17 @@ class CameraHandler(
       }
     }
   }
+
+  private fun cameraLogger(
+    file: java.io.File?,
+    command: String,
+    prefix: String = "",
+  ): (String) -> Unit =
+    { message ->
+      if (BuildConfig.DEBUG) {
+        val time = java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US).format(java.util.Date())
+        file?.appendText("[$prefix$time] $message\n")
+        android.util.Log.w("openclaw", "$command: $message")
+      }
+    }
 }

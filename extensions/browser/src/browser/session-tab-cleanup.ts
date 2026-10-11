@@ -1,6 +1,3 @@
-/**
- * Periodic cleanup for browser tabs tracked to primary OpenClaw sessions.
- */
 import {
   isAcpSessionKey,
   isCronSessionKey,
@@ -34,9 +31,12 @@ function resolveBrowserTabCleanupRuntimeConfig(): ResolvedBrowserTabCleanupConfi
   return resolveBrowserConfig(cfg.browser, cfg).tabCleanup;
 }
 
-/** Starts the recurring Browser tab cleanup timer and returns its disposer. */
 export function startTrackedBrowserTabCleanupTimer(params: {
-  getResolvedBrowserConfig?: () => ResolvedBrowserConfig | null;
+  getResolvedBrowserConfig?: () =>
+    | ResolvedBrowserConfig
+    | null
+    | Promise<ResolvedBrowserConfig | null>;
+  isCurrent?: () => boolean;
   onWarn: (message: string) => void;
 }): () => Promise<void> {
   let stopped = false;
@@ -44,7 +44,7 @@ export function startTrackedBrowserTabCleanupTimer(params: {
   let running: Promise<unknown> | null = null;
 
   const schedule = () => {
-    if (stopped) {
+    if (stopped || params.isCurrent?.() === false) {
       return;
     }
     let sweepMinutes = 5;
@@ -58,7 +58,7 @@ export function startTrackedBrowserTabCleanupTimer(params: {
   };
 
   const run = () => {
-    if (stopped) {
+    if (stopped || params.isCurrent?.() === false) {
       return;
     }
     running = (async () => {

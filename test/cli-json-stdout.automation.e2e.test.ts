@@ -1,3 +1,4 @@
+import "../src/test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
@@ -138,10 +139,12 @@ describe("cli json stdout contract", () => {
             error: { type: "cli_error", message },
           });
         }
-        expect(result.stderr).toContain(message);
         if ("gatewayRequest" in testCase) {
-          expect(result.stderr).toContain(gatewayError);
+          expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+          expect(result.stderr).not.toContain(message);
+          expect(result.stderr).not.toContain(gatewayError);
         } else {
+          expect(result.stderr).toContain(message);
           expect(result.stderr).not.toContain(gatewayError);
           await expect(fs.stat(stateDir)).rejects.toMatchObject({ code: "ENOENT" });
         }

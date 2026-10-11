@@ -15,6 +15,16 @@ describe("qa model-switch evaluation", () => {
       true,
     ],
     [
+      "accepts handed-off model confirmations",
+      "The harness has handed off the model; the QA mission remains unchanged.",
+      true,
+    ],
+    [
+      "rejects unrelated handed-off transfers",
+      "I handed off the report; the QA mission remains unchanged.",
+      false,
+    ],
+    [
       "accepts concise kickoff note confirmations",
       "Handoff clean: after the model switch, I reread the kickoff note.",
       true,

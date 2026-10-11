@@ -9,7 +9,6 @@ import type { ModelApi } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   ProviderModelRouteRuntimePolicy,
-  ProviderResolveModelRoutesContext,
   ProviderRouteOverridePresence,
 } from "../../plugin-sdk/provider-model-types.js";
 import { resolveProviderModelRoutes } from "../../plugins/provider-model-routes.js";
@@ -189,7 +188,8 @@ export function buildAgentHarnessSupportContext(
       : resolveHarnessRouteRuntimePolicy({
           provider: params.provider,
           modelId: params.modelId,
-          modelProvider: modelProviderFacts,
+          api: modelProviderFacts.api as ModelApi | undefined,
+          baseUrl: modelProviderFacts.baseUrl,
           config: params.config,
           routeIntent: resolveModelRouteIntent({
             config: params.config,
@@ -205,6 +205,7 @@ export function buildAgentHarnessSupportContext(
                 })
               : undefined,
           }),
+          requestTransportOverrides: modelProviderFacts.requestTransportOverrides,
         });
   const modelProvider = {
     ...modelProviderFacts,
@@ -225,26 +226,11 @@ export function buildAgentHarnessSupportContext(
   };
 }
 
-function resolveHarnessRouteRuntimePolicy(params: {
-  provider: string;
-  modelId?: string;
-  modelProvider?: AgentHarnessSupportContext["modelProvider"];
-  config?: OpenClawConfig;
-  routeIntent?: ProviderResolveModelRoutesContext["routeIntent"];
-}): ProviderModelRouteRuntimePolicy | undefined {
-  const resolution = resolveProviderModelRoutes({
-    provider: params.provider,
-    modelId: params.modelId,
-    api: params.modelProvider?.api as ModelApi | undefined,
-    baseUrl: params.modelProvider?.baseUrl,
-    config: params.config,
-    routeIntent: params.routeIntent,
-    requestTransportOverrides: params.modelProvider?.requestTransportOverrides,
-  });
-  if (!resolution) {
-    return undefined;
-  }
-  if (resolution.kind !== "routes") {
+function resolveHarnessRouteRuntimePolicy(
+  params: Parameters<typeof resolveProviderModelRoutes>[0],
+): ProviderModelRouteRuntimePolicy | undefined {
+  const resolution = resolveProviderModelRoutes(params);
+  if (resolution?.kind !== "routes") {
     return undefined;
   }
   const policies = resolution.routes.map((route) => route.runtimePolicy);
@@ -291,18 +277,11 @@ export function resolveAutoAgentHarnessSelection(
     harness,
     support: support ?? harness.supports((supportContext ??= createSupportContext())),
   }));
-  const selected = candidates
-    .filter(isSupportedHarness)
-    .toSorted(compareHarnessSupport)[0]?.harness;
+  const selected = candidates.filter(isSupportedHarness).toSorted((left, right) => {
+    const priorityDelta = (right.support.priority ?? 0) - (left.support.priority ?? 0);
+    return priorityDelta !== 0 ? priorityDelta : left.harness.id.localeCompare(right.harness.id);
+  })[0]?.harness;
   return { candidates, selected };
-}
-
-function compareHarnessSupport(
-  left: { harness: AgentHarness; support: AgentHarnessSupport & { supported: true } },
-  right: { harness: AgentHarness; support: AgentHarnessSupport & { supported: true } },
-): number {
-  const priorityDelta = (right.support.priority ?? 0) - (left.support.priority ?? 0);
-  return priorityDelta !== 0 ? priorityDelta : left.harness.id.localeCompare(right.harness.id);
 }
 
 function isSupportedHarness(entry: {

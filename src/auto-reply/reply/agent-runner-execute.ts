@@ -29,13 +29,31 @@ import {
   normalizePendingFinalDeliveryPayloads,
 } from "./pending-final-delivery.js";
 import { claimNextQueuedFollowupRequestFrom, enqueueFollowupRun } from "./queue.js";
-import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
+import {
+  isReplyOperationSuperseded,
+  resolveReplyOperationAbortReason,
+} from "./reply-operation-abort.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
+import {
+  acquireReplyOperationSessionActor,
+  getReplyOperationSessionTarget,
+} from "./reply-run-registry.state.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
 import { resolveReplySourceTurnId } from "./source-turn-id.js";
 import { buildStalledTurnRecoveryRun, STALLED_TURN_GUIDANCE } from "./stalled-turn-recovery.js";
+
+export function prependCompactionNotices(
+  result: ReplyPayload | ReplyPayload[] | undefined,
+  notices: readonly ReplyPayload[],
+  operation: ReplyOperation,
+): ReplyPayload | ReplyPayload[] | undefined {
+  if (notices.length === 0 || resolveReplyOperationAbortReason(operation)) {
+    return result;
+  }
+  return [...notices, ...(Array.isArray(result) ? result : result ? [result] : [])];
+}
 
 /** Continues a saved stalled request once, retaining its final-feedback obligation. */
 export function continueStalledReplyTurn({
@@ -68,10 +86,9 @@ export function continueStalledReplyTurn({
     );
     return true;
   }
-  // Source-bound reply owners (Web UI chat.send, group threads) deliver only the
-  // follow-ups they queued themselves and would drop a recovery run's answer.
-  // Leave the notice with the stalled turn's still-live dispatch.
-  if (followupRun.queuedFollowupReplyDisposition) {
+  // Group-thread participants declare no queued reply owner, so a recovery's
+  // answer would be dropped; leave the notice with the stalled turn's dispatch.
+  if (followupRun.queuedFollowupReplyDisposition?.kind === "drop") {
     return false;
   }
   const enqueued = enqueueFollowupRun(
@@ -113,6 +130,7 @@ type ExecutePreparedReplyAgentRunInput = Omit<
     getActiveSessionEntry: () => SessionEntry | undefined;
     isRestartRecoveryArmed: () => Promise<boolean>;
     sendDirectCompactionNotice: ((phase: CompactionNoticePhase) => Promise<void>) | undefined;
+    onCompactionNoticePayload?: (payload: ReplyPayload) => void;
     setRunFollowupTurn: (runner: FinalizeReplyAgentRunInput["runFollowupTurn"]) => void;
     setActiveSessionEntry: (entry: SessionEntry | undefined) => void;
     shouldEmitToolOutput: () => boolean;
@@ -130,7 +148,6 @@ export async function executePreparedReplyAgentRun(
     activeSessionStore,
     admitUserTurn,
     beginBeforeAgentReply,
-    cfg,
     checkpointBeforeAgentReply,
     defaultModel,
     followupRun,
@@ -139,7 +156,6 @@ export async function executePreparedReplyAgentRun(
     replyOperation,
     replyThreadingOverride,
     returnWithQueuedFollowupDrain,
-    runtimePolicySessionKey,
     sendDirectCompactionNotice,
     sessionCtx,
     sessionKey,
@@ -182,6 +198,7 @@ export async function executePreparedReplyAgentRun(
   activeSessionEntry = await traceAgentPhase("reply.preflight_compaction", () =>
     runSessionCompactionIfNeeded({
       ...context,
+      replyOperation,
       pendingUserEntryId: preflightAdmission?.entryId,
       promptForEstimate: followupRun.prompt,
       sessionEntry: activeSessionEntry,
@@ -219,8 +236,7 @@ export async function executePreparedReplyAgentRun(
     return returnWithQueuedFollowupDrain(undefined);
   }
   // Adoption marks run start and must never be spool-replayed (would re-run tools).
-  // Suppressed delivery persists only the user transcript; crashed suppressed runs die
-  // silently. Deliverable turns atomically persist transcript plus recovery ownership.
+  // New input and its recovery claim share admission; otherwise lifecycle start owns the claim.
   await turnAdoptionLifecycle?.onAdopted();
   const runOutcome = await withBeforeAgentReplyObserver(
     {
@@ -243,12 +259,9 @@ export async function executePreparedReplyAgentRun(
         };
         if (sessionKey && storePath && normalizedHookReplies.length > 0) {
           const sourceReplyPolicy = resolveSourceReplyPolicy({
-            cfg,
-            sessionCtx,
-            sessionEntry: activeSessionEntry,
+            ...context,
             sessionKey,
-            runtimePolicySessionKey,
-            opts,
+            sessionEntry: activeSessionEntry,
           });
           if (!sourceReplyPolicy.suppressDelivery) {
             const pendingFinalDeliveryIntentId = crypto.randomUUID();
@@ -273,12 +286,9 @@ export async function executePreparedReplyAgentRun(
                 intentId: pendingFinalDeliveryIntentId,
                 deliveries: [{ id: pendingFinalDeliveryDeliveryId, state: "prepared" }],
                 context: resolveReplyRunDeliveryContext({
-                  cfg,
-                  sessionCtx,
-                  sessionEntry: activeSessionEntry,
+                  ...context,
                   sessionKey,
-                  runtimePolicySessionKey,
-                  opts,
+                  sessionEntry: activeSessionEntry,
                 }),
               },
             };
@@ -395,8 +405,22 @@ export function createReplyAgentRestartRecoveryController(
     normalizeOptionalString(sessionCtx.MessageSidFull);
   const recovery = createReplyRestartRecoveryClaimController({
     agentId: followupRun.run.agentId,
+    acquireSessionActor: async () => {
+      const actor = await acquireReplyOperationSessionActor(replyOperation);
+      if (!actor) {
+        return undefined;
+      }
+      const target = getReplyOperationSessionTarget(replyOperation);
+      if (!target) {
+        throw new Error("Reply operation has no session actor target");
+      }
+      return { actor, target };
+    },
+    operatorAuthority: followupRun.operatorAuthority,
+    inputProvenance: followupRun.run.inputProvenance,
     lifecycleGeneration: replyOperation.lifecycleGeneration,
     admissionRunId,
+    executionRunId: opts?.runId,
     getEntry: () =>
       sessionKey
         ? (activeSessionStore?.[sessionKey] ?? getActiveSessionEntry())

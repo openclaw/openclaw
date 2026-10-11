@@ -1,6 +1,14 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readdirSync, realpathSync, readFileSync, lstatSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  realpathSync,
+  readFileSync,
+  lstatSync,
+} from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "tsdown";
@@ -12,9 +20,11 @@ import {
 } from "../../src/infra/package-update-activation-journal.js";
 import { preparePackageActivationJournal } from "../../src/infra/package-update-activation-prepare.js";
 import { packageActivationRuntimeEntrypoint } from "../../src/infra/package-update-activation-runtime-assets.js";
+import { packageActivationRuntimeForTest } from "../../src/infra/package-update-activation-runtime.test-support.js";
 import { createPackageIntegrityReader } from "../../src/infra/package-update-integrity.js";
 import { createPackageSwapFixture } from "../../src/infra/package-update-swap.test-support.js";
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
+import { stageFreeBsdManagedHandoffNativeRuntime } from "../../src/infra/update-managed-service-handoff-native.js";
 import { MANAGED_HANDOFF_RUNTIME_ENTRY } from "../../src/infra/update-managed-service-handoff-runtime-assets.js";
 import { stageManagedHandoffRuntime } from "../../src/infra/update-managed-service-handoff-runtime.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -72,23 +82,6 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => vi.restoreAllMocks());
 
-it("loads the worker compiler with native Node before preparing artifacts", () => {
-  const output = execFileSync(
-    process.execPath,
-    [
-      "--input-type=module",
-      "--eval",
-      `
-await import("./scripts/lib/vitest-worker-compiler.mts");
-console.log("native worker compiler import verified");
-`,
-    ],
-    { encoding: "utf8", timeout: 30_000 },
-  );
-
-  expect(output.trim()).toBe("native worker compiler import verified");
-});
-
 it.each(
   (["managed", "package"] as const).filter(
     (kind) => kind === "managed" || process.platform !== "win32",
@@ -129,7 +122,7 @@ it.each(
   let preparedPackage: Awaited<ReturnType<typeof preparePackageActivationJournal>> | undefined;
   let prepareNext: (() => Promise<NonNullable<typeof preparedPackage>>) | undefined;
   const runCommand = (command: string, action: string) =>
-    spawnSync("/bin/sh", ["-c", `exec ${command.replace(/ status$/u, ` ${action}`)}`], {
+    spawnSync("/bin/sh", ["-c", command.replace(/ status$/u, ` ${action}`)], {
       encoding: "utf8",
       timeout: 30_000,
       killSignal: "SIGKILL",
@@ -147,9 +140,26 @@ it.each(
         path.resolve("src/infra/update-managed-service-handoff-native-loader.ts"),
       );
       expect(modules).not.toContain(path.resolve("src/shared/freebsd-process-identity-native.ts"));
+    } else {
+      expect(modules).toContain(
+        path.resolve("src/infra/package-update-activation-native-loader.ts"),
+      );
+      expect(modules).not.toContain(path.resolve("src/shared/freebsd-process-identity-native.ts"));
+      // Lease observation and error-code metadata must not capture execution controllers.
+      for (const module of [
+        "src/infra/update-managed-service-handoff.ts",
+        "src/flows/doctor-health-contributions.ts",
+      ]) {
+        expect(modules.includes(path.resolve(module)), module).toBe(false);
+      }
     }
-    vi.mocked(resolveRuntimeWorkerUrl).mockReturnValue(
-      pathToFileURL(path.join(outDir, runtimeEntry)),
+    const runtimeWorker = await vi.importActual<
+      typeof import("../../src/infra/runtime-worker-url.js")
+    >("../../src/infra/runtime-worker-url.js");
+    vi.mocked(resolveRuntimeWorkerUrl).mockImplementation((entry) =>
+      entry.distWorkerPath === runtimeEntry
+        ? pathToFileURL(path.join(outDir, runtimeEntry))
+        : runtimeWorker.resolveRuntimeWorkerUrl(entry),
     );
     let entry: string;
     if (kind === "managed") {
@@ -177,11 +187,18 @@ it.each(
       mkdirSync(base, { mode: 0o700 });
       prepareNext = async () => {
         const fixture = await createPackageSwapFixture(base);
+        // npm nests the FreeBSD identity dependency inside the installed package.
+        const nativeModules = path.join(fixture.packageRoot, "node_modules");
+        if (process.platform === "freebsd" && !existsSync(nativeModules)) {
+          const native = tempDirs.make("openclaw-package-native-");
+          stageFreeBsdManagedHandoffNativeRuntime(native);
+          cpSync(path.join(native, "runtime", "node_modules"), nativeModules, { recursive: true });
+        }
         return withUpdateCommandExecutor(randomUUID(), async (executor) =>
           preparePackageActivationJournal({
             options: {
               fence: await executor.enter(fixture.packageRoot),
-              nodeRunner: process.execPath,
+              runtime: packageActivationRuntimeForTest(),
               onPrepared: (command) => {
                 const observed = runCommand(command, "status");
                 expect(observed.error).toBeUndefined();
@@ -232,9 +249,6 @@ it.each(
             "createManagedHandoffLeaseStore",
             "resolveUpdateRestartNoticeMeta",
             "shouldPublishUpdateRestartNotice",
-            "extractSqliteTableSchema",
-            "readRestartSentinelRowSync",
-            "writeRestartSentinelRowIfRevisionSync",
           ]) {
             assert.equal(typeof runtime[name], "function", name);
           }
@@ -296,42 +310,44 @@ it.each(
           phase,
         });
       }
+      const completedJournal = readFileSync(
+        resolvePackageActivationJournalPath(preparedPackage.anchor),
+      );
       const second = await prepareNext();
       const recordB = second.journal.read();
       const journalPath = resolvePackageActivationJournalPath(second.anchor);
-      expect(lstatSync(journalPath).ino).toBe(originalJournal.ino);
+      const archivedJournal = path.join(
+        `${second.anchor}.superseded-${first.descriptor.operationId}`,
+        "control",
+        "operation.sqlite",
+      );
+      expect(lstatSync(archivedJournal).ino).toBe(originalJournal.ino);
+      expect(readFileSync(archivedJournal)).toEqual(completedJournal);
+      expect(lstatSync(journalPath).ino).not.toBe(originalJournal.ino);
       expect(lstatSync(journalPath).dev).toBe(originalJournal.dev);
-      expect(recordB.revision).toBeGreaterThan(first.revision);
       expect(recordB.descriptor.operationId).not.toBe(first.descriptor.operationId);
       const snapshot = () =>
         [
+          archivedJournal,
           journalPath,
           resolvePackageActivationHelper(second.anchor),
           path.join(recordB.descriptor.authority.installKey, "package.json"),
         ].map((file) => ({ bytes: readFileSync(file), ino: lstatSync(file).ino }));
       const before = snapshot();
-      expect(commands).toHaveLength(3);
+      expect(commands).toHaveLength(2);
       for (const action of ["status", "repair", "retire"]) {
         const stale = runCommand(commandA, action);
         expect(stale.error).toBeUndefined();
         expect(stale.status).toBe(1);
         expect(stale.stderr).toContain("different operation");
-        const after = snapshot();
-        expect(after).toHaveLength(before.length);
-        for (const [index, original] of before.entries()) {
-          expect(after[index]!.ino).toBe(original.ino);
-          expect(after[index]!.bytes.equals(original.bytes)).toBe(true);
-        }
+        expect(snapshot()).toEqual(before);
       }
-      // The replacement's temporary command is deliberately one-phase, never
-      // another locator for the next operation after its helper has moved.
-      expect(runCommand(commands[1]!, "status").status).not.toBe(0);
       for (const [action, phase] of [
         ["status", "prepared"],
         ["repair", "aborted"],
         ["retire", "complete"],
       ]) {
-        const current = runCommand(commands[2]!, action!);
+        const current = runCommand(commands[1]!, action!);
         expect(current.error).toBeUndefined();
         expect(current.status, current.stderr).toBe(0);
         expect(JSON.parse(current.stdout)).toMatchObject({

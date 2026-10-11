@@ -1,26 +1,28 @@
-import { isDeepStrictEqual } from "node:util";
 import { assertCronJobStateTimestamps } from "../persisted-shape.js";
 import { noteCronJobsStoreCommit } from "../store.js";
-import type { CronRuntimeMutationContracts } from "../store/runtime-mutation.types.js";
-import type { CronExternalStateChange } from "../store/runtime-worker.types.js";
+import { loadCronJobsStoreWithConfigJobsReadOnly } from "../store/read-only.js";
+import type {
+  CronRuntimeMutationContracts,
+  CronExternalStateChange,
+} from "../store/runtime-worker.types.js";
 import {
   CronStreamSourceRetirementError,
   createCronStreamSourceIdentity,
   ownsStreamSource,
 } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
-import { failureNotificationDeliveryFromJobState, resolveFailureAlert } from "./failure-alerts.js";
+import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import { findJobOrThrow } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
-import { emitCronRunFinished } from "./ops-run-preparation.js";
 import { runCronRuntimeMutation } from "./runtime-mutation.js";
-import { applyCronRuntimeRowsToState } from "./runtime-store.js";
+import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import type { CronServiceState } from "./state.js";
 import {
   captureCronJobMutationSource,
   ensureLoaded,
   runPostPersistCronNotifications,
 } from "./store.js";
+import { emitCronRunFinished } from "./timer-outcome-events.js";
 import { armTimer } from "./timer.js";
 
 type ExternalOutcome = CronRuntimeMutationContracts["cron.mutateExternalState"]["outcome"];
@@ -57,33 +59,11 @@ async function mutateExternalState(
         type: "cron.mutateExternalState",
         input: { storeKey: source.storeKey, jobId, change },
         assertCurrent: () => source.assertCurrent(),
-        prepare(routing) {
-          if (routing.id !== jobId) {
-            throw new Error("Cron external policy differs from its admitted job");
-          }
-          const cronConfig =
-            change.kind === "failure" ? structuredClone(state.deps.cronConfig) : undefined;
-          const value = {
-            nowMs: state.deps.nowMs(),
-            cronConfig,
-            failureAlert:
-              change.kind === "failure"
-                ? resolveFailureAlert({ deps: { cronConfig } }, routing)
-                : null,
-          };
-          return {
-            value,
-            assertCurrent() {
-              source.assertCurrent();
-              if (
-                change.kind === "failure" &&
-                (!isDeepStrictEqual(cronConfig, state.deps.cronConfig) ||
-                  !isDeepStrictEqual(value.failureAlert, resolveFailureAlert(state, routing)))
-              ) {
-                throw new Error("Cron external failure policy changed before commit");
-              }
-            },
-          };
+        // A config reload may race this submitted mutation; the worker uses this snapshot.
+        snapshot: {
+          nowMs: state.deps.nowMs(),
+          cronConfig:
+            change.kind === "failure" ? structuredClone(state.deps.cronConfig) : undefined,
         },
         publish(outcome) {
           committed = outcome;
@@ -97,8 +77,6 @@ async function mutateExternalState(
       noteCronJobsStoreCommit(source.storeKey);
       failure = { error };
     }
-    // Settlement can establish commit even when the ordinary reply is lost.
-    // Join its history and publication before returning the transport failure.
     try {
       if (committed) {
         source.assertCurrent();
@@ -146,6 +124,26 @@ async function mutateExternalState(
       state.deps.log.warn({ jobId, error }, "cron: committed external state publication failed");
     }
     if (failure) {
+      if (change.kind === "retire" && retiredIdentity === undefined) {
+        try {
+          // A lost reply can hide a committed retirement; read its chosen identity once.
+          const loaded = await loadCronJobsStoreWithConfigJobsReadOnly(
+            state.deps.storePath,
+            source.context.environment,
+          );
+          source.assertStorageCurrent();
+          const current = loaded.store.jobs.find((job) => job.id === jobId);
+          if (
+            current &&
+            ownsStreamSource(current, change.source.scheduleKey, change.nextIdentity)
+          ) {
+            retiredIdentity = change.nextIdentity;
+            applyCronRuntimeRowsToState(state, [current]);
+          }
+        } catch (error) {
+          state.deps.log.warn({ jobId, error }, "cron: stream retirement readback failed");
+        }
+      }
       if (change.kind === "retire" && retiredIdentity !== undefined) {
         throw new CronStreamSourceRetirementError(
           {

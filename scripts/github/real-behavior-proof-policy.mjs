@@ -1,5 +1,7 @@
-// Shared PR context and evidence policy for GitHub checks and label decisions.
-import { readBoundedResponseText } from "../lib/bounded-response.mjs";
+import {
+  createBoundedResponseTooLargeError,
+  readBoundedResponseText,
+} from "../lib/bounded-response.mjs";
 import { escapeRegExp } from "../lib/regexp.mjs";
 import { createTimeoutError } from "../lib/timeout-error.mjs";
 
@@ -62,12 +64,6 @@ const legacyProofFieldNames = [
 const missingValueRegex =
   /^(?:n\/?a|none|not applicable|tbd|todo|unknown|unsure|none provided|no evidence|not tested|untested|did not test|didn't test|could not test|couldn't test|-|(?:-{3,}|\*{3,}|_{3,})|\[[^\]]*\])\.?$/i;
 
-function createTooLargeGitHubApiBodyError(label, maxBytes) {
-  const error = new Error(`${label} response body exceeded ${maxBytes} bytes`);
-  error.code = "ETOOBIG";
-  return error;
-}
-
 async function withGitHubApiTimeout(label, timeoutMs, run) {
   const boundedTimeoutMs = Math.max(1, timeoutMs);
   const controller = new AbortController();
@@ -105,13 +101,10 @@ export async function readBoundedGitHubApiJson(
 ) {
   const text = await readBoundedResponseText(response, label, maxBytes, {
     ...options,
-    createTooLargeError: () => createTooLargeGitHubApiBodyError(label, maxBytes),
+    createTooLargeError: () =>
+      createBoundedResponseTooLargeError(`${label} response body exceeded ${maxBytes} bytes`),
   });
   return JSON.parse(text);
-}
-
-function normalizeLineEndings(text = "") {
-  return text.replace(/\r\n?/g, "\n");
 }
 
 function maskHtmlComments(text) {
@@ -135,8 +128,8 @@ function maskHtmlComments(text) {
         commentOpen = false;
       }
 
-      if (nextFenceMarker(maskedLine, "")) {
-        fenceMarker = nextFenceMarker(maskedLine, "");
+      fenceMarker = nextFenceMarker(maskedLine, "");
+      if (fenceMarker) {
         return maskedLine;
       }
 
@@ -269,7 +262,7 @@ function markdownHeadingLevel(line) {
 function extractMarkdownSections(headingRegex, body = "") {
   // Normalize CRLF → LF so regexes and section slicing see GitHub web-editor PR
   // bodies the same way as locally-authored Markdown.
-  const normalizedBody = normalizeLineEndings(body);
+  const normalizedBody = body.replace(/\r\n?/g, "\n");
   const headingBody = maskHtmlComments(normalizedBody);
   const sections = [];
   const matcher = new RegExp(headingRegex.source, headingRegex.flags.replaceAll("g", ""));
@@ -307,10 +300,6 @@ export function hasAuthoredPullRequestSection(heading, body = "") {
   return !isMissingValue(extractMarkdownSections(headingPattern, body).at(-1) ?? "");
 }
 
-function extractLegacyProofSections(body = "") {
-  return extractMarkdownSections(/^#{2,6}\s+real behavior proof\b[^\n]*$/im, body);
-}
-
 function fieldLineRegex(name) {
   return new RegExp(
     `^\\s*(?:[-*]\\s*)?(?:\\*\\*)?${escapeRegExp(name)}(?:\\s*\\([^)]*\\))?(?:\\*\\*)?\\s*:\\s*(.*)$`,
@@ -325,7 +314,7 @@ function legacyProofFieldLineValue(line) {
 }
 
 function extractFieldValue(section, field) {
-  const lines = maskHtmlComments(normalizeLineEndings(section)).split("\n");
+  const lines = maskHtmlComments(section).split("\n");
   let fenceMarker = "";
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
@@ -358,7 +347,7 @@ function extractFieldValue(section, field) {
 }
 
 function stripMarkdownFenceMarkers(value) {
-  return maskHtmlComments(normalizeLineEndings(value))
+  return maskHtmlComments(value)
     .split("\n")
     .filter((line) => !/^ {0,3}(?:`{3,}|~{3,})(?:.*)?$/.test(line))
     .join("\n")
@@ -367,10 +356,7 @@ function stripMarkdownFenceMarkers(value) {
 
 function isMissingValue(value) {
   const trimmed = stripMarkdownFenceMarkers(value).replace(/^\s*[-*]\s+/, "");
-  if (!trimmed) {
-    return true;
-  }
-  return missingValueRegex.test(trimmed);
+  return !trimmed || missingValueRegex.test(trimmed);
 }
 
 /**
@@ -399,7 +385,8 @@ export function evaluatePullRequestContext({ pullRequest } = {}) {
   }
 
   const body = pullRequest?.body ?? "";
-  const latestLegacyProof = extractLegacyProofSections(body).at(-1) ?? "";
+  const latestLegacyProof =
+    extractMarkdownSections(/^#{2,6}\s+real behavior proof\b[^\n]*$/im, body).at(-1) ?? "";
   const hasAuthoredProblem = hasAuthoredPullRequestSection("What Problem This Solves", body);
   const hasLegacyProblem = !isMissingValue(
     extractFieldValue(latestLegacyProof, legacyProofFields.problem),

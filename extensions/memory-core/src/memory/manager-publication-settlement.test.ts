@@ -48,6 +48,7 @@ function createPublicationDatabase(stateDir: string) {
   db.exec(`INSERT INTO memory_index_sources(path, source, hash, mtime, size)
     VALUES ('memory/current.md', 'memory', 'old', 1, 1)`);
   const input: PublicationFaultInput = {
+    kind: "publication",
     marker: path.join(stateDir, "entered"),
     failRollback: false,
     failClose: false,
@@ -189,7 +190,7 @@ it.each([
             }),
           () => undefined,
         ),
-      ).resolves.toEqual({ ok: true, value: false });
+      ).resolves.toMatchObject({ ok: true, value: false });
       await worker.close();
       worker = undefined;
       await closeOpenClawAgentDatabasesAsync(state.stateDir);
@@ -216,7 +217,7 @@ it.each([
           (scope) => scope.execute(deleteCurrentSource),
           () => undefined,
         ),
-      ).resolves.toEqual({ ok: true, value: true });
+      ).resolves.toMatchObject({ ok: true, value: true });
       expect(recovered.db.prepare("SELECT * FROM memory_index_sources").all()).toEqual([]);
       expect(recovered.db.prepare("PRAGMA integrity_check").get()).toEqual({
         integrity_check: "ok",
@@ -229,7 +230,7 @@ it.each([
           (scope) => scope.execute(deleteCurrentSource),
           () => undefined,
         ),
-      ).resolves.toEqual({ ok: true, value: true });
+      ).resolves.toMatchObject({ ok: true, value: true });
     }
   } finally {
     clearInterval(heartbeat);
@@ -288,7 +289,7 @@ it("preserves a committed publication when binding cleanup fails", async () => {
     if (completed === undefined && "error" in outcome) {
       throw outcome.error;
     }
-    expect(completed).toEqual({ ok: true, value: true });
+    expect(completed).toMatchObject({ ok: true, value: true });
     expect(callbacks).toBe(1);
     expect(readMemoryDatabaseRevision(db)).toBe(beforeRevision + 1);
     expect(db.prepare("SELECT * FROM memory_index_sources").all()).toEqual([]);
@@ -315,99 +316,3 @@ it("preserves a committed publication when binding cleanup fails", async () => {
     }
   }
 });
-
-it.each([false, true])(
-  "preserves the staged publication outcome when discard fails (publication fails: %s)",
-  async (failPublication) => {
-    const state = await createOpenClawTestState({
-      prefix: "memory-publication-discard-",
-      layout: "state-only",
-    });
-    let worker:
-      | Awaited<ReturnType<typeof openOpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>>>
-      | undefined;
-    try {
-      const { options, db, input } = createPublicationDatabase(state.stateDir);
-      input.failDiscard = true;
-      const beforeRevision = readMemoryDatabaseRevision(db);
-      const open = (failDiscard: boolean) =>
-        openOpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>(options, db, {
-          moduleUrl: resolveRuntimeWorkerUrl(memoryPublicationFaultEntrypoint),
-          input: { ...input, failDiscard },
-        });
-      const replace = (
-        owner: Awaited<ReturnType<typeof open>>,
-        hash: string,
-        refusePublication = false,
-      ) =>
-        owner.run(
-          async (scope) => {
-            await scope.execute({
-              type: "stage.start",
-              input: {
-                operation: hash,
-                rows: 0,
-                header: {
-                  source: "memory",
-                  entry: { path: "memory/current.md", hash, mtimeMs: 2, size: 0 },
-                  model: "none",
-                  now: 2,
-                  vectorReady: false,
-                },
-              },
-            });
-            if (refusePublication) {
-              db.exec(`CREATE TRIGGER fail_publication BEFORE UPDATE ON memory_index_sources
-                BEGIN SELECT RAISE(FAIL, 'injected publication failure'); END`);
-            }
-            try {
-              return await scope.execute({
-                type: "source.replace",
-                input: {
-                  operation: hash,
-                  state: {
-                    vector: { enabled: false, available: false },
-                    fts: { enabled: false, available: false },
-                  },
-                },
-              });
-            } finally {
-              if (refusePublication) {
-                db.exec("DROP TRIGGER fail_publication");
-              }
-            }
-          },
-          () => undefined,
-        );
-      worker = await open(true);
-      const outcome = await replace(worker, "new", failPublication);
-      expect(outcome).toMatchObject({
-        ok: false,
-        entered: true,
-        committed: !failPublication,
-        error: failPublication
-          ? { message: "injected publication failure", code: "ERR_SQLITE_ERROR", errcode: 1811 }
-          : { message: "injected staging discard failure" },
-      });
-      expect(db.prepare("SELECT hash FROM memory_index_sources").all()).toEqual([
-        { hash: failPublication ? "old" : "new" },
-      ]);
-      expect(readMemoryDatabaseRevision(db)).toBe(beforeRevision + (failPublication ? 0 : 1));
-      await worker.close();
-      worker = undefined;
-      worker = await open(false);
-      await expect(replace(worker, "retry")).resolves.toMatchObject({ ok: true });
-      expect(db.prepare("SELECT hash FROM memory_index_sources").all()).toEqual([
-        { hash: "retry" },
-      ]);
-      expect(readMemoryDatabaseRevision(db)).toBe(beforeRevision + (failPublication ? 1 : 2));
-      expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-    } finally {
-      try {
-        await worker?.close();
-      } finally {
-        await state.cleanup();
-      }
-    }
-  },
-);

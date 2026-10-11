@@ -6,12 +6,10 @@ import { normalizeConfiguredMcpServers } from "../../config/mcp-config-normalize
 import type { SessionToolOverrides } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadMcpToolGrants } from "../../infra/exec-approvals-mcp.js";
-import type { BundleMcpConfig, BundleMcpServerConfig } from "../../plugins/bundle-mcp.js";
+import type { BundleMcpConfig, BundleMcpServerConfig } from "../../plugins/bundle-mcp.types.js";
 import { isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
-import {
-  acquireSessionMcpRuntime,
-  releaseSessionMcpRuntime,
-} from "../agent-bundle-mcp-manager-api.js";
+import { acquireSessionMcpRuntime } from "../agent-bundle-mcp-manager-api.js";
+import { releaseSessionMcpRuntime } from "../agent-bundle-mcp-manager-cleanup.js";
 import type { PreparedNativeMcpPolicy } from "../agent-bundle-mcp-types.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { isRecord } from "../bundle-mcp-adapter.js";
@@ -21,11 +19,11 @@ import {
   normalizeCodexMcpServerConfig,
 } from "../codex-mcp-config.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
-import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { requiresMcpBearerProjection, resolveMcpBearerBundleConfig } from "../mcp-auth-profile.js";
 import { partitionMcpServersByConnectionScope } from "../mcp-connection-resolver.js";
 import { applyPreparedNativeMcpPolicy, prepareNativeMcpPolicy } from "../native-mcp-policy.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
+import { projectNativeMcpRunContext } from "./native-mcp-context.js";
 import { serializeTomlInlineValue } from "./toml-inline.js";
 
 // Mutable JSON shape structurally compatible with the bundled Codex
@@ -185,7 +183,9 @@ export async function buildCodexUserMcpServersThreadConfigPatchForRuntime(
 
 /** Prepares canonical native MCP policy and projects it into Codex before thread creation. */
 export async function buildCodexUserMcpServersThreadConfigPatchForRun(params: {
-  run: Omit<EmbeddedRunAttemptParams, "admittedRunContext">;
+  run:
+    | import("../harness/types.js").AgentHarnessAttemptParams
+    | import("../harness/types.js").AgentHarnessSessionRuntimeParamsV1;
   cwd: string;
   agentId?: string;
   allowLiteralOAuthProjection?: boolean;
@@ -211,25 +211,12 @@ export async function buildCodexUserMcpServersThreadConfigPatchForRun(params: {
     agentId: policyAgentId,
   });
   const capabilityProfile = resolveConversationCapabilityProfile({
+    ...projectNativeMcpRunContext(run),
     config: run.config,
     sessionKey: policySessionKey,
     runSessionKey:
       run.sessionKey && run.sessionKey !== policySessionKey ? run.sessionKey : undefined,
-    sessionId: run.sessionId,
-    runId: run.runId,
     agentId: policyAgentId,
-    agentAccountId: run.agentAccountId,
-    messageProvider: run.messageProvider ?? run.messageChannel,
-    messageChannel: run.messageChannel,
-    groupId: run.groupId,
-    groupChannel: run.groupChannel,
-    groupSpace: run.groupSpace,
-    spawnedBy: run.spawnedBy,
-    senderId: run.senderId,
-    senderName: run.senderName,
-    senderUsername: run.senderUsername,
-    senderE164: run.senderE164,
-    senderIsOwner: run.senderIsOwner,
     modelProvider: run.provider,
     modelId: run.modelId,
     workspaceDir: run.workspaceDir,
@@ -238,9 +225,6 @@ export async function buildCodexUserMcpServersThreadConfigPatchForRun(params: {
     runtimeToolAllowlist: run.toolsAllow,
     inheritRuntimeToolAllowlist: true,
     runtimePluginToolGrant: run.runtimePluginToolGrant,
-    inputProvenance: run.inputProvenance,
-    trustedInternalHandoff: run.trustedInternalHandoff,
-    scheduledToolPolicy: run.scheduledToolPolicy,
   });
   const configuredMcpServers = selectCodexProjectableMcpServers(run.config, {
     agentId,

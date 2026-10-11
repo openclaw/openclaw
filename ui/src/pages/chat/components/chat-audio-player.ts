@@ -9,6 +9,7 @@ import {
   openAttachmentCardFromClick,
   renderAttachmentCardHeader,
   renderCompactAttachmentCard,
+  type AttachmentCardHeaderOptions,
 } from "./chat-attachment-card.ts";
 import { safeMediaAttachmentHref } from "./chat-attachment-href.ts";
 import { ChatAttachmentViewportRef } from "./chat-attachment-viewport.ts";
@@ -27,7 +28,7 @@ import {
   type CachedChatAudioBlob,
 } from "./chat-audio-waveform.ts";
 import { buildChatMediaFetchHeaders, type ChatMediaPlaybackMode } from "./chat-media-playback.ts";
-import { ChatMediaSourceController } from "./chat-media-source.ts";
+import { chatMediaSourceChanged, ChatMediaSourceController } from "./chat-media-source.ts";
 import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";
 
 const SEEK_STEP_SECONDS = 5;
@@ -110,10 +111,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
   protected override willUpdate(changedProperties: PropertyValues<this>): void {
     if (
       this.sourceController.readiness === "unavailable" &&
-      (changedProperties.has("src") ||
-        changedProperties.has("sourceIdentity") ||
-        changedProperties.has("playback") ||
-        changedProperties.has("authToken"))
+      chatMediaSourceChanged(changedProperties)
     ) {
       this.releaseWaveformBlob?.();
       this.releaseWaveformBlob = undefined;
@@ -123,10 +121,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
 
   override updated(changedProperties: PropertyValues<this>): void {
     if (
-      changedProperties.has("src") ||
-      changedProperties.has("sourceIdentity") ||
-      changedProperties.has("playback") ||
-      changedProperties.has("authToken") ||
+      chatMediaSourceChanged(changedProperties) ||
       changedProperties.has("sizeBytes") ||
       changedProperties.has("serverDurationMs")
     ) {
@@ -380,22 +375,20 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
       this.adoptPreparedAudioForPlayback();
       claimChatAudioPlayback(media, this.cancelPendingResume);
       const playback = media.play();
+      const failed = () => {
+        releaseChatAudioPlayback(media);
+        this.playing = false;
+      };
       if (!this.playRequest) {
         // Invoke play in the click task so strict browser media policies retain user activation.
         this.playRequest = playback
           .then(() => this.prepareWaveformAudio().catch(() => undefined))
-          .catch(() => {
-            releaseChatAudioPlayback(media);
-            this.playing = false;
-          })
+          .catch(failed)
           .finally(() => {
             this.playRequest = null;
           });
       } else {
-        void playback.catch(() => {
-          releaseChatAudioPlayback(media);
-          this.playing = false;
-        });
+        void playback.catch(failed);
       }
     } else {
       media.pause();
@@ -524,16 +517,17 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
         </div>
       </div>`;
     }
+    const card: AttachmentCardHeaderOptions = {
+      kind: "audio",
+      label: this.label,
+      mimeType: this.mimeType,
+      sizeBytes: this.sizeBytes,
+      downloadHref,
+      onExpand: this.onExpand,
+      voiceNote: this.voiceNote,
+    };
     if (failed) {
-      return renderCompactAttachmentCard({
-        kind: "audio",
-        label: this.label,
-        mimeType: this.mimeType,
-        sizeBytes: this.sizeBytes,
-        downloadHref,
-        onExpand: this.onExpand,
-        voiceNote: this.voiceNote,
-      });
+      return renderCompactAttachmentCard(card);
     }
     const timeLabel = `${formatChatMediaTime(this.currentTime)} / ${formatChatMediaTime(this.duration)}`;
     return html`
@@ -547,14 +541,8 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
           this.voiceNote
             ? nothing
             : renderAttachmentCardHeader({
-                kind: "audio",
-                label: this.label,
-                mimeType: this.mimeType,
-                sizeBytes: this.sizeBytes,
-                downloadHref,
-                onExpand: this.onExpand,
+                ...card,
                 visualMode: "preview-with-favicon",
-                voiceNote: this.voiceNote,
               })
         }
         ${

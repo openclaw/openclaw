@@ -1,5 +1,9 @@
 /* @vitest-environment jsdom */
-import type { EnvironmentSummary, SystemInfoResult } from "@openclaw/gateway-protocol";
+import type {
+  BackupStatusResult,
+  EnvironmentSummary,
+  SystemInfoResult,
+} from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -79,6 +83,11 @@ function harness(
       },
     },
   ],
+  backups: () => Promise<BackupStatusResult> = async () => ({
+    targets: [],
+    schedules: [],
+    locations: [],
+  }),
 ) {
   const request = vi.fn(async (method: string) => {
     if (method === "environments.list") {
@@ -89,6 +98,12 @@ function harness(
     }
     if (method === "node.list") {
       return { nodes: nodes() };
+    }
+    if (method === "backup.status") {
+      return backups();
+    }
+    if (method === "storage.locations.probe") {
+      return { state: "ok", freeBytes: 1024 ** 3 };
     }
     if (method === "desktop.observe") {
       return {
@@ -135,6 +150,215 @@ async function mount(controller: SystemsController) {
 }
 
 describe("Systems workspace", () => {
+  it("shows and refreshes backup health on the landing view without machines", async () => {
+    vi.useFakeTimers();
+    const pending = createDeferred<BackupStatusResult>();
+    const backups = vi
+      .fn<() => Promise<BackupStatusResult>>()
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValue({ targets: [], schedules: [], locations: [] });
+    const { controller, request } = harness(
+      async () => [],
+      () => [],
+      backups,
+    );
+    const { page } = await mount(controller);
+    expect(page.querySelector(".systems-heading h1")?.textContent).toBe("Systems");
+    expect(page.querySelectorAll(".systems-backups")).toHaveLength(1);
+    expect(page.querySelector(".systems-backups")?.textContent).toContain("Loading backups…");
+    pending.reject(new Error("Backup history unavailable"));
+    await pending.promise.catch(() => {});
+    await page.updateComplete;
+    expect(page.querySelector('.systems-backups [role="alert"]')?.textContent).toContain(
+      "Backup history unavailable",
+    );
+    await controller.refreshBackups();
+    await page.updateComplete;
+    expect(page.querySelector(".systems-backups")?.textContent).toContain("No backups recorded —");
+    expect(page.querySelector(".systems-backups code")?.textContent).toBe(
+      "openclaw backup enable --to <location>",
+    );
+    const backupReads = () => request.mock.calls.filter(([method]) => method === "backup.status");
+    expect(backupReads()).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(backupReads()).toHaveLength(3);
+  });
+
+  it("renders backup outcomes and namespace-owned schedules, probing storage only on request", async () => {
+    const now = Date.UTC(2026, 8, 30, 12);
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const success = {
+      id: "backup-ok",
+      createdAt: now - 3_600_000,
+      archivePath: "/scratch/backup.tar.gz",
+      kind: "archive" as const,
+      status: "ok" as const,
+      target: "offsite",
+      location: {
+        name: "offsite",
+        provider: "filesystem",
+        locationId: "fixture-location",
+        namespace: "gateway",
+        key: "20260930T110000Z-12345678.tar.gz",
+        plaintextBytes: 1024,
+        storedBytes: 2048,
+      },
+    };
+    const namespaceTargets = ["host-a", undefined].map((namespace) => {
+      const latest = {
+        id: "other-namespace-ok",
+        createdAt: now,
+        archivePath: "storage://offsite/backup.tar.gz",
+        kind: "archive" as const,
+        status: "ok" as const,
+        target: "offsite",
+        namespace,
+      };
+      return { kind: latest.kind, target: latest.target, namespace, latest, latestOk: latest };
+    });
+    const gitTargets = [undefined, "Git remote rejected the push: permission denied."].map(
+      (error) => {
+        const latest = {
+          id: "git-push-failed",
+          createdAt: now - 3_600_000,
+          archivePath: "/backups/git",
+          target: "/backups/git",
+          kind: "git" as const,
+          status: "ok" as const,
+          pushFailed: true as const,
+          ...(error ? { error } : {}),
+        };
+        return { kind: latest.kind, target: latest.target, latest, latestOk: latest };
+      },
+    );
+    const external = {
+      id: "external-ok",
+      createdAt: now,
+      kind: "external" as const,
+      status: "ok" as const,
+      archivePath: "restic",
+      bytes: 4096,
+    };
+    const { controller, request } = harness(undefined, undefined, async () => ({
+      targets: [
+        {
+          kind: "archive",
+          target: "offsite",
+          namespace: "gateway",
+          latest: {
+            ...success,
+            id: "backup-failed",
+            status: "failed",
+            createdAt: now,
+            error: "Disk disconnected. Run openclaw storage test offsite.",
+          },
+          latestOk: success,
+        },
+        {
+          kind: "external",
+          target: "restic",
+          latest: external,
+          latestOk: external,
+        },
+        ...namespaceTargets,
+        ...gitTargets,
+      ],
+      schedules: [
+        {
+          id: "scheduled",
+          mode: "offsite",
+          target: "offsite",
+          namespace: "gateway",
+          enabled: true,
+          everyMs: 86_400_000,
+          nextRunAtMs: now + 3_600_000,
+        },
+        {
+          id: "host-b-schedule",
+          mode: "offsite",
+          target: "offsite",
+          namespace: "host-b",
+          enabled: true,
+          everyMs: 86_400_000,
+          nextRunAtMs: now + 3_600_000,
+        },
+      ],
+      locations: [
+        {
+          name: "offsite",
+          provider: "filesystem",
+          displayTarget: "/Volumes/Archive/openclaw",
+          encrypted: true,
+        },
+      ],
+    }));
+    const { page } = await mount(controller);
+    const section = page.querySelector(".systems-backups")!;
+    expect(section.textContent).toMatch(/Last success: .*ago/);
+    expect(section.textContent).toContain("2 KB");
+    expect(section.textContent).toContain("/Volumes/Archive/openclaw");
+    expect(section.textContent).toContain("Next run:");
+    expect(section.textContent).toContain("Disk disconnected. Run openclaw storage test offsite.");
+    expect(section.querySelectorAll('[data-status="ok"]')).toHaveLength(3);
+    const rows = [...section.querySelectorAll(".systems-backup")];
+    expect(rows).toHaveLength(6);
+    for (const row of rows.slice(2, 4)) {
+      expect(row.textContent).not.toContain("Next run:");
+    }
+    expect(section.querySelector(".systems-backups__hint")?.textContent).toContain("Next run:");
+    for (const [index, target] of gitTargets.entries()) {
+      const backup = rows[index + 4]!;
+      expect(backup.getAttribute("data-status")).toBe("failed");
+      expect(backup.querySelector(".systems-backup__state")?.textContent?.trim()).toBe(
+        "Push failed",
+      );
+      expect(backup.textContent).toMatch(/Last local success: .*ago/);
+      expect(backup.querySelector(".systems-backup__error")?.textContent).toBe(
+        target.latest.error ??
+          "Local backup succeeded, but pushing to the Git remote failed. Check the remote and retry.",
+      );
+    }
+    expect(
+      request.mock.calls.filter(([method]) => method === "storage.locations.probe"),
+    ).toHaveLength(0);
+    const probe = createDeferred<{ state: "ok"; freeBytes: number }>();
+    request.mockReturnValueOnce(probe.promise);
+    section.querySelector<HTMLButtonElement>('[aria-label="Check offsite"]')!.click();
+    await page.updateComplete;
+    expect(section.querySelector<HTMLButtonElement>('[aria-label="Check offsite"]')?.disabled).toBe(
+      true,
+    );
+    probe.resolve({ state: "ok", freeBytes: 1024 ** 3 });
+    await probe.promise;
+    await page.updateComplete;
+    expect(section.textContent).toContain("Available");
+    expect(section.textContent).toContain("1 GB free");
+    expect(request).toHaveBeenCalledWith(
+      "storage.locations.probe",
+      { name: "offsite" },
+      expect.anything(),
+    );
+    controller.select(worker.id);
+    await page.updateComplete;
+    expect(page.querySelector(".systems-backups")).toBeNull();
+  });
+
+  it("discards a backup response from the previous connection", async () => {
+    const pending = createDeferred<BackupStatusResult>();
+    const { controller, gateway } = harness(undefined, undefined, () => pending.promise);
+    const { page } = await mount(controller);
+    gateway.publish({ phase: "offline" });
+    pending.resolve({
+      targets: [],
+      schedules: [],
+      locations: [{ name: "old-host", provider: "filesystem", encrypted: false }],
+    });
+    await pending.promise;
+    await page.updateComplete;
+    expect(controller.backups).toBeNull();
+    expect(page.querySelector(".systems-backups")?.textContent).not.toContain("old-host");
+  });
+
   it("defers hidden initial and event reads, preserving inventory until visible recovery", async () => {
     vi.useFakeTimers();
     let visibility: DocumentVisibilityState = "hidden";
@@ -157,7 +381,7 @@ describe("Systems workspace", () => {
     expect(statusReads()).toHaveLength(1);
     const inventory = controller.inventory;
     expect(inventory?.gatewaySystemInfo).toEqual(systemInfo);
-    controller.toggleStats();
+    controller.updatePresentation({ showStats: !controller.showStats });
     expect(controller.showStats || controller.showDetails).toBe(false);
 
     visibility = "hidden";
@@ -386,7 +610,7 @@ describe("Systems workspace", () => {
   });
 
   it("graphs genuine node reports, preserves per-machine history, and leaves gaps for missing metrics", async () => {
-    const node = { ...offline, status: "available" as const };
+    let node: EnvironmentSummary = { ...offline, status: "available" };
     let stats: NonNullable<NodeListNode["hostStats"]> = {
       cpuCount: 8,
       loadAverage: [2, 1, 1],
@@ -396,11 +620,15 @@ describe("Systems workspace", () => {
       diskAvailableBytes: 256 * 1024 ** 3,
       updatedAtMs: Date.now() - 60_000,
     };
-    const { controller, gateway } = harness(
+    const { controller, gateway, request } = harness(
       async () => [host, node],
       () => [{ nodeId: "offline", connected: true, paired: true, hostStats: stats }],
     );
+    const connect = vi.spyOn(DesktopClient.prototype, "connect");
     const { page } = await mount(controller);
+    const calls = request.mock.calls.length;
+    gateway.publishEvent("node.hostStats", { nodeId: "unrelated-node" });
+    expect(request.mock.calls).toHaveLength(calls);
     controller.select(node.id);
     const readings = () =>
       [...page.querySelectorAll(".sparkline-tile__value")].map((tile) => tile.textContent?.trim());
@@ -440,6 +668,14 @@ describe("Systems workspace", () => {
       page.querySelector("openclaw-sparkline")?.querySelector(".sparkline-tile__chart"),
     ).toBeNull();
 
+    node = { ...node, status: "unavailable" };
+    await controller.refresh();
+    await page.updateComplete;
+    expect(page.textContent).toContain("This machine is offline");
+    expect(page.textContent).toContain("Last reported");
+    expect(page.querySelector('.systems-metrics[data-stale="true"]')).not.toBeNull();
+    expect(connect).not.toHaveBeenCalled();
+
     gateway.publish({ phase: "offline" });
     await vi.waitFor(() => expect(page.querySelectorAll(".sparkline-tile__chart")).toHaveLength(0));
     expect(readings()[0]).toBe("3.00");
@@ -449,14 +685,17 @@ describe("Systems workspace", () => {
   it("shares inventory, keeps a single view-only connection through presentation changes, and retains a removed selection", async () => {
     let environments = [host, worker, offline];
     const { controller, request } = harness(async () => environments);
-    const handle = createConnectionHandle();
+    const disconnect = vi.fn();
+    const handle = createConnectionHandle({ disconnect });
     const connect = vi
       .spyOn(DesktopClient.prototype, "connect")
       .mockImplementation(async (options) => {
         options.onConnect?.();
         return handle;
       });
-    const { page, sidebar } = await mount(controller);
+    const mounted = await mount(controller);
+    let page = mounted.page;
+    const { sidebar } = mounted;
     expect(sidebar.querySelectorAll(".systems-machine")).toHaveLength(3);
     expect(page.textContent).toContain("No desktop available");
     expect(request.mock.calls.filter(([method]) => method === "environments.list")).toHaveLength(1);
@@ -472,12 +711,23 @@ describe("Systems workspace", () => {
     const viewer = page.querySelector("openclaw-desktop-panel");
     expect(viewer?.hasAttribute("embedded")).toBe(true);
     expect(viewer?.embedded).toBe(true);
-    controller.toggleStats();
-    controller.toggleDetails();
+    controller.updatePresentation({ showStats: !controller.showStats });
+    controller.updatePresentation({ showDetails: !controller.showDetails });
     await controller.refresh();
     await page.updateComplete;
     expect(page.querySelector("openclaw-desktop-panel")).toBe(viewer);
     expect(connect).toHaveBeenCalledOnce();
+    expect(page.querySelector<HTMLSelectElement>(".systems-mobile-picker")?.value).toBe(worker.id);
+    page.remove();
+    sidebar.remove();
+    ({ page } = await mount(controller));
+    await vi.waitFor(() => expect(controller.loading).toBe(false));
+    await page.updateComplete;
+    expect(controller.selectedId).toBe(worker.id);
+    expect(page.querySelector<HTMLSelectElement>(".systems-mobile-picker")?.value).toBe(worker.id);
+    expect(page.querySelector("openclaw-desktop-panel")?.requestedSource).toBe(worker.id);
+    await vi.waitFor(() => expect(connect).toHaveBeenCalledTimes(2));
+    disconnect.mockClear();
     environments = [host, offline];
     await controller.refresh();
     await page.updateComplete;
@@ -494,47 +744,7 @@ describe("Systems workspace", () => {
     await page.updateComplete;
     expect(controller.selectedId).toBe("worker-no-longer-known");
     expect(page.textContent).toContain("This machine is no longer listed");
-    expect(connect).toHaveBeenCalledOnce();
-  });
-
-  it("keeps a retained worker selected in the mobile picker after remount", async () => {
-    const { controller } = harness();
-    vi.spyOn(DesktopClient.prototype, "connect").mockImplementation(async (options) => {
-      options.onConnect?.();
-      return createConnectionHandle();
-    });
-    const first = await mount(controller);
-    controller.select(worker.id);
-    await first.page.updateComplete;
-    expect(first.page.querySelector<HTMLSelectElement>(".systems-mobile-picker")?.value).toBe(
-      worker.id,
-    );
-    first.page.remove();
-    first.sidebar.remove();
-
-    const second = await mount(controller);
-    await vi.waitFor(() => expect(controller.loading).toBe(false));
-    await second.page.updateComplete;
-    expect(controller.selectedId).toBe(worker.id);
-    expect(second.page.querySelector<HTMLSelectElement>(".systems-mobile-picker")?.value).toBe(
-      worker.id,
-    );
-    expect(second.page.querySelector("openclaw-desktop-panel")?.requestedSource).toBe(worker.id);
-  });
-
-  it("shows offline last-known telemetry without creating a desktop connection", async () => {
-    const { controller, gateway, request } = harness();
-    const connect = vi.spyOn(DesktopClient.prototype, "connect");
-    const { page } = await mount(controller);
-    const calls = request.mock.calls.length;
-    gateway.publishEvent("node.hostStats", { nodeId: "unrelated-node" });
-    expect(request.mock.calls).toHaveLength(calls);
-    controller.select(offline.id);
-    await page.updateComplete;
-    expect(page.textContent).toContain("This machine is offline");
-    expect(page.textContent).toContain("Last reported");
-    expect(page.querySelector('.systems-metrics[data-stale="true"]')).not.toBeNull();
-    expect(connect).not.toHaveBeenCalled();
+    expect(connect).toHaveBeenCalledTimes(2);
   });
 
   it("keeps selection across route activation and drops late work after departure or gateway replacement", async () => {

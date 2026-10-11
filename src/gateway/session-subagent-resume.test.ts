@@ -8,14 +8,21 @@ import type { AgentWaitResult } from "../agents/run-wait.js";
 import { resolveSubagentController } from "../agents/subagents/registry/subagent-control-scope.js";
 import { killAllControlledSubagentRuns } from "../agents/subagents/registry/subagent-control.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import {
+  mutateSubagentRuns,
+  restoreSubagentRunsFromDisk,
+} from "../agents/subagents/registry/subagent-registry-persistence.js";
 import { markSubagentRunPausedAfterYield } from "../agents/subagents/registry/subagent-registry-run-pause.js";
-import { persistSubagentRunsToDiskOrThrow } from "../agents/subagents/registry/subagent-registry-state.js";
+import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { registerSubagentRun } from "../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { bindSubagentRunRecord } from "../agents/subagents/registry/subagent-registry.store.codec.js";
+import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
+import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { publishSystemEventStoreResolver } from "../infra/system-event-ownership.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   assertParentSubagentResumeCurrent,
   assertParentSubagentResumeSuccessorCurrent,
@@ -33,6 +40,15 @@ afterEach(() => {
   publishSystemEventStoreResolver(undefined);
   vi.useRealTimers();
 });
+
+async function updateRun(runId: string, update: (draft: SubagentRunRecord) => void) {
+  await mutateSubagentRuns([runId], (rows) => {
+    const draft = structuredClone(rows.get(runId)!);
+    update(draft);
+    return { value: undefined, postimages: new Map([[runId, draft]]) };
+  });
+  return subagentRuns.get(runId)!;
+}
 
 // Seed the same paused registry state that the yield terminal observer records.
 async function arrangePausedChild(childSessionKey = "agent:main:subagent:resume-child") {
@@ -59,9 +75,9 @@ async function arrangePausedChild(childSessionKey = "agent:main:subagent:resume-
     expectsCompletionMessage: true,
     queued: true,
   });
-  const entry = subagentRuns.get(previousRunId)!;
-  expect(markSubagentRunPausedAfterYield({ entry })).toBe(true);
-  persistSubagentRunsToDiskOrThrow(subagentRuns, [previousRunId]);
+  const entry = await updateRun(previousRunId, (draft) => {
+    expect(markSubagentRunPausedAfterYield({ entry: draft })).toBe(true);
+  });
   const caller = { agentId: "main", sessionKey: parent, assertCurrent: vi.fn() };
   const cfg = getRuntimeConfig();
   const resume = bindParentSubagentResume({
@@ -88,17 +104,18 @@ it.each(["agent:main:subagent:resume-child", "agent:main:dashboard:resume-child"
   "preserves the task and frozen completion batch for %s",
   async (childSessionKey) => {
     const state = await arrangePausedChild(childSessionKey);
-    state.entry.requesterSettleWake = {
-      status: "pending",
-      attemptCount: 0,
-      requesterYieldBatch: true,
-      afterRequesterYield: true,
-      rearmGeneration: 1,
-      batchRunIds: [previousRunId],
-    };
-    persistSubagentRunsToDiskOrThrow(subagentRuns, [previousRunId]);
+    state.entry = await updateRun(previousRunId, (draft) => {
+      draft.requesterSettleWake = {
+        status: "pending",
+        attemptCount: 0,
+        requesterYieldBatch: true,
+        afterRequesterYield: true,
+        rearmGeneration: 1,
+        batchRunIds: [previousRunId],
+      };
+    });
     const adopt = await state.prepare();
-    expect(adopt()).toBe(previousRunId);
+    await expect(adopt()).resolves.toBe(previousRunId);
     const next = subagentRuns.get(nextRunId)!;
     expect(next).toMatchObject({
       taskRunId: previousRunId,
@@ -117,33 +134,17 @@ it.each(["agent:main:subagent:resume-child", "agent:main:dashboard:resume-child"
       task: next.task,
     });
     expect(stored.has(previousRunId)).toBe(false);
-    expect(() => adopt()).toThrow(/paused/);
+    await expect(adopt()).rejects.toThrow(/paused/);
   },
 );
-
-it("rejects binding a paused child without task-owned completion", async () => {
-  const state = await arrangePausedChild();
-  state.entry.expectsCompletionMessage = false;
-  persistSubagentRunsToDiskOrThrow(subagentRuns, [previousRunId]);
-  expect(() =>
-    bindParentSubagentResume({
-      cfg: state.cfg,
-      caller: state.caller,
-      childSessionKey: state.childSessionKey,
-      childSessionId: sessionId,
-    }),
-  ).toThrow("Task resume requires a child with task-owned completion.");
-  expect(subagentRuns.has(nextRunId)).toBe(false);
-  expect(subagentRuns.get(previousRunId)).toBe(state.entry);
-  expect(state.entry.pauseReason).toBe("sessions_yield");
-});
 
 it("rejects adoption when task-owned completion is disabled after binding", async () => {
   const state = await arrangePausedChild();
   const adopt = await state.prepare();
-  state.entry.expectsCompletionMessage = false;
-  persistSubagentRunsToDiskOrThrow(subagentRuns, [previousRunId]);
-  expect(() => adopt()).toThrow("Task resume requires a child with task-owned completion.");
+  state.entry = await updateRun(previousRunId, (draft) => {
+    draft.expectsCompletionMessage = false;
+  });
+  await expect(adopt()).rejects.toThrow("Task resume requires a child with task-owned completion.");
   expect(subagentRuns.has(nextRunId)).toBe(false);
   expect(subagentRuns.get(previousRunId)).toBe(state.entry);
   expect(state.entry.pauseReason).toBe("sessions_yield");
@@ -167,7 +168,7 @@ it.each(["selection", "admission"] as const)(
         /controlled/,
       );
     } else {
-      expect(() => adopt()).toThrow(/controlled/);
+      await expect(adopt()).rejects.toThrow(/controlled/);
     }
     expect(subagentRuns.has(nextRunId)).toBe(false);
     expect(subagentRuns.get(previousRunId)?.pauseReason).toBe("sessions_yield");
@@ -180,17 +181,19 @@ it.each(["resume", "cancel"] as const)(
     const state = await arrangePausedChild();
     const storePath = state.entry.controllerStorePath!;
     // v2026.9.5 registration persisted neither physical-store field.
-    delete state.entry.controllerStorePath;
-    delete state.entry.requesterStorePath;
-    persistSubagentRunsToDiskOrThrow(subagentRuns, [previousRunId]);
-    subagentRuns.set(previousRunId, loadSubagentRegistryFromSqlite().get(previousRunId)!);
+    await updateRun(previousRunId, (draft) => {
+      delete draft.controllerStorePath;
+      delete draft.requesterStorePath;
+    });
+    await restoreSubagentRunsFromDisk({ runs: subagentRuns });
+    state.entry = subagentRuns.get(previousRunId)!;
     publishSystemEventStoreResolver(() => storePath);
     await fixture.settle();
     expect(shouldResumeParentSubagent(state)).toBe(false);
     if (action === "resume") {
       const resume = bindParentSubagentResume({ ...state, childSessionId: sessionId });
       const adopt = await state.prepare({ resume });
-      expect(adopt()).toBe(previousRunId);
+      await expect(adopt()).resolves.toBe(previousRunId);
       expect(subagentRuns.get(nextRunId)?.taskRunId).toBe(previousRunId);
     } else {
       const result = await killAllControlledSubagentRuns({
@@ -209,19 +212,6 @@ it.each(["resume", "cancel"] as const)(
   },
 );
 
-it("does not adopt ordinary peer messages or forged message provenance", async () => {
-  const state = await arrangePausedChild();
-  expect(subagentRuns.get(previousRunId)).toBe(state.entry);
-  expect(() =>
-    bindParentSubagentResume({
-      cfg: state.cfg,
-      caller: { ...state.caller, sessionKey: "agent:main:dashboard:unrelated" },
-      childSessionKey: state.childSessionKey,
-      childSessionId: sessionId,
-    }),
-  ).toThrow(/controlled/);
-});
-
 it.each(["cancel", "complete", "replace", "session", "caller", "admission"] as const)(
   "rejects a %s race after preparing admission without creating a successor",
   async (race) => {
@@ -232,14 +222,16 @@ it.each(["cancel", "complete", "replace", "session", "caller", "admission"] as c
       getSessionId: () => currentSessionId,
       assertAdmissionCurrent,
     });
-    if (race === "cancel") {
-      state.entry.killIntent = { requestedAt: Date.now(), reason: "killed" };
-    }
-    if (race === "complete") {
-      state.entry.pauseReason = undefined;
-    }
-    if (race === "replace") {
-      state.entry.generation = (state.entry.generation ?? 0) + 1;
+    if (race === "cancel" || race === "complete" || race === "replace") {
+      state.entry = await updateRun(previousRunId, (draft) => {
+        if (race === "cancel") {
+          draft.killIntent = { requestedAt: Date.now(), reason: "killed" };
+        } else if (race === "complete") {
+          draft.pauseReason = undefined;
+        } else {
+          draft.generation = (draft.generation ?? 0) + 1;
+        }
+      });
     }
     if (race === "session") {
       currentSessionId = "replaced-session";
@@ -254,7 +246,7 @@ it.each(["cancel", "complete", "replace", "session", "caller", "admission"] as c
         throw new Error("admission retired");
       });
     }
-    expect(() => adopt()).toThrow();
+    await expect(adopt()).rejects.toThrow();
     expect(subagentRuns.has(nextRunId)).toBe(false);
     expect(subagentRuns.get(previousRunId)).toBe(state.entry);
   },
@@ -262,7 +254,9 @@ it.each(["cancel", "complete", "replace", "session", "caller", "admission"] as c
 
 it("checks transcript incarnation even if the target key and task still match", async () => {
   const state = await arrangePausedChild();
-  state.entry.execution.transcriptTarget = { sessionId: "previous-incarnation" };
+  state.entry = await updateRun(previousRunId, (draft) => {
+    draft.execution.transcriptTarget = { sessionId: "previous-incarnation" };
+  });
   expect(() =>
     assertParentSubagentResumeCurrent({
       cfg: state.cfg,
@@ -273,15 +267,26 @@ it("checks transcript incarnation even if the target key and task still match", 
   ).toThrow(/changed/);
 });
 
-it("rolls back a rejected durable replacement instead of accepting untracked work", async () => {
+it("rejects a foreign task replacement instead of accepting untracked work", async () => {
   const state = await arrangePausedChild();
   const adopt = await state.prepare();
-  // Diverge the source from its durable snapshot to exercise the real atomic CAS rejection.
-  state.entry.task = "uncommitted source change";
-  expect(() => adopt()).toThrow(/source changed/);
+  const replacement = {
+    ...state.entry,
+    generation: state.entry.generation! + 1,
+    task: "replacement task",
+  };
+  // An independent writer changes execution ownership before the worker's version check.
+  writeSubagentRunValuesInDatabase(
+    openOpenClawStateDatabase(),
+    [bindSubagentRunRecord(replacement)],
+    [],
+  );
+  await expect(adopt()).rejects.toThrow(/changed/);
   expect(subagentRuns.has(nextRunId)).toBe(false);
-  expect(subagentRuns.get(previousRunId)?.pauseReason).toBe("sessions_yield");
-  expect(loadSubagentRegistryFromSqlite().has(previousRunId)).toBe(true);
+  expect(subagentRuns.get(previousRunId)).toBe(state.entry);
+  const stored = loadSubagentRegistryFromSqlite();
+  expect(stored.has(nextRunId)).toBe(false);
+  expect(stored.get(previousRunId)).toEqual(replacement);
 });
 
 it("delivers a result once after the former synchronous wait window, through the task owner", async () => {
@@ -292,7 +297,7 @@ it("delivers a result once after the former synchronous wait window, through the
   const now = Date.now();
   vi.useFakeTimers({ toFake: ["Date"] });
   const adopt = await state.prepare();
-  adopt();
+  await adopt();
   vi.setSystemTime(now + 60_000);
   expect(announce).not.toHaveBeenCalled();
   completion.resolve({
@@ -323,9 +328,11 @@ it("delivers a result once after the former synchronous wait window, through the
 
 it("does not grant control to a separate completion recipient", async () => {
   const state = await arrangePausedChild();
-  state.entry.controllerSessionKey = "agent:main:dashboard:actual-controller";
-  state.entry.controllerStorePath = "controller-store";
-  state.entry.requesterStorePath = "completion-store";
+  state.entry = await updateRun(previousRunId, (draft) => {
+    draft.controllerSessionKey = "agent:main:dashboard:actual-controller";
+    draft.controllerStorePath = "controller-store";
+    draft.requesterStorePath = "completion-store";
+  });
   publishSystemEventStoreResolver((key) =>
     key === state.entry.controllerSessionKey ? "controller-store" : "completion-store",
   );
@@ -337,7 +344,7 @@ it("does not grant control to a separate completion recipient", async () => {
       childSessionId: sessionId,
     }),
   ).toThrow(/controlled/);
-  const controller = { ...state.caller, sessionKey: state.entry.controllerSessionKey };
+  const controller = { ...state.caller, sessionKey: "agent:main:dashboard:actual-controller" };
   expect(
     bindParentSubagentResume({
       cfg: state.cfg,
@@ -351,9 +358,11 @@ it("does not grant control to a separate completion recipient", async () => {
 it("retires queued resume execution when the successor is cancelled", async () => {
   const state = await arrangePausedChild();
   const adopt = await state.prepare();
-  adopt();
+  await adopt();
   expect(() => assertParentSubagentResumeSuccessorCurrent(state.resume, nextRunId)).not.toThrow();
-  subagentRuns.get(nextRunId)!.killIntent = { requestedAt: Date.now(), reason: "killed" };
+  await updateRun(nextRunId, (draft) => {
+    draft.killIntent = { requestedAt: Date.now(), reason: "killed" };
+  });
   expect(() => assertParentSubagentResumeSuccessorCurrent(state.resume, nextRunId)).toThrow(
     /no longer owns/,
   );

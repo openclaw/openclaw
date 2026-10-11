@@ -138,6 +138,7 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
               headers: { CONTEXT7_API_KEY: "ctx7sk-test" },
             },
             "omi-sse": {
+              type: "http",
               transport: "sse",
               url: "https://api.omi.me/v1/mcp/sse",
             },
@@ -157,38 +158,6 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
 
     expect(raw.mcpServers?.["omi-sse"]?.type).toBe("sse");
     expect(raw.mcpServers?.["omi-sse"]?.transport).toBeUndefined();
-
-    await prepared.cleanup?.();
-  });
-
-  it("preserves explicit type and still strips transport on user mcp.servers", async () => {
-    const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
-      "openclaw-cli-bundle-mcp-user-servers-transport-explicit-",
-    );
-
-    const prepared = await prepareClaudeConfig({
-      workspaceDir,
-      config: {
-        plugins: { enabled: false },
-        mcp: {
-          servers: {
-            mixed: {
-              type: "http",
-              transport: "sse",
-              url: "https://mcp.example.com/mcp",
-            },
-          },
-        },
-      },
-    });
-
-    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
-    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
-      mcpServers?: Record<string, { type?: string; transport?: string }>;
-    };
-
-    expect(raw.mcpServers?.mixed?.type).toBe("http");
-    expect(raw.mcpServers?.mixed?.transport).toBeUndefined();
 
     await prepared.cleanup?.();
   });

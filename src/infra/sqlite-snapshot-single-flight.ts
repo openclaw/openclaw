@@ -1,6 +1,11 @@
+import {
+  createRetainedOperation,
+  flatMapRetainedOperation,
+  mapRetainedOperation,
+  type RetainedOperation,
+} from "@openclaw/worker-runtime/lifecycle";
 import { getChildLogger } from "../logging/logger.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { createRetainedOperation, type RetainedOperation } from "./retained-operation.js";
 import {
   retainSnapshotWork,
   SqliteSnapshotCleanupError,
@@ -57,16 +62,18 @@ type SnapshotProducer = (
   startClose?: () => RetainedOperation<void>;
 };
 
+function serviceWhenSettled(source: RetainedOperation<unknown>, target: SnapshotWaiter): void {
+  const service = () => target.service();
+  void source.result.then(service, service);
+}
+
 function startCloseProducer(flight: SnapshotFlight): RetainedOperation<void> {
   if (flight.producerClose && flight.producerClose.read().status !== "rejected") {
     return flight.producerClose;
   }
   if (flight.startProducerClose) {
     flight.producerClose = flight.startProducerClose();
-    void flight.producerClose.result.then(
-      () => flight.settled.service(),
-      () => flight.settled.service(),
-    );
+    serviceWhenSettled(flight.producerClose, flight.settled);
     return flight.producerClose;
   }
   const completion = createRetainedOperation<void>(() => {});
@@ -88,54 +95,23 @@ function removeFlight(key: string, flight: SnapshotFlight): void {
 }
 
 function startReleaseFlight(key: string, flight: SnapshotFlight): RetainedOperation<boolean> {
-  let cleanup: RetainedOperation<boolean> | undefined;
-  let producerClose: RetainedOperation<void> | undefined;
-  const retained = createRetainedOperation<boolean>(() => {
-    if (!cleanup || retained.operation.read().status !== "pending") {
-      return;
-    }
-    cleanup.service();
-    const result = cleanup.read();
-    if (result.status === "rejected") {
-      retained.reject(result.error);
-    } else if (result.status === "fulfilled") {
-      if (!result.value) {
-        retained.resolve(false);
-        return;
-      }
-      if (!producerClose) {
-        producerClose = startCloseProducer(flight);
-        void producerClose.result.then(
-          () => retained.operation.service(),
-          () => retained.operation.service(),
-        );
-      }
-      producerClose.service();
-      const closed = producerClose.read();
-      if (closed.status === "pending") {
-        return;
-      }
-      if (closed.status === "rejected") {
-        retained.reject(closed.error);
-        return;
-      }
-      flight.leases--;
-      removeFlight(key, flight);
-      retained.resolve(true);
-    }
-  });
   if (flight.leases > 1 || flight.waiters > 0) {
+    const retained = createRetainedOperation<boolean>(() => {});
     flight.leases--;
     retained.resolve(true);
-  } else {
-    cleanup = flight.startCleanup!();
-    void cleanup.result.then(
-      () => retained.operation.service(),
-      () => retained.operation.service(),
-    );
-    retained.operation.service();
+    return retained.operation;
   }
-  return retained.operation;
+  const cleanup = flight.startCleanup!();
+  return flatMapRetainedOperation(cleanup, (removed) => {
+    if (!removed) {
+      return cleanup;
+    }
+    return mapRetainedOperation(startCloseProducer(flight), () => {
+      flight.leases--;
+      removeFlight(key, flight);
+      return true;
+    });
+  });
 }
 
 function leaseFlight(
@@ -169,10 +145,7 @@ function leaseFlight(
       retained.resolve(true);
     } else {
       release = startReleaseFlight(key, flight);
-      void release.result.then(
-        () => retained.operation.service(),
-        () => retained.operation.service(),
-      );
+      serviceWhenSettled(release, retained.operation);
       retained.operation.service();
     }
     return retained.operation;
@@ -231,10 +204,7 @@ function createFlight(
           });
           flight.production = production.operation;
           flight.startProducerClose = production.startClose;
-          void flight.production.result.then(
-            () => settled.operation.service(),
-            () => settled.operation.service(),
-          );
+          serviceWhenSettled(flight.production, settled.operation);
         } catch (error) {
           flight.outcome = { error };
         }
@@ -269,10 +239,7 @@ function createFlight(
       } else {
         if (!flight.cleanup) {
           flight.cleanup = flight.startCleanup!();
-          void flight.cleanup.result.then(
-            () => settled.operation.service(),
-            () => settled.operation.service(),
-          );
+          serviceWhenSettled(flight.cleanup, settled.operation);
         }
         flight.cleanup.service();
         const removed = flight.cleanup.read();
@@ -447,6 +414,18 @@ function startSnapshotFlight(
     let leaseClose: RetainedOperation<boolean> | undefined;
     let producerClose: RetainedOperation<void> | undefined;
     let servicingClose = false;
+    const serviceProducerClose = () => {
+      if (!producerClose) {
+        producerClose = startCloseProducer(selected);
+        serviceWhenSettled(producerClose, completion.operation);
+      }
+      producerClose.service();
+      const joined = producerClose.read();
+      if (joined.status === "rejected") {
+        throw joined.error;
+      }
+      return joined.status;
+    };
     const completion = createRetainedOperation<void>(() => {
       if (servicingClose || completion.operation.read().status !== "pending") {
         return;
@@ -462,18 +441,7 @@ function startSnapshotFlight(
         const alone = selected.waiters === 0 && selected.leases === 0;
         if (!selected.outcome && alone && selected.startProducerClose) {
           // The final cancelled participant must close accepted work even before a result exists.
-          if (!producerClose) {
-            producerClose = startCloseProducer(selected);
-            void producerClose.result.then(
-              () => completion.operation.service(),
-              () => completion.operation.service(),
-            );
-          }
-          producerClose.service();
-          const earlyClose = producerClose.read();
-          if (earlyClose.status === "rejected") {
-            throw earlyClose.error;
-          }
+          serviceProducerClose();
         }
         if (!selected.outcome) {
           return;
@@ -481,10 +449,7 @@ function startSnapshotFlight(
         if (outcome && "value" in outcome) {
           if (!leaseClose) {
             leaseClose = outcome.value.startCleanup();
-            void leaseClose.result.then(
-              () => completion.operation.service(),
-              () => completion.operation.service(),
-            );
+            serviceWhenSettled(leaseClose, completion.operation);
           }
           leaseClose.service();
           const released = leaseClose.read();
@@ -501,20 +466,8 @@ function startSnapshotFlight(
           !("value" in selected.outcome && (selected.leases > 0 || selected.waiters > 0))
         ) {
           // A failed result is never evidence that the original producer joined.
-          if (!producerClose) {
-            producerClose = startCloseProducer(selected);
-            void producerClose.result.then(
-              () => completion.operation.service(),
-              () => completion.operation.service(),
-            );
-          }
-          producerClose.service();
-          const joined = producerClose.read();
-          if (joined.status === "pending") {
+          if (serviceProducerClose() === "pending") {
             return;
-          }
-          if (joined.status === "rejected") {
-            throw joined.error;
           }
         }
         closed = true;
@@ -526,14 +479,8 @@ function startSnapshotFlight(
       }
     });
     closing = completion.operation;
-    void retained.operation.result.then(
-      () => completion.operation.service(),
-      () => completion.operation.service(),
-    );
-    void selected.settled.result.then(
-      () => completion.operation.service(),
-      () => completion.operation.service(),
-    );
+    serviceWhenSettled(retained.operation, completion.operation);
+    serviceWhenSettled(selected.settled, completion.operation);
     completion.operation.service();
     return completion.operation;
   };
@@ -602,10 +549,7 @@ export function startSingleFlightSqliteSnapshot(
           retained.reject(outcome.error);
         }
       });
-      void source.result.then(
-        () => retained.operation.service(),
-        () => retained.operation.service(),
-      );
+      serviceWhenSettled(source, retained.operation);
       return { operation: retained.operation, startClose: () => source.startClose() };
     },
     signal,

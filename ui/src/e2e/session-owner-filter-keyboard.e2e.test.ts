@@ -51,7 +51,12 @@ suite.define(() => {
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
       await waitForSessionRosterHydration(page);
-      const trigger = page.getByRole("button", { name: "Filter & sort" });
+      // Keyboard owner selection is an All-scope control; keep the initial Mine default.
+      await page
+        .locator(".sidebar-navigation-scope")
+        .getByRole("button", { name: "All", exact: true })
+        .click();
+      const trigger = page.getByRole("button", { name: "Filter & sort", exact: true });
       await trigger.focus();
       await page.keyboard.press("Enter");
       const menu = page.locator(".sidebar-session-sort-menu");
@@ -78,7 +83,7 @@ suite.define(() => {
       await page.keyboard.press("Tab");
       await expectBrowser(active).toBeFocused();
       await page.keyboard.press("ArrowRight");
-      await expectBrowser(menu.getByRole("radio", { name: "Archived", exact: true })).toBeChecked();
+      await expectBrowser(menu.getByRole("radio", { name: "Snoozed", exact: true })).toBeChecked();
       await page.keyboard.press("ArrowLeft");
       await expectBrowser(active).toBeChecked();
       // Row order, switches, and display submenus are covered by the sidebar
@@ -125,7 +130,7 @@ suite.define(() => {
         if (name === "compact") {
           await page.getByRole("button", { name: "Expand sidebar" }).click();
         }
-        await page.getByRole("button", { name: "Filter & sort" }).click();
+        await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
         await openSidebarMenu(page);
         const menu = page.locator(".sidebar-session-sort-menu");
         const menuBounds = await menu.locator(".sidebar-session-filter-panel").boundingBox();
@@ -180,16 +185,21 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:rtl-owners"));
       await page.locator("html").evaluate((element) => element.setAttribute("dir", "rtl"));
       await page.getByRole("button", { name: "Expand sidebar" }).click();
-      await page.getByRole("button", { name: "Filter & sort" }).click();
+      await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
       await openSidebarMenu(page);
       const menu = page.locator(".sidebar-session-sort-menu");
       const owners = menu.locator("#sidebar-sessions-owner");
       await chooseSidebarOwner(page, "owner:profile-0");
       await expectBrowser(owners).toHaveAccessibleName("Owners: Owner 1");
       const active = menu.getByRole("radio", { name: "Active", exact: true });
+      const snoozed = menu.getByRole("radio", { name: "Snoozed", exact: true });
       await active.focus();
+      await page.keyboard.press("ArrowLeft");
+      await expectBrowser(snoozed).toBeChecked();
+      await expectBrowser(snoozed).toBeFocused();
       await page.keyboard.press("ArrowRight");
-      await expectBrowser(menu.getByRole("radio", { name: "Archived", exact: true })).toBeChecked();
+      await expectBrowser(active).toBeChecked();
+      await expectBrowser(active).toBeFocused();
       await page.keyboard.press("Escape");
       await expectBrowser(menu).toHaveCount(0);
       await expectBrowser(

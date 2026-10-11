@@ -11,14 +11,17 @@ import type {
   SessionListDiagnostics,
   SessionListPhase,
 } from "../session-list-diagnostics.types.js";
+import { SLOW_GATEWAY_REQUEST_MS } from "../slow-request-diagnostics.js";
+import { summarizeSessionListForWsLog } from "../ws-log.js";
 import { sessionLog } from "./sessions-shared.js";
-import type { GatewayRequestHandler, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
+import type { RespondFn } from "./types.js";
 
 const sessionListDiagnostics = channel("openclaw.session.list");
 
-function startSessionListDiagnostics(
+export function startSessionListDiagnostics(
   respond: RespondFn,
   operation: "sessions.list" | "sessions.subscribe",
+  params: unknown,
 ) {
   const logEnabled = areDiagnosticsEnabledForProcess() && sessionLog.isEnabled("warn");
   if (!logEnabled && !sessionListDiagnostics.hasSubscribers) {
@@ -98,7 +101,9 @@ function startSessionListDiagnostics(
       mark("handlerExit");
       const handlerElapsedMs = checkpoint - startedAt;
       const shouldLog =
-        logEnabled && handlerElapsedMs >= 1_000 && areDiagnosticsEnabledForProcess();
+        logEnabled &&
+        handlerElapsedMs >= SLOW_GATEWAY_REQUEST_MS &&
+        areDiagnosticsEnabledForProcess();
       if (!shouldLog && !sessionListDiagnostics.hasSubscribers) {
         return;
       }
@@ -110,6 +115,7 @@ function startSessionListDiagnostics(
         }
         const fields = {
           operation,
+          ...summarizeSessionListForWsLog(params),
           pid: process.pid,
           threadId,
           isMainThread,
@@ -136,28 +142,5 @@ function startSessionListDiagnostics(
         // Diagnostic sinks cannot replace the response or original exception.
       }
     },
-  };
-}
-
-export function withSessionListDiagnostics(
-  handler: (
-    args: GatewayRequestHandlerOptions,
-    diagnostics?: SessionListDiagnostics,
-  ) => Promise<void>,
-): GatewayRequestHandler {
-  return async (args) => {
-    const diagnostics = startSessionListDiagnostics(
-      args.respond,
-      args.req.method === "sessions.subscribe" ? "sessions.subscribe" : "sessions.list",
-    );
-    let outcome: "returned" | "threw" = "returned";
-    try {
-      await handler(diagnostics ? { ...args, respond: diagnostics.respond } : args, diagnostics);
-    } catch (error) {
-      outcome = "threw";
-      throw error;
-    } finally {
-      diagnostics?.finish(outcome);
-    }
   };
 }

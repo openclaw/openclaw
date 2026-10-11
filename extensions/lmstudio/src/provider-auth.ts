@@ -19,15 +19,10 @@ export function resolveLmstudioProviderAuthMode(
 ): ModelProviderConfig["auth"] | undefined {
   const normalized = normalizeOptionalSecretInput(apiKey);
   if (normalized !== undefined) {
-    const trimmed = normalized.trim();
-    if (
-      !trimmed ||
-      trimmed === LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER ||
-      trimmed === CUSTOM_LOCAL_AUTH_MARKER
-    ) {
-      return undefined;
-    }
-    return "api-key";
+    return normalized === LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER ||
+      normalized === CUSTOM_LOCAL_AUTH_MARKER
+      ? undefined
+      : "api-key";
   }
   return hasConfiguredSecretInput(apiKey) ? "api-key" : undefined;
 }
@@ -38,15 +33,4 @@ export function shouldUseLmstudioApiKeyPlaceholder(params: {
   hasAuthorizationHeader?: boolean;
 }): boolean {
   return params.hasModels && !params.resolvedApiKey && !params.hasAuthorizationHeader;
-}
-
-export function shouldUseLmstudioSyntheticAuth(
-  providerConfig: ModelProviderConfig | undefined,
-): boolean {
-  const hasModels = Array.isArray(providerConfig?.models) && providerConfig.models.length > 0;
-  return (
-    hasModels &&
-    !resolveLmstudioProviderAuthMode(providerConfig?.apiKey) &&
-    !hasLmstudioAuthorizationHeader(providerConfig?.headers)
-  );
 }

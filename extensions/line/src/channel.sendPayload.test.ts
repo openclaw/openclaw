@@ -8,7 +8,7 @@ import { chunkMarkdownText as chunkMarkdownTextForLine } from "openclaw/plugin-s
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
-import { resolveLineAccount } from "./accounts.js";
+import { createQuickReply } from "./auto-reply-delivery.test-helpers.js";
 import { linePlugin } from "./channel.js";
 import { createRuntime, lineResult } from "./channel.sendPayload.test-support.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
@@ -38,7 +38,6 @@ const primaryContext = { cfg, to, accountId: "primary" };
 const primaryOptions = { ...sendOptions, accountId: "primary" };
 const videoUrl = "https://example.com/video.mp4";
 const imageUrl = "https://example.com/photo.png";
-const audioUrl = "https://example.com/voice.m4a";
 const previewImageUrl = "https://example.com/preview.jpg";
 const locationFixture = {
   title: "Meet here",
@@ -127,19 +126,15 @@ it("sends oversized tables in source order with quick replies on the final card"
   await send({ text: markdown, line: { quickReplies: ["Continue"] } });
   expect(mocks.pushFlexMessage).toHaveBeenCalledOnce();
   const oversized = mocks.pushMessageLine.mock.calls.flatMap((args, index) =>
-    String(args[1]).includes("Large")
-      ? [mocks.pushMessageLine.mock.invocationCallOrder[index]]
-      : [],
+    args[1].includes("Large") ? [mocks.pushMessageLine.mock.invocationCallOrder[index]] : [],
   );
   expect(oversized).toHaveLength(1);
   expect(oversized[0]).toBeGreaterThan(order(mocks.pushFlexMessage));
   expect(oversized[0]).toBeLessThan(order(mocks.pushMessagesLine));
-  expect(mocks.pushMessageLine.mock.calls.every((args) => String(args[1]).length <= 5000)).toBe(
-    true,
-  );
+  expect(mocks.pushMessageLine.mock.calls.every((args) => args[1].length <= 5000)).toBe(true);
   expect(mocks.pushMessagesLine).toHaveBeenCalledExactlyOnceWith(
     to,
-    [expect.objectContaining({ altText: "Code", quickReply: { items: ["Continue"] } })],
+    [expect.objectContaining({ altText: "Code", quickReply: createQuickReply("Continue") })],
     expect.any(Object),
   );
   expect(mocks.pushTextMessageWithQuickReplies).not.toHaveBeenCalled();
@@ -162,35 +157,40 @@ it("keeps a degraded location in the quick-reply inline batch", async () => {
   await send({
     line: {
       quickReplies: ["Continue"],
-      location: { ...locationFixture, address: " " },
+      location: { ...locationFixture, title: "A".repeat(6000), address: " " },
     },
   });
   expectBatch([
     {
       type: "text",
-      text: "Meet here\n35.6895, 139.6917",
-      quickReply: { items: ["Continue"] },
+      text: `${"A".repeat(100)}\n35.6895, 139.6917`,
+      quickReply: createQuickReply("Continue"),
     },
   ]);
   expect(mocks.pushTextMessageWithQuickReplies).not.toHaveBeenCalled();
 });
 
-it("preserves the finalized receipt when its delivery observer rejects", async () => {
-  const onDeliveryResult = vi.fn(async () => {
-    throw new Error("delivery observer unavailable");
-  });
+it("preserves all finalized receipts when its delivery observer rejects", async () => {
+  const failure = new Error("delivery observer unavailable");
+  mocks.chunkMarkdownText.mockReturnValueOnce(["First", "Second", "Third"]);
+  mocks.pushMessageLine
+    .mockResolvedValueOnce(lineResult("m-first"))
+    .mockResolvedValueOnce(lineResult("m-second"));
+  const onDeliveryResult = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(failure);
   const caught = await send({ text: "Hello" }, { onDeliveryResult }).catch(
     (error: unknown) => error,
   );
   if (!isChannelPartialDeliveryError(caught)) {
     throw new Error("expected a partial LINE delivery error");
   }
+  expect(caught.cause).toBe(failure);
   expect(caught.deliveryResult).toMatchObject({
-    messageIds: ["m-text"],
-    receipt: { primaryPlatformMessageId: "m-text" },
+    messageIds: ["m-first", "m-second"],
+    receipt: { platformMessageIds: ["m-first", "m-second"] },
     visibleReplySent: true,
   });
-  expect(onDeliveryResult).toHaveBeenCalledOnce();
+  expect(mocks.pushMessageLine).toHaveBeenCalledTimes(2);
+  expect(onDeliveryResult).toHaveBeenCalledTimes(2);
 });
 
 it("publishes completed Flex receipts before a later legacy text send fails", async () => {
@@ -261,7 +261,7 @@ it("preserves inline batch receipts and bounds the Flex alternative text", async
   expectBatch(
     [
       { type: "flex", altText: "a".repeat(1500), contents: { type: "bubble" } },
-      expect.objectContaining({ type: "location", quickReply: { items: ["Confirm"] } }),
+      expect.objectContaining({ type: "location", quickReply: createQuickReply("Confirm") }),
     ],
     "line:group:C123",
   );
@@ -319,22 +319,11 @@ it.each([
         originalContentUrl: videoUrl,
         previewImageUrl,
         ...tracking,
-        quickReply: { items: ["One"] },
+        quickReply: createQuickReply("One"),
       },
     ],
     target,
   );
-});
-
-it.each([
-  [imageUrl, { type: "image", originalContentUrl: imageUrl, previewImageUrl: imageUrl }],
-  [audioUrl, { type: "audio", originalContentUrl: audioUrl, duration: 60000 }],
-] as const)("validates and infers inline quick-reply media from %s", async (url, message) => {
-  await inlineMedia(url);
-  expectBatch([{ ...message, quickReply: { items: ["One"] } }]);
-  expect(ssrfMocks.resolvePinnedHostnameWithPolicy).toHaveBeenCalledWith("example.com", {
-    policy: { allowPrivateNetwork: false },
-  });
 });
 
 it("rejects insecure generic media before quick-reply batch sends", async () => {
@@ -381,7 +370,7 @@ it("reports caption and media receipts through the registered media adapter", as
     mediaUrl: imageUrl,
     onDeliveryResult,
   });
-  expect(mocks.sendMessageLine).toHaveBeenCalledWith(to, "", {
+  expect(mocks.pushMessageLine).toHaveBeenCalledWith(to, "", {
     ...primaryOptions,
     mediaUrl: imageUrl,
   });
@@ -410,7 +399,6 @@ it.each<[string, number | undefined, number | undefined, boolean, number]>([
   ["exhausted", 200, 200, false, 2],
   ["fractional allowance", 200.5, 201, true, 1],
   ["fractional usage", 200, 200.5, true, 2],
-  ["available allowance", 200, 12, true, 2],
   ["unlimited", undefined, undefined, true, 1],
 ])("classifies a refusal with %s quota", async (_label, limit, used, retryable, requests) => {
   const rejection = refusal(429, true);
@@ -461,39 +449,74 @@ it("keeps a stalled allowance from holding back a retryable refusal", async () =
   }
 });
 
-it("keeps accepted media receipts without reading quota for a later text refusal", async () => {
-  const rejection = refusal(429);
-  const onDeliveryResult = vi.fn();
-  mocks.pushTextMessageWithQuickReplies.mockRejectedValueOnce(rejection);
-  const fetchMock = stubLineApiFetch(
-    Response.json({ type: "limited", value: 200 }),
-    Response.json({ totalUsage: 200 }),
-  );
-  await expect(
-    send(
-      {
-        text: "Caption",
-        mediaUrl: imageUrl,
-        line: { quickReplies: ["Continue"] },
+it.each([false, true])(
+  "keeps accepted media receipts for a later text refusal (observer=%s)",
+  async (observed) => {
+    const rejection = refusal(429);
+    const onDeliveryResult = observed ? vi.fn() : undefined;
+    mocks.pushTextMessageWithQuickReplies.mockRejectedValueOnce(rejection);
+    const fetchMock = stubLineApiFetch(
+      Response.json({ type: "limited", value: 200 }),
+      Response.json({ totalUsage: 200 }),
+    );
+    await expect(
+      send(
+        {
+          text: "Caption",
+          mediaUrl: imageUrl,
+          line: { quickReplies: ["Continue"] },
+        },
+        { ...LINE_QUOTA_ACCOUNT, onDeliveryResult },
+      ),
+    ).rejects.toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      cause: rejection,
+      deliveryResult: {
+        messageIds: ["m-media"],
+        receipt: { platformMessageIds: ["m-media"] },
+        visibleReplySent: true,
       },
-      { ...LINE_QUOTA_ACCOUNT, onDeliveryResult },
-    ),
-  ).rejects.toBe(rejection);
-  expect(mocks.sendMessageLine).toHaveBeenCalledOnce();
-  expect(mocks.pushTextMessageWithQuickReplies).toHaveBeenCalledOnce();
-  expect(order(onDeliveryResult)).toBeLessThan(order(mocks.pushTextMessageWithQuickReplies));
-  expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(delivery(["m-media"]));
-  expect(fetchMock).not.toHaveBeenCalled();
-});
+    });
+    expect(mocks.pushMessageLine).toHaveBeenCalledOnce();
+    expect(mocks.pushTextMessageWithQuickReplies).toHaveBeenCalledOnce();
+    if (onDeliveryResult) {
+      expect(order(onDeliveryResult)).toBeLessThan(order(mocks.pushTextMessageWithQuickReplies));
+      expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(delivery(["m-media"]));
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  },
+);
 
-it("preserves partial delivery evidence with a nested LINE rejection", async () => {
-  const partial = createChannelPartialDeliveryError(refusal(400), {
-    messageIds: ["accepted-first"],
-    visibleReplySent: true,
-  });
-  mocks.pushMessageLine.mockRejectedValueOnce(partial);
-  await expect(send({ text: "hello" })).rejects.toBe(partial);
-});
+it.each([false, true])(
+  "preserves nested LINE partial evidence (prior acceptance=%s)",
+  async (accepted) => {
+    const rejection = refusal(400);
+    const partial = createChannelPartialDeliveryError(rejection, {
+      messageIds: ["accepted-child"],
+      receipt: createLineSendReceipt({ messageId: "accepted-child", chatId: "c1", kind: "text" }),
+      visibleReplySent: true,
+    });
+    if (accepted) {
+      mocks.chunkMarkdownText.mockReturnValueOnce(["First", "Second"]);
+      mocks.pushMessageLine.mockResolvedValueOnce(lineResult("accepted-first"));
+    }
+    mocks.pushMessageLine.mockRejectedValueOnce(partial);
+    const caught = await send({ text: "hello" }).catch((error: unknown) => error);
+    if (!accepted) {
+      expect(caught).toBe(partial);
+      return;
+    }
+    expect(caught).toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      cause: rejection,
+      deliveryResult: {
+        messageIds: ["accepted-first", "accepted-child"],
+        receipt: { platformMessageIds: ["accepted-first", "accepted-child"] },
+        visibleReplySent: true,
+      },
+    });
+  },
+);
 
 const pairingCfg = lineConfig({
   defaultAccount: "alpha",
@@ -504,7 +527,6 @@ const pairingCfg = lineConfig({
 });
 
 it("pushes the approval from the approved account", async () => {
-  mocks.resolveLineAccount.mockImplementation(resolveLineAccount);
   await linePlugin.pairing!.notifyApproval!({
     cfg: pairingCfg,
     id: "U-paired",

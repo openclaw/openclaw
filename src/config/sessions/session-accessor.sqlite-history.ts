@@ -1,4 +1,4 @@
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -33,6 +33,10 @@ import type {
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
 import {
+  prepareExactSessionEntryRowReads,
+  readExactSessionEntryRowValidated,
+} from "./session-accessor.sqlite-entry-read.js";
+import {
   getSessionKysely,
   prepareSqliteScope,
   resolveSqliteReadScope,
@@ -45,9 +49,13 @@ import {
   MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
   normalizeVisibleMessageLimit,
 } from "./session-accessor.sqlite-visible-cursor.js";
+import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
+import type { SessionEntryProjection } from "./session-entry-snapshots.js";
 import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
+import type { SessionArchiveInventoryScope } from "./session-transcript-inventory.types.js";
 import { withSessionHistoryWorkerReadCandidates } from "./session-transcript-worker-resources.js";
+import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 import type { SessionEntry } from "./types.js";
 
@@ -118,11 +126,27 @@ async function readTaskArchivePage(
   });
 }
 
+function prepareTranscriptInstanceEntries(
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db">,
+  sessionKeys: readonly string[],
+  projection: SessionEntryProjection = "full",
+): Pick<ReadonlyMap<string, SessionEntry>, "get"> {
+  if (sessionKeys.length === 0) {
+    return new Map();
+  }
+  const readRow = prepareExactSessionEntryRowReads(database, sessionKeys, projection, "canonical");
+  return { get: (sessionKey) => readRow(sessionKey)?.entry };
+}
+
 export function listTranscriptInstancesFromDatabase(params: {
-  currentEntries: Pick<ReadonlyMap<string, SessionEntry>, "get">;
+  currentEntries?: Pick<ReadonlyMap<string, SessionEntry>, "get">;
   database: Pick<OpenClawAgentDatabase, "agentId" | "db">;
   options: SessionTranscriptInstanceListOptions;
+  entryProjection?: SessionEntryProjection;
 }): SessionTranscriptInstance[] {
+  if (!params.currentEntries && params.options.sessionIds !== undefined) {
+    assertCanonicalSqliteSessionKeysCurrent(params.database);
+  }
   const db = getSessionKysely(params.database.db);
   let query = db
     .selectFrom("session_windows")
@@ -148,17 +172,33 @@ export function listTranscriptInstancesFromDatabase(params: {
   if (params.options.sessionId !== undefined) {
     query = query.where("session_id", "=", params.options.sessionId);
   }
+  if (params.options.sessionIds !== undefined) {
+    query = query.where("session_id", "in", sqliteStringSet(params.options.sessionIds));
+  }
   const rows = executeSqliteQuerySync(
     params.database.db,
     query.orderBy("transcript_updated_at", "desc").orderBy("session_id", "asc"),
   ).rows;
+  const currentEntries =
+    params.currentEntries ??
+    (params.options.sessionIds !== undefined
+      ? prepareTranscriptInstanceEntries(
+          params.database,
+          [...new Set(rows.map((row) => row.session_key))],
+          params.entryProjection,
+        )
+      : {
+          get: (sessionKey: string) =>
+            readExactSessionEntryRowValidated(params.database, sessionKey, params.entryProjection)
+              ?.entry,
+        });
   return rows
     .map((row): SessionTranscriptInstance | undefined => {
       if (!params.options.includeAllWindows && isInternalSessionEffectsKey(row.session_key)) {
         return undefined;
       }
       const updatedAtMs = row.transcript_updated_at ?? row.updated_at;
-      const current = params.currentEntries.get(row.session_key);
+      const current = currentEntries.get(row.session_key);
       // Matching identities cannot classify transcript content written before provenance existed.
       const currentIsExact = current?.sessionId === row.session_id;
       const provenanceKnown = row.session_entry_provenance === 1;
@@ -207,13 +247,7 @@ export function listTranscriptInstancesFromDatabase(params: {
 }
 
 /** Read retained archive identities through the same physical and logical session owner. */
-export function listSessionTranscriptArchivesReadOnly(
-  scope: Pick<SessionAccessScope, "agentId" | "env" | "storePath"> & {
-    archiveNames?: readonly string[];
-    sessionIds?: readonly string[];
-    includeAllAgents?: boolean;
-  },
-) {
+export function listSessionTranscriptArchivesReadOnly(scope: SessionArchiveInventoryScope) {
   const selectors = [...new Set(scope.sessionIds ?? [])];
   const archiveNames = [...new Set(scope.archiveNames ?? [])];
   if (selectors.length === 0 && archiveNames.length === 0) {
@@ -322,8 +356,6 @@ export async function findSessionTranscriptArchiveEventReadOnly(
         );
         return registered.found && registered.value ? readArchive() : undefined;
       }
-      const { withSessionHistoryWorkerDatabase } =
-        await import("./session-transcript-worker-runtime.js");
       assertCurrent();
       return withSessionHistoryWorkerDatabase(options, async (reader) => {
         // Empty lookups never start the archive reader or retain its completion roots.

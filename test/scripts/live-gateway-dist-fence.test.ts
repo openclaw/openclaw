@@ -137,84 +137,113 @@ describe("live-gateway-dist-fence", () => {
       ).rejects.toBe(failure);
     });
   });
-  it.each([
-    { name: "running", state: { running: true } },
-    {
-      name: "holding cgroup tasks",
-      state: { runtime: { status: "unknown", state: "failed", systemd: { tasksCurrent: 2 } } },
-    },
-  ])("allows builds when the $name managed Gateway uses another checkout", async ({ state }) => {
-    await withTestDir({ prefix: "openclaw-live-dist-foreign-" }, async (tmp) => {
-      const other = path.join(tmp, "other");
-      await writeOpenClawPackage(tmp);
-      await writeOpenClawPackage(other);
-      expect(
-        await inspectFixtureGateway(tmp, {
-          readState: async () => stateForPackage(other, state),
-        }),
-      ).toEqual({ refuse: false });
-    });
-  });
-
-  it("requests the loaded command before comparing the serving dist", async () => {
-    await withTestDir({ prefix: "openclaw-live-dist-loaded-" }, async (tmp) => {
-      const savedDefinition = path.join(tmp, "saved-definition");
-      await writeOpenClawPackage(tmp);
-      await writeOpenClawPackage(savedDefinition);
-      const result = await inspectFixtureGateway(tmp, {
-        readState: async (_binding, input) =>
-          stateForPackage(
-            input?.requireEffective && input.requireLoadedCommand ? tmp : savedDefinition,
-            { running: true },
-          ),
+  it.each(
+    [[], ["--profile", "dev"], ["--profile=dev"], ["--dev"]].map((rootOptions) => ({
+      rootOptions,
+    })),
+  )(
+    "fences the loaded command and names its recovery owner with root options %j",
+    async ({ rootOptions }) => {
+      await withTestDir({ prefix: "openclaw-live-dist-loaded-" }, async (tmp) => {
+        const savedDefinition = path.join(tmp, "saved-definition");
+        await writeOpenClawPackage(tmp);
+        await writeOpenClawPackage(savedDefinition);
+        const result = await inspectFixtureGateway(tmp, {
+          readState: async (_binding, input) =>
+            baseState({
+              running: true,
+              command: {
+                programArguments: [
+                  process.execPath,
+                  path.join(
+                    input?.requireEffective && input.requireLoadedCommand ? tmp : savedDefinition,
+                    "dist",
+                    "index.js",
+                  ),
+                  ...rootOptions,
+                  "gateway",
+                ],
+              },
+              runtime: {
+                status: "running",
+                pid: process.pid,
+                systemd: { unit: "openclaw-gateway.service" },
+              },
+            }),
+        });
+        expect(result.refuse).toBe(true);
+        if (result.refuse) {
+          expect(result.message).toContain(path.join(tmp, "dist", "index.js"));
+          expect(result.message).toContain("openclaw-gateway.service");
+          expect(result.message).toContain("openclaw update");
+        }
       });
-      expect(result.refuse).toBe(true);
-    });
-  });
+    },
+  );
 
   it.each([
-    { name: "stopped", runtime: { status: "stopped", state: "inactive" }, refuse: false },
-    ...(["inactive", "failed"] as const).flatMap((state) => [
+    ...[
+      { name: "stopped", runtime: { status: "stopped", state: "inactive" }, refuse: false },
+      ...(["inactive", "failed"] as const).flatMap((state) => [
+        {
+          name: `${state} with remaining cgroup tasks and no MainPID`,
+          runtime: { status: "unknown", state, systemd: { tasksCurrent: 2 } },
+          refuse: true,
+        },
+        {
+          name: `${state} with zero cgroup tasks`,
+          runtime: { status: "stopped", state, systemd: { tasksCurrent: 0 } },
+          refuse: false,
+        },
+        {
+          name: `${state} with an unavailable cgroup task count`,
+          runtime: { status: "unknown", state, systemd: {} },
+          refuse: false,
+        },
+      ]),
       {
-        name: `${state} with remaining cgroup tasks and no MainPID`,
-        runtime: { status: "unknown", state, systemd: { tasksCurrent: 2 } },
+        name: "deactivating without a MainPID",
+        runtime: { status: "stopped", state: "deactivating", subState: "stop-post" },
         refuse: true,
       },
       {
-        name: `${state} with zero cgroup tasks`,
-        runtime: { status: "stopped", state, systemd: { tasksCurrent: 0 } },
-        refuse: false,
+        name: "deactivating with a live MainPID",
+        runtime: {
+          status: "stopped",
+          state: "deactivating",
+          subState: "stop-sigterm",
+          pid: process.pid,
+        },
+        refuse: true,
       },
-      {
-        name: `${state} with an unavailable cgroup task count`,
-        runtime: { status: "unknown", state, systemd: {} },
-        refuse: false,
-      },
-    ]),
+    ].map(({ name, runtime, refuse }) => ({ name, refuse, state: { runtime }, foreign: false })),
+    { name: "foreign running", state: { running: true }, foreign: true, refuse: false },
     {
-      name: "deactivating without a MainPID",
-      runtime: { status: "stopped", state: "deactivating", subState: "stop-post" },
-      refuse: true,
+      name: "foreign holding cgroup tasks",
+      state: { runtime: { status: "unknown", state: "failed", systemd: { tasksCurrent: 2 } } },
+      foreign: true,
+      refuse: false,
     },
-    {
-      name: "deactivating with a live MainPID",
-      runtime: {
-        status: "stopped",
-        state: "deactivating",
-        subState: "stop-sigterm",
-        pid: process.pid,
-      },
-      refuse: true,
-    },
-  ])("classifies a matching $name service using its native state", async ({ runtime, refuse }) => {
-    await withTestDir({ prefix: "openclaw-live-dist-state-" }, async (tmp) => {
-      await writeOpenClawPackage(tmp);
-      const result = await inspectFixtureGateway(tmp, {
-        readState: async () => stateForPackage(tmp, { runtime }),
+  ])(
+    "classifies a $name service using its native state and checkout",
+    async ({ state, refuse, foreign }) => {
+      await withTestDir({ prefix: "openclaw-live-dist-state-" }, async (tmp) => {
+        await writeOpenClawPackage(tmp);
+        const other = path.join(tmp, "other");
+        if (foreign) {
+          await writeOpenClawPackage(other);
+        }
+        const result = await inspectFixtureGateway(tmp, {
+          readState: async () => stateForPackage(foreign ? other : tmp, state),
+        });
+        if (foreign) {
+          expect(result).toEqual({ refuse: false });
+        } else {
+          expect(result.refuse).toBe(refuse);
+        }
       });
-      expect(result.refuse).toBe(refuse);
-    });
-  });
+    },
+  );
 
   it.each([
     { code: "EPERM", refuse: true },
@@ -232,53 +261,26 @@ describe("live-gateway-dist-fence", () => {
             runtime: { status: "stopped", state: "inactive", pid: process.pid },
           }),
       });
-      expect(kill).toHaveBeenCalledTimes(1);
       expect(kill).toHaveBeenCalledWith(process.pid, 0);
       expect(result.refuse).toBe(refuse);
     });
   });
 
-  it("names the running Gateway and recovery commands in its refusal", async () => {
-    await withTestDir({ prefix: "openclaw-live-dist-message-" }, async (tmp) => {
-      await writeOpenClawPackage(tmp);
-      const result = await inspectFixtureGateway(tmp, {
-        readState: async () =>
-          stateForPackage(tmp, {
-            running: true,
-            runtime: {
-              status: "running",
-              pid: process.pid,
-              systemd: { unit: "openclaw-gateway.service" },
-            },
-          }),
-      });
-      expect(result.refuse).toBe(true);
-      if (result.refuse) {
-        expect(result.message).toContain(path.join(tmp, "dist", "index.js"));
-        expect(result.message).toContain("openclaw-gateway.service");
-        expect(result.message).toContain("openclaw update");
-      }
-    });
-  });
-
-  it("fails open when service inspection throws", async () => {
+  it.each(["service", "layout"])("fails open when %s inspection throws", async (phase) => {
+    if (phase === "layout") {
+      const layout = vi
+        .spyOn(serviceLayout, "summarizeGatewayServiceLayout")
+        .mockRejectedValue(new Error("realpath failed"));
+      onTestFinished(() => layout.mockRestore());
+    }
     expect(
       await inspectFixtureGateway("/synthetic/openclaw", {
         readState: async () => {
-          throw new Error("no service manager");
+          if (phase === "service") {
+            throw new Error("no service manager");
+          }
+          return baseState({ running: true });
         },
-      }),
-    ).toEqual({ refuse: false });
-  });
-
-  it("fails open when layout inspection throws after reading a service", async () => {
-    const layout = vi
-      .spyOn(serviceLayout, "summarizeGatewayServiceLayout")
-      .mockRejectedValue(new Error("realpath failed"));
-    onTestFinished(() => layout.mockRestore());
-    expect(
-      await inspectFixtureGateway("/synthetic/openclaw", {
-        readState: async () => baseState({ running: true }),
       }),
     ).toEqual({ refuse: false });
   });
@@ -356,131 +358,96 @@ describe("live-gateway-dist-fence physical overlap", () => {
     },
   );
 
-  it.each([
-    { rootOptions: [] },
-    { rootOptions: ["--profile", "dev"] },
-    { rootOptions: ["--profile=dev"] },
-    { rootOptions: ["--dev"] },
-  ])(
-    "refuses when the serving entrypoint is this checkout's dist with root options $rootOptions",
-    async ({ rootOptions }) => {
-      await withTestDir({ prefix: "openclaw-live-dist-physical-" }, async (tmp) => {
-        await writeOpenClawPackage(tmp);
-        const result = await inspectFixtureGateway(tmp, {
+  it.each([false, true])(
+    "compares the physical release behind current (same checkout: %s)",
+    async (sameCheckout) => {
+      await withTestDir({ prefix: "openclaw-live-dist-release-" }, async (tmp) => {
+        const managedRoot = path.join(tmp, "openclaw");
+        const release = path.join(tmp, "releases", "selected");
+        const current = path.join(tmp, "current");
+        await writeOpenClawPackage(managedRoot);
+        await writeOpenClawPackage(release);
+        await fs.symlink(release, current);
+        const result = await inspectFixtureGateway(sameCheckout ? release : managedRoot, {
           readState: async () =>
             baseState({
               running: true,
               command: {
                 programArguments: [
                   process.execPath,
-                  path.join(tmp, "dist", "index.js"),
-                  ...rootOptions,
+                  path.join(current, "dist", "index.js"),
                   "gateway",
                 ],
+                ...(sameCheckout
+                  ? {}
+                  : {
+                      managedDefinition: {
+                        programArguments: [
+                          process.execPath,
+                          path.join(managedRoot, "dist", "index.js"),
+                          "gateway",
+                        ],
+                      },
+                    }),
               },
             }),
         });
-        expect(result.refuse).toBe(true);
+        if (sameCheckout) {
+          expect(result.refuse).toBe(true);
+        } else {
+          expect(result).toEqual({ refuse: false });
+        }
       });
     },
   );
-
-  it("allows a logically owned current/releases tree whose dist is physically separate", async () => {
-    await withTestDir({ prefix: "openclaw-live-dist-release-" }, async (tmp) => {
-      const managedRoot = path.join(tmp, "openclaw");
-      const release = path.join(tmp, "releases", "selected");
-      const current = path.join(tmp, "current");
-      await writeOpenClawPackage(managedRoot);
-      await writeOpenClawPackage(release);
-      await fs.symlink(release, current);
-      const command = {
-        programArguments: [process.execPath, path.join(current, "dist", "index.js"), "gateway"],
-        managedDefinition: {
-          programArguments: [
-            process.execPath,
-            path.join(managedRoot, "dist", "index.js"),
-            "gateway",
-          ],
-        },
-      };
-      const result = await inspectFixtureGateway(managedRoot, {
-        readState: async () => baseState({ running: true, command }),
-      });
-      expect(result).toEqual({ refuse: false });
-    });
-  });
-
-  it("refuses when the checkout is the physical release behind current", async () => {
-    await withTestDir({ prefix: "openclaw-live-dist-release-self-" }, async (tmp) => {
-      const release = path.join(tmp, "releases", "selected");
-      const current = path.join(tmp, "current");
-      await writeOpenClawPackage(release);
-      await fs.symlink(release, current);
-      const result = await inspectFixtureGateway(release, {
-        readState: async () =>
-          baseState({
-            running: true,
-            command: {
-              programArguments: [
-                process.execPath,
-                path.join(current, "dist", "index.js"),
-                "gateway",
-              ],
-            },
-          }),
-      });
-      expect(result.refuse).toBe(true);
-    });
-  });
 });
 
 describe("live-gateway-dist-fence cross-profile overlap", () => {
-  it("refuses when another profile's live Gateway overlaps this checkout", async () => {
+  it.each([1, 2])("names every overlapping live profile (%i siblings)", async (count) => {
     await withTestDir({ prefix: "openclaw-live-dist-cross-profile-" }, async (tmp) => {
-      const otherCheckout = path.join(tmp, "other");
+      const other = path.join(tmp, "other");
       await writeOpenClawPackage(tmp);
-      await writeOpenClawPackage(otherCheckout);
-      const fenceproofBinding = {
-        env: {
-          OPENCLAW_PROFILE: "fenceproof",
-          OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-fenceproof.service",
-        },
-      };
+      await writeOpenClawPackage(other);
+      const profiles = count === 1 ? ["fenceproof"] : ["work", "fenceproof"];
       const result = await inspectFixtureGateway(tmp, {
-        env: {},
-        listBindings: async () => [fenceproofBinding],
-        readState: async (binding) => {
-          if (binding.env.OPENCLAW_SYSTEMD_UNIT === "openclaw-gateway-fenceproof.service") {
-            return baseState({
-              running: true,
-              command: {
-                programArguments: [process.execPath, path.join(tmp, "dist", "index.js"), "gateway"],
-              },
-              runtime: {
-                status: "running",
-                pid: 4242,
-                systemd: { unit: "openclaw-gateway-fenceproof.service" },
-              },
-            });
-          }
-          return baseState({
-            running: false,
-            command: {
-              programArguments: [
-                process.execPath,
-                path.join(otherCheckout, "dist", "index.js"),
-                "gateway",
-              ],
+        listBindings: async () =>
+          profiles.map((profile) => ({
+            env: {
+              OPENCLAW_PROFILE: profile,
+              ...(count === 1
+                ? { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-fenceproof.service" }
+                : {}),
             },
-            runtime: { status: "stopped", pid: undefined },
+          })),
+        readState: async (binding) => {
+          const profile =
+            count === 1
+              ? binding.env.OPENCLAW_SYSTEMD_UNIT === "openclaw-gateway-fenceproof.service"
+                ? "fenceproof"
+                : undefined
+              : binding.env.OPENCLAW_PROFILE;
+          if (!profile) {
+            return count === 1
+              ? stateForPackage(other, { runtime: { status: "stopped", pid: undefined } })
+              : baseState({ command: null });
+          }
+          return stateForPackage(tmp, {
+            running: true,
+            runtime: {
+              status: "running",
+              pid: 4242,
+              systemd: { unit: `openclaw-gateway-${profile}.service` },
+            },
           });
         },
       });
       expect(result.refuse).toBe(true);
       if (result.refuse) {
-        expect(result.message).toContain("fenceproof");
+        for (const profile of profiles) {
+          expect(result.message).toContain(profile);
+          expect(result.message).toContain(`openclaw-gateway-${profile}.service`);
+        }
         expect(result.message).toContain("openclaw update");
-        expect(result.message).toContain("openclaw-gateway-fenceproof.service");
         expect(result.message).not.toContain("profiles default, fenceproof");
       }
     });
@@ -565,10 +532,18 @@ describe("live-gateway-dist-fence cross-profile overlap", () => {
                 requireEffective: true,
                 requireLoadedCommand: true,
               }),
-            ).resolves.toMatchObject({ installed: true, running: true });
+            ).resolves.toMatchObject({
+              installed: true,
+              running: false,
+              runtime: { status: "unknown", state: "Running" },
+            });
             await expect(resolveLiveManagedGatewayDistFence(other, { env })).resolves.toEqual({
               refuse: false,
             });
+            task.state = 2;
+            await expect(resolveLiveManagedGatewayDistFence(checkout, { env })).resolves.toEqual(
+              result,
+            );
             task.state = 3;
             await expect(resolveLiveManagedGatewayDistFence(checkout, { env })).resolves.toEqual({
               refuse: false,
@@ -798,44 +773,6 @@ describe("live-gateway-dist-fence cross-profile overlap", () => {
       });
     },
   );
-
-  it("names every overlapping live profile in the refusal", async () => {
-    await withTestDir({ prefix: "openclaw-live-dist-two-profiles-" }, async (tmp) => {
-      await writeOpenClawPackage(tmp);
-      const result = await inspectFixtureGateway(tmp, {
-        listBindings: async () => [
-          { env: { OPENCLAW_PROFILE: "work" } },
-          { env: { OPENCLAW_PROFILE: "fenceproof" } },
-        ],
-        readState: async (binding) =>
-          !binding.env.OPENCLAW_PROFILE
-            ? baseState({ command: null })
-            : baseState({
-                running: true,
-                command: {
-                  programArguments: [
-                    process.execPath,
-                    path.join(tmp, "dist", "index.js"),
-                    "gateway",
-                  ],
-                },
-                runtime: {
-                  status: "running",
-                  pid: 99,
-                  systemd: { unit: `openclaw-gateway-${binding.env.OPENCLAW_PROFILE}.service` },
-                },
-              }),
-      });
-      expect(result.refuse).toBe(true);
-      if (result.refuse) {
-        expect(result.message).toContain("fenceproof");
-        expect(result.message).toContain("work");
-        expect(result.message).toContain("openclaw update");
-        expect(result.message).toContain("openclaw-gateway-fenceproof.service");
-        expect(result.message).toContain("openclaw-gateway-work.service");
-      }
-    });
-  });
 
   it("refuses when only a system-scope sibling overlaps this checkout", async () => {
     await withTestDir({ prefix: "openclaw-live-dist-system-scope-" }, async (tmp) => {

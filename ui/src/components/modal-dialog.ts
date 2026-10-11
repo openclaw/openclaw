@@ -1,12 +1,43 @@
-// Control UI adapter for Web Awesome's accessible modal dialog.
 import "@awesome.me/webawesome/dist/components/dialog/dialog.js";
 import type WaDialog from "@awesome.me/webawesome/dist/components/dialog/dialog.js";
+import type { JSX as SolidJSX } from "@solidjs/web";
 import { css, html, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
 import { acquireNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
+import { composedParent } from "../lib/navigation-click.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 
+type ModalDialogAttributes = SolidJSX.HTMLAttributes<HTMLElement> & {
+  label: string;
+  manual?: boolean;
+  description?: string;
+  "onModal-cancel"?: (event: Event) => void;
+};
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-modal-dialog": ModalDialogAttributes;
+    }
+  }
+}
+
 const modalLayers = (document.openClawModalLayers ??= new Set<HTMLElement>());
+
+function isInert(target: Element): boolean {
+  for (let element: Element | null = target; element; element = composedParent(element)) {
+    if (element.hasAttribute("inert")) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function restoreFocus(target: HTMLElement): void {
+  target.focus({ preventScroll: true });
+  // Cross-origin frame adapters finish the return inside their own document.
+  target.dispatchEvent(new Event("openclaw:restore-focus"));
+}
 
 function setModalLayer(modal: HTMLElement, open: boolean) {
   const wasOpen = modalLayers.size > 0;
@@ -163,8 +194,10 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     }
 
     @media (prefers-reduced-motion: reduce) {
+      wa-dialog,
       :host(.drawer) wa-dialog {
         --show-duration: 0ms;
+        --hide-duration: 0ms;
       }
 
       :host(.drawer) wa-dialog[open]::part(dialog) {
@@ -240,7 +273,22 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     this.#returnFocus = null;
     this.#returnFocusOverride = undefined;
     if (returnFocus?.isConnected) {
-      returnFocus.focus({ preventScroll: true });
+      if (!isInert(returnFocus)) {
+        restoreFocus(returnFocus);
+      } else {
+        const activeElement = document.activeElement;
+        // The containing render may release background inertness after removing the modal.
+        queueMicrotask(() => {
+          if (
+            !this.isConnected &&
+            returnFocus.isConnected &&
+            !isInert(returnFocus) &&
+            document.activeElement === activeElement
+          ) {
+            restoreFocus(returnFocus);
+          }
+        });
+      }
     }
     super.disconnectedCallback();
   }
@@ -301,7 +349,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
       }
     }
     if (this.open) {
-      if (!dialog?.open) {
+      if (!dialog.open) {
         this.#returnFocus =
           document.activeElement instanceof HTMLElement ? document.activeElement : null;
         this.#initialFocusPending = true;
@@ -315,7 +363,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
         generation === this.#syncGeneration &&
         this.isConnected &&
         this.open &&
-        dialog?.open &&
+        dialog.open &&
         this.#initialFocusPending
       ) {
         this.#initialFocusPending = false;
@@ -324,7 +372,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
       return;
     }
     this.#initialFocusPending = false;
-    if (webAwesomeDialog.open || dialog?.open) {
+    if (webAwesomeDialog.open || dialog.open) {
       this.#suppressNextCancel = true;
       webAwesomeDialog.open = false;
     } else {
@@ -402,7 +450,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
           originalReturnFocus.blur();
         }
       } else if (returnFocus.isConnected) {
-        returnFocus.focus({ preventScroll: true });
+        restoreFocus(returnFocus);
       }
     }, 0);
   };

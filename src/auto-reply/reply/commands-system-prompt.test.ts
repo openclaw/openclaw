@@ -3,21 +3,18 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createOpenClawCodingTools } from "../../agents/agent-tools.js";
+import { createOpenClawCodingToolsAsync } from "../../agents/agent-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
-import {
-  resolveChannelMessageToolHints,
-  resolveChannelReactionGuidance,
-} from "../../agents/channel-tools.js";
 import * as preparedModelCatalog from "../../agents/prepared-model-catalog.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.types.js";
-import { collectRuntimeChannelCapabilities } from "../../agents/runtime-capabilities.js";
+import { resolveRuntimeChannelPromptContext } from "../../agents/runtime-capabilities.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import { detectRuntimeShell } from "../../agents/shell-utils.js";
 import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
+import type { SubsystemLogger } from "../../logging/subsystem.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createSyntheticSourceInfo } from "../../skills/loading/skill-contract.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
@@ -26,37 +23,31 @@ import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const {
-  collectRuntimeChannelCapabilitiesMock,
-  createOpenClawCodingToolsMock,
+  resolveRuntimeChannelPromptContextMock,
+  createOpenClawCodingToolsAsyncMock,
   detectRuntimeShellMock,
   getMachineDisplayNameMock,
   logWarnMock,
   makeBootstrapWarnMock,
-  resolveChannelMessageToolHintsMock,
-  resolveChannelReactionGuidanceMock,
   resolveRuntimeOsLabelMock,
 } = vi.hoisted(() => ({
-  collectRuntimeChannelCapabilitiesMock: vi.fn(() => ["voice"]),
-  createOpenClawCodingToolsMock: vi.fn(() => []),
+  resolveRuntimeChannelPromptContextMock: vi.fn<typeof resolveRuntimeChannelPromptContext>(() => ({
+    runtimeChannel: "telegram",
+    runtimeCapabilities: ["voice"],
+    reactionGuidance: { level: "minimal", channel: "Telegram" },
+    messageToolHints: ["Use the message tool."],
+  })),
+  createOpenClawCodingToolsAsyncMock: vi.fn(() => []),
   detectRuntimeShellMock: vi.fn(() => "zsh"),
   getMachineDisplayNameMock: vi.fn(async () => "test-host"),
   logWarnMock: vi.fn(),
   makeBootstrapWarnMock: vi.fn((params: { warn?: (message: string) => void }) => params.warn),
-  resolveChannelMessageToolHintsMock: vi.fn(() => ["Use the message tool."]),
-  resolveChannelReactionGuidanceMock: vi.fn(() => ({
-    level: "minimal" as const,
-    channel: "Telegram",
-  })),
   resolveRuntimeOsLabelMock: vi.fn(() => "TestOS 1.0"),
 }));
 
-vi.mock("../../agents/channel-tools.js", () => ({
-  resolveChannelMessageToolHints: resolveChannelMessageToolHintsMock,
-  resolveChannelReactionGuidance: resolveChannelReactionGuidanceMock,
-}));
-
+// mock-isolation: Fix channel prompt facts without loading live channel plugin state.
 vi.mock("../../agents/runtime-capabilities.js", () => ({
-  collectRuntimeChannelCapabilities: collectRuntimeChannelCapabilitiesMock,
+  resolveRuntimeChannelPromptContext: resolveRuntimeChannelPromptContextMock,
 }));
 
 vi.mock("../../agents/shell-utils.js", () => ({
@@ -71,9 +62,24 @@ vi.mock("../../infra/os-summary.js", () => ({
   resolveRuntimeOsLabel: resolveRuntimeOsLabelMock,
 }));
 
-vi.mock("../../logging/subsystem.js", () => ({
-  createSubsystemLogger: vi.fn(() => ({ warn: logWarnMock })),
-}));
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const createLogger = (subsystem: string): SubsystemLogger => ({
+    subsystem,
+    isEnabled: () => false,
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: logWarnMock,
+    error: vi.fn(),
+    fatal: vi.fn(),
+    raw: vi.fn(),
+    child: (name) => createLogger(`${subsystem}/${name}`),
+  });
+  return {
+    ...(await importOriginal<typeof import("../../logging/subsystem.js")>()),
+    createSubsystemLogger: vi.fn(createLogger),
+  };
+});
 
 vi.mock("../../agents/bootstrap-files.js", () => ({
   makeBootstrapWarn: makeBootstrapWarnMock,
@@ -109,11 +115,10 @@ vi.mock("../../agents/model-selection.js", () => ({
   resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-5" })),
 }));
 
+// mock-isolation: Keep host discovery outside command prompt fixtures.
 vi.mock("../../agents/system-prompt-params.js", () => ({
   buildSystemPromptParams: vi.fn(() => ({
     runtimeInfo: { host: "unknown", os: "unknown", arch: "unknown", node: process.version },
-    userTimezone: "UTC",
-    userDate: "2026-01-05",
   })),
 }));
 
@@ -121,8 +126,9 @@ vi.mock("../../agents/system-prompt.js", () => ({
   buildAgentSystemPrompt: vi.fn(() => "system prompt"),
 }));
 
+// mock-isolation: Inspect prompt composition with fixture tools without initializing tool integrations.
 vi.mock("../../agents/agent-tools.js", () => ({
-  createOpenClawCodingTools: createOpenClawCodingToolsMock,
+  createOpenClawCodingToolsAsync: createOpenClawCodingToolsAsyncMock,
 }));
 
 vi.mock("../../tts/tts-settings.js", () => ({
@@ -194,8 +200,8 @@ function requireFirstArg(
 describe("resolveCommandsSystemPromptBundle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    createOpenClawCodingToolsMock.mockClear();
-    createOpenClawCodingToolsMock.mockReturnValue([]);
+    createOpenClawCodingToolsAsyncMock.mockClear();
+    createOpenClawCodingToolsAsyncMock.mockReturnValue([]);
     vi.mocked(ensureSandboxWorkspaceForSession).mockResolvedValue(null);
     vi.mocked(resolveReusableWorkspaceSkillSnapshot).mockReturnValue({
       snapshot: { prompt: "", skills: [], resolvedSkills: [] },
@@ -260,8 +266,8 @@ describe("resolveCommandsSystemPromptBundle", () => {
     await resolveCommandsSystemPromptBundle(makeParams());
 
     const toolParams = requireFirstArg(
-      vi.mocked(createOpenClawCodingTools),
-      "createOpenClawCodingTools",
+      vi.mocked(createOpenClawCodingToolsAsync),
+      "createOpenClawCodingToolsAsync",
     );
     expect(toolParams.allowGatewaySubagentBinding).toBe(true);
     expect(toolParams.sessionKey).toBe("agent:main:default");
@@ -285,17 +291,7 @@ describe("resolveCommandsSystemPromptBundle", () => {
     params.command.to = "slash:8460800771";
     await resolveCommandsSystemPromptBundle(params);
 
-    expect(vi.mocked(collectRuntimeChannelCapabilities)).toHaveBeenCalledWith({
-      cfg: params.cfg,
-      channel: "telegram",
-      accountId: "work",
-    });
-    expect(vi.mocked(resolveChannelReactionGuidance)).toHaveBeenCalledWith({
-      cfg: params.cfg,
-      channel: "telegram",
-      accountId: "work",
-    });
-    expect(vi.mocked(resolveChannelMessageToolHints)).toHaveBeenCalledWith({
+    expect(vi.mocked(resolveRuntimeChannelPromptContext)).toHaveBeenCalledExactlyOnceWith({
       cfg: params.cfg,
       channel: "telegram",
       accountId: "work",
@@ -430,8 +426,8 @@ describe("resolveCommandsSystemPromptBundle", () => {
       }),
     );
     const toolParams = requireFirstArg(
-      vi.mocked(createOpenClawCodingTools),
-      "createOpenClawCodingTools",
+      vi.mocked(createOpenClawCodingToolsAsync),
+      "createOpenClawCodingToolsAsync",
     );
     expect(toolParams.agentId).toBe("target");
     expect(toolParams.sessionKey).toBe("agent:target:telegram:direct:target-session");
@@ -608,7 +604,7 @@ describe("resolveCommandsSystemPromptBundle", () => {
   });
 
   it("uses config-backed prompt settings for the target agent", async () => {
-    createOpenClawCodingToolsMock.mockReturnValue([{ name: "sessions_spawn" }] as never);
+    createOpenClawCodingToolsAsyncMock.mockReturnValue([{ name: "sessions_spawn" }] as never);
     const params = makeParams();
     params.cfg = {
       agents: {

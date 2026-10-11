@@ -1,8 +1,4 @@
-import {
-  renderMessagePresentationFallbackText,
-  type MessagePresentation,
-  type MessagePresentationBlock,
-} from "openclaw/plugin-sdk/interactive-runtime";
+import type { MessagePresentationBlock } from "openclaw/plugin-sdk/interactive-runtime";
 import type { PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import {
   findCodexMarketplacePluginSummary,
@@ -27,6 +23,7 @@ import {
   type CodexPluginsConfigBlock,
 } from "./command-plugin-config.js";
 import type { CodexPluginCommandContext } from "./command-plugins-runtime.js";
+import { buildCodexPresentationReply } from "./command-presentation.js";
 import { discoverCodexMarketplacePlugins } from "./plugin-marketplace-discovery.js";
 
 type Evidence<T> =
@@ -410,12 +407,7 @@ export function formatCodexPluginReadiness(
       blocks.push(buildCodexPluginStatusButtons(readiness.commandId, canRefreshHostedApps));
     }
   }
-  const presentation: MessagePresentation = { title: "Codex plugin status", blocks };
-  return {
-    text: renderMessagePresentationFallbackText({ presentation }),
-    presentation,
-    presentationTextMode: "fallback",
-  };
+  return buildCodexPresentationReply({ title: "Codex plugin status", blocks });
 }
 
 async function readEvidence<T>(read: () => Promise<T>): Promise<Evidence<T>> {

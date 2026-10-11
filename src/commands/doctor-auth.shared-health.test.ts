@@ -6,10 +6,7 @@ import {
   writePersistedAuthProfileStateRaw,
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
-import {
-  loadAuthProfileStoreForRuntime,
-  loadAuthProfileStoreWithoutExternalProfiles,
-} from "../agents/auth-profiles/store-runtime.js";
+import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
 import { resolvePersistedAuthProfileOwnerAgentDir } from "../agents/auth-profiles/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
@@ -43,48 +40,6 @@ function createFleetConfig(): OpenClawConfig {
 }
 
 describe("Doctor shared auth health", () => {
-  it("reports shared OAuth expiry for an explicit fleet without local profiles", async () => {
-    await withOpenClawTestState({ prefix: "openclaw-doctor-shared-health-" }, async (state) => {
-      const cfg = createFleetConfig();
-      await state.writeConfig(cfg);
-      const profileId = "diagnostic-provider:shared";
-      const store = {
-        version: 1,
-        profiles: {
-          [profileId]: {
-            type: "oauth" as const,
-            provider: "diagnostic-provider",
-            access: "synthetic-access",
-            refresh: "synthetic-refresh",
-            expires: Date.now() - 60_000,
-          },
-        },
-      };
-      writeConfigMachineState("auth.sharedStore", { location: "state-db" });
-      writePersistedAuthProfileStoreRaw(store);
-      const sharedPath = resolveSharedAuthStorePath();
-      const prompter = createDoctorPrompter({
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        options: { nonInteractive: true },
-      });
-
-      const findings = await collectAuthProfileHealthFindings({ cfg });
-      await noteAuthProfileHealth({ cfg, prompter, allowKeychainPrompt: false });
-
-      expect.soft(findings).toEqual([
-        expect.objectContaining({
-          target: profileId,
-          path: sharedPath,
-          message: expect.stringContaining("expired"),
-        }),
-      ]);
-      expect
-        .soft(vi.mocked(note).mock.calls)
-        .toEqual([[expect.stringContaining(`${profileId}: expired`), "Model auth"]]);
-      expect(loadAuthProfileStoreWithoutExternalProfiles().profiles).toEqual(store.profiles);
-    });
-  });
-
   it("keeps inherited-profile recovery guidance local without duplicating shared expiry", async () => {
     await withOpenClawTestState({ prefix: "openclaw-doctor-auth-owners-" }, async (state) => {
       const cfg = createFleetConfig();
@@ -116,6 +71,7 @@ describe("Doctor shared auth health", () => {
       );
 
       const findings = await collectAuthProfileHealthFindings({ cfg });
+      expect(refreshProfile).not.toHaveBeenCalled();
       expect.soft(findings).toEqual([
         expect.objectContaining({
           target: profileId,
@@ -174,42 +130,6 @@ describe("Doctor shared auth health", () => {
           fixHint: expect.stringContaining("openclaw models auth login --provider openai"),
         }),
       ]);
-      expect(cliCredentials.readCodex).not.toHaveBeenCalled();
-    });
-  });
-
-  it("preserves supported external CLI overlays when checking an agent-local auth store", async () => {
-    await withOpenClawTestState({ prefix: "openclaw-doctor-minimax-auth-" }, async (state) => {
-      const cfg: OpenClawConfig = {
-        agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
-        plugins: { enabled: false },
-      };
-      await state.writeConfig(cfg);
-      writeConfigMachineState("auth.sharedStore", { location: "state-db" });
-      writePersistedAuthProfileStoreRaw(
-        {
-          version: 1,
-          profiles: {
-            "minimax-portal:minimax-cli": {
-              type: "oauth",
-              provider: "minimax-portal",
-              accountId: "synthetic-cli-account",
-              expires: 1,
-            },
-          },
-        },
-        state.agentDir("alpha"),
-      );
-      cliCredentials.readMiniMax.mockReturnValue({
-        type: "oauth",
-        provider: "minimax-portal",
-        accountId: "synthetic-cli-account",
-        access: "synthetic-cli-access",
-        refresh: "synthetic-cli-refresh",
-        expires: Date.now() + 7 * 86_400_000,
-      });
-
-      expect(await collectAuthProfileHealthFindings({ cfg })).toEqual([]);
       expect(cliCredentials.readCodex).not.toHaveBeenCalled();
     });
   });

@@ -31,38 +31,21 @@ struct OpenClawChatSwarmActivityState: Equatable {
                         limit: maxTrackedSwarmChildren)
                     self.nextPhaseRank += 1
                 }
-                Self.setBounded(
-                    &self.currentPhaseByGroup,
-                    key: groupID,
-                    value: text,
-                    limit: maxTrackedSwarmGroups)
-            } else {
-                Self.setBounded(
-                    &self.latestLogByGroup,
-                    key: groupID,
-                    value: text,
-                    limit: maxTrackedSwarmGroups)
             }
+            let field: WritableKeyPath<Self, [String: String]> = kind == "phase"
+                ? \.currentPhaseByGroup : \.latestLogByGroup
+            Self.setBounded(&self[keyPath: field], key: groupID, value: text, limit: maxTrackedSwarmGroups)
             return true
         }
 
         guard let childKey = ChatPayloadDecoding.trimmedNonEmptyString(event.sessionKey) else { return true }
-        if let phase = ChatPayloadDecoding.trimmedNonEmptyString(event.swarmPhase) {
+        let inheritedPhase = event.reason == "create" && self.phaseByChild[childKey] == nil
+            ? self.currentPhaseByGroup[groupID] : nil
+        if let phase = ChatPayloadDecoding.trimmedNonEmptyString(event.swarmPhase) ?? inheritedPhase {
             Self.setBounded(
                 &self.phaseByChild,
                 key: childKey,
                 value: phase,
-                limit: maxTrackedSwarmChildren)
-            return true
-        }
-        if event.reason == "create",
-           self.phaseByChild[childKey] == nil,
-           let currentPhase = currentPhaseByGroup[groupID]
-        {
-            Self.setBounded(
-                &self.phaseByChild,
-                key: childKey,
-                value: currentPhase,
                 limit: maxTrackedSwarmChildren)
         }
         return true
@@ -322,7 +305,7 @@ extension OpenClawChatViewModel {
             return
         }
         do {
-            let enabled = try await routeLease.isEnabled(sessionKey: session.key)
+            let enabled = try await routeLease.isEnabled(session.key)
             guard isCurrent() else { return }
             self.swarmEnabled = enabled
             guard enabled else {
@@ -336,8 +319,10 @@ extension OpenClawChatViewModel {
                 self.updateSwarmProjection()
             }
             let rosterRead = self.sidebarData?.beginRead()
-            let rows = try await routeLease.listChildSessions(parentKey: session.key)
+            let result = try await routeLease.listChildSessions(session.key)
             guard isCurrent() else { return }
+            // iOS and macOS Swarm keep showing partial rows; only sidebar hydration uses completeness for retry UI.
+            let rows = result.rows
             if let owner = self.sidebarData, let rosterRead {
                 self.swarmRowIDs = owner.receive(rows, read: rosterRead)
             } else if self.sidebarData == nil {

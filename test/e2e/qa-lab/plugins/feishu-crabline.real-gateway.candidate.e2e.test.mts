@@ -18,6 +18,7 @@ import {
   PROXY_FIXTURE_CERTIFICATE,
   PROXY_FIXTURE_KEY,
 } from "../../../../src/test-helpers/proxy-tls-fixture.js";
+import { createQaPluginEntryObservation } from "../../../helpers/qa-plugin-entry-observation.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../../../..");
 const accounts = ["alpha", "beta"] as const;
@@ -97,6 +98,7 @@ it("joins two native Feishu accounts through the real Gateway with raw rendering
   const builtEntryHash = createHash("sha256")
     .update(await fs.readFile(builtEntry))
     .digest("hex");
+  const entryObservation = await createQaPluginEntryObservation({ directory, entry: builtEntry });
   const gateway = await gatewayOwner.start({
     repoRoot,
     providerBaseUrl: `${mock.baseUrl}/v1`,
@@ -108,6 +110,7 @@ it("joins two native Feishu accounts through the real Gateway with raw rendering
     controlUiEnabled: false,
     enabledPluginIds: ["feishu"],
     runtimeEnvPatch: { NODE_EXTRA_CA_CERTS: caPath },
+    runtimePreloads: [entryObservation.preloadUrl],
     mutateConfig: (cfg) => ({
       ...cfg,
       logging: { ...cfg.logging, level: "debug", consoleLevel: "debug" },
@@ -149,15 +152,9 @@ it("joins two native Feishu accounts through the real Gateway with raw rendering
     }
   };
   await wait(() => accounts.every((account) => stage(account, "websocket.connected").length === 1));
-  const loaded = [...gateway.logs().matchAll(/\[plugins\] loading feishu from ([^\r\n]+)/gu)]
-    .at(-1)?.[1]
-    ?.trim();
-  if (!loaded) {
-    throw new Error("Gateway did not report its actual Feishu executable entry");
-  }
-  expect(await fs.realpath(loaded)).toBe(builtEntry);
+  await entryObservation.verify(gateway.pid, builtEntryHash);
   const entryHash = createHash("sha256")
-    .update(await fs.readFile(loaded))
+    .update(await fs.readFile(builtEntry))
     .digest("hex");
   expect(entryHash).toBe(builtEntryHash);
   const sourceHash = createHash("sha256")
@@ -235,7 +232,7 @@ it("joins two native Feishu accounts through the real Gateway with raw rendering
       `中文入口 ${account === "alpha" ? "beta" : "alpha"}`,
     );
   }
-  // The import-attempt line is identity evidence only; native replies above prove execution.
+  // Native loader bytes establish identity; the replies above prove execution.
   console.log(
     JSON.stringify({
       proof: "feishu-native-gateway-candidate",

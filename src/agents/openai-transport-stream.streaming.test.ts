@@ -163,7 +163,7 @@ describe("openai transport stream", () => {
       expect(String(errorPayload?.errorBody)).toContain("Not supported model some-model-id");
       expect(classifyAssistantFailoverReason(errorPayload as never)).toBe("model_not_found");
       expect(formatUserFacingAssistantErrorText(errorPayload as never)).toBe(
-        "The selected model was not found by the provider. Check the model id or choose a different model.",
+        "This model was not found. Choose another model in the Control UI.",
       );
     } finally {
       await new Promise<void>((resolve, reject) => {

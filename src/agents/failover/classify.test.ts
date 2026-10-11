@@ -6,13 +6,44 @@ import {
   isBillingErrorMessage,
   isCloudCodeAssistFormatError,
   isContextOverflowError,
-  isFailoverErrorMessage,
   isProviderCompletedErrorFinishReasonMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
 } from "./classify.js";
 import { isAuthPermanentErrorMessage } from "./message-patterns.js";
 import { renderRateLimitOrOverloadedCopy } from "./user-copy.js";
+
+describe("numeric authentication status context", () => {
+  it.each([401, 403])("preserves authentication status %s", (status) => {
+    for (const message of [
+      String(status),
+      `HTTP ${status}`,
+      `provider returned HTTP ${status}`,
+      `status code: ${status}`,
+      `response_code=${status}`,
+      `Error code ${status} was returned`,
+      JSON.stringify({ status }),
+      JSON.stringify({ code: String(status) }),
+    ]) {
+      expect(isAuthErrorMessage(message), message).toBe(true);
+      expect(classifyFailoverReason(message, { providerPlugin: null }), message).toBe("auth");
+    }
+    expect(
+      classifyFailoverSignal({ status, message: "provider refusal" }, { providerPlugin: null }),
+    ).toEqual({ kind: "reason", reason: "auth" });
+  });
+
+  it.each([401, 403])("ignores diagnostic counts and identifiers containing %s", (value) => {
+    for (const message of [
+      JSON.stringify({ argumentChars: value }),
+      JSON.stringify({ requestId: String(value) }),
+      `Processed ${value} records`,
+    ]) {
+      expect(isAuthErrorMessage(message), message).toBe(false);
+      expect(classifyFailoverReason(message, { providerPlugin: null }), message).toBeNull();
+    }
+  });
+});
 
 describe("HTTP 402 prose classification", () => {
   it.each([
@@ -352,8 +383,8 @@ it("keeps aborted finish reasons in the timeout lane", () => {
 });
 
 it("matches bare terminated transport failures without matching unrelated prose", () => {
-  expect(isFailoverErrorMessage("terminated")).toBe(true);
-  expect(isFailoverErrorMessage("The user terminated the session manually.")).toBe(false);
+  expect(classifyFailoverReason("terminated")).toBe("timeout");
+  expect(classifyFailoverReason("The user terminated the session manually.")).toBeNull();
 });
 
 it("does not classify MALFORMED_FUNCTION_CALL as timeout", () => {
@@ -369,7 +400,7 @@ it("classifies the generic LLM request failure as transient", () => {
 it("does not match schema rejection copy as a generic timeout", () => {
   expect(
     isTimeoutErrorMessage(
-      "LLM request failed: provider rejected the request schema or tool payload.",
+      "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.",
     ),
   ).toBe(false);
 });
@@ -398,6 +429,6 @@ it("keeps HTTP 429 overload wording in rate-limit backoff and copy", () => {
     '429 status code (exceeded limit)\n{"code":1305,"message":"The service may be temporarily overloaded, please try again later."}';
   expect(classifyFailoverReason(message)).toBe("rate_limit");
   expect(renderRateLimitOrOverloadedCopy({ reason: "rate_limit", raw: message })).toBe(
-    "⚠️ API rate limit reached. Please try again later.",
+    "⚠️ The AI service needs a short break. Please try again in a few minutes.",
   );
 });

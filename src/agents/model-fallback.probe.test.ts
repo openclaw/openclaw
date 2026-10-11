@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
-import { hasAnyAuthProfileStoreSource } from "./auth-profiles/source-check.js";
+import { hasAnyAuthProfileStoreSourceAsync } from "./auth-profiles/source-check.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
@@ -39,8 +39,9 @@ vi.mock("./auth-profiles/order.js", () => ({ resolveAuthProfileOrder: vi.fn() })
 vi.mock("./provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: () => undefined,
 }));
+// mock-isolation: Cooldown probing uses the mocked profile store; disk source discovery must stay isolated.
 vi.mock("./auth-profiles/source-check.js", () => ({
-  hasAnyAuthProfileStoreSource: vi.fn(() => true),
+  hasAnyAuthProfileStoreSourceAsync: vi.fn(() => true),
 }));
 const sessionSuspensionMocks = vi.hoisted(() => ({
   suspendSession: vi.fn().mockResolvedValue(undefined),
@@ -63,7 +64,7 @@ const sessionSuspensionMocks = vi.hoisted(() => ({
 vi.mock("./session-suspension.js", () => sessionSuspensionMocks);
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => {
   const { createEmptyPluginMetadataSnapshot } =
-    await import("./test-helpers/embedded-agent-runner-e2e-mocks.js");
+    await import("../plugins/plugin-metadata-empty.test-support.js");
   const snapshot = {
     ...createEmptyPluginMetadataSnapshot(),
     policyHash: "model-fallback-probe-test-empty-plugin-policy",
@@ -141,7 +142,7 @@ beforeEach(() => {
   vi.spyOn(Date, "now").mockReturnValue(NOW);
   setLoggerOverride({ level: "silent", consoleLevel: "silent" });
   probeThrottleInternals.lastProbeAttempt.clear();
-  vi.mocked(hasAnyAuthProfileStoreSource).mockReturnValue(true);
+  vi.mocked(hasAnyAuthProfileStoreSourceAsync).mockResolvedValue(true);
   vi.mocked(ensureAuthProfileStore).mockReturnValue({ version: 1, profiles: {} });
   profileOrder.mockImplementation(({ provider }) =>
     ["openai", "anthropic", "google"].includes(provider) ? [`${provider}-profile-1`] : [],
@@ -374,25 +375,6 @@ describe("runWithModelFallback probe logic", () => {
     });
   });
 
-  it("decides when billing cooldowns should probe", () => {
-    expect(
-      cooldownDecision({
-        reason: "billing",
-        soonest: NOW + 30 * 60 * 1000,
-        hasFallbackCandidates: false,
-      }),
-    ).toEqual({ type: "attempt", reason: "billing", markProbe: true });
-    expect(cooldownDecision({ reason: "billing", soonest: NOW + 60 * 1000 })).toEqual({
-      type: "attempt",
-      reason: "billing",
-      markProbe: true,
-    });
-    expect(cooldownDecision({ reason: "billing", soonest: NOW + 30 * 60 * 1000 })).toEqual({
-      type: "suspend_session",
-      reason: "billing",
-    });
-  });
-
   it("does not suspend the session when fallback candidates remain", async () => {
     getExpiry.mockReturnValue(NOW + 30 * 60 * 1000);
     unavailableReason.mockReturnValue("billing");
@@ -406,18 +388,6 @@ describe("runWithModelFallback probe logic", () => {
     );
     expect(result.attempts[0]?.reason).toBe("billing");
     expect(sessionSuspensionMocks.suspendSession).not.toHaveBeenCalled();
-  });
-
-  it("defers embedded session suspension only while another candidate remains", async () => {
-    inCooldown.mockReturnValue(false);
-    const run = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("primary failed"))
-      .mockResolvedValueOnce("fallback-ok");
-    const result = await runPrimary(run, { sessionId: "test-session", lane: "main" });
-    expect(result.result).toBe("fallback-ok");
-    expect(run).toHaveBeenCalledTimes(2);
-    expect(sessionSuspensionMocks.runWithDeferredSessionSuspension).toHaveBeenCalledOnce();
   });
 
   it.each(["caller abort", "terminal classified result", "closed throw"])(

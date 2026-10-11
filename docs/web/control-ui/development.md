@@ -26,16 +26,18 @@ from the complete chat and new-session boot totals. Those route totals include
 the entry assets and the route's measured immediate dynamic imports, counting
 each asset once even when both preload lists reference it. Moving an existing
 boot import into the first request wave therefore remains visible in the byte
-accounting. The initial-entry ceilings and baseline are unchanged; route totals
+accounting. The initial-entry ceilings and baseline are unchanged; route byte totals
 are reported without introducing a higher limit. `--base-dist` on
 `scripts/check-control-ui-performance.mts` compares route bytes and requests when
 both builds contain route preload templates. Older builds report that comparison
 as unavailable, so use a cold-load network capture to compare their complete boot
 cost.
 
-For bundled builds, the Gateway retains manifest-verified assets so already-open tabs can fetch older asset URLs after an update. The cache serves at most three generations and 96 MiB total, preferring the current generation; older generations can be pruned sooner to meet the byte budget. Background startup preparation reuses verified inventories through publication and pruning instead of rereading unchanged retained assets at each step. Newly published assets are verified before reuse, including a concurrent publisher's winning copy. Each pruner claims an old directory before removing it so concurrent publishers do not delete the same tree. Cleanup failures log a warning and may temporarily leave extra files on disk, without discarding a successfully published generation. Later preparation can reclaim abandoned staging directories after one hour. Configured `gateway.controlUi.root` builds do not use this cache.
+Route boot JavaScript is limited to 35 requests per route, with three requests of headroom above the measured maximum, to catch facade regressions caused by top-level await disabling chunk optimization.
 
-Bundled public assets (themes, fonts, icons, and artwork) use `?v=<build-id>` URLs with a one-year immutable HTTP cache. The ID includes a digest of the public files, so rebuilding changed files at the same commit also changes their URLs. The Gateway snapshots this identity at startup; restart it after rebuilding an in-place installation. Unversioned requests, stale IDs, documents, `sw.js`, and custom `gateway.controlUi.root` installs keep `Cache-Control: no-cache`. The service worker keeps its network-first policy for public assets, allowing the browser's HTTP cache to satisfy matching versioned requests.
+After a Gateway update, already-open tabs reload the current build when they encounter a missing old asset. Reloading is automatic when no unsaved-work guard blocks it; otherwise, save or discard the protected work and use the **Reload** banner. The Gateway and service worker keep only the current build's assets.
+
+Bundled public assets (themes, fonts, icons, and artwork) use `?v=<build-id>` URLs with a one-year immutable HTTP cache. The ID includes a digest of the public files, so rebuilding changed files at the same commit also changes their URLs. The Gateway snapshots this identity at startup; restart it after rebuilding an in-place installation. Unversioned requests, stale IDs, documents, `sw.js`, and custom `gateway.controlUi.root` installs keep `Cache-Control: no-cache`. The service worker caches matching current-build public URLs for offline reuse.
 
 The Gateway shares prepared bundled asset bytes across browsers, including Brotli and gzip variants. Cold file admission and reads run in a worker so simultaneous page loads do not block chat delivery. Custom roots continue to read current files on each request.
 

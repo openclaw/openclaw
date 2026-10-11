@@ -4,6 +4,7 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { formatGatewayServiceInstallationDrift } from "../cli/daemon-cli/shared.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
@@ -38,12 +39,18 @@ import {
   resolveManagedGatewayServiceCommand,
 } from "../daemon/service-types.js";
 import { resolveGatewayService } from "../daemon/service.js";
-import { isSystemdUnitActive, uninstallLegacySystemdUnits } from "../daemon/systemd.js";
+import { isSystemdUnitActive } from "../daemon/systemd.js";
 import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-supervision.js";
+import { formatInstallOwnerMessage, readInstallOwner } from "../infra/install-owner.js";
+import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { sleep } from "../utils/sleep.js";
 import { resolveGatewayDaemonRuntime } from "./daemon-runtime.js";
-import { resolveGatewayAuthTokenForService } from "./doctor-gateway-auth-token.js";
+import {
+  preserveGatewayAuthTokenForService,
+  resolveGatewayAuthTokenForService,
+} from "./doctor-gateway-auth-token.js";
 import {
   assertGatewayServiceInstallationRepairAllowed,
   canRepairRunningGatewayDefinition,
@@ -54,13 +61,19 @@ import {
   resolveSystemdUnitNameFromServicePath,
   type DoctorGatewayInstallationMaintenance,
 } from "./doctor-gateway-installation.js";
-import { classifyLegacyServices } from "./doctor-gateway-legacy-services.js";
+import {
+  classifyLegacyServices,
+  cleanupLegacyLinuxUserServices,
+} from "./doctor-gateway-legacy-services.js";
 import { buildExpectedGatewayServicePlan } from "./doctor-gateway-runtime-plan.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import {
   formatServiceConfigIssues,
+  formatGatewayServiceRepairPreview,
+  reportGatewayServiceConfigAudit,
   hasRepairableServiceDefinitionDrift,
   isOperatorOwnedEnvironmentIssue,
+  isPreservedLaunchdTimeoutWarning,
   isServiceDefinitionOnlyRepair,
   isServiceInstallationOnlyRepair,
   reportServiceDefinitionDrift,
@@ -101,19 +114,9 @@ async function confirmLegacyLaunchdServiceUnloaded(serviceTarget: string): Promi
     if (delayMs <= 0) {
       break;
     }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, delayMs);
-    });
+    await sleep(delayMs);
   }
   return false;
-}
-
-function extractDetailPath(detail: string, prefix: string): string | null {
-  if (!detail.startsWith(prefix)) {
-    return null;
-  }
-  const value = detail.slice(prefix.length).trim();
-  return value.length > 0 ? value : null;
 }
 
 async function filterInactiveExtraGatewayServices(
@@ -197,7 +200,7 @@ async function cleanupLegacyDarwinServices(
   const failed: string[] = [];
 
   for (const svc of services) {
-    const plistPath = extractDetailPath(svc.detail, "plist:");
+    const plistPath = svc.sourcePath;
     if (!plistPath) {
       failed.push(`${svc.label} (missing plist path)`);
       continue;
@@ -210,39 +213,6 @@ async function cleanupLegacyDarwinServices(
       removed.push(result.destination ? `${svc.label} -> ${result.destination}` : svc.label);
     } else {
       failed.push(`${svc.label} (${result.reason})`);
-    }
-  }
-
-  return { removed, failed };
-}
-
-async function cleanupLegacyLinuxUserServices(
-  services: ExtraGatewayService[],
-  runtime: RuntimeEnv,
-): Promise<{ removed: string[]; failed: string[] }> {
-  const removed: string[] = [];
-  const failed: string[] = [];
-
-  try {
-    const removedUnits = await uninstallLegacySystemdUnits({
-      env: process.env,
-      stdout: process.stdout,
-    });
-    const removedByLabel: Map<string, (typeof removedUnits)[number]> = new Map(
-      removedUnits.map((unit) => [`${unit.name}.service`, unit] as const),
-    );
-    for (const svc of services) {
-      const removedUnit = removedByLabel.get(svc.label);
-      if (!removedUnit) {
-        failed.push(`${svc.label} (legacy unit name not recognized)`);
-        continue;
-      }
-      removed.push(`${svc.label} -> ${removedUnit.unitPath}`);
-    }
-  } catch (err) {
-    runtime.error(`Legacy Linux gateway cleanup failed: ${String(err)}`);
-    for (const svc of services) {
-      failed.push(`${svc.label} (linux cleanup failed)`);
     }
   }
 
@@ -273,6 +243,16 @@ export async function maybeRepairGatewayServiceConfig(
 
   if (mode === "remote") {
     note("Gateway mode is remote; skipped local service audit.", "Gateway");
+    return cfg;
+  }
+
+  const root = await resolveOpenClawPackageRoot({
+    moduleUrl: import.meta.url,
+    argv1: process.argv[1],
+  });
+  const installOwner = await readInstallOwner(root);
+  if (installOwner) {
+    note(formatInstallOwnerMessage(installOwner), "Gateway runtime");
     return cfg;
   }
 
@@ -315,12 +295,13 @@ export async function maybeRepairGatewayServiceConfig(
     note(`Gateway service invokes ${OPENCLAW_WRAPPER_ENV_KEY}: ${serviceWrapperPath}`, "Gateway");
   }
   const serviceLayout = await summarizeGatewayServiceLayout(command);
-  const sourceCheckoutWarning = serviceLayout?.entrypointSourceCheckout
-    ? [
-        `Gateway service entrypoint resolves to a source checkout: ${serviceLayout.packageRootReal ?? serviceLayout.packageRoot ?? serviceLayout.entrypointReal ?? serviceLayout.entrypoint}.`,
-        "Run `openclaw gateway install --force` from the intended package install to replace the gateway service definition.",
-      ].join("\n")
-    : null;
+  const serviceOwner = await readInstallOwner(
+    serviceLayout?.packageRootReal ?? serviceLayout?.packageRoot ?? null,
+  );
+  if (serviceOwner) {
+    note(formatInstallOwnerMessage(serviceOwner), "Gateway runtime");
+    return cfg;
+  }
 
   const tokenRefConfigured = Boolean(
     resolveSecretInputRef({
@@ -409,15 +390,11 @@ export async function maybeRepairGatewayServiceConfig(
     : null;
   const systemNodePath = systemNodeInfo?.status === "supported" ? systemNodeInfo.path : null;
   if (needsNodeRuntime && !systemNodePath && runtimeChoice !== "node") {
-    const warning = renderSystemNodeWarning(systemNodeInfo);
-    if (warning) {
-      note(warning, "Gateway runtime");
-    } else {
-      note(
+    note(
+      renderSystemNodeWarning(systemNodeInfo) ||
         `System Node ${SUPPORTED_NODE_VERSIONS} not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.`,
-        "Gateway runtime",
-      );
-    }
+      "Gateway runtime",
+    );
   }
 
   const expectedRuntimePlan =
@@ -474,24 +451,18 @@ export async function maybeRepairGatewayServiceConfig(
     note(serviceRewriteBlock, "Gateway service config");
   }
 
-  const hasEntrypointMismatch = audit.issues.some(
-    (issue) => issue.code === SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
+  const sourceCheckoutWarningToShow = reportGatewayServiceConfigAudit(
+    audit,
+    serviceLayout,
+    definitionRepair,
   );
-  const sourceCheckoutWarningToShow = hasEntrypointMismatch ? null : sourceCheckoutWarning;
-
   if (audit.issues.length === 0 && !definitionRepair) {
-    if (sourceCheckoutWarningToShow !== null) {
-      note(sourceCheckoutWarningToShow, "Gateway service config");
-    }
     return cfg;
   }
-
-  const consolidatedLines: string[] = [];
-  if (sourceCheckoutWarningToShow !== null) {
-    consolidatedLines.push(sourceCheckoutWarningToShow, "");
+  // A short custom timeout is diagnostic, not permission to overwrite native policy.
+  if (!definitionRepair && !installationDrift && isPreservedLaunchdTimeoutWarning(audit)) {
+    return cfg;
   }
-  consolidatedLines.push(...formatServiceConfigIssues(audit.issues));
-  note(consolidatedLines.join("\n"), "Gateway service config");
   if (
     audit.issues.length > 0 &&
     audit.issues.every((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeProbeFailed)
@@ -556,19 +527,39 @@ export async function maybeRepairGatewayServiceConfig(
       : undefined;
   const needsConfigWrite =
     !tokenRefConfigured && !configuredGatewayToken && Boolean(gatewayTokenForRepair);
+  const { preview, unresolvedFindings: unresolvedRepairFindings } =
+    formatGatewayServiceRepairPreview({
+      command,
+      managedDefinition,
+      plan: expectedRuntimePlan,
+      currentLayout: serviceLayout,
+      plannedLayout: runtimeLayout,
+      missingSystemNode: needsNodeRuntime && !systemNodePath,
+      definitionDrift: audit.definitionDrift,
+    });
+  note(preview, "Gateway service repair preview");
   const repair = await prompter.confirmRuntimeRepair({
-    message: needsAggressive
-      ? "Overwrite gateway service config with current defaults now?"
-      : "Update gateway service config to the recommended defaults now?",
-    initialValue: needsAggressive ? prompter.shouldForce : true,
+    message: needsConfigWrite
+      ? "Preserve the Gateway token in the secret store, write its SecretRef to config, and reinstall the service now?"
+      : needsAggressive
+        ? "Overwrite gateway service config with the repair shown above now?"
+        : "Apply the gateway service repair shown above now?",
+    initialValue: needsConfigWrite ? false : needsAggressive ? prompter.shouldForce : true,
     requiresInteractiveConfirmation:
-      !(installationDrift && isServiceInstallationOnlyRepair(audit)) &&
-      !(definitionRepair && !needsConfigWrite && isServiceDefinitionOnlyRepair(audit)),
+      needsConfigWrite ||
+      (!(installationDrift && isServiceInstallationOnlyRepair(audit)) &&
+        !(definitionRepair && isServiceDefinitionOnlyRepair(audit))),
   });
   if (!repair) {
+    if (needsConfigWrite) {
+      note(
+        "Skipped Gateway token preservation and service repair. Rerun `openclaw doctor --fix` in an interactive terminal to approve saving a store SecretRef in gateway.auth.token.",
+        "Gateway service config",
+      );
+    }
     if (sourceCheckoutWarningToShow === null) {
       note(
-        "Run `openclaw gateway install --force` when you want to replace the gateway service definition.",
+        `Run \`${formatCliCommand("openclaw gateway install --force")}\` when you want to replace the gateway service definition.`,
         "Gateway service config",
       );
     }
@@ -593,24 +584,30 @@ export async function maybeRepairGatewayServiceConfig(
     return cfg;
   }
   let cfgForServiceInstall = cfg;
-  if (needsConfigWrite) {
-    const nextCfg: OpenClawConfig = {
-      ...cfg,
-      gateway: {
-        ...cfg.gateway,
-        auth: {
-          ...cfg.gateway?.auth,
-          mode: cfg.gateway?.auth?.mode ?? "token",
-          token: gatewayTokenForRepair,
-        },
-      },
-    };
+  if (needsConfigWrite && gatewayTokenForRepair) {
     try {
-      cfgForServiceInstall = await options.writeConfig(nextCfg);
+      const { ref, reused, backupPath } = await preserveGatewayAuthTokenForService({
+        cfg,
+        env: serviceInstallEnv,
+        token: gatewayTokenForRepair,
+        assertCurrent: options.serviceMaintenance?.assertCurrent,
+      });
       note(
-        expectedGatewayToken
-          ? "Persisted gateway.auth.token from environment before reinstalling service."
-          : "Persisted gateway.auth.token from existing service definition before reinstalling service.",
+        reused
+          ? `Gateway token already exists in secret store entry "${ref.id}"; the store was left unchanged.`
+          : `Saved Gateway token in secret store entry "${ref.id}".${backupPath ? ` Backup: ${backupPath}` : ""} If config publication fails, the entry is retained and reused on the next repair.`,
+        "Gateway",
+      );
+      options.serviceMaintenance?.assertCurrent();
+      cfgForServiceInstall = await options.writeConfig({
+        ...cfg,
+        gateway: {
+          ...cfg.gateway,
+          auth: { ...cfg.gateway?.auth, mode: cfg.gateway?.auth?.mode ?? "token", token: ref },
+        },
+      });
+      note(
+        "Configured gateway.auth.token as a store SecretRef before reinstalling service.",
         "Gateway",
       );
     } catch (err) {
@@ -641,7 +638,14 @@ export async function maybeRepairGatewayServiceConfig(
         ? { kind: "installation", root: expectedRoot }
         : definitionRepair && expectedRoot
           ? { kind: "definition", root: expectedRoot }
-          : { kind: "config" },
+          : {
+              kind: "config",
+              ...(expectedRoot &&
+              !expectedLayout?.entrypointSourceCheckout &&
+              audit.definitionDrift?.some((finding) => finding.kind === "preserved")
+                ? { root: expectedRoot }
+                : {}),
+            },
     args: {
       ...updatedPlan,
       runtimePinUpdate: { expected: pinSnapshot, pin: pinSnapshot.pin },
@@ -650,6 +654,9 @@ export async function maybeRepairGatewayServiceConfig(
       warn: (message) => note(message, "Gateway"),
     },
   });
+  if (unresolvedRepairFindings.length > 0) {
+    note(unresolvedRepairFindings.join("\n"), "Gateway service findings still unresolved");
+  }
   return cfgForServiceInstall;
 }
 
@@ -700,16 +707,15 @@ export async function maybeScanExtraGatewayServices(
       const { darwinUserServices, linuxUserServices, failed } =
         classifyLegacyServices(legacyServices);
 
-      if (darwinUserServices.length > 0) {
-        const result = await cleanupLegacyDarwinServices(darwinUserServices);
-        removed.push(...result.removed);
-        failed.push(...result.failed);
-      }
-
-      if (linuxUserServices.length > 0) {
-        const result = await cleanupLegacyLinuxUserServices(linuxUserServices, runtime);
-        removed.push(...result.removed);
-        failed.push(...result.failed);
+      for (const [services, cleanup] of [
+        [darwinUserServices, () => cleanupLegacyDarwinServices(darwinUserServices)],
+        [linuxUserServices, () => cleanupLegacyLinuxUserServices(linuxUserServices, runtime)],
+      ] as const) {
+        if (services.length > 0) {
+          const result = await cleanup();
+          removed.push(...result.removed);
+          failed.push(...result.failed);
+        }
       }
 
       if (removed.length > 0) {

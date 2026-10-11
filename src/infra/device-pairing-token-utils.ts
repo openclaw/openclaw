@@ -5,14 +5,10 @@ import { generatePairingToken } from "./pairing-token.js";
 const OPERATOR_SCOPE_PREFIX = "operator.";
 
 /** Redacted token metadata safe for list/status responses. */
-export type DeviceAuthTokenSummary = {
-  role: string;
-  scopes: string[];
-  createdAtMs: number;
-  rotatedAtMs?: number;
-  revokedAtMs?: number;
-  lastUsedAtMs?: number;
-};
+export type DeviceAuthTokenSummary = Pick<
+  DeviceAuthToken,
+  "role" | "scopes" | "createdAtMs" | "rotatedAtMs" | "revokedAtMs" | "lastUsedAtMs"
+>;
 
 /** Build one freshly generated role token while preserving requested lifecycle fields. */
 export function createDeviceAuthToken(params: {

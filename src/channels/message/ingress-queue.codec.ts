@@ -28,6 +28,15 @@ export function parseFailedPayload(value: string): ParseJsonResult {
   return value === FAILED_NULL_PAYLOAD_SENTINEL ? { ok: true, value: null } : parseJson(value);
 }
 
+function recordIdentity(row: ChannelIngressRow) {
+  return {
+    id: row.event_id,
+    channelId: row.channel_id,
+    accountId: row.account_id,
+    queueName: row.queue_name,
+  };
+}
+
 export function baseRecord<TPayload, TMetadata>(
   row: ChannelIngressRow,
 ): ChannelIngressQueueRecord<TPayload, TMetadata> | null {
@@ -37,10 +46,7 @@ export function baseRecord<TPayload, TMetadata>(
   }
   const metaResult = row.metadata_json === null ? null : parseJson(row.metadata_json);
   return {
-    id: row.event_id,
-    channelId: row.channel_id,
-    accountId: row.account_id,
-    queueName: row.queue_name,
+    ...recordIdentity(row),
     // SAFETY: The channel codec owns payload validation; the queue preserves its opaque JSON.
     payload: payloadResult.value as TPayload,
     ...(metaResult === null || !metaResult.ok
@@ -76,10 +82,7 @@ export function claimedRecord<TPayload, TMetadata>(
 ): ChannelIngressQueueClaim<TPayload, TMetadata> | null {
   const claim = decodeClaimColumns(row);
   const base = claim === null ? null : baseRecord<TPayload, TMetadata>(row);
-  if (claim === null || base === null) {
-    return null;
-  }
-  return { ...base, claim };
+  return claim && base ? { ...base, claim } : null;
 }
 
 export function corruptClaimRecord(
@@ -87,10 +90,7 @@ export function corruptClaimRecord(
   claim: ChannelIngressClaimColumns,
 ): ChannelIngressQueueCorruptClaim {
   return {
-    id: row.event_id,
-    channelId: row.channel_id,
-    accountId: row.account_id,
-    queueName: row.queue_name,
+    ...recordIdentity(row),
     ...(row.lane_key === null ? {} : { laneKey: row.lane_key }),
     reason: "corrupt_payload",
     claim,
@@ -103,10 +103,7 @@ export function completedRecord<TCompletedMetadata>(
   const metaResult =
     row.completed_metadata_json === null ? null : parseJson(row.completed_metadata_json);
   return {
-    id: row.event_id,
-    channelId: row.channel_id,
-    accountId: row.account_id,
-    queueName: row.queue_name,
+    ...recordIdentity(row),
     completedAt: row.completed_at ?? row.updated_at,
     ...(metaResult === null || !metaResult.ok
       ? {}
@@ -123,10 +120,7 @@ export function failedRecord<TPayload, TMetadata>(
   const payloadResult = parseFailedPayload(row.payload_json);
   const metadataResult = row.metadata_json === null ? null : parseJson(row.metadata_json);
   return {
-    id: row.event_id,
-    channelId: row.channel_id,
-    accountId: row.account_id,
-    queueName: row.queue_name,
+    ...recordIdentity(row),
     ...(payloadResult.ok && row.payload_json !== "null"
       ? {
           // SAFETY: Retained payloads keep the same channel-owned codec contract after failure.

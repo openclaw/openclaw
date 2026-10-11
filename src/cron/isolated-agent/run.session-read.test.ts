@@ -45,6 +45,54 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 describe("cron session preparation", () => {
+  it("persists scheduled session rows through the worker without caller SQL", async () => {
+    resetRunCronIsolatedAgentTurnHarness();
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-cron-session-write-"));
+    const database = openOpenClawAgentDatabase({ agentId: "main", env: process.env });
+    resolveCronSessionMock.mockImplementation(actualSession.prepareCronSession);
+    loadSessionEntryMock.mockImplementation(actualSession.loadCronSessionEntryLatest);
+    const queries: string[] = [];
+    patchSessionEntryMock.mockImplementation(
+      async (...args: Parameters<typeof actualAccessor.patchSessionEntryCore>) => {
+        const sql = observeHostDataSql();
+        try {
+          return await actualAccessor.patchSessionEntryCore(...args);
+        } finally {
+          queries.push(...sql.queries);
+          sql.restore();
+        }
+      },
+    );
+    const result = await prepareCronRunContext({
+      input: makeIsolatedAgentParamsFixture({
+        agentId: "main",
+        cfg: { session: { store: database.path } },
+        sessionKey: "cron:test-job",
+        job: makeIsolatedAgentJobFixture({ delivery: { mode: "none" } }),
+      }),
+      isFastTestEnv: true,
+      onLifecycleInterrupt: () => {},
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("Cron preparation failed");
+    }
+    try {
+      await using _ = result.context.preparedModelRuntimeLease;
+      expect(patchSessionEntryMock).toHaveBeenCalled();
+      expect(queries).toEqual([]);
+      expect(
+        actualAccessor.loadSessionEntry({
+          storePath: database.path,
+          sessionKey: "agent:main:cron:test-job",
+        }),
+      ).toMatchObject({ createdVia: "cron", sessionId: result.context.runSessionId });
+    } finally {
+      result.context.sessionWorkAdmission.release();
+      await result.context.workspaceLease?.release();
+    }
+  });
+
   it("prepares full target and source rows without host database reads", async () => {
     resetRunCronIsolatedAgentTurnHarness();
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-cron-session-read-"));
@@ -137,74 +185,59 @@ describe("cron session preparation", () => {
     expect(prepared?.sessionEntry.sessionId).not.toBe(source.sessionId);
   });
 
-  it.each([
-    { outcome: "rejected", replaceTarget: true },
-    { outcome: "accepted", replaceTarget: false },
-  ])(
-    "preserves bootstrap ownership when rollover admission is $outcome",
-    async ({ replaceTarget }) => {
-      resetRunCronIsolatedAgentTurnHarness();
-      const stateDir = tempDirs.make("openclaw-cron-session-read-rotation-");
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      const scope = { agentId: "main", env: process.env };
-      const database = openOpenClawAgentDatabase(scope);
-      const sessionKey = "agent:main:cron:test-job";
-      const target = { ...scope, storePath: database.path, sessionKey };
-      const now = Date.now();
-      const entry = {
-        sessionId: "initial-session",
-        lifecycleRevision: "initial-revision",
-        updatedAt: now,
-        sessionStartedAt: now,
-      };
-      await actualAccessor.replaceSessionEntry(target, entry);
-      const bootstrapInput = { workspaceDir: stateDir, sessionKey };
-      bootstrapSnapshots.add(sessionKey);
-      const bootstrapFiles = await getOrLoadBootstrapFiles(bootstrapInput);
-      const replacement = {
-        ...entry,
-        sessionId: "replacement-session",
-        lifecycleRevision: "replacement-revision",
-      };
-      resolveCronSessionMock.mockImplementation(async (params) => {
-        const prepared = await actualSession.prepareCronSession(params);
-        if (replaceTarget) {
-          await actualAccessor.replaceSessionEntry(target, replacement);
-        }
-        return prepared;
-      });
-      loadSessionEntryMock.mockImplementation(actualSession.loadCronSessionEntryLatest);
-      const admittedBoundary = new Error("cron lifecycle admission complete");
-      preflightCronModelProviderMock.mockRejectedValue(admittedBoundary);
+  it("preserves bootstrap ownership when rollover admission is rejected", async () => {
+    resetRunCronIsolatedAgentTurnHarness();
+    const stateDir = tempDirs.make("openclaw-cron-session-read-rotation-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const scope = { agentId: "main", env: process.env };
+    const database = openOpenClawAgentDatabase(scope);
+    const sessionKey = "agent:main:cron:test-job";
+    const target = { ...scope, storePath: database.path, sessionKey };
+    const now = Date.now();
+    const entry = {
+      sessionId: "initial-session",
+      lifecycleRevision: "initial-revision",
+      updatedAt: now,
+      sessionStartedAt: now,
+    };
+    await actualAccessor.replaceSessionEntry(target, entry);
+    const bootstrapInput = { workspaceDir: stateDir, sessionKey };
+    bootstrapSnapshots.add(sessionKey);
+    const bootstrapFiles = await getOrLoadBootstrapFiles(bootstrapInput);
+    const replacement = {
+      ...entry,
+      sessionId: "replacement-session",
+      lifecycleRevision: "replacement-revision",
+    };
+    resolveCronSessionMock.mockImplementation(async (params) => {
+      const prepared = await actualSession.prepareCronSession(params);
+      await actualAccessor.replaceSessionEntry(target, replacement);
+      return prepared;
+    });
+    loadSessionEntryMock.mockImplementation(actualSession.loadCronSessionEntryLatest);
+    const admittedBoundary = new Error("cron lifecycle admission complete");
+    preflightCronModelProviderMock.mockRejectedValue(admittedBoundary);
 
-      const preparation = prepareCronRunContext({
-        input: makeIsolatedAgentParamsFixture({
-          agentId: "main",
-          cfg: { session: { store: database.path } },
-          sessionKey,
-          job: makeIsolatedAgentJobFixture({
-            sessionTarget: "isolated",
-            delivery: { mode: "none" },
-          }),
+    const preparation = prepareCronRunContext({
+      input: makeIsolatedAgentParamsFixture({
+        agentId: "main",
+        cfg: { session: { store: database.path } },
+        sessionKey,
+        job: makeIsolatedAgentJobFixture({
+          sessionTarget: "isolated",
+          delivery: { mode: "none" },
         }),
-        isFastTestEnv: true,
-        onLifecycleInterrupt: () => {},
-      });
-      if (replaceTarget) {
-        await expect(preparation).rejects.toMatchObject({
-          name: "CronSessionLifecycleClaimError",
-          admissionDisposition: "session-conflict",
-        });
-        expect(preflightCronModelProviderMock).not.toHaveBeenCalled();
-        expect(await getOrLoadBootstrapFiles(bootstrapInput)).toBe(bootstrapFiles);
-      } else {
-        await expect(preparation).rejects.toBe(admittedBoundary);
-        expect(await getOrLoadBootstrapFiles(bootstrapInput)).not.toBe(bootstrapFiles);
-      }
-      expect(patchSessionEntryMock).not.toHaveBeenCalled();
-      expect(actualAccessor.loadSessionEntry(target)).toMatchObject(
-        replaceTarget ? replacement : entry,
-      );
-    },
-  );
+      }),
+      isFastTestEnv: true,
+      onLifecycleInterrupt: () => {},
+    });
+    await expect(preparation).rejects.toMatchObject({
+      name: "CronSessionLifecycleClaimError",
+      admissionDisposition: "session-conflict",
+    });
+    expect(preflightCronModelProviderMock).not.toHaveBeenCalled();
+    expect(await getOrLoadBootstrapFiles(bootstrapInput)).toBe(bootstrapFiles);
+    expect(patchSessionEntryMock).not.toHaveBeenCalled();
+    expect(actualAccessor.loadSessionEntry(target)).toMatchObject(replacement);
+  });
 });

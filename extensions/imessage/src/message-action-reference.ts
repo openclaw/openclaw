@@ -1,5 +1,6 @@
 // Imessage plugin module resolves and authorizes action message references.
 import type { IMessageChatContext } from "./chat-context.js";
+import type { authorizeIMessageResourceReference } from "./message-resource.js";
 
 type ResolveMessageId = (
   messageId: string,
@@ -10,16 +11,9 @@ type ResolveMessageId = (
   },
 ) => string | Promise<string>;
 
-type AuthorizeMessageReference = (params: {
-  accountId: string;
-  chatContext: IMessageChatContext;
-  cliPath: string;
-  dbPath?: string;
-  hasExclusiveLocalDatabase: boolean;
-  remoteHost?: string;
-  messageId: string;
-  conversationReadOrigin?: string;
-}) => void | Promise<void>;
+type AuthorizeMessageReference = (
+  params: Parameters<typeof authorizeIMessageResourceReference>[0],
+) => void | Promise<void>;
 
 export async function resolveAuthorizedIMessageActionReference(params: {
   messageId?: string;

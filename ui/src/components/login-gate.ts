@@ -1,15 +1,15 @@
-// Control UI component renders the login gate.
 import { html, nothing, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
-import type { ThemeMascot } from "../../../packages/gateway-protocol/src/theme.ts";
+import type { ThemeBranding, ThemeMascot } from "../../../packages/gateway-protocol/src/theme.ts";
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { canReloadControlUiDocument } from "../app/document-reload-guard.ts";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { retryStaleChunkReloadWhenReachable } from "../app/stale-chunk-reload.ts";
+import { currentThemeBranding } from "../app/theme-branding.ts";
 import { t } from "../i18n/index.ts";
-import "../lib/toast.ts";
 import { registerLoginEnglish } from "../i18n/locales/en-login.ts";
+import "../lib/toast.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { formatGatewayHost } from "../lib/gateway-host.ts";
 import { classifyGatewaySecret } from "../lib/gateway-secret-shape.ts";
@@ -24,11 +24,13 @@ import {
   type LoginFailureTone,
   resolveLoginFailureFeedback,
 } from "./login-gate-feedback.ts";
+import { renderThemeBrandIcon } from "./theme-brand-icon.ts";
 
 registerLoginEnglish();
 
 type LoginGateProps = LoginFailureFeedbackParams & {
   mascot?: ThemeMascot;
+  branding?: ThemeBranding;
   resourceBasePath: string;
   gatewayUrl: string;
   secret: string;
@@ -129,27 +131,6 @@ function renderRefreshAction(feedback: LoginFailureFeedback, action: RefreshActi
   `;
 }
 
-function renderSecretToggle(
-  revealed: boolean,
-  labels: [string, string, string],
-  onToggle: () => void,
-) {
-  const [show, hide, toggle] = labels;
-  return html`
-    <openclaw-tooltip .content=${revealed ? hide : show}>
-      <button
-        type="button"
-        class="settings-secret__toggle"
-        aria-label=${toggle}
-        aria-pressed=${revealed}
-        @click=${onToggle}
-      >
-        ${revealed ? icons.eye : icons.eyeOff}
-      </button>
-    </openclaw-tooltip>
-  `;
-}
-
 function renderForm(params: {
   props: LoginGateProps;
   feedback: LoginFailureFeedback | null;
@@ -203,11 +184,19 @@ function renderForm(params: {
             @keydown=${submitOnEnter}
             placeholder=${t("login.secretPlaceholder")}
           />
-          ${renderSecretToggle(
-            props.showGatewaySecret,
-            [t("login.showSecret"), t("login.hideSecret"), t("login.toggleSecretVisibility")],
-            props.onToggleGatewaySecret,
-          )}
+          <openclaw-tooltip
+            .content=${t(props.showGatewaySecret ? "login.hideSecret" : "login.showSecret")}
+          >
+            <button
+              type="button"
+              class="settings-secret__toggle"
+              aria-label=${t("login.toggleSecretVisibility")}
+              aria-pressed=${props.showGatewaySecret}
+              @click=${props.onToggleGatewaySecret}
+            >
+              ${props.showGatewaySecret ? icons.eye : icons.eyeOff}
+            </button>
+          </openclaw-tooltip>
         </span>
         ${isSetupCode ? html`<p id="login-gate-secret-hint" class="muted" role="status">${t("login.setupCodeHint")}</p>` : nothing}
       </div>
@@ -299,7 +288,7 @@ function renderStatusBody(params: {
       <div class="login-gate__actions">
         ${renderRefreshAction(feedback, params.refreshAction)}
         <button class="btn login-gate__connect" @click=${props.onConnect}>
-          ${waitingForPairing ? t("login.failure.pairing.checkNow") : t("common.connect")}
+          ${feedback.kind === "pairing-rejected" || feedback.kind === "pairing-expired" ? t("login.failure.pairing.requestAgain") : waitingForPairing ? t("login.failure.pairing.checkNow") : t("common.connect")}
         </button>
       </div>
       <details class="login-gate__connection">
@@ -382,13 +371,15 @@ function renderLoginGate(props: LoginGateProps, refreshAction: RefreshAction) {
       <div class="login-gate__card" data-mode=${feedback?.placement ?? "form"}>
         <header class="login-gate__brand">
           ${
-            props.mascot === "none"
+            (props.branding?.brandIcon ?? (props.mascot === "none" ? "mark" : "claw")) !== "claw"
               ? html`<span class="login-gate__logo login-gate__logo--neutral" aria-hidden="true"
-                  >${icons.mark}</span
+                  >${renderThemeBrandIcon(icons.mark, props.branding)}</span
                 >`
               : html`<img class="login-gate__logo" src=${faviconSrc} alt="" />`
           }
-          <span class="login-gate__brand-name">OpenClaw</span>
+          <span class="login-gate__brand-name"
+            >${props.branding?.brandName ?? currentThemeBranding().brandName}</span
+          >
         </header>
         ${body}
         ${

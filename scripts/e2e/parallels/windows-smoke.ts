@@ -35,6 +35,7 @@ import {
 import {
   psSingleQuote,
   windowsAgentTurnConfigPatchScript,
+  windowsAgentTurnScript,
   windowsOpenClawResolver,
   windowsScopedEnvFunction,
 } from "./powershell.ts";
@@ -50,6 +51,8 @@ import {
   parseSmokeCliArgs,
   printSmokeTargetSummary,
   SmokeRunController,
+  smokeDefaultOptions,
+  smokeDefaultStatus,
   type SmokeCliOptions,
 } from "./smoke-common.ts";
 import { ensureGuestGit, prepareMinGitZip } from "./windows-git.ts";
@@ -63,21 +66,11 @@ const WINDOWS_PACKAGE_INSTALL_TIMEOUT_SECONDS = 900;
 const WINDOWS_PACKAGE_INSTALL_TIMEOUT_MS = WINDOWS_PACKAGE_INSTALL_TIMEOUT_SECONDS * 1000;
 
 const defaultOptions = (): WindowsOptions => ({
-  hostIp: undefined,
+  ...smokeDefaultOptions,
   hostPort: 18426,
-  hostPortExplicit: false,
   installUrl: "https://openclaw.ai/install.ps1",
-  installVersion: "",
-  json: false,
-  keepServer: false,
-  latestVersion: "",
-  mode: "both",
-  modelId: undefined,
-  npmRegistry: undefined,
-  provider: "openai",
   skipLatestRefCheck: false,
   snapshotHint: "pre-openclaw-native-e2e-",
-  targetPackageSpec: "",
   upgradeFromPackedMain: false,
   vmName: "Windows 11",
 });
@@ -154,16 +147,8 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
   private guestEnv: Record<string, string> = {};
 
   protected status = {
-    freshAgent: "skip",
-    freshGateway: "skip",
-    freshMain: "skip",
-    freshVersion: "skip",
-    latestInstalledVersion: "skip",
-    upgrade: "skip",
-    upgradeAgent: "skip",
-    upgradeGateway: "skip",
+    ...smokeDefaultStatus,
     upgradePrecheck: "skip",
-    upgradeVersion: "skip",
   };
 
   constructor(options: WindowsOptions) {
@@ -232,13 +217,6 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
   }
 
   private artifactLabel(): string {
-    if (
-      !this.options.targetPackageSpec &&
-      this.options.mode === "upgrade" &&
-      !this.options.upgradeFromPackedMain
-    ) {
-      return "Windows smoke artifacts";
-    }
     if (this.options.targetPackageSpec) {
       return "baseline package tgz";
     }
@@ -280,17 +258,7 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
           ),
       }),
     );
-    await this.phases.phase("fresh.onboard-ref", 720, () => this.runRefOnboard());
-    await this.phases.phase("fresh.gateway-restart", 420, () => this.gatewayAction("restart"));
-    await this.phases.phase("fresh.gateway-status", 420, () => this.verifyGatewayReachable());
-    this.status.freshGateway = "pass";
-    await this.phases.phase("fresh.gateway-stop-before-local-agent", 420, () =>
-      this.gatewayAction("stop"),
-    );
-    await this.phases.phase("fresh.first-agent-turn", this.agentTimeoutSeconds, () =>
-      this.verifyTurn(),
-    );
-    this.status.freshAgent = "pass";
+    await this.runGatewaySmoke("fresh");
   }
 
   protected async runUpgradeLane(): Promise<void> {
@@ -300,31 +268,22 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
       ensureGuestGit({ guest: this.guest, minGitZipPath: this.minGitZipPath, server: this.server }),
     );
     await this.phases.phase("upgrade.preflight", 120, () => this.logGuestPreflight(false));
-    if (this.options.targetPackageSpec || this.options.upgradeFromPackedMain) {
-      await this.phases.phase(
-        "upgrade.install-baseline-package",
-        WINDOWS_PACKAGE_INSTALL_TIMEOUT_SECONDS,
-        () => this.installMain("openclaw-main-upgrade.tgz"),
-      );
-      this.status.latestInstalledVersion = await this.extractLastVersion(
-        "upgrade.install-baseline-package",
-      );
-      await this.phases.phase("upgrade.verify-baseline-package-version", 120, () =>
-        this.verifyTargetVersion(),
-      );
-    } else {
-      await this.phases.phase(
-        "upgrade.install-baseline",
-        WINDOWS_PACKAGE_INSTALL_TIMEOUT_SECONDS,
-        () => this.installLatestRelease(),
-      );
-      this.status.latestInstalledVersion = await this.extractLastVersion(
-        "upgrade.install-baseline",
-      );
-      await this.phases.phase("upgrade.verify-baseline-version", 120, () =>
-        this.verifyVersionContains(this.installVersion),
-      );
-    }
+    const fromPackage = Boolean(
+      this.options.targetPackageSpec || this.options.upgradeFromPackedMain,
+    );
+    const baseline = fromPackage ? "baseline-package" : "baseline";
+    await this.phases.phase(
+      `upgrade.install-${baseline}`,
+      WINDOWS_PACKAGE_INSTALL_TIMEOUT_SECONDS,
+      () =>
+        fromPackage ? this.installMain("openclaw-main-upgrade.tgz") : this.installLatestRelease(),
+    );
+    this.status.latestInstalledVersion = await this.extractLastVersion(
+      `upgrade.install-${baseline}`,
+    );
+    await this.phases.phase(`upgrade.verify-${baseline}-version`, 120, () =>
+      fromPackage ? this.verifyTargetVersion() : this.verifyVersionContains(this.installVersion),
+    );
     if (this.options.skipLatestRefCheck) {
       this.status.upgradePrecheck = "skipped";
     } else if (
@@ -345,17 +304,21 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
     this.status.upgradeVersion = await this.extractLastVersion("upgrade.update-dev");
     await this.phases.phase("upgrade.verify-dev-channel", 120, () => this.verifyDevChannelUpdate());
     await this.phases.phase("upgrade.gateway-stop", 420, () => this.gatewayAction("stop"));
-    await this.phases.phase("upgrade.onboard-ref", 720, () => this.runRefOnboard());
-    await this.phases.phase("upgrade.gateway-restart", 420, () => this.gatewayAction("restart"));
-    await this.phases.phase("upgrade.gateway-status", 420, () => this.verifyGatewayReachable());
-    this.status.upgradeGateway = "pass";
-    await this.phases.phase("upgrade.gateway-stop-before-local-agent", 420, () =>
+    await this.runGatewaySmoke("upgrade");
+  }
+
+  private async runGatewaySmoke(lane: "fresh" | "upgrade"): Promise<void> {
+    await this.phases.phase(`${lane}.onboard-ref`, 720, () => this.runRefOnboard());
+    await this.phases.phase(`${lane}.gateway-restart`, 420, () => this.gatewayAction("restart"));
+    await this.phases.phase(`${lane}.gateway-status`, 420, () => this.verifyGatewayReachable());
+    this.status[`${lane}Gateway`] = "pass";
+    await this.phases.phase(`${lane}.gateway-stop-before-local-agent`, 420, () =>
       this.gatewayAction("stop"),
     );
-    await this.phases.phase("upgrade.first-agent-turn", this.agentTimeoutSeconds, () =>
+    await this.phases.phase(`${lane}.first-agent-turn`, this.agentTimeoutSeconds, () =>
       this.verifyTurn(),
     );
-    this.status.upgradeAgent = "pass";
+    this.status[`${lane}Agent`] = "pass";
   }
 
   private guestPowerShell(
@@ -381,7 +344,6 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
         ["snapshot-switch", this.options.vmName, "--id", this.snapshot.id],
         {
           check: false,
-          quiet: true,
           timeoutMs: this.phases.remainingTimeoutMs(),
         },
       );
@@ -413,13 +375,12 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
     while (Date.now() < deadline) {
       const status = run("prlctl", ["status", this.options.vmName], {
         check: false,
-        quiet: true,
         timeoutMs: this.phases.remainingTimeoutMs(30_000),
       }).stdout;
       if (!status.includes(" restoring")) {
         return;
       }
-      run("sleep", ["5"], { quiet: true });
+      run("sleep", ["5"]);
     }
     throw new Error(`VM ${this.options.vmName} did not leave restoring state`);
   }
@@ -432,14 +393,13 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
         ["exec", this.options.vmName, "--current-user", "cmd.exe", "/d", "/s", "/c", "echo ready"],
         {
           check: false,
-          quiet: true,
           timeoutMs: this.phases.remainingTimeoutMs(),
         },
       );
       if (result.status === 0) {
         return;
       }
-      run("sleep", ["3"], { quiet: true });
+      run("sleep", ["3"]);
     }
     throw new Error("Windows guest did not become ready");
   }
@@ -652,7 +612,7 @@ if ($LASTEXITCODE -ne 0) { throw "gateway ${action} failed with exit code $LASTE
       }
       warn(`gateway-reachable retry ${attempt}`);
       attempt++;
-      run("sleep", ["5"], { quiet: true });
+      run("sleep", ["5"]);
     }
     throw new Error("gateway did not become reachable");
   }
@@ -675,13 +635,8 @@ ${windowsAgentTurnConfigPatchScript(this.auth.modelId)}
 ${windowsAgentWorkspaceScript("Parallels Windows smoke test assistant.")}
 ${windowsCodexPlatformPackageRepairFunction()}
 Set-Item -Path ('Env:' + ${psSingleQuote(this.auth.apiKeyEnv)}) -Value ${psSingleQuote(this.auth.apiKeyValue)}
-$agentOk = $false
-for ($attempt = 1; $attempt -le 2; $attempt++) {
-  $sessionId = if ($attempt -eq 1) { 'parallels-windows-smoke' } else { "parallels-windows-smoke-retry-$attempt" }
-  $sessionsDir = Join-Path $env:USERPROFILE '.openclaw\\agents\\main\\sessions'
-  $sessionPath = Join-Path $sessionsDir "$sessionId.jsonl"
-  Remove-Item $sessionPath -Force -ErrorAction SilentlyContinue
-  $args = @(
+${windowsAgentTurnScript({
+  command: `  $args = @(
     'agent',
     '--local',
     '--agent',
@@ -696,27 +651,10 @@ for ($attempt = 1; $attempt -le 2; $attempt++) {
     '${resolveParallelsModelTimeoutSeconds("windows")}',
     '--json'
   )
-  $output = Invoke-OpenClaw @args 2>&1
-  $agentExitCode = $LASTEXITCODE
-  if ($null -ne $output) { $output | ForEach-Object { $_ } }
-  if ($agentExitCode -eq 0 -and ($output | Out-String) -match '"finalAssistant(Raw|Visible)Text":\\s*"OK"') {
-    $agentOk = $true
-    break
-  }
-  if ($agentExitCode -ne 0 -and $attempt -lt 2 -and (Repair-MissingCodexPlatformPackage -Output $output)) {
-    Write-Host "agent turn attempt $attempt hit a missing Codex platform package; retrying"
-    continue
-  }
-  if ($attempt -lt 2) {
-    Write-Host "agent turn attempt $attempt failed or finished without OK response; retrying"
-    Start-Sleep -Seconds 3
-    continue
-  }
-  if ($agentExitCode -ne 0) {
-    throw "agent failed with exit code $agentExitCode"
-  }
-}
-if (-not $agentOk) { throw 'openclaw agent finished without OK response' }`,
+  $output = Invoke-OpenClaw @args 2>&1`,
+  sessionId: "parallels-windows-smoke",
+  retryOnCommandFailure: true,
+})}`,
       this.agentTimeoutSeconds * 1000,
     );
   }

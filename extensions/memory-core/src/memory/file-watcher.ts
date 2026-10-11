@@ -10,7 +10,7 @@ import {
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { MemoryWorkspaceWatchRequest } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
-import { runInMemoryBackgroundContext } from "./background-context.js";
+import type { MemoryCoreRuntimeHost } from "./runtime-host.js";
 import { MemoryWatchPolicy, type MemoryObservation } from "./watch-policy.js";
 import {
   MEMORY_WATCH_MAX_PATHS,
@@ -22,7 +22,9 @@ import {
 
 const log = createSubsystemLogger("memory");
 const RETRY_DELAYS_MS = [500, 2_000, 5_000];
+const DEFAULT_POLL_INTERVAL_MS = 30_000;
 type MemoryFileWatcherOptions = {
+  runInBackgroundContext: NonNullable<MemoryCoreRuntimeHost["runInBackgroundContext"]>;
   workspaceDir: string;
   agentId: string;
   settings: MemoryWorkspaceWatchRequest["settings"];
@@ -35,6 +37,8 @@ type Observation = {
   group: MemoryObservation;
   key: string;
   subscription: WatchSubscription;
+  mode: "auto" | "poll";
+  pollIntervalMs: number;
 };
 
 export class MemoryFileWatcher {
@@ -45,6 +49,7 @@ export class MemoryFileWatcher {
   private nextRootId = 0;
   private readonly pendingPaths: MemoryWatchSettleQueue = new Map();
   private pressureWarningShown = false;
+  private pollingWarningShown = false;
   private readonly closeErrors: unknown[] = [];
   private closed = false;
   private degraded = false;
@@ -69,10 +74,28 @@ export class MemoryFileWatcher {
     return this.degraded;
   }
 
+  health() {
+    return [...this.observations.values()].map(({ subscription, mode, pollIntervalMs }) => {
+      const health = subscription.health();
+      return {
+        state: health.state,
+        mode: health.mode,
+        directories: health.directories,
+        failure: health.failure
+          ? {
+              operation: health.failure.operation,
+              code: health.failure.code,
+              error: String(health.failure.error),
+            }
+          : undefined,
+        pollingFallback: mode === "auto" && health.mode === "poll",
+        pollIntervalMs,
+      };
+    });
+  }
+
   start(): Promise<void> {
-    // Both local and remote callers can arrive from a turn. Resource lifetimes
-    // inherit the plugin service context, never the requesting turn's ALS store.
-    return (this.starting ??= runInMemoryBackgroundContext(() => this.refresh()));
+    return (this.starting ??= this.options.runInBackgroundContext(() => this.refresh()));
   }
 
   private get canObserve(): boolean {
@@ -140,21 +163,28 @@ export class MemoryFileWatcher {
               continue;
             }
             const mode = resolveFsObservationMode();
+            // Bound idle scanning by default while preserving explicit operator overrides.
+            const pollIntervalMs = resolveFsObservationIntervalMs(
+              process.env,
+              DEFAULT_POLL_INTERVAL_MS,
+            );
             const owner: Observation = {
               id,
               group,
               key,
+              mode,
+              pollIntervalMs,
               subscription: watch(group.root, {
                 scopes,
                 mode,
-                pollIntervalMs: resolveFsObservationIntervalMs(),
+                pollIntervalMs,
                 maxDirectories: 1_000_000,
                 maxEntries: 1_000_000,
                 maxPendingPaths: MEMORY_WATCH_MAX_PATHS,
                 signal: this.lifetime.signal,
                 exclude: (file) => this.policy.exclude(owner.group, file),
                 onInvalidate: (hint) => this.dirty(owner.group, hint),
-                onHealth: (health) => this.health(health),
+                onHealth: (health) => this.onHealth(health, mode, pollIntervalMs),
               }),
             };
             this.observations.set(id, owner);
@@ -200,7 +230,7 @@ export class MemoryFileWatcher {
     }
   }
 
-  private health(health: WatchHealth): void {
+  private onHealth(health: WatchHealth, mode: "auto" | "poll", pollIntervalMs: number): void {
     if (health.state === "unavailable") {
       const code =
         health.failure?.operation === "watch" && health.failure.code === "watch-limit"
@@ -211,6 +241,16 @@ export class MemoryFileWatcher {
     }
     if (health.state !== "ready") {
       return;
+    }
+    if (mode === "auto" && health.mode === "poll" && !this.pollingWarningShown) {
+      this.pollingWarningShown = true;
+      const reason = health.failure
+        ? `${health.failure.code ?? health.failure.operation}: ${String(health.failure.error)}`
+        : "native watch events are unavailable; fs-safe did not report a reason";
+      log.warn(
+        `memory watcher using fallback polling every ${pollIntervalMs} ms: ${reason}. ` +
+          "Native watching will not be retried until the watcher restarts.",
+      );
     }
     const count = [...this.observations.values()].reduce(
       (total, entry) => total + entry.subscription.health().directories,
@@ -320,7 +360,7 @@ export class MemoryFileWatcher {
               return;
             }
             this.pendingChange = this.revision !== revision;
-            await this.options.onChange();
+            await this.options.runInBackgroundContext(() => this.options.onChange());
           })
           .catch((error: unknown) => {
             if (error instanceof ObservationSampleCloseError) {
@@ -349,12 +389,12 @@ export class MemoryFileWatcher {
     if (this.closing) {
       return this.closing;
     }
-    this.closed = true;
-    this.lifetime.abort();
-    clearTimeout(this.watchTimer);
-    clearTimeout(this.retryTimer);
-    const retirement = this.retire([...this.observations.values()]);
-    this.closing = runInMemoryBackgroundContext(async () => {
+    this.closing = this.options.runInBackgroundContext(async () => {
+      this.closed = true;
+      this.lifetime.abort();
+      clearTimeout(this.watchTimer);
+      clearTimeout(this.retryTimer);
+      const retirement = this.retire([...this.observations.values()]);
       await Promise.allSettled([
         this.starting,
         this.refreshing,

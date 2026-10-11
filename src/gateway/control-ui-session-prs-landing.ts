@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { runGit } from "../agents/worktrees/git.js";
-import { requireGitCommandOutput } from "../infra/git-exec.js";
+import {
+  createGitCommandError,
+  GitCommandTimeoutError,
+  requireGitCommandOutput,
+} from "../infra/git-exec.js";
 import type { GitMergedPullHead as MergedPullHead } from "../infra/git-read-operations.js";
 import { readGitHead, readGitRefs, resolveGitRefsBase } from "../infra/git-root.js";
 import { canReadGitFilesystemRefs } from "../infra/git-worker-context.js";
@@ -84,16 +88,28 @@ export function readCheckoutHead(
   }
 }
 
-export async function gitOutput(cwd: string, args: string[]): Promise<string | null> {
-  try {
-    const result = await runGit(cwd, args);
-    return result.code === 0 ? result.stdout.trim() || null : null;
-  } catch {
-    return null;
+/** Background PR reads never hydrate objects; old Git also has no permitted transport. */
+export async function runPullRequestGit(
+  cwd: string,
+  args: string[],
+  options: Parameters<typeof runGit>[2] = {},
+) {
+  const result = await runGit(cwd, args, {
+    ...options,
+    env: { GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
+  });
+  if (result.termination === "timeout") {
+    throw createGitCommandError(`git ${args[0]}`, result);
   }
+  return result;
 }
 
-async function readRemoteRevisions(
+export async function gitOutput(cwd: string, args: string[]): Promise<string | null> {
+  const result = await runPullRequestGit(cwd, args);
+  return result.code === 0 ? result.stdout.trim() || null : null;
+}
+
+export async function readRemoteRevisions(
   root: string,
   refs: string[],
   head: ReturnType<typeof readCheckoutHead>,
@@ -126,7 +142,7 @@ async function readRemoteRevisions(
   }
   try {
     // These fields read stored IDs without loading or lazily fetching partial-clone objects.
-    const result = await runGit(
+    const result = await runPullRequestGit(
       root,
       ["for-each-ref", "--format=%(refname)%00%(objectname)", "--", ...refs],
       { maxOutputBytes: 16 * 1024, terminateOnOutputLimit: true },
@@ -142,7 +158,10 @@ async function readRemoteRevisions(
       }
     }
     return revisions;
-  } catch {
+  } catch (error) {
+    if (error instanceof GitCommandTimeoutError) {
+      throw error;
+    }
     // A failed or oversized ref inventory must not hide independently readable tips.
     const revisions = new Map<string, string>();
     for (const ref of refs) {
@@ -155,24 +174,23 @@ async function readRemoteRevisions(
   }
 }
 
-async function isAncestor(root: string, ancestor: string, descendant: string): Promise<boolean> {
-  try {
-    const result = await runGit(root, ["merge-base", "--is-ancestor", ancestor, descendant]);
-    return result.code === 0;
-  } catch {
-    return false;
-  }
+export async function isAncestor(
+  root: string,
+  ancestor: string,
+  descendant: string,
+): Promise<boolean> {
+  return (
+    (await runPullRequestGit(root, ["merge-base", "--is-ancestor", ancestor, descendant])).code ===
+    0
+  );
 }
 
 /** Prefer a maximal published baseline containing the merge base, then input order. */
 async function maximalCommit(root: string, candidates: readonly string[]): Promise<string | null> {
   const unique = [...new Set(candidates)];
   const first = unique[0];
-  if (first === undefined) {
-    return null;
-  }
-  if (unique.length === 1) {
-    return first;
+  if (first === undefined || unique.length === 1) {
+    return first ?? null;
   }
   const second = unique[1];
   if (unique.length === 2 && second !== undefined) {

@@ -7,9 +7,16 @@ import {
   WorkerTranscriptMessageSchema,
 } from "../../packages/gateway-protocol/src/index.js";
 import { WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
-import type { AssistantMessage } from "../llm/types.js";
+import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
+import { SessionManager } from "../agents/sessions/session-manager.js";
+import type { AssistantMessage, Context } from "../llm/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createWorkerTranscriptRuntime } from "./embedded-agent-transcript.runtime.js";
+import { createWorkerLiveRuntime } from "./embedded-agent-live.runtime.js";
+import {
+  createWorkerTranscriptRuntime,
+  toWorkerInferenceContext,
+  type WorkerTranscriptClient,
+} from "./embedded-agent-transcript.runtime.js";
 import {
   isWorkerTranscriptMessageFrameSafe,
   toWorkerTranscriptMessage,
@@ -28,6 +35,46 @@ const providerReplay = {
   sessionHash: "171dzdv17gum5g",
   authProfileHash: "oe8bkr3r8947",
 };
+
+it("round-trips runtime context metadata through worker inference", () => {
+  const context: Context = {
+    messages: [
+      {
+        role: "user",
+        content: [{ type: "text", text: "OpenClaw runtime context:\ncurrent facts" }],
+        timestamp: 1,
+        runtimeContext: { retained: true },
+      },
+    ],
+  };
+  expect(toWorkerInferenceContext(context)).toEqual({ kind: "complete", context });
+});
+
+it.each([
+  { name: "canonical", marker: { runtimeContext: {} } },
+  { name: "shipped", marker: { runtimeContextCarrier: true } },
+])(
+  "rejects mixed-media $name runtime context instead of projecting it as user input",
+  ({ marker }) => {
+    const context: Context = {
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "private legacy runtime context" },
+            { type: "image", data: "AA==", mimeType: "image/png" },
+          ],
+          timestamp: 1,
+          ...marker,
+        },
+      ],
+    };
+
+    expect(() => toWorkerInferenceContext(context)).toThrow(
+      "Cloud worker cannot preserve runtime context with media. Stop or reclaim the cloud worker, then retry locally.",
+    );
+  },
+);
 
 function assistantWithReplay(
   replay: AssistantMessage["providerReplay"] = structuredClone(providerReplay),
@@ -53,6 +100,64 @@ function assistantWithReplay(
 }
 
 describe("worker transcript provider replay", () => {
+  it.each([true, false])(
+    "correlates identical assistant occurrences through guarded persistence (previews=%s)",
+    async (previews) => {
+      const commit = vi.fn<WorkerTranscriptClient["commit"]>(async () => {});
+      const transcript = createWorkerTranscriptRuntime({ commit });
+      const manager = guardSessionManager(SessionManager.inMemory(), {
+        onMessagePersisted: transcript.onMessagePersisted,
+      });
+      const liveItemIds: Array<string | undefined> = [];
+      const live = createWorkerLiveRuntime({
+        enqueuePreview: (event) => {
+          if (event.kind === "assistant") {
+            liveItemIds.push(event.payload.itemId);
+          }
+          return previews;
+        },
+        emitTerminal: async () => {},
+      });
+      live.handleSessionEvent({ type: "agent_start" });
+      for (let index = 0; index < 2; index++) {
+        const message = assistantWithReplay();
+        live.handleSessionEvent({ type: "message_start", message });
+        live.handleSessionEvent({
+          type: "message_update",
+          message,
+          assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "visible" },
+        });
+        const completed = structuredClone(message);
+        live.handleSessionEvent({ type: "message_end", message: completed });
+        const entryId = await transcript.withSessionWriteSettlement(() =>
+          manager.appendMessageAsync(completed),
+        );
+        if (!entryId) {
+          throw new Error("Expected a persisted assistant entry");
+        }
+        expect(manager.getEntry(entryId)).not.toHaveProperty("message.itemId");
+        expect(toWorkerInferenceContext({ messages: [completed] })).not.toHaveProperty(
+          "context.messages.0.itemId",
+        );
+      }
+      const messages = commit.mock.calls.flatMap(([batch]) => batch);
+      const itemIds = messages.flatMap((message) =>
+        message.role === "assistant" ? [message.itemId] : [],
+      );
+      expect(itemIds).toEqual([expect.any(String), expect.any(String)]);
+      expect(new Set(itemIds).size).toBe(2);
+      expect(liveItemIds).toEqual(previews ? itemIds : []);
+      expect(
+        validateWorkerTranscriptCommitParams({
+          runEpoch: 1,
+          seq: 1,
+          baseLeafId: null,
+          messages,
+        }),
+      ).toBe(true);
+    },
+  );
+
   it.each(["accepted", "failed"] as const)(
     "settles a submitted transcript commit after cancellation when it is %s",
     async (outcome) => {

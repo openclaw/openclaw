@@ -24,28 +24,11 @@ export type ReplyLine = {
   agentAvatar?: ReplyPreview["agentAvatar"];
   /** The original the name navigates to, loaded or not. */
   openId?: string;
-  /** An original that still needs a lookup: unresolved, or named only by a snapshot. */
-  request?: string;
 };
 
 export const NO_REPLY_LINE: ReplyLine = { state: "hidden" };
 
 type ReplyContext = Pick<MessageGroup, "replyShared" | "replyTurnSource" | "runId">;
-
-// Transcript rows are immutable; re-renders reuse their normalized form.
-const normalizedMessages = new WeakMap<object, NormalizedMessage>();
-
-function normalizeReplyMessage(message: unknown): NormalizedMessage {
-  if (!message || typeof message !== "object") {
-    return normalizeMessage(message);
-  }
-  let normalized = normalizedMessages.get(message);
-  if (!normalized) {
-    normalized = normalizeMessage(message);
-    normalizedMessages.set(message, normalized);
-  }
-  return normalized;
-}
 
 function foundPreview(result: ReturnType<ReplyPreviewLookup>) {
   return result && !("pending" in result || "missing" in result || "oversized" in result)
@@ -129,8 +112,6 @@ function resolveTarget(
       sender: { ...sender, name },
       agentAvatar: preview?.agentAvatar,
       openId: id,
-      // A sender-only snapshot paints now; its lookup can still confirm a missing original.
-      ...(preview || snapshot?.text || oversized ? {} : { request: id }),
     };
   }
   if (preview || name) {
@@ -138,7 +119,6 @@ function resolveTarget(
   }
   return {
     state: result && "pending" in result && reserves ? "reserved" : "hidden",
-    request: id,
   };
 }
 
@@ -183,11 +163,11 @@ export function resolveGroupReplyLine(
   if (group.role !== "assistant") {
     return NO_REPLY_LINE;
   }
-  const targets = group.messages.map(({ message }) => normalizeReplyMessage(message).replyTarget);
+  const targets = group.messages.map(({ message }) => normalizeMessage(message).replyTarget);
   const explicit = targets.find((target) => target?.kind === "id");
   if (explicit?.kind === "id") {
     const previews = replyMessages
-      .map(({ message }) => normalizeReplyMessage(message))
+      .map(({ message }) => normalizeMessage(message))
       .filter(({ replyTarget }) => replyTarget?.kind === "id" && replyTarget.id === explicit.id)
       .map(({ replyPreview }) => replyPreview);
     // Prefer a snapshot that names its sender: the name alone paints the line.
@@ -201,7 +181,7 @@ export function resolveGroupReplyLine(
     // reply_to_current resolves only through the prompt that started this run,
     // never the latest prompt; in 1:1 its own turn's prompt adds nothing.
     const source = group.replyCurrentSource;
-    const sender = source && normalizeReplyMessage(source.message).sender;
+    const sender = source && normalizeMessage(source.message).sender;
     return source &&
       (sender || !group.replyShared) &&
       (group.replyShared || source.key !== group.replyTurnSource?.key)
@@ -216,7 +196,6 @@ export function resolveGroupReplyLine(
 
 type ReplyLineActions = {
   onOpenReply?: (id: string) => void;
-  onResolveReply?: (id: string) => void;
   replyNavigationId?: string | null;
 };
 
@@ -227,12 +206,9 @@ type ReplyLineActions = {
  */
 export function renderReplyLine(
   line: ReplyLine,
-  { onOpenReply, onResolveReply, replyNavigationId }: ReplyLineActions,
+  { onOpenReply, replyNavigationId }: ReplyLineActions,
   inline = false,
 ) {
-  if (line.request) {
-    onResolveReply?.(line.request);
-  }
   if (line.state === "hidden") {
     return nothing;
   }

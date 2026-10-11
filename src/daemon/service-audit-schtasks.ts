@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DOMParser } from "linkedom";
 import { hasErrnoCode } from "../infra/errno.js";
-import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
+import {
+  getWindowsPowerShellExePath,
+  getWindowsSystem32ExePath,
+} from "../infra/windows-install-roots.js";
 import { decodeWindowsLauncherScript } from "../infra/windows-launcher-encoding.js";
 import { execFileUtf8 } from "./exec-file.js";
 import { execSchtasks } from "./schtasks-exec.js";
@@ -60,6 +63,7 @@ export async function auditScheduledTaskDefinition(
         taskDescription: "",
         taskUser: resolveTaskUser(env),
         launchPath: sourcePath,
+        interactive: env.OPENCLAW_SERVICE_KIND === "node",
       }),
     "text/xml",
   );
@@ -113,6 +117,9 @@ export async function auditScheduledTaskDefinition(
     // https://learn.microsoft.com/en-us/windows/win32/taskschd/task-scheduler-schema
     // DeleteExpiredTaskAfter is excluded: omission disables deletion, unlike explicit PT0S.
     "Principals.Principal.RunLevel": "LeastPrivilege",
+    "Triggers.BootTrigger.Enabled": "true",
+    "Triggers.BootTrigger.ExecutionTimeLimit": "PT72H",
+    "Triggers.BootTrigger.Delay": "PT0M",
     "Triggers.LogonTrigger.Enabled": "true",
     "Triggers.LogonTrigger.ExecutionTimeLimit": "PT72H",
     "Triggers.LogonTrigger.Delay": "PT0M",
@@ -143,12 +150,12 @@ export async function auditScheduledTaskDefinition(
     // Pre-XML installers used /Create defaults for these settings.
     "Settings.ExecutionTimeLimit": "PT72H",
     "Settings.IdleSettings.StopOnIdleEnd": "true",
-    "Principals.Principal.LogonType": "S4U",
+    "Principals.Principal.LogonType": "InteractiveToken",
     "Settings.RestartOnFailure.Count": "0",
     "Settings.RestartOnFailure.Interval": "PT0S",
   };
   const preserved =
-    /^(?:RegistrationInfo\.(?:Description|Date|Author|URI)|Actions\.Exec\.Command)$/u;
+    /^(?:RegistrationInfo\.(?:Description|Date|Author|URI)|Actions\.Exec\.(?:Command|Arguments|WorkingDirectory))$/u;
   const seen = new Set<string>();
   for (const node of [installed.documentElement, ...installed.querySelectorAll("Task *")]) {
     const key = elementKey(node);
@@ -207,7 +214,8 @@ export async function auditScheduledTaskDefinition(
     }
     if (
       (!canonical && nativeDefaults[key] === current) ||
-      (canonical && (node.children.length || current === canonical.textContent))
+      (canonical &&
+        (node.children.length || canonical.children.length || current === canonical.textContent))
     ) {
       continue;
     }
@@ -217,7 +225,8 @@ export async function auditScheduledTaskDefinition(
       !expectedXml &&
       canonical &&
       ((key.startsWith("Settings.") && key !== "Settings.Enabled") ||
-        key === "Triggers.LogonTrigger.Enabled")
+        key === "Triggers.LogonTrigger.Enabled" ||
+        key === "Triggers.BootTrigger.Enabled")
     ) {
       findings.push(serviceDefinitionPreserved(key, sourcePath));
     } else {
@@ -245,11 +254,58 @@ export async function auditScheduledTaskDefinition(
     }
   }
   const launcher = installed.querySelector("Actions > Exec > Command")?.textContent;
-  if (
-    !expectedXml &&
-    (!launcher || ![sourcePath, hiddenPath].some((candidate) => samePath(candidate, launcher)))
-  ) {
-    unknown("Actions.Exec.Command", "Native task points at an unrecognized launcher.");
+  const launcherArguments = installed.querySelector("Actions > Exec > Arguments")?.textContent;
+  const hiddenSelected = Boolean(
+    launcher &&
+    ((samePath(launcher, hiddenPath) && !launcherArguments) ||
+      (["wscript.exe", getWindowsSystem32ExePath("wscript.exe")].some((candidate) =>
+        samePath(candidate, launcher),
+      ) &&
+        launcherArguments === `"${hiddenPath}"`)),
+  );
+  if (!expectedXml) {
+    const canonicalLauncher = expected.querySelector("Actions > Exec > Command")?.textContent;
+    const canonicalArguments = expected.querySelector("Actions > Exec > Arguments")?.textContent;
+    const workingDirectory = installed.querySelector(
+      "Actions > Exec > WorkingDirectory",
+    )?.textContent;
+    const canonicalDirectory = expected.querySelector(
+      "Actions > Exec > WorkingDirectory",
+    )?.textContent;
+    const sameDirectory =
+      workingDirectory === canonicalDirectory ||
+      Boolean(
+        workingDirectory && canonicalDirectory && samePath(workingDirectory, canonicalDirectory),
+      );
+    const currentAction = Boolean(
+      launcher &&
+      canonicalLauncher &&
+      samePath(launcher, canonicalLauncher) &&
+      launcherArguments === canonicalArguments,
+    );
+    const legacyAction = Boolean(
+      hiddenSelected || (launcher && samePath(launcher, sourcePath) && !launcherArguments),
+    );
+    if (!currentAction && !legacyAction) {
+      unknown(
+        "Actions.Exec.Command",
+        "Native task points at an unrecognized launcher or arguments.",
+      );
+    } else if (!currentAction) {
+      outdated("Actions.Exec.Command", launcher ?? null, canonicalLauncher ?? sourcePath);
+    }
+    if (!sameDirectory) {
+      if (workingDirectory === undefined && legacyAction) {
+        if (canonicalDirectory !== undefined) {
+          outdated("Actions.Exec.WorkingDirectory", null, canonicalDirectory);
+        }
+      } else {
+        unknown(
+          "Actions.Exec.WorkingDirectory",
+          "Native task uses an operator-owned working directory.",
+        );
+      }
+    }
   }
   if (expectedCommand) {
     const command = await readScheduledTaskCommand(env, { requireEffective: true, timeoutMs });
@@ -262,7 +318,9 @@ export async function auditScheduledTaskDefinition(
           return (
             line &&
             !(comment && isInstallerServiceDescription(comment.trim(), env)) &&
-            line !== 'set "OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER=1"'
+            line !== 'set "OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER=1"' &&
+            line !==
+              'if not defined OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER set "OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER=cmd"'
           );
         })
         .join("\n")
@@ -272,11 +330,11 @@ export async function auditScheduledTaskDefinition(
     if (!command || normalize(await read(sourcePath)) !== normalize(buildTaskScript(command))) {
       unknown("TaskScript", "The generated task script contains unrecognized behavior.");
     }
-    const hiddenSelected = Boolean(launcher && samePath(launcher, hiddenPath));
     if (
       hiddenSelected ||
-      resolveTaskLauncherScriptPath({ ...env, ...expectedCommand.environment }, sourcePath) !==
-        sourcePath
+      ((!taskUser || env.OPENCLAW_SERVICE_KIND === "node") &&
+        resolveTaskLauncherScriptPath({ ...env, ...expectedCommand.environment }, sourcePath) !==
+          sourcePath)
     ) {
       const legacy = `CreateObject("WScript.Shell").Run """${sourcePath.replaceAll('"', '""')}""", 0, False`;
       // 2026.9.3 emitted this waiting launcher before the supervisor environment marker.

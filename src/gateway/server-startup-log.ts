@@ -1,5 +1,3 @@
-// Gateway startup logging helpers.
-// Produces the compact ready banner with resolved model and safety state.
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import chalk from "chalk";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
@@ -58,6 +56,9 @@ export async function logGatewayStartup(params: {
     `http server listening (${formatReadyDetails(params.loadedPluginIds, startupDurationLabel)})`,
   );
   params.log.info(`log file: ${getResolvedLoggerSettings().file}`);
+  params.log.warn(
+    "Older local CLI/SDK versions can bypass Gateway state mutation routing. Use matching CLI/SDK and Gateway versions; direct state writes from another process while this Gateway owns state are unsupported.",
+  );
   const sqliteLibrary = ensureSqliteLibrarySelected();
   params.log.info(
     `native runtime: ${JSON.stringify({
@@ -127,7 +128,6 @@ export function formatAgentModelStartupLogLine(params: {
   };
 }
 
-/** Format model thinking and fast-mode details for the Gateway startup banner. */
 export function formatAgentModelStartupDetails(params: {
   cfg: OpenClawConfig;
   provider: string;
@@ -245,7 +245,6 @@ function formatConfiguredChannelMissingOwnerStartupWarning(entry: {
   );
 }
 
-/** Format plugin count/list and optional startup duration for the ready log line. */
 function formatReadyDetails(
   loadedPluginIds: readonly string[],
   startupDurationLabel: string | null,

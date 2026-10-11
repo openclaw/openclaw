@@ -1,7 +1,10 @@
-// Codex tests cover transport stdio plugin behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./config.js";
-import { createStdioTransport, resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
+import {
+  createStdioTransport,
+  resolveCodexAppServerSpawnEnv,
+  withCodexAppServerGitConfig,
+} from "./transport-stdio.js";
 
 const spawnMock = vi.hoisted(() => vi.fn(() => ({ pid: 1234 })));
 const prepareRegistration = vi.hoisted(() => vi.fn(async () => async () => {}));
@@ -15,6 +18,7 @@ beforeEach(() => {
   spawnMock.mockClear();
   prepareRegistration.mockReset().mockResolvedValue(async () => {});
 });
+afterEach(() => vi.unstubAllEnvs());
 
 function startOptions(command: string): CodexAppServerStartOptions {
   return {
@@ -93,18 +97,38 @@ describe("createStdioTransport", () => {
     ).rejects.toThrow("owner closed");
     expect(spawnMock).not.toHaveBeenCalled();
   });
-  it("spawns a compatibility endpoint in its configured working directory", async () => {
-    await createStdioTransport({
-      ...startOptions("codex"),
-      cwd: "/srv/codex-project",
-    });
+  it.each<{
+    lifeline?: string;
+    detached: boolean;
+    childOptions?: Pick<CodexAppServerStartOptions, "env" | "clearEnv">;
+  }>([
+    {
+      lifeline: " stdin ",
+      childOptions: { clearEnv: ["OPENCLAW_GATEWAY_HOST_LIFELINE"] },
+      detached: false,
+    },
+    {
+      childOptions: { env: { OPENCLAW_GATEWAY_HOST_LIFELINE: "stdin" } },
+      detached: true,
+    },
+  ])(
+    "spawns an endpoint with host lifeline $lifeline and child overrides $childOptions",
+    async ({ lifeline, detached, childOptions }) => {
+      await createStdioTransport(
+        { ...startOptions("codex"), cwd: "/srv/codex-project", ...childOptions },
+        { OPENCLAW_GATEWAY_HOST_LIFELINE: lifeline },
+      );
 
-    expect(spawnMock).toHaveBeenCalledWith(
-      "codex",
-      ["app-server", "--listen", "stdio://"],
-      expect.objectContaining({ cwd: "/srv/codex-project" }),
-    );
-  });
+      expect(spawnMock).toHaveBeenCalledWith(
+        "codex",
+        ["app-server", "--listen", "stdio://"],
+        expect.objectContaining({
+          cwd: "/srv/codex-project",
+          detached: process.platform !== "win32" && detached,
+        }),
+      );
+    },
+  );
 
   it("preserves wrapper prefixes, root option values, and raw override ordering", async () => {
     const overrides = ["-c", 'developer_instructions="app-server = literal"'];
@@ -143,23 +167,50 @@ describe("createStdioTransport", () => {
     expect(spawnMock).toHaveBeenCalledWith("node", args, expect.any(Object));
   });
 
-  it.each([
-    { flag: "--ws-issuer", subcommand: [] },
-    { flag: "--ws-audience", subcommand: [] },
-    { flag: "--sock", subcommand: ["proxy"] },
-  ])("preserves a subcommand-shaped $flag value", async ({ flag, subcommand }) => {
+  it("preserves a subcommand-shaped socket value", async () => {
     await createStdioTransport({
       ...startOptions("codex"),
-      args: ["app-server", ...subcommand, flag, "app-server", "-c", "model_reasoning_effort=high"],
+      args: ["app-server", "proxy", "--sock", "app-server", "-c", "model_reasoning_effort=high"],
     });
     expect(spawnMock.mock.calls[0]?.slice(0, 2)).toEqual([
       "codex",
-      ["-c", "model_reasoning_effort=high", "app-server", ...subcommand, flag, "app-server"],
+      ["-c", "model_reasoning_effort=high", "app-server", "proxy", "--sock", "app-server"],
     ]);
   });
 });
 
 describe("resolveCodexAppServerSpawnEnv", () => {
+  it.each([
+    { label: "configured", parameters: "'user.name=Process'", clear: false, preserve: true },
+    { label: "empty", parameters: "", clear: false, preserve: false },
+    { label: "cleared", parameters: "'user.name=Process'", clear: true, preserve: false },
+    {
+      label: "already prepared",
+      parameters: "'user.name=Process' 'maintenance.auto=false' 'gc.auto=0'",
+      clear: false,
+      preserve: true,
+    },
+  ])("preserves $label Git settings when preparing the private process", (fixture) => {
+    vi.stubEnv("GIT_CONFIG_PARAMETERS", "'user.name=Ambient'");
+    const parameters = "'maintenance.auto=false' 'gc.auto=0'";
+    const original = {
+      ...startOptions("codex"),
+      env: {
+        GIT_CONFIG_PARAMETERS: fixture.parameters,
+        OPENCLAW_GIT_ENV_DROP: "fixture",
+      },
+      clearEnv: ["OPENCLAW_GIT_ENV_DROP", ...(fixture.clear ? ["GIT_CONFIG_PARAMETERS"] : [])],
+    };
+    const prepared = withCodexAppServerGitConfig(original, parameters);
+    const refreshed = withCodexAppServerGitConfig(prepared, parameters);
+    const env = resolveCodexAppServerSpawnEnv(refreshed);
+    expect(env.GIT_CONFIG_PARAMETERS).toBe(
+      fixture.preserve ? `'user.name=Process' ${parameters}` : parameters,
+    );
+    expect(env.OPENCLAW_GIT_ENV_DROP).toBeUndefined();
+    expect(original.env.GIT_CONFIG_PARAMETERS).toBe(fixture.parameters);
+  });
+
   it("applies configured env overrides before clearing denied env vars", () => {
     expect({
       ...resolveCodexAppServerSpawnEnv(
@@ -222,24 +273,13 @@ describe("resolveCodexAppServerSpawnEnv", () => {
   });
 
   it("uses a null-prototype env map and ignores prototype-polluting keys", () => {
-    const overrides = Object.create(null) as Record<string, string | undefined>;
-    Object.defineProperty(overrides, "__proto__", {
-      value: "polluted",
-      enumerable: true,
-    });
-    Object.defineProperty(overrides, "constructor", {
-      value: "polluted",
-      enumerable: true,
-    });
-    Object.defineProperty(overrides, "prototype", {
-      value: "polluted",
-      enumerable: true,
-    });
-    overrides.SAFE = "1";
+    const overrides: Record<string, string> = JSON.parse(
+      '{"__proto__":"polluted","constructor":"polluted","prototype":"polluted","SAFE":"1"}',
+    );
 
     const env = resolveCodexAppServerSpawnEnv(
       {
-        env: overrides as Record<string, string>,
+        env: overrides,
       },
       {
         BASE: "1",

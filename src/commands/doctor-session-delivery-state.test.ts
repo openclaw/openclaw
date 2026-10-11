@@ -3,10 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import {
-  listSessionEntriesCore,
-  rewriteDoctorSessionEntries,
-} from "../config/sessions/session-accessor.js";
+import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
 import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.sqlite-exact-read.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -22,6 +19,7 @@ import {
   repairCanonicalSessionResolvedSkills,
 } from "./doctor-session-delivery-state.js";
 import { repairReservedIncognitoSessionKeys } from "./doctor-session-incognito-key-repair.js";
+import { rewriteDoctorSessionEntries } from "./doctor/shared/session-entry-rewrite.js";
 
 const tempDirs = createTempDirTracker();
 

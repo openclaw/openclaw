@@ -88,7 +88,7 @@ function logRemoteBinProbeFailure(
   const details = `command=${context.command} timeoutMs=${context.timeoutMs} requiredBins=${context.requiredBinCount} connected=${remoteNodes.get(nodeId)?.connected === true ? "yes" : "no"}`;
   if (phase === "preflight") {
     log.info(
-      `remote bin probe skipped: node connectivity unavailable (${label}; ${details}): ${
+      `remote bin check skipped: node connectivity unavailable (${label}; ${details}): ${
         message ?? "unknown"
       }`,
     );
@@ -97,16 +97,16 @@ function logRemoteBinProbeFailure(
   // Node unavailable errors (not connected or disconnected mid-operation) are expected
   // when nodes have transient connections - log at info level instead of warn
   if (message?.includes("node not connected") || message?.includes("node disconnected")) {
-    log.info(`remote bin probe skipped: node unavailable (${label}; ${details})`);
+    log.info(`remote bin check skipped: node unavailable (${label}; ${details})`);
     return;
   }
   if (message?.includes("invoke timed out") || message?.includes("timeout")) {
     log.warn(
-      `remote bin probe timed out (${label}; ${details}); check node connectivity for ${label}`,
+      `remote bin check timed out (${label}; ${details}); check node connectivity for ${label}`,
     );
     return;
   }
-  log.warn(`remote bin probe error (${label}; ${details}): ${message ?? "unknown"}`);
+  log.warn(`remote bin check error (${label}; ${details}): ${message ?? "unknown"}`);
 }
 
 function upsertNode(
@@ -140,51 +140,6 @@ function upsertNode(
     ...(pairingGeneration ? { pairingGeneration } : {}),
     connected: record.connected ?? existing?.connected ?? false,
   });
-}
-
-function clearRemoteNodeBins(nodeId: string): boolean {
-  const existing = remoteNodes.get(nodeId);
-  if (!existing || existing.bins.size === 0) {
-    return false;
-  }
-  existing.bins = new Set();
-  return true;
-}
-
-function buildRemoteProbeSignature(params: {
-  command: string;
-  platform?: string;
-  deviceFamily?: string;
-  commands?: string[];
-  bins: string[];
-}): string {
-  return JSON.stringify([
-    params.command,
-    normalizeLowercaseStringOrEmpty(params.platform),
-    normalizeLowercaseStringOrEmpty(params.deviceFamily),
-    (params.commands ?? []).toSorted(),
-    params.bins.toSorted(),
-  ]);
-}
-
-function restoreCachedRemoteNodeBins(nodeId: string): boolean {
-  const node = remoteNodes.get(nodeId);
-  const state = remoteNodeProbeStates.get(nodeId);
-  const cachedBins = state?.bins;
-  if (
-    !node ||
-    state?.pairingGeneration !== node.pairingGeneration ||
-    !cachedBins ||
-    areBinSetsEqual(node.bins, cachedBins)
-  ) {
-    return false;
-  }
-  node.bins = new Set(cachedBins);
-  return true;
-}
-
-function sameRemoteNodeOwner(left: RemoteNodeOwner, right: RemoteNodeOwner): boolean {
-  return left.connId === right.connId && left.pairingGeneration === right.pairingGeneration;
 }
 
 function isCurrentRemoteNodeOwner(nodeId: string, owner: RemoteNodeOwner): boolean {
@@ -223,7 +178,11 @@ function recordRemoteNodeProbeFailure(
     nextProbeAfterMs: params.nowMs + backoffMs,
     failedProbeCount,
   });
-  const cleared = clearRemoteNodeBins(params.nodeId);
+  const node = remoteNodes.get(params.nodeId);
+  const cleared = Boolean(node?.bins.size);
+  if (node && cleared) {
+    node.bins = new Set();
+  }
   logRemoteBinProbeFailure(params.nodeId, err, context, phase);
   if (cleared) {
     bumpSkillsSnapshotVersion({ reason: "remote-node" });
@@ -369,7 +328,10 @@ export async function refreshRemoteNodeBins(params: RemoteNodeBinRefreshParams):
     const existing = remoteBinProbeInflight.get(params.nodeId);
     if (existing) {
       await existing.promise;
-      if (sameRemoteNodeOwner(existing, owner)) {
+      if (
+        existing.connId === owner.connId &&
+        existing.pairingGeneration === owner.pairingGeneration
+      ) {
         return;
       }
       // Replacement waiters resume together. Recheck the live owner and map
@@ -453,20 +415,27 @@ async function refreshRemoteNodeBinsUncoalesced(params: RemoteNodeBinRefreshPara
   const binsList = [...requiredBins];
   const timeoutMs = params.timeoutMs ?? 15_000;
   const command = canWhich ? "system.which" : "system.run";
-  const probeSignature = buildRemoteProbeSignature({
+  const probeSignature = JSON.stringify([
     command,
-    platform,
-    deviceFamily,
-    commands,
-    bins: binsList,
-  });
+    normalizeLowercaseStringOrEmpty(platform),
+    normalizeLowercaseStringOrEmpty(deviceFamily),
+    (commands ?? []).toSorted(),
+    binsList.toSorted(),
+  ]);
   const cachedProbe = remoteNodeProbeStates.get(params.nodeId);
   if (
     cachedProbe?.pairingGeneration === probeOwner.pairingGeneration &&
     cachedProbe.signature === probeSignature &&
     Date.now() < cachedProbe.nextProbeAfterMs
   ) {
-    if (restoreCachedRemoteNodeBins(params.nodeId)) {
+    const node = remoteNodes.get(params.nodeId);
+    if (
+      node &&
+      cachedProbe.pairingGeneration === node.pairingGeneration &&
+      cachedProbe.bins &&
+      !areBinSetsEqual(node.bins, cachedProbe.bins)
+    ) {
+      node.bins = new Set(cachedProbe.bins);
       bumpSkillsSnapshotVersion({ reason: "remote-node" });
     }
     return;

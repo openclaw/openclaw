@@ -4,7 +4,7 @@ import Testing
 import WebKit
 @testable import OpenClaw
 
-@Suite(.serialized, .timeLimit(.minutes(1)))
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct DashboardSandboxNavigationTests {
     @Test(arguments: [
@@ -74,7 +74,10 @@ struct DashboardSandboxNavigationTests {
             navigationType: .other) == allowed)
         #expect(!ControlUIDocumentHost.shouldAllowIdentityNavigation(
             to: url,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: "fixture", password: nil),
+            auth: DashboardWindowAuth.nativeDevice(
+                gatewayUrl: "wss://gateway.example/",
+                token: "fixture",
+                password: nil),
             isMainFrame: true,
             sourceIsDashboard: true,
             navigationType: .other))
@@ -166,7 +169,7 @@ struct DashboardSandboxNavigationTests {
     {
         try await DashboardTestWait.document(controller, "document at \(url.path)") { controller.webView.url == url }
         // Callers pass page-script facts that can settle after the load completes.
-        try await DashboardTestWait.state("\(ready) at \(url.path)") {
+        try await TestWait.state("\(ready) at \(url.path)") {
             try await controller.webView.evaluateJavaScript(ready) as? Bool == true
         }
     }
@@ -222,7 +225,7 @@ struct DashboardSandboxNavigationTests {
         let server = try await DashboardHTTPFixture.start()
         defer { server.stop() }
         let dashboardURL = server.url("/")
-        let auth = DashboardWindowAuth(
+        let auth = DashboardWindowAuth.nativeDevice(
             gatewayUrl: server.websocketURL().absoluteString, token: "fixture-token", password: nil)
         let controller = DashboardWindowController(
             url: dashboardURL,
@@ -349,14 +352,17 @@ struct DashboardSandboxNavigationTests {
         let dashboardURL = dashboard.url("/control/")
         let controller = DashboardWindowController(
             url: dashboardURL,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: "fixture-only", password: nil),
+            auth: DashboardWindowAuth.nativeDevice(
+                gatewayUrl: dashboard.websocketURL("/control/").absoluteString,
+                token: "fixture-only",
+                password: nil),
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
-        controller.loadInBackground(url: dashboardURL, auth: controller.auth)
+        controller.update(url: dashboardURL, auth: controller.auth)
         var rendered = false
-        try await DashboardTestWait.state("sandbox inner document handshake") {
+        try await TestWait.state("sandbox inner document handshake") {
             rendered = await (try? controller.webView.evaluateJavaScript(
                 "document.body.dataset.appReady")) as? String == "true"
             return rendered

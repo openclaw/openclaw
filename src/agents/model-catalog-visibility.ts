@@ -10,7 +10,11 @@ import type {
   ModelAuthAvailabilityEvaluation,
   ModelAuthAvailabilityRef,
 } from "./model-auth-availability.js";
-import { compareModelCatalogEntries, orderModelCatalogForPicker } from "./model-catalog-order.js";
+import {
+  compareModelCatalogEntries,
+  createModelPickerRecommendationRank,
+  orderModelCatalogForPicker,
+} from "./model-catalog-order.js";
 import type {
   ModelCatalogRoutePolicy,
   ModelCatalogRouteProjection,
@@ -35,20 +39,14 @@ export type ModelCatalogAuthChecker = (
   ref?: ModelAuthAvailabilityRef,
 ) => boolean | Promise<boolean>;
 
-type LogicalModelCatalogEntryState = {
-  authBacked: boolean;
-  compatible: boolean;
-  routeManaged: boolean;
-  routeProjection: ModelCatalogRouteProjection;
-  nativeRuntime?: string;
-};
+type LogicalModelCatalogEntryState = ReturnType<typeof resolveLogicalModelCatalogEntryState>;
 
 /** Maps one shared auth evaluation into logical catalog selection state. */
 export function resolveLogicalModelCatalogEntryState(params: {
   evaluation: ModelAuthAvailabilityEvaluation;
   authBacked?: boolean;
   routePolicy: ModelCatalogRoutePolicy;
-}): LogicalModelCatalogEntryState {
+}) {
   const routeManaged = params.evaluation.routeResolution !== null;
   const selectedRoute = params.evaluation.selectedRoute;
   const routeProjection: ModelCatalogRouteProjection = !routeManaged
@@ -83,6 +81,8 @@ type LogicalModelCatalogParams = {
   retainedModel?: ModelRef;
   selectedModel?: ModelRef;
   metadataSnapshot?: PluginMetadataSnapshot;
+  /** Only a lifecycle owner can certify that captured catalog policy remains current. */
+  isCurrent?: () => boolean;
 };
 
 /** Resolves logical rows while keeping provider-owned physical route precedence. */
@@ -110,7 +110,7 @@ export async function prepareLogicalVisibleModelCatalog(
     prepareEntry(
       entry: ModelCatalogEntry,
       routeVariants: readonly ModelCatalogEntry[],
-    ): Promise<() => LogicalModelCatalogEntryState>;
+    ): (() => LogicalModelCatalogEntryState) | Promise<() => LogicalModelCatalogEntryState>;
   },
 ): Promise<() => ModelCatalogEntry[]> {
   const policy =
@@ -155,7 +155,9 @@ export async function prepareLogicalVisibleModelCatalog(
     const key = resolveModelCatalogIdentityKey(entry);
     if (!readers.has(key)) {
       const variants = catalogView.variantsOf(entry, key) ?? [entry];
-      readers.set(key, await params.prepareEntry(variants[0] ?? entry, variants));
+      const prepared = params.prepareEntry(variants[0] ?? entry, variants);
+      // Prepared-fact readers stay in the caller's synchronous authority boundary.
+      readers.set(key, typeof prepared === "function" ? prepared : await prepared);
     }
   }
   const { buildManifestBuiltInModelSuppressionResolver } =
@@ -166,9 +168,51 @@ export async function prepareLogicalVisibleModelCatalog(
     metadataSnapshot: params.metadataSnapshot,
   });
   const catalogKeys = new Set(params.catalog.map(createModelCatalogIdentityKeyResolver()));
+  let previousStates: Map<string, LogicalModelCatalogEntryState> | undefined;
+  let previousCatalog: ModelCatalogEntry[] | undefined;
   return () => {
-    // Membership and row availability consume this one observation after every await.
+    // Observe revocable readiness each time; stable membership keeps its prepared ordering.
     const states = new Map([...readers].map(([key, read]) => [key, read()]));
+    const retainedStates = previousStates;
+    if (
+      params.isCurrent?.() &&
+      previousCatalog &&
+      retainedStates &&
+      [...states].every(([key, state]) => {
+        const previous = retainedStates.get(key);
+        const route = state.routeProjection;
+        const previousRoute = previous?.routeProjection;
+        return (
+          previous !== undefined &&
+          previous.authBacked === state.authBacked &&
+          previous.compatible === state.compatible &&
+          previous.routeManaged === state.routeManaged &&
+          previous.nativeRuntime === state.nativeRuntime &&
+          previousRoute?.kind === route.kind &&
+          (route.kind === "unmanaged" ||
+            (previousRoute.kind !== "unmanaged" && previousRoute.policy === route.policy)) &&
+          (route.kind !== "selected" ||
+            (previousRoute.kind === "selected" && previousRoute.route === route.route))
+        );
+      })
+    ) {
+      return [...previousCatalog];
+    }
+    const publish = (catalog: ModelCatalogEntry[]) => {
+      if (!params.isCurrent?.()) {
+        previousStates = undefined;
+        previousCatalog = undefined;
+        return catalog;
+      }
+      previousStates = new Map(
+        [...states].map(([key, state]) => [
+          key,
+          { ...state, routeProjection: { ...state.routeProjection } },
+        ]),
+      );
+      previousCatalog = [...catalog];
+      return catalog;
+    };
     const publicationKeyOf = createModelCatalogIdentityKeyResolver();
     const getEntryState = (entry: ModelCatalogEntry) => {
       const state = states.get(publicationKeyOf(entry));
@@ -198,16 +242,21 @@ export async function prepareLogicalVisibleModelCatalog(
       return orderModelCatalogForPicker(
         dedupeByKey(projected, publicationKeyOf),
         params.selectedModel ?? params.retainedModel,
+        createModelPickerRecommendationRank(params.cfg),
       );
     };
     if (params.view === "all") {
-      return projectEntries(params.catalog);
+      return publish(projectEntries(params.catalog));
     }
+    // Authored refs stay listed, unavailable, until their login or key returns.
     const defaultVisibleCatalog = wildcard
       ? sortModelCatalogEntries(
           dedupeModelCatalogEntries([
             ...configuredCatalog,
-            ...params.catalog.filter((entry) => getEntryState(entry).authBacked),
+            ...params.catalog.filter(
+              (entry) =>
+                configuredKeys.has(publicationKeyOf(entry)) || getEntryState(entry).authBacked,
+            ),
           ]),
         )
       : [];
@@ -261,13 +310,15 @@ export async function prepareLogicalVisibleModelCatalog(
     });
     // Selected physical routes must lead dedupe so sibling metadata cannot win.
     // Deprecated/disabled rows stay selectable; configured and current refs remain picker-visible.
-    return projectEntries([...preferred, ...kept, ...retained, ...routeBacked]).filter(
-      (entry) =>
-        (params.view === "configured" ||
-          policy.allows({ provider: entry.provider, model: entry.id })) &&
-        (publicationKeyOf(entry) === retainedKey ||
-          (entry.status !== "deprecated" && entry.status !== "disabled") ||
-          configuredKeys.has(publicationKeyOf(entry))),
+    return publish(
+      projectEntries([...preferred, ...kept, ...retained, ...routeBacked]).filter(
+        (entry) =>
+          (params.view === "configured" ||
+            policy.allows({ provider: entry.provider, model: entry.id })) &&
+          (publicationKeyOf(entry) === retainedKey ||
+            (entry.status !== "deprecated" && entry.status !== "disabled") ||
+            configuredKeys.has(publicationKeyOf(entry))),
+      ),
     );
   };
 }

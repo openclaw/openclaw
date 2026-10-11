@@ -15,7 +15,6 @@ import {
   type AttemptParamsLike,
   type AttemptResultWithSdkSessionId,
   type CopilotAttemptOperation,
-  type CopilotSessionConfig,
   type ModelRef,
   type ModelRefInputObject,
 } from "./attempt-types.js";
@@ -159,7 +158,7 @@ export function createSessionConfig(
     includeAskUser: boolean;
     operation: CopilotAttemptOperation;
   },
-): CopilotSessionConfig {
+): SessionConfig {
   const settledToolFinalization = options.operation === "settled-tool-finalization";
   const permissionPolicy = settledToolFinalization
     ? rejectAllPolicy
@@ -351,21 +350,20 @@ export function resolvePoolAcquire(params: AttemptParamsLike): {
     resolvedApiKey: readNonEmptyString(params.resolvedApiKey),
     authProfileId: readNonEmptyString(params.authProfileId),
   });
+  const authContext = {
+    agentId: readNonEmptyString(params.agentId),
+    agentDir: readNonEmptyString(params.agentDir),
+    copilotHome: readNonEmptyString(params.copilotHome),
+  };
   const auth =
     provider.mode === "byok"
       ? createCopilotByokAuth({
-          agentId: readNonEmptyString(params.agentId),
-          agentDir: readNonEmptyString(params.agentDir),
-          workspaceDir: readNonEmptyString(params.workspaceDir),
-          copilotHome: readNonEmptyString(params.copilotHome),
+          ...authContext,
           authProfileId: provider.authProfileId,
           authProfileVersion: provider.authProfileVersion,
         })
       : resolveCopilotAuth({
-          agentId: readNonEmptyString(params.agentId),
-          agentDir: readNonEmptyString(params.agentDir),
-          workspaceDir: readNonEmptyString(params.workspaceDir),
-          copilotHome: readNonEmptyString(params.copilotHome),
+          ...authContext,
           auth: params.auth,
           resolvedApiKey: readNonEmptyString(params.resolvedApiKey),
           authProfileId: readNonEmptyString(params.authProfileId),

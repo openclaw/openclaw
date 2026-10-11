@@ -6,6 +6,9 @@ import { testing } from "../../../../scripts/e2e/lib/openai-web-search-minimal/c
 const RAW_SCHEMA_ERROR =
   "400 The following tools cannot be used with reasoning.effort 'minimal': web_search.";
 const GATEWAY_SCHEMA_ERROR = "provider rejected the request schema or tool payload";
+const GATEWAY_SCHEMA_GUIDANCE =
+  "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.";
+const GATEWAY_SCHEMA_DETAIL = String.raw`LLM request rejected: The following tools cannot be used with reasoning\.effort \'minimal\'\: web\_search\.`;
 const SUCCESS_MARKER = "OPENCLAW_SCHEMA_E2E_OK";
 
 describe("scripts/e2e/lib/openai-web-search-minimal/client.mjs", () => {
@@ -18,14 +21,17 @@ describe("scripts/e2e/lib/openai-web-search-minimal/client.mjs", () => {
     ).toContain(RAW_SCHEMA_ERROR);
   });
 
-  it("accepts the gateway schema rejection wrapper in reject mode", () => {
-    expect(
-      testing.validateRejectResult({
-        ok: false,
-        error: new Error(`GatewayClientRequestError: FailoverError: ${GATEWAY_SCHEMA_ERROR}.`),
-      }),
-    ).toContain(GATEWAY_SCHEMA_ERROR);
-  });
+  it.each([GATEWAY_SCHEMA_ERROR, GATEWAY_SCHEMA_GUIDANCE, GATEWAY_SCHEMA_DETAIL])(
+    "accepts the gateway schema rejection in reject mode: %s",
+    (message) => {
+      expect(
+        testing.validateRejectResult({
+          ok: false,
+          error: new Error(`GatewayClientRequestError: ${message} | invalid_request_error`),
+        }),
+      ).toContain(message);
+    },
+  );
 
   it("fails reject mode when the agent run unexpectedly succeeds", () => {
     expect(() =>
@@ -36,11 +42,15 @@ describe("scripts/e2e/lib/openai-web-search-minimal/client.mjs", () => {
     ).toThrow(/reject mode unexpectedly completed/u);
   });
 
-  it("fails reject mode on unrelated transport errors", () => {
+  it.each([
+    "connect ECONNREFUSED 127.0.0.1:9",
+    "invalid_request_error: unrelated provider request failed",
+    "LLM request rejected: Unknown model | invalid_request_error",
+  ])("fails reject mode on unrelated errors: %s", (message) => {
     expect(() =>
       testing.validateRejectResult({
         ok: false,
-        error: new Error("connect ECONNREFUSED 127.0.0.1:9"),
+        error: new Error(message),
       }),
     ).toThrow(/reject mode failed for an unexpected reason/u);
   });

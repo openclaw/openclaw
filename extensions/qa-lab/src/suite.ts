@@ -6,7 +6,6 @@ import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { parseBooleanValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaGatewayChild, QaGatewayStopResult } from "./gateway-child.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
-import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
 import {
   createQaTransportAdapter,
@@ -18,7 +17,7 @@ import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
 import type { QaSuiteGatewayHeapSnapshot, QaSuiteGatewayRssSample } from "./suite-artifacts.js";
 import { waitForQaHttpReady } from "./suite-http-readiness.js";
-import { shouldUseIsolatedQaSuiteScenarioWorkers, splitModelRef } from "./suite-planning.js";
+import { shouldUseIsolatedQaSuiteScenarioWorkers } from "./suite-planning.js";
 import { runQaSuiteScenarioDefinition, runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
 import type { QaSuiteSummaryJson } from "./suite-summary.js";
 import {
@@ -320,10 +319,6 @@ export async function runQaSuiteScenarioDefinitionForRuntime(
     env,
     scenario,
     runScenario: runQaSuiteScenarioSteps,
-    splitModelRef,
-    formatErrorMessage,
-    liveTurnTimeoutMs: resolveQaLiveTurnTimeoutMs,
-    resolveQaLiveTurnTimeoutMs,
     constants: {
       imageUnderstandingPngBase64: QA_IMAGE_UNDERSTANDING_PNG_BASE64,
       imageUnderstandingLargePngBase64: QA_IMAGE_UNDERSTANDING_LARGE_PNG_BASE64,

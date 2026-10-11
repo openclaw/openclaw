@@ -8,6 +8,7 @@ import type {
 } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
@@ -134,67 +135,60 @@ it.each(["default", "shared"] as const)(
         for (const receipt of receipts) {
           receipt.finish("cancelled");
         }
+        await Promise.all(receipts.map(async (receipt) => receipt.settled?.()));
       }
     });
   },
 );
 
-it("preserves a consumed source receipt when withdrawal targets its original run", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const database = openOpenClawAgentDatabase({ agentId: target.agentId });
-    writeSessionEntry(database, target.sessionKey, { sessionId: target.sessionId, updatedAt: 1 });
-    const receipts: SessionPendingInputReceipt[] = [];
-    try {
-      const first = await stage(target, "first", receipts);
-      const second = await stage(target, "second", receipts);
-      const collected = expectDefined(
-        bindSessionPendingInputSources([first, second], message("collected")),
-        "Expected collected input custody",
-      );
-      receipts.push(collected);
-      await collected.run(() => appendTranscriptMessage(target, { message: collected.message }));
-      const original = readPendingRow(database, first.inputId);
-      expect(original.consumed_event_id).toBe(collected.inputId);
-
-      expect(await discardSessionPendingInput(target, "first", assertCurrent)).toBe(false);
-
-      expect(readPendingRow(database, first.inputId)).toEqual(original);
-    } finally {
-      for (const receipt of receipts) {
-        receipt.finish("cancelled");
+it.each(["consumed", "superseded"] as const)(
+  "preserves %s input custody on withdrawal",
+  async (state) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const database = openOpenClawAgentDatabase({ agentId: target.agentId });
+      writeSessionEntry(database, target.sessionKey, { sessionId: target.sessionId, updatedAt: 1 });
+      const receipts: SessionPendingInputReceipt[] = [];
+      try {
+        const runId = "reused-run";
+        const first = await stage(target, runId, receipts);
+        let original = readPendingRow(database, first.inputId);
+        let successor: ReturnType<typeof readPendingRow> | undefined;
+        if (state === "consumed") {
+          const second = await stage(target, "second", receipts);
+          const collected = expectDefined(
+            bindSessionPendingInputSources([first, second], message("collected")),
+            "Expected collected input custody",
+          );
+          receipts.push(collected);
+          await collected.run(() =>
+            appendTranscriptMessage(target, { message: collected.message }),
+          );
+          original = readPendingRow(database, first.inputId);
+          expect(original.consumed_event_id).toBe(collected.inputId);
+        } else {
+          const successorScope = { ...target, sessionId: "successor-session" };
+          writeSessionEntry(database, target.sessionKey, {
+            sessionId: successorScope.sessionId,
+            updatedAt: 2,
+          });
+          const receipt = await stage(successorScope, runId, receipts);
+          successor = readPendingRow(database, receipt.inputId);
+          expect(readPendingRow(database, first.inputId)).toEqual(original);
+        }
+        expect(await discardSessionPendingInput(target, runId, assertCurrent)).toBe(false);
+        expect(readPendingRow(database, first.inputId)).toEqual(original);
+        if (successor) {
+          expect(readPendingRow(database, successor.input_id)).toEqual(successor);
+        }
+      } finally {
+        for (const receipt of receipts) {
+          receipt.finish("cancelled");
+        }
+        await Promise.all(receipts.map(async (receipt) => receipt.settled?.()));
       }
-    }
-  });
-});
-
-it("does not withdraw an old or successor input after the canonical session resets", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const database = openOpenClawAgentDatabase({ agentId: target.agentId });
-    writeSessionEntry(database, target.sessionKey, { sessionId: target.sessionId, updatedAt: 1 });
-    const receipts: SessionPendingInputReceipt[] = [];
-    try {
-      const previous = await stage(target, "reused-run", receipts);
-      const original = readPendingRow(database, previous.inputId);
-      const successorScope = { ...target, sessionId: "successor-session" };
-      writeSessionEntry(database, target.sessionKey, {
-        sessionId: successorScope.sessionId,
-        updatedAt: 2,
-      });
-      const successor = await stage(successorScope, "reused-run", receipts);
-      const successorRow = readPendingRow(database, successor.inputId);
-      expect(readPendingRow(database, previous.inputId)).toEqual(original);
-
-      expect(await discardSessionPendingInput(target, "reused-run", assertCurrent)).toBe(false);
-
-      expect(readPendingRow(database, previous.inputId)).toEqual(original);
-      expect(readPendingRow(database, successor.inputId)).toEqual(successorRow);
-    } finally {
-      for (const receipt of receipts) {
-        receipt.finish("cancelled");
-      }
-    }
-  });
-});
+    });
+  },
+);
 
 it("rolls back withdrawal when current authority is revoked at commit", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -203,18 +197,13 @@ it("rolls back withdrawal when current authority is revoked at commit", async ()
     const receipts: SessionPendingInputReceipt[] = [];
     const receipt = await stage(target, "revoked", receipts);
     const original = readPendingRow(database, receipt.inputId);
-    const createAdmission = admission.createSqliteWorkerOperationAdmission;
     let current = true;
-    const admitted = vi
-      .spyOn(admission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((callback, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "commit") {
-            current = false;
-          }
-          return callback(request, grant);
-        }, attachment),
-      );
+    const admitted = probe.admission(admission, (request, grant, callback) => {
+      if (request.stage === "commit") {
+        current = false;
+      }
+      return callback(request, grant);
+    });
     try {
       await expect(
         discardSessionPendingInput(target, "revoked", () => {
@@ -228,6 +217,7 @@ it("rolls back withdrawal when current authority is revoked at commit", async ()
     } finally {
       admitted.mockRestore();
       receipt.finish("cancelled");
+      await receipt.settled?.();
     }
   });
 });
@@ -317,6 +307,7 @@ it("recovers the committed withdrawal when delivery of the worker result fails",
     } finally {
       observer.mockRestore();
       receipt.finish("cancelled");
+      await receipt.settled?.();
     }
   });
 });

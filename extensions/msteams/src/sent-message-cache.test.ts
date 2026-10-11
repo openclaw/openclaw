@@ -24,6 +24,7 @@ describe("msteams sent message cache", () => {
   afterEach(() => {
     sentMessageMemory.clear();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it("records and resolves sent message ids", async () => {

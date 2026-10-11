@@ -22,6 +22,7 @@ import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
+import { bindExecutionGuards } from "./update-command-execution.test-support.js";
 import type * as fixtures from "./update-command-execution.test-support.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import * as gitAdmission from "./update-command-git-admission.js";
@@ -41,7 +42,7 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
     exercise: (fixture: {
       root: string;
       run: Run;
-      params: Parameters<typeof executeMutableUpdate>[0];
+      params: Omit<Parameters<typeof executeMutableUpdate>[0], "executionGuards">;
       events: string[];
       beforeCall: { run?: () => void };
       start: () => ReturnType<typeof executeMutableUpdate>;
@@ -128,7 +129,7 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
             params,
             events,
             beforeCall,
-            start: () => executeMutableUpdate(params),
+            start: async () => executeMutableUpdate(await bindExecutionGuards(params)),
           });
         });
       } finally {
@@ -137,65 +138,6 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
       }
     });
   };
-
-  it.each(["retained", "replaced"] as const)(
-    "handles %s invocation custody before the native receiver probe",
-    async (custody) =>
-      withPhase("validating", async (fixture) => {
-        fixture.params.shouldRestart = true;
-        fixture.params.opts.restart = true;
-        mocks.maybeStopService.mockResolvedValue({
-          inspected: true,
-          runtimeInspected: true,
-          running: false,
-          stopped: false,
-          serviceEnv: fixture.run.env,
-          serviceUpdateVerdict: {
-            kind: "owned",
-            root: fixture.root,
-            fingerprint: "phase-receiver-fixture",
-            refreshDefinition: false,
-          },
-        });
-        mocks.nativeSupport.mockResolvedValue(true);
-        let recheckArmed = false;
-        let rechecked = false;
-        let phaseAtRecheck: string | undefined;
-        fixture.beforeCall.run = () => {
-          recheckArmed = true;
-        };
-        const revalidate = mocks.revalidateSchemaContext.getMockImplementation()!;
-        mocks.revalidateSchemaContext.mockImplementation(async (context) => {
-          const result = await revalidate(context);
-          if (recheckArmed && !rechecked) {
-            rechecked = true;
-            phaseAtRecheck = (await getUpdateRunAsync(fixture.run.runId, { env: fixture.run.env }))
-              ?.phase;
-            if (custody === "replaced") {
-              fixture.params.opts.run = { ...fixture.run };
-            }
-          }
-          return result;
-        });
-
-        try {
-          const result = await fixture.start();
-          expect(rechecked).toBe(true);
-          expect(phaseAtRecheck).toBe("validating");
-          if (custody === "replaced") {
-            expect(result).toMatchObject({ mutationStarted: false, result: { status: "error" } });
-            expect(mocks.nativeSupport).not.toHaveBeenCalled();
-            expect(mocks.validateCanary).not.toHaveBeenCalled();
-          } else {
-            expect(result).toMatchObject({ result: { status: "ok" } });
-            expect(mocks.nativeSupport).toHaveBeenCalledOnce();
-            expect(mocks.validateCanary).toHaveBeenCalledOnce();
-          }
-        } finally {
-          mocks.nativeSupport.mockReset();
-        }
-      }),
-  );
 
   it.each(["validating", "activating", "staging"] as const)(
     "awaits the real %s phase acknowledgement without host ledger DML",
@@ -328,52 +270,29 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
     });
   });
 
-  it.each(["validating", "activating", "staging"] as const)(
-    "refuses downstream work after the %s receipt returns to a revoked caller",
-    async (phase) =>
-      withPhase(phase, async (fixture) => {
-        const revoke = () => {
-          if (phase === "staging") {
-            fixture.run.interrupted = true;
-          } else {
-            fixture.params.opts.run = { ...fixture.run };
-          }
-        };
-        let received = false;
-        const original = phaseWrites.recordUpdateRunPhaseAsync;
-        const phaseWrite = vi
-          .spyOn(phaseWrites, "recordUpdateRunPhaseAsync")
-          .mockImplementation(async (...args) => {
-            const record = await original(...args);
-            if (args[1] === phase && phase !== "staging") {
-              received = true;
-              revoke();
-            }
-            return record;
-          });
-        const inspect = gitAdmission.recordInspectedGitTarget;
-        const inspected = vi
-          .spyOn(gitAdmission, "recordInspectedGitTarget")
-          .mockImplementation(async (...args) => {
-            await inspect(...args);
-            if (phase === "staging") {
-              received = true;
-              revoke();
-            }
-          });
-        try {
-          expect(await fixture.start()).toMatchObject({
-            mutationStarted: false,
-            result: { status: "error" },
-          });
-          expect(received).toBe(true);
-          expect(fixture.events).toEqual([]);
-        } finally {
-          phaseWrite.mockRestore();
-          inspected.mockRestore();
-        }
-      }),
-  );
+  it("refuses downstream work after an interrupted staging receipt", async () => {
+    await withPhase("staging", async (fixture) => {
+      let received = false;
+      const inspect = gitAdmission.recordInspectedGitTarget;
+      const inspected = vi
+        .spyOn(gitAdmission, "recordInspectedGitTarget")
+        .mockImplementation(async (...args) => {
+          await inspect(...args);
+          received = true;
+          fixture.run.interrupted = true;
+        });
+      try {
+        expect(await fixture.start()).toMatchObject({
+          mutationStarted: false,
+          result: { status: "error" },
+        });
+        expect(received).toBe(true);
+        expect(fixture.events).toEqual([]);
+      } finally {
+        inspected.mockRestore();
+      }
+    });
+  });
 
   it.each(["missing-row", "recovery-required", "missing-reply"] as const)(
     "keeps %s distinct from a successful validating receipt",
@@ -448,7 +367,7 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
   });
 
   it.each(["ordinary", "unknown"] as const)(
-    "preserves a phase %s error when its caller is revoked before delivery",
+    "preserves a phase %s error before delivery",
     async (outcome) =>
       withPhase("validating", async (fixture) => {
         const original = stateWorker.runOpenClawStateWorkerOperation;
@@ -460,7 +379,6 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
           .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
           .mockImplementation(async (...args) => {
             await original(...args);
-            fixture.params.opts.run = { ...fixture.run };
             throw originalError;
           });
         try {

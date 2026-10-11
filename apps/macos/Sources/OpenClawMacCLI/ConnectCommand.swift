@@ -130,6 +130,14 @@ func runConnect(_ args: [String], configURL: URL) async {
     }
 
     let config = loadGatewayConfig(from: configURL)
+    var output = ConnectOutput(
+        status: "ok",
+        url: "unknown",
+        mode: (opts.mode ?? config.mode ?? "local").lowercased(),
+        role: opts.role,
+        clientId: opts.clientId,
+        clientMode: opts.clientMode,
+        scopes: opts.scopes)
     do {
         let endpoint = try resolveGatewayEndpoint(opts: opts, config: config)
         let displayName = opts.displayName ?? Host.current().localizedName ?? "OpenClaw macOS Debug CLI"
@@ -162,32 +170,17 @@ func runConnect(_ args: [String], configURL: URL) async {
         let snapshot = await snapshotStore.get()
         await channel.shutdown()
 
-        let output = ConnectOutput(
-            status: "ok",
-            url: endpoint.url.absoluteString,
-            mode: endpoint.mode,
-            role: opts.role,
-            clientId: opts.clientId,
-            clientMode: opts.clientMode,
-            scopes: opts.scopes,
-            snapshot: snapshot,
-            health: health,
-            error: nil)
+        output.url = endpoint.url.absoluteString
+        output.mode = endpoint.mode
+        output.snapshot = snapshot
+        output.health = health
         printConnectOutput(output, json: opts.json)
     } catch {
         let endpoint = try? resolveGatewayEndpoint(opts: opts, config: config)
-        let fallbackMode = (opts.mode ?? config.mode ?? "local").lowercased()
-        let output = ConnectOutput(
-            status: "error",
-            url: endpoint?.url.absoluteString ?? "unknown",
-            mode: endpoint?.mode ?? fallbackMode,
-            role: opts.role,
-            clientId: opts.clientId,
-            clientMode: opts.clientMode,
-            scopes: opts.scopes,
-            snapshot: nil,
-            health: nil,
-            error: error.localizedDescription)
+        output.status = "error"
+        output.url = endpoint?.url.absoluteString ?? "unknown"
+        output.mode = endpoint?.mode ?? output.mode
+        output.error = error.localizedDescription
         printConnectOutput(output, json: opts.json)
         exit(1)
     }
@@ -297,7 +290,7 @@ func gatewayURLDeviceAuthOwner(_ url: URL, mode: String) -> String {
     components?.password = nil
     let queryItems = components?.queryItems
     components?.queryItems = queryItems?.filter { queryItem in
-        !isSensitiveGatewayQueryItem(queryItem.name)
+        !GatewayEndpointID.isSensitiveQueryItemName(queryItem.name)
     }
     if components?.queryItems?.isEmpty == true {
         components?.query = nil
@@ -308,19 +301,6 @@ func gatewayURLDeviceAuthOwner(_ url: URL, mode: String) -> String {
     let digest = SHA256.hash(data: Data(route.utf8))
     let fingerprint = digest.map { String(format: "%02x", $0) }.joined()
     return "openclaw-mac-cli:route:\(fingerprint)"
-}
-
-private func isSensitiveGatewayQueryItem(_ value: String) -> Bool {
-    let normalized = value
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-        .lowercased()
-        .replacingOccurrences(of: "-", with: "_")
-    return [
-        "access_token", "api_key", "apikey", "app_secret", "auth", "auth_token",
-        "authorization", "client_secret", "code", "credential", "hook_token", "id_token",
-        "jwt", "key", "pass", "passwd", "password", "private_key", "refresh_token",
-        "secret", "session", "signature", "token", "x_amz_security_token", "x_amz_signature",
-    ].contains(normalized)
 }
 
 private func resolveLocalHost(bind: String?) -> String {

@@ -1,3 +1,4 @@
+import "../src/test-utils/prepare-compiled-subprocesses.js";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -133,7 +134,8 @@ describe("cli json stdout contract", () => {
       name: "node identity",
       args: ["node", "identity", "--json"],
       overrides: {},
-      error: "no node device identity found",
+      error:
+        "no node device identity found (start the node host once with `openclaw node run` or `openclaw node install`)",
     },
     {
       name: "routed config get",
@@ -204,7 +206,10 @@ describe("cli json stdout contract", () => {
         expect(result.status, result.stderr).toBe("error" in testCase ? 1 : 0);
         if ("error" in testCase) {
           expect(result.stderr).toContain(testCase.error);
-          expect(result.stdout).toBe("");
+          expect(JSON.parse(result.stdout)).toEqual({
+            ok: false,
+            error: { type: "cli_error", message: testCase.error },
+          });
         } else {
           expect(() => JSON.parse(result.stdout)).not.toThrow();
         }

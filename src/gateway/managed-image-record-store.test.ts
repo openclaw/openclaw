@@ -127,7 +127,7 @@ describe("managed image record SQLite store", () => {
     }
   });
 
-  it("round-trips every typed field", async () => {
+  it("round-trips every typed field even when the debug JSON copy is corrupt", async () => {
     const expected = record({
       messageId: "message-1",
       updatedAt: "2026-07-15T00:01:00.000Z",
@@ -137,11 +137,6 @@ describe("managed image record SQLite store", () => {
     await insertManagedImageRecord(expected, stateDir);
 
     expect(await readManagedImageRecord(expected.attachmentId, stateDir)).toEqual(expected);
-  });
-
-  it("uses typed columns when the debug JSON copy is corrupt", async () => {
-    const expected = record();
-    await insertManagedImageRecord(expected, stateDir);
     const database = openOpenClawStateDatabase({
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     });
@@ -154,54 +149,6 @@ describe("managed image record SQLite store", () => {
     );
 
     expect(await readManagedImageRecord(expected.attachmentId, stateDir)).toEqual(expected);
-  });
-
-  it("atomically promotes a transient row and refreshes its debug copy", async () => {
-    const initial = record();
-    await insertManagedImageRecord(initial, stateDir);
-
-    expect(
-      await attachManagedImageRecordsToMessage({
-        attachments: [initial],
-        messageId: "message-committed",
-        updatedAt: "2026-07-15T00:02:00.000Z",
-        stateDir,
-      }),
-    ).toBe(true);
-
-    const current = await readManagedImageRecord(initial.attachmentId, stateDir);
-    expect(current).toMatchObject({
-      messageId: "message-committed",
-      retentionClass: "history",
-      updatedAt: "2026-07-15T00:02:00.000Z",
-    });
-    const database = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
-    const row = executeSqliteQueryTakeFirstSync(
-      database.db,
-      getNodeSqliteKysely<ManagedImageRecordDatabase>(database.db)
-        .selectFrom("managed_outgoing_image_records")
-        .select("record_json")
-        .where("attachment_id", "=", initial.attachmentId),
-    );
-    expect(JSON.parse(row?.record_json ?? "{}")).toEqual(current);
-  });
-
-  it("keeps a row changed after cleanup planning", async () => {
-    const planned = record();
-    await insertManagedImageRecord(planned, stateDir);
-    await attachManagedImageRecordsToMessage({
-      attachments: [planned],
-      messageId: "message-committed",
-      updatedAt: "2026-07-15T00:02:00.000Z",
-      stateDir,
-    });
-
-    expect(await claimManagedImageRecordCleanupIfCurrent(planned, stateDir)).toBe(false);
-    expect((await readManagedImageRecord(planned.attachmentId, stateDir))?.messageId).toBe(
-      "message-committed",
-    );
   });
 
   it("keeps a cleanup claim durable until the file deletion completes", async () => {
@@ -241,8 +188,8 @@ describe("managed image record SQLite store", () => {
       });
     const attaching = attachManagedImageRecordsToMessage({
       attachments: [initial],
-      messageId: "committed",
-      updatedAt: initial.createdAt,
+      messageId: "message-committed",
+      updatedAt: "2026-07-15T00:02:00.000Z",
       stateDir,
     });
     let claiming: Promise<boolean> | undefined;
@@ -256,10 +203,23 @@ describe("managed image record SQLite store", () => {
       release.resolve();
       expect(await attaching).toBe(true);
       expect(await claiming).toBe(false);
-      expect(await readManagedImageRecord(initial.attachmentId, stateDir)).toMatchObject({
-        messageId: "committed",
+      const current = await readManagedImageRecord(initial.attachmentId, stateDir);
+      expect(current).toMatchObject({
+        messageId: "message-committed",
         retentionClass: "history",
+        updatedAt: "2026-07-15T00:02:00.000Z",
       });
+      const database = openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      });
+      const row = executeSqliteQueryTakeFirstSync(
+        database.db,
+        getNodeSqliteKysely<ManagedImageRecordDatabase>(database.db)
+          .selectFrom("managed_outgoing_image_records")
+          .select("record_json")
+          .where("attachment_id", "=", initial.attachmentId),
+      );
+      expect(JSON.parse(row?.record_json ?? "{}")).toEqual(current);
     } finally {
       release.resolve();
       await Promise.allSettled([attaching, claiming]);

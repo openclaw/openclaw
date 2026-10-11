@@ -53,7 +53,6 @@ export type LobsterPetLook = {
   scale: number;
   accessory: LobsterPetAccessory;
   antennae: LobsterPetAntennae;
-  side: "left" | "right";
   spotPct: number;
   facing: 1 | -1;
   personality: LobsterPetPersonalityId;

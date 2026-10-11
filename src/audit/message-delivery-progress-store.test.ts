@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import gitPrerequisites from "../../.github/actions/git-owner/test-prerequisites.json" with { type: "json" };
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { getCanonicalSqliteTableNames } from "../infra/sqlite-schema-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
@@ -16,6 +17,7 @@ import { STATE_SCHEMA_11_TO_10_TABLES_SQL } from "../state/openclaw-state-schema
 import { STATE_SCHEMA_12_TO_11_DOWNGRADE_SQL } from "../state/openclaw-state-schema-v12-foldin.test-support.js";
 import { STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL } from "../state/openclaw-state-schema-v13-widerow.test-support.js";
 import { removePreparedWorkerOwnershipColumns } from "../state/openclaw-state-schema-v17.test-support.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { recordAuditEventInDatabase } from "./audit-event-store.js";
 import type { OutboundMessageProgressInput } from "./audit-event-types.js";
 import {
@@ -295,11 +297,6 @@ describe("outbound message progress companion", () => {
     // Only audit rows belong to this proof. Restore empty unrelated owner tables
     // for the immutable reader without inventing a production downgrade.
     expect(
-      projectedDatabase
-        .prepare("SELECT COUNT(*) AS count FROM current_conversation_bindings")
-        .get(),
-    ).toEqual({ count: 0 });
-    expect(
       projectedDatabase.prepare("SELECT COUNT(*) AS count FROM worker_environments").get(),
     ).toEqual({ count: 0 });
     removePreparedWorkerOwnershipColumns(projectedDatabase);
@@ -318,21 +315,45 @@ describe("outbound message progress companion", () => {
            AND type IN ('table', 'index') AND sql IS NOT NULL
          ORDER BY type = 'table' DESC, name`,
       );
-      for (const table of ["current_conversation_bindings", "skill_workshop_proposals"]) {
-        projectedDatabase.exec(`DROP TABLE ${table};`);
+      for (const table of [
+        "current_conversation_bindings",
+        "skill_workshop_proposals",
+        "cron_run_receipts",
+      ]) {
+        // Current state no longer has the retired proposal table; the pinned reader recreates it.
+        if (table !== "skill_workshop_proposals") {
+          expect(projectedDatabase.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual(
+            { count: 0 },
+          );
+        }
+        projectedDatabase.exec(`DROP TABLE IF EXISTS ${table};`);
         for (const { sql } of pinnedStatements.all(table) as Array<{ sql: string }>) {
+          projectedDatabase.exec(sql);
+        }
+      }
+
+      // The v9-era reader needs these owner projections reversed before restoring
+      // any other retired tables from its immutable schema.
+      projectedDatabase.exec(STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL);
+      projectedDatabase.exec(STATE_SCHEMA_12_TO_11_DOWNGRADE_SQL);
+      projectedDatabase.exec(STATE_SCHEMA_11_TO_10_TABLES_SQL);
+      projectedDatabase.exec(STATE_SCHEMA_10_TO_9_DOWNGRADE_SQL);
+      const currentTables = new Set(getCanonicalSqliteTableNames(OPENCLAW_STATE_SCHEMA_SQL));
+      const pinnedTables = pinnedSchemaDatabase
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name")
+        .all() as Array<{ name: string }>;
+      for (const { name } of pinnedTables) {
+        // Current owners, including lazy audit tables, must retain their own setup.
+        if (currentTables.has(name) || tableExists(projectedDatabase, name)) {
+          continue;
+        }
+        for (const { sql } of pinnedStatements.all(name) as Array<{ sql: string }>) {
           projectedDatabase.exec(sql);
         }
       }
     } finally {
       pinnedSchemaDatabase.close();
     }
-    // The v9-era reader needs the v13 projection removal, v12 singleton fold-in,
-    // v11 curator retirement, and v10 dead-table retirement reversed in order.
-    projectedDatabase.exec(STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL);
-    projectedDatabase.exec(STATE_SCHEMA_12_TO_11_DOWNGRADE_SQL);
-    projectedDatabase.exec(STATE_SCHEMA_11_TO_10_TABLES_SQL);
-    projectedDatabase.exec(STATE_SCHEMA_10_TO_9_DOWNGRADE_SQL);
     closeOpenClawStateDatabaseForTest();
 
     const checkoutParent = tempDirs.make("message-progress-pinned-reader-");

@@ -64,7 +64,7 @@ describe("provider model id policy normalization", () => {
       fable: "claude-fable-5-1",
       "fable-5": "claude-fable-5",
       "fable-5.1": "claude-fable-5-1",
-      haiku: "claude-haiku-4-5",
+      haiku: "claude-haiku-5-5",
       "opus-4.7": "claude-opus-4-7",
       "mythos-5": "claude-mythos-5",
     })) {

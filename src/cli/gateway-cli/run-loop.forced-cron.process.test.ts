@@ -3,7 +3,7 @@ import { EventEmitter, once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -19,24 +19,21 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
         child.kill("SIGKILL");
       }
     }
-    await withTestTimeout(
-      Promise.all(children.values()),
-      5_000,
-      "cron restart children did not close",
-    );
+    await Promise.all(children.values());
     children.clear();
     cleanup();
   }),
 );
 const fixture = resolveRuntimeWorkerUrl(gatewayDirectStopEntrypoints.forcedCronFixture);
 
-it.skipIf(process.platform === "win32").each([
+it.skipIf(process.platform === "win32").for([
   { signal: "SIGUSR2", mode: "force" },
   { signal: "SIGTERM", mode: "force" },
   { signal: "SIGUSR2", mode: "timeout" },
 ] as const)(
   "settles admitted cron work before $signal $mode restart",
-  async ({ signal, mode }) => {
+  { timeout: 60_000 },
+  async ({ signal, mode }, { signal: testSignal }) => {
     const root = tempDirs.make("openclaw-forced-cron-");
     const home = path.join(root, "home");
     fs.mkdirSync(home);
@@ -63,27 +60,30 @@ it.skipIf(process.platform === "win32").each([
     };
     child.stdout?.on("data", recordOutput);
     child.stderr?.on("data", recordOutput);
-    const waitForOutput = async (text: string, timeout = 5_000) => {
+    const waitForOutput = async (text: string) => {
       let inspect: () => void = () => {};
       try {
-        await withTestTimeout(
-          new Promise<void>((resolve) => {
-            inspect = () => {
-              if (output.includes(text)) {
-                resolve();
-              }
-            };
-            changes.on("output", inspect);
-            inspect();
-          }),
-          timeout,
-          `Missing ${text}: ${output}`,
+        await withinTest(
+          awaitGateBeforeSettlement(
+            new Promise<void>((resolve) => {
+              inspect = () => {
+                if (output.includes(text)) {
+                  resolve();
+                }
+              };
+              changes.on("output", inspect);
+              inspect();
+            }),
+            closed,
+            `Missing ${text}: ${output}`,
+          ),
+          testSignal,
         );
       } finally {
         changes.off("output", inspect);
       }
     };
-    await waitForOutput("process proof: ready:1", 45_000);
+    await waitForOutput("process proof: ready:1");
     expect(child.kill(signal)).toBe(true);
     if (mode === "timeout") {
       await waitForOutput("process proof: cron-cancelled:Gateway restarting.");
@@ -100,14 +100,12 @@ it.skipIf(process.platform === "win32").each([
     expect(child.exitCode).toBeNull();
     child.send("release");
     if (signal === "SIGUSR2") {
-      await waitForOutput("process proof: ready:2", 15_000);
+      await waitForOutput("process proof: ready:2");
       expect(child.kill("SIGINT")).toBe(true);
     }
-    const outcome = await withTestTimeout(closed, 5_000, "Cron restart child did not close").catch(
-      (cause: unknown) => {
-        throw new Error(output, { cause });
-      },
-    );
+    const outcome = await withinTest(closed, testSignal).catch((cause: unknown) => {
+      throw new Error(output, { cause });
+    });
     expect(outcome).toEqual([0, null]);
     expect(fs.readFileSync(path.join(root, "cleanup.txt"), "utf8")).toBe("settled\n");
     expect(output.indexOf("process proof: cron-cleanup-settled")).toBeLessThan(
@@ -115,5 +113,4 @@ it.skipIf(process.platform === "win32").each([
     );
     expect(output).not.toContain("shutdown deadline reached");
   },
-  60_000,
 );

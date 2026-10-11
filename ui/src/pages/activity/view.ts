@@ -86,16 +86,6 @@ function matchesEntry(entry: ActivityEntry, needle: string): boolean {
   return haystack.includes(needle);
 }
 
-function filterEntries(props: ActivityProps): ActivityEntry[] {
-  const needle = normalizeLowercaseStringOrEmpty(props.filterText);
-  return props.entries.filter(
-    (entry) =>
-      props.statusFilters[entry.status] &&
-      (!props.toolFilter || entry.toolName === props.toolFilter) &&
-      matchesEntry(entry, needle),
-  );
-}
-
 function renderStatusFilter(props: ActivityProps, status: ActivityStatus) {
   return html`
     <label class="activity-status-filter">
@@ -147,8 +137,11 @@ function renderToolFilter(props: ActivityProps, toolNames: string[]) {
               }
             }}
           >
-            <option value="">${t("activity.allTools")}</option>
-            ${toolNames.map((name) => html`<option value=${name}>${name}</option>`)}
+            <option value="" .selected=${props.toolFilter === ""}>${t("activity.allTools")}</option>
+            ${toolNames.map(
+              (name) =>
+                html`<option value=${name} .selected=${name === props.toolFilter}>${name}</option>`,
+            )}
           </select>
         </label>
       </div>
@@ -272,7 +265,13 @@ export function renderActivity(props: ActivityProps) {
     "",
   );
   const toolNames = sortUniqueStrings(props.entries.map((entry) => entry.toolName));
-  const filtered = filterEntries(props);
+  const needle = normalizeLowercaseStringOrEmpty(props.filterText);
+  const filtered = props.entries.filter(
+    (entry) =>
+      props.statusFilters[entry.status] &&
+      (!props.toolFilter || entry.toolName === props.toolFilter) &&
+      matchesEntry(entry, needle),
+  );
 
   // The stream fills the remaining viewport height; the settings-page column
   // wrapper is intentionally skipped so the fill-height flex chain
@@ -289,30 +288,24 @@ export function renderActivity(props: ActivityProps) {
               total: String(props.entries.length),
             })}
           </span>
-          <button
-            type="button"
-            class="btn btn--sm"
-            ?disabled=${filtered.length === 0}
-            @click=${props.onExpandAll}
-          >
-            ${t("activity.expandAll")}
-          </button>
-          <button
-            type="button"
-            class="btn btn--sm"
-            ?disabled=${props.expandedIds.size === 0}
-            @click=${props.onCollapseAll}
-          >
-            ${t("activity.collapseAll")}
-          </button>
-          <button
-            type="button"
-            class="btn btn--sm danger"
-            ?disabled=${props.entries.length === 0}
-            @click=${props.onClear}
-          >
-            ${t("activity.clear")}
-          </button>
+          ${[
+            { action: "expandAll", disabled: filtered.length === 0, onClick: props.onExpandAll },
+            {
+              action: "collapseAll",
+              disabled: props.expandedIds.size === 0,
+              onClick: props.onCollapseAll,
+            },
+            { action: "clear", disabled: props.entries.length === 0, onClick: props.onClear },
+          ].map(
+            ({ action, disabled, onClick }) => html`<button
+              type="button"
+              class=${action === "clear" ? "btn btn--sm danger" : "btn btn--sm"}
+              ?disabled=${disabled}
+              @click=${onClick}
+            >
+              ${t(`activity.${action}`)}
+            </button>`,
+          )}
         </div>
       </div>
       <div class="settings-group activity-group">

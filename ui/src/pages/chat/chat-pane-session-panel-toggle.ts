@@ -5,6 +5,8 @@ import {
   LINK_READER_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
   PORTAL_PANEL_TOGGLE_EVENT,
+  PLUGIN_PANEL_TOGGLE_EVENT,
+  type PluginPanelToggleDetail,
   TERMINAL_PANEL_DOCK_BOTTOM_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../../components/panel-toggle-contract.ts";
@@ -27,6 +29,7 @@ interface ActivePanelOwner {
   renderRoot: ParentNode;
   state: ChatPageHost;
   linkReaders: readonly ControlUiLinkReaderDescriptor[];
+  pluginPanels: readonly `${string}/${string}`[];
   updateComplete: Promise<unknown>;
 }
 
@@ -65,6 +68,9 @@ export class ChatPaneSessionPanelToggleController {
       window.addEventListener(eventName, listener);
       return () => window.removeEventListener(eventName, listener);
     });
+    const handlePluginPanel = (event: Event) => this.handlePluginPanel(event);
+    window.addEventListener(PLUGIN_PANEL_TOGGLE_EVENT, handlePluginPanel);
+    cleanups.push(() => window.removeEventListener(PLUGIN_PANEL_TOGGLE_EVENT, handlePluginPanel));
     const handleTerminalDockBottom = () => {
       const owner = this.options.current();
       if (owner) {
@@ -79,7 +85,37 @@ export class ChatPaneSessionPanelToggleController {
     };
   }
 
-  handle(slot: SessionPanelToggleSlot, tagName: PanelTagName, event: Event): boolean {
+  private handlePluginPanel(event: Event): void {
+    const owner = this.options.current();
+    if (!owner || !(event instanceof CustomEvent)) {
+      return;
+    }
+    // SAFETY: The typed host SDK and validated ui.command adapter own this event.
+    const detail = event.detail as PluginPanelToggleDetail;
+    const key = `${detail.pluginId}/${detail.panelId}` as const;
+    if (
+      !owner.pluginPanels.includes(key) ||
+      !areUiSessionKeysEquivalent(detail.sessionKey, owner.state.sessionKey) ||
+      (detail.agentId && detail.agentId !== resolveChatAgentId(owner.state))
+    ) {
+      return;
+    }
+    const slot = `plugin:${key}` as const;
+    clearSessionPanelToggle(slot, event);
+    let layout = detail.open
+      ? openSlot(owner.state.sidebarLayout, slot)
+      : closeSlot(owner.state.sidebarLayout, slot);
+    if (detail.dock) {
+      layout = setSidebarDock(layout, detail.dock);
+    }
+    this.options.updateSidebarLayout(layout);
+  }
+
+  handle(
+    slot: (typeof panelToggleEvents)[number][1],
+    tagName: PanelTagName,
+    event: Event,
+  ): boolean {
     const owner = this.options.current();
     if (!owner) {
       return false;
@@ -133,12 +169,17 @@ export class ChatPaneSessionPanelToggleController {
     }
     if (slot === "terminal") {
       const intent = terminalToggleIntent(event, resolveChatAgentId(owner.state));
-      const embeddedTerminal = owner.renderRoot.querySelector("openclaw-terminal-panel[embedded]");
+      const embeddedTerminal = owner.renderRoot.querySelector<
+        HTMLElementTagNameMap["openclaw-terminal-panel"]
+      >("openclaw-terminal-panel[embedded]");
       const terminalConstructor = customElements.get("openclaw-terminal-panel");
       const embeddedTerminalMounted =
         embeddedTerminal !== null &&
         terminalConstructor !== undefined &&
         embeddedTerminal instanceof terminalConstructor;
+      if (embeddedTerminalMounted) {
+        embeddedTerminal.activateTerminalHost();
+      }
       if (intent) {
         void terminalIntentQueue.queue(intent, {
           deferUntilHostChange: !embeddedTerminalMounted,
@@ -219,6 +260,18 @@ export class ChatPaneSessionPanelToggleController {
     const owner = this.options.current();
     if (!owner) {
       return;
+    }
+    for (const key of owner.pluginPanels) {
+      let event: Event | null;
+      while (
+        (event = takeSessionPanelToggle(
+          `plugin:${key}`,
+          owner.state.sessionKey,
+          resolveChatAgentId(owner.state),
+        ))
+      ) {
+        this.handlePluginPanel(event);
+      }
     }
     for (const [, slot, tagName] of panelToggleEvents) {
       let event: Event | null;

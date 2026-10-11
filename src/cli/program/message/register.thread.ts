@@ -1,4 +1,3 @@
-// Thread command registration, including channel-specific create request normalization.
 import type { Command } from "commander";
 import { getChannelPlugin } from "../../../channels/plugins/index.js";
 import { resolveMessageSecretScope } from "../../message-secret-scope.js";
@@ -21,7 +20,6 @@ function resolveThreadCreateRequest(opts: Record<string, unknown>) {
   };
 }
 
-/** Register thread create/list/reply commands. */
 export function registerMessageThreadCommands(message: Command, helpers: MessageCliHelpers) {
   const thread = message.command("thread").description("Thread actions");
 

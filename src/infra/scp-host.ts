@@ -1,21 +1,12 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 
 // SCP host/path normalization rejects shell metacharacters before values are
 // embedded in remote-copy commands.
 const SSH_TOKEN = /^[A-Za-z0-9._-]+$/;
 const BRACKETED_IPV6 = /^\[[0-9A-Fa-f:.%]+\]$/;
 const WHITESPACE = /\s/;
-const SCP_REMOTE_PATH_UNSAFE_CHARS = new Set(["\\", "'", '"', "`", "$", ";", "|", "&", "<", ">"]);
-
-function hasControlOrWhitespace(value: string): boolean {
-  for (const char of value) {
-    const code = char.charCodeAt(0);
-    if (code <= 0x1f || code === 0x7f || WHITESPACE.test(char)) {
-      return true;
-    }
-  }
-  return false;
-}
+const SCP_REMOTE_PATH_UNSAFE_CHARS = /[\\'"`$;|&<>]/;
 
 /** Normalize an optional `[user@]host` SCP target or reject unsafe tokens. */
 export function normalizeScpRemoteHost(value: string | null | undefined): string | undefined {
@@ -23,7 +14,7 @@ export function normalizeScpRemoteHost(value: string | null | undefined): string
   if (!trimmed) {
     return undefined;
   }
-  if (hasControlOrWhitespace(trimmed)) {
+  if (containsAsciiControlCharacter(trimmed) || WHITESPACE.test(trimmed)) {
     return undefined;
   }
   if (trimmed.startsWith("-")) {
@@ -66,17 +57,9 @@ export function normalizeScpRemotePath(value: string | null | undefined): string
     return undefined;
   }
 
-  for (const char of trimmed) {
-    const code = char.charCodeAt(0);
-    if (code <= 0x1f || code === 0x7f || SCP_REMOTE_PATH_UNSAFE_CHARS.has(char)) {
-      return undefined;
-    }
+  if (containsAsciiControlCharacter(trimmed) || SCP_REMOTE_PATH_UNSAFE_CHARS.test(trimmed)) {
+    return undefined;
   }
 
   return trimmed;
-}
-
-/** Return true when a value is safe for the SCP remote path position. */
-export function isSafeScpRemotePath(value: string | null | undefined): boolean {
-  return normalizeScpRemotePath(value) !== undefined;
 }

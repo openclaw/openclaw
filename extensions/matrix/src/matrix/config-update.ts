@@ -1,4 +1,3 @@
-// Matrix helper module supports config update behavior.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { coerceSecretRef, normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
@@ -36,54 +35,37 @@ export type MatrixAccountPatch = {
   rooms?: MatrixConfig["rooms"] | null;
 };
 
-function applyNullableStringField(
+function applyNullableField<T>(
   target: Record<string, unknown>,
   key: keyof MatrixAccountPatch,
-  value: string | null | undefined,
+  value: T | null | undefined,
+  normalize: (value: T) => unknown = (entry) => entry,
 ): void {
   if (value === undefined) {
     return;
   }
-  if (value === null) {
+  const normalized = value === null ? undefined : normalize(value);
+  if (normalized === undefined) {
     delete target[key];
-    return;
+  } else {
+    target[key] = normalized;
   }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    delete target[key];
-    return;
-  }
-  target[key] = trimmed;
 }
 
-function applyNullableSecretInputField(
-  target: Record<string, unknown>,
+function normalizeMatrixSecretInput(
+  value: NonNullable<MatrixConfig["accessToken"]>,
   key: "accessToken" | "password",
-  value: MatrixConfig["accessToken"] | null | undefined,
   defaults?: NonNullable<CoreConfig["secrets"]>["defaults"],
-): void {
-  if (value === undefined) {
-    return;
-  }
-  if (value === null) {
-    delete target[key];
-    return;
-  }
+) {
   if (typeof value === "string") {
-    const normalized = normalizeSecretInputString(value);
-    if (normalized) {
-      target[key] = normalized;
-    } else {
-      delete target[key];
-    }
-    return;
+    return normalizeSecretInputString(value) || undefined;
   }
 
   const ref = coerceSecretRef(value, defaults);
   if (!ref) {
     throw new Error(`Invalid Matrix ${key} SecretInput.`);
   }
-  target[key] = ref;
+  return ref;
 }
 
 function cloneMatrixDmConfig(dm: NonNullable<MatrixConfig["dm"]>): MatrixConfig["dm"] {
@@ -102,33 +84,6 @@ function cloneMatrixRoomMap(rooms: MatrixConfig["groups"]): MatrixConfig["groups
   );
 }
 
-function applyNullableArrayField(
-  target: Record<string, unknown>,
-  key: keyof MatrixAccountPatch,
-  value: Array<string | number> | null | undefined,
-): void {
-  if (value === undefined) {
-    return;
-  }
-  if (value === null) {
-    delete target[key];
-    return;
-  }
-  target[key] = [...value];
-}
-
-function applyNullableScalarField(
-  target: Record<string, unknown>,
-  key: "encryption" | "allowBots" | "autoJoin" | "groupPolicy",
-  value: string | boolean | null | undefined,
-): void {
-  if (value === null) {
-    delete target[key];
-  } else if (value !== undefined) {
-    target[key] = value;
-  }
-}
-
 export function updateMatrixAccountConfig(
   cfg: CoreConfig,
   accountId: string,
@@ -140,27 +95,25 @@ export function updateMatrixAccountConfig(
     (normalizedAccountId === DEFAULT_ACCOUNT_ID ? matrix : {})) as MatrixConfig;
   const nextAccount: Record<string, unknown> = { ...existingAccount };
 
-  applyNullableStringField(nextAccount, "name", patch.name);
+  const trimString = (value: string) => value.trim() || undefined;
+  applyNullableField(nextAccount, "name", patch.name, trimString);
   if (typeof patch.enabled === "boolean") {
     nextAccount.enabled = patch.enabled;
   } else if (typeof nextAccount.enabled !== "boolean") {
     nextAccount.enabled = true;
   }
 
-  applyNullableStringField(nextAccount, "homeserver", patch.homeserver);
-  applyNullableStringField(nextAccount, "proxy", patch.proxy);
-  applyNullableStringField(nextAccount, "userId", patch.userId);
-  applyNullableSecretInputField(
-    nextAccount,
-    "accessToken",
-    patch.accessToken,
-    cfg.secrets?.defaults,
-  );
-  applyNullableSecretInputField(nextAccount, "password", patch.password, cfg.secrets?.defaults);
-  applyNullableStringField(nextAccount, "deviceId", patch.deviceId);
-  applyNullableStringField(nextAccount, "deviceName", patch.deviceName);
-  applyNullableStringField(nextAccount, "avatarUrl", patch.avatarUrl);
-
+  applyNullableField(nextAccount, "homeserver", patch.homeserver, trimString);
+  applyNullableField(nextAccount, "proxy", patch.proxy, trimString);
+  applyNullableField(nextAccount, "userId", patch.userId, trimString);
+  for (const key of ["accessToken", "password"] as const) {
+    applyNullableField(nextAccount, key, patch[key], (value) =>
+      normalizeMatrixSecretInput(value, key, cfg.secrets?.defaults),
+    );
+  }
+  applyNullableField(nextAccount, "deviceId", patch.deviceId, trimString);
+  applyNullableField(nextAccount, "deviceName", patch.deviceName, trimString);
+  applyNullableField(nextAccount, "avatarUrl", patch.avatarUrl, trimString);
   if (patch.allowPrivateNetwork !== undefined) {
     const nextNetwork =
       nextAccount.network && typeof nextAccount.network === "object"
@@ -178,43 +131,22 @@ export function updateMatrixAccountConfig(
     }
   }
 
-  if (patch.initialSyncLimit !== undefined) {
-    if (patch.initialSyncLimit === null) {
-      delete nextAccount.initialSyncLimit;
-    } else {
-      const initialSyncLimit = resolveOptionalIntegerOption(patch.initialSyncLimit, { min: 0 });
-      if (initialSyncLimit === undefined) {
-        delete nextAccount.initialSyncLimit;
-      } else {
-        nextAccount.initialSyncLimit = initialSyncLimit;
-      }
-    }
-  }
-
-  applyNullableScalarField(nextAccount, "encryption", patch.encryption);
-  applyNullableScalarField(nextAccount, "allowBots", patch.allowBots);
-  applyNullableScalarField(nextAccount, "autoJoin", patch.autoJoin);
-  applyNullableArrayField(nextAccount, "autoJoinAllowlist", patch.autoJoinAllowlist);
-  if (patch.dm !== undefined) {
-    if (patch.dm === null) {
-      delete nextAccount.dm;
-    } else {
-      nextAccount.dm = cloneMatrixDmConfig({
-        ...(nextAccount.dm as MatrixConfig["dm"] | undefined),
-        ...patch.dm,
-      });
-    }
-  }
-  applyNullableScalarField(nextAccount, "groupPolicy", patch.groupPolicy);
-  applyNullableArrayField(nextAccount, "groupAllowFrom", patch.groupAllowFrom);
+  applyNullableField(nextAccount, "initialSyncLimit", patch.initialSyncLimit, (value) =>
+    resolveOptionalIntegerOption(value, { min: 0 }),
+  );
+  applyNullableField(nextAccount, "encryption", patch.encryption);
+  applyNullableField(nextAccount, "allowBots", patch.allowBots);
+  applyNullableField(nextAccount, "autoJoin", patch.autoJoin);
+  applyNullableField(nextAccount, "autoJoinAllowlist", patch.autoJoinAllowlist, (value) => [
+    ...value,
+  ]);
+  applyNullableField(nextAccount, "dm", patch.dm, (value) =>
+    cloneMatrixDmConfig({ ...(nextAccount.dm as MatrixConfig["dm"] | undefined), ...value }),
+  );
+  applyNullableField(nextAccount, "groupPolicy", patch.groupPolicy);
+  applyNullableField(nextAccount, "groupAllowFrom", patch.groupAllowFrom, (value) => [...value]);
   for (const key of ["groups", "rooms"] as const) {
-    if (patch[key] !== undefined) {
-      if (patch[key] === null) {
-        delete nextAccount[key];
-      } else {
-        nextAccount[key] = cloneMatrixRoomMap(patch[key]);
-      }
-    }
+    applyNullableField(nextAccount, key, patch[key], cloneMatrixRoomMap);
   }
 
   const nextAccounts = Object.fromEntries(

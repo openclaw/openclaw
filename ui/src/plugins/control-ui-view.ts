@@ -6,6 +6,7 @@ import type {
   ControlUiSurfaceProps,
 } from "../../../src/plugin-sdk/control-ui.js";
 import { applicationContext } from "../app/context.ts";
+import { livePresentation, type PresentationValue } from "../lit/presentation-binding.ts";
 import type { ControlUiPluginCapability } from "./control-ui-capability.ts";
 
 export type ViewKind = "pages" | "panels" | "accessories" | "widgets" | "replacements";
@@ -15,10 +16,13 @@ class PluginSurfaceDirective extends AsyncDirective {
   private consumer?: ContextConsumer<typeof applicationContext, LitElement>;
   private runtime?: ControlUiPluginCapability;
   private unsubscribe?: () => void;
-  private args?: [ControlUiSurface, unknown, unknown, boolean, unknown];
+  private args?: [ControlUiSurface, unknown, unknown, PresentationValue, unknown];
   private pending = false;
 
-  override update(part: ChildPart, args: [ControlUiSurface, unknown, unknown, boolean, unknown]) {
+  override update(
+    part: ChildPart,
+    args: [ControlUiSurface, unknown, unknown, PresentationValue, unknown],
+  ) {
     this.args = args;
     const host = part.options?.host;
     if (host instanceof LitElement && this.host !== host) {
@@ -84,7 +88,7 @@ class PluginSurfaceDirective extends AsyncDirective {
     surface: ControlUiSurface,
     props: unknown,
     defaultView: unknown,
-    presented: boolean,
+    presented: PresentationValue,
     replacementCompanion: unknown,
   ) {
     // Built-in renderers remain synchronous and do not create a component for
@@ -97,7 +101,7 @@ class PluginSurfaceDirective extends AsyncDirective {
           .defaultView=${defaultView}
           .replacementCompanion=${replacementCompanion}
           .defaultHost=${this.host}
-          .presented=${presented}
+          .presented=${livePresentation(presented)}
         ></openclaw-plugin-view>`
       : defaultView;
   }
@@ -109,7 +113,7 @@ export function renderPluginSurface<S extends ControlUiSurface>(
   surface: S,
   props: ControlUiSurfaceProps[S],
   defaultView: unknown,
-  presented = true,
+  presented: PresentationValue = true,
   replacementCompanion: unknown = nothing,
 ) {
   return pluginSurface(surface, props, defaultView, presented, replacementCompanion);
@@ -119,14 +123,12 @@ export function renderPluginContribution(
   kind: Exclude<ViewKind, "replacements">,
   key: string,
   props: unknown,
-  defaultView: unknown = nothing,
-  presented = true,
+  presented: PresentationValue = true,
 ) {
   return html`<openclaw-plugin-view
     .kind=${kind}
     .contributionKey=${key}
     .props=${props}
-    .defaultView=${defaultView}
-    .presented=${presented}
+    .presented=${livePresentation(presented)}
   ></openclaw-plugin-view>`;
 }

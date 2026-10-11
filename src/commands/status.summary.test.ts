@@ -6,6 +6,7 @@ import {
   setActiveCredentialDegradedOwner,
   setActiveDegradedSecretOwners,
 } from "../secrets/runtime-degraded-state.js";
+import { getStatusSummary } from "../status/summary.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import {
   registerStatusSummarySessionRowCases,
@@ -13,7 +14,9 @@ import {
 } from "./status.summary.test-support.js";
 
 const statusSummaryMocks = vi.hoisted(() => ({
-  hasConfiguredChannelsForReadOnlyScope: vi.fn(() => true),
+  hasConfiguredChannelsForReadOnlyScopeAsync: vi.fn<
+    typeof import("../plugins/channel-plugin-ids.js").hasConfiguredChannelsForReadOnlyScopeAsync
+  >(async () => true),
   buildChannelSummary: vi.fn(async () => ["ok"]),
   resolveProviderStaticModel: vi.fn(),
   listSessionEntriesCore: vi.fn<
@@ -26,8 +29,10 @@ const statusSummaryMocks = vi.hoisted(() => ({
     vi.fn<typeof import("../config/sessions/session-accessor.js").loadExactSessionEntryReadOnly>(),
 }));
 
+// mock-isolation: Keep plugin discovery outside this status aggregation fixture.
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
-  hasConfiguredChannelsForReadOnlyScope: statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope,
+  hasConfiguredChannelsForReadOnlyScopeAsync:
+    statusSummaryMocks.hasConfiguredChannelsForReadOnlyScopeAsync,
 }));
 
 vi.mock("../status/summary.runtime.js", () => ({
@@ -95,41 +100,43 @@ vi.mock("../config/sessions/paths.js", () => ({
 
 vi.mock("../config/sessions/session-accessor.js", () => ({
   loadExactSessionEntryReadOnly: statusSummaryMocks.loadExactSessionEntryReadOnly,
-  readSessionStoreSummaryReadOnly: (
-    scope: Parameters<
-      typeof import("../config/sessions/session-accessor.js").readSessionStoreSummaryReadOnly
-    >[0],
-    options: Parameters<
-      typeof import("../config/sessions/session-accessor.js").readSessionStoreSummaryReadOnly
-    >[1],
-  ) => {
-    const entries = statusSummaryMocks
-      .listSessionEntriesCore(scope)
-      .filter(({ sessionKey }) => sessionKey.startsWith("agent:"))
-      .map(({ sessionKey, entry }) => ({
-        sessionKey,
-        entry: { sessionId: sessionKey, updatedAt: 0, ...entry },
-      }))
-      .toSorted(
-        (left, right) =>
-          right.entry.updatedAt - left.entry.updatedAt ||
-          (left.sessionKey < right.sessionKey ? -1 : left.sessionKey > right.sessionKey ? 1 : 0),
-      );
-    const summarize = (rows: typeof entries) => ({
-      count: rows.length,
-      recent: rows.slice(0, options.recentLimit),
-    });
-    return {
-      ...summarize(entries),
-      byAgent: new Map(
-        options.agentIds.map((agentId) => [
-          agentId,
-          summarize(entries.filter(({ sessionKey }) => sessionKey.startsWith(`agent:${agentId}:`))),
-        ]),
-      ),
-    };
-  },
 }));
+
+vi.mock("../config/sessions/session-entry-read-runtime.js", async () => {
+  const { createSessionStoreSummaryReaderStub } =
+    await import("../config/sessions/session-store-summary.test-support.js");
+  return {
+    withSessionStoreReaderInWorker: createSessionStoreSummaryReaderStub((scope, options) => {
+      const entries = statusSummaryMocks
+        .listSessionEntriesCore(scope)
+        .filter(({ sessionKey }) => sessionKey.startsWith("agent:"))
+        .map(({ sessionKey, entry }) => ({
+          sessionKey,
+          entry: { sessionId: sessionKey, updatedAt: 0, ...entry },
+        }))
+        .toSorted(
+          (left, right) =>
+            right.entry.updatedAt - left.entry.updatedAt ||
+            (left.sessionKey < right.sessionKey ? -1 : left.sessionKey > right.sessionKey ? 1 : 0),
+        );
+      const summarize = (rows: typeof entries) => ({
+        count: rows.length,
+        recent: rows.slice(0, options.recentLimit),
+      });
+      return {
+        ...summarize(entries),
+        byAgent: new Map(
+          options.agentIds.map((agentId) => [
+            agentId,
+            summarize(
+              entries.filter(({ sessionKey }) => sessionKey.startsWith(`agent:${agentId}:`)),
+            ),
+          ]),
+        ),
+      };
+    }),
+  };
+});
 
 vi.mock("../gateway/agent-list.js", () => ({
   listGatewayAgentsBasic: vi.fn(),
@@ -172,7 +179,6 @@ const { buildChannelSummary } = await import("../infra/channel-summary.js");
 const { listGatewayAgentsBasic } = await import("../gateway/agent-list.js");
 const { peekSystemEvents } = await import("../infra/system-events.js");
 const { resolveLinkChannelContext } = await import("../status/link-channel.js");
-let getStatusSummary: typeof import("../status/summary.js").getStatusSummary;
 let statusSummaryRuntime: typeof import("../status/summary.runtime.js").statusSummaryRuntime;
 
 function toSessionEntrySummaries(store: Record<string, Record<string, unknown>>) {
@@ -187,7 +193,6 @@ function setSession(entry: Record<string, unknown>) {
 
 describe("getStatusSummary", () => {
   beforeAll(async () => {
-    ({ getStatusSummary } = await import("../status/summary.js"));
     ({ statusSummaryRuntime } = await import("../status/summary.runtime.js"));
   });
 
@@ -196,7 +201,7 @@ describe("getStatusSummary", () => {
     setActiveDegradedPlugins([]);
     clearActiveCredentialDegradedOwner("account", "telegram:work");
     setActiveDegradedSecretOwners([]);
-    statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope.mockReturnValue(true);
+    statusSummaryMocks.hasConfiguredChannelsForReadOnlyScopeAsync.mockResolvedValue(true);
     statusSummaryMocks.resolveProviderStaticModel.mockReset();
     statusSummaryMocks.listSessionEntriesCore.mockReturnValue([]);
     vi.mocked(peekSystemEvents).mockReset().mockReturnValue([]);
@@ -400,13 +405,13 @@ describe("getStatusSummary", () => {
   });
 
   it("skips channel summary imports when no channels are configured", async () => {
-    statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope.mockReturnValue(false);
+    statusSummaryMocks.hasConfiguredChannelsForReadOnlyScopeAsync.mockResolvedValue(false);
 
     const summary = await getStatusSummary();
 
     expect(summary.channelSummary).toStrictEqual([]);
     expect(summary.linkChannel).toBeUndefined();
-    expect(statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope).toHaveBeenCalledWith({
+    expect(statusSummaryMocks.hasConfiguredChannelsForReadOnlyScopeAsync).toHaveBeenCalledWith({
       config: {},
     });
     expect(buildChannelSummary).not.toHaveBeenCalled();

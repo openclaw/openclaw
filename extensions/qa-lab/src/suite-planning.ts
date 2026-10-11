@@ -9,7 +9,7 @@ import {
 import { createQaArtifactRunId } from "./artifact-run-id.js";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
-import { splitQaModelRef as splitModelRef, type QaProviderMode } from "./model-selection.js";
+import type { QaProviderMode } from "./model-selection.js";
 import { readQaScenarioPack, type QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import {
   describeQaProviderLaneMismatches,
@@ -132,11 +132,9 @@ function listQaSuiteScenarioChannels(scenarios: QaSeedScenario[]) {
   ];
 }
 
-function resolveQaSuiteScenarioChannel(params: {
-  defaultChannel: string;
-  explicitChannel?: string | null;
-  scenarios: QaSeedScenario[];
-}) {
+function resolveQaSuiteScenarioChannel(
+  params: Parameters<typeof resolveQaSuiteScenarioChannels>[0],
+) {
   const scenarioChannels = resolveQaSuiteScenarioChannels(params);
   const [scenarioChannel] = scenarioChannels;
   if (scenarioChannels.length === 1 && scenarioChannel) {
@@ -331,6 +329,7 @@ function scenarioRequiresIsolatedQaSuiteWorker(scenario: QaSeedScenario) {
   return (
     scenario.execution.suiteIsolation === "isolated" ||
     scenario.execution.runtime !== undefined ||
+    scenario.execution.liveConfiguredRuntime !== undefined ||
     // Transport policy is fixed when the gateway starts; sharing it would leak routing rules.
     scenario.execution.transportPolicy !== undefined ||
     scenario.execution.config?.agentE2e === true ||
@@ -493,5 +492,4 @@ export {
   selectQaFlowSuiteScenarios,
   selectQaScenarioDefinitionsForChannelResolution,
   shouldUseIsolatedQaSuiteScenarioWorkers,
-  splitModelRef,
 };

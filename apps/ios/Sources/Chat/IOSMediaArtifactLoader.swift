@@ -22,16 +22,13 @@ struct IOSMediaArtifactLoader: Sendable {
     typealias RequestFactory = @Sendable (GatewayTLSParams, Int) -> Request
     typealias ConnectionProvider = @MainActor @Sendable () -> Connection?
 
-    static let maximumImageBytes = 12 * 1024 * 1024
-    static let maximumAudioBytes = 16 * 1024 * 1024
-    static let maximumVideoBytes = 16 * 1024 * 1024
     private let connectionProvider: ConnectionProvider
     private let requestFactory: RequestFactory
 
     init(
         connectionProvider: @escaping ConnectionProvider,
         requestFactory: @escaping RequestFactory = { tls, maximumBytes in
-            let session = GatewayTLSPinningSession(params: tls)
+            let session = GatewayTLSPinningSession(params: tls, allowsRedirects: false, allowsStoredCredentials: false)
             return { request in
                 defer { session.finishTasksAndInvalidate() }
                 return try await session.data(for: request, maximumBytes: maximumBytes)
@@ -48,7 +45,7 @@ struct IOSMediaArtifactLoader: Sendable {
         playback: OpenClawChatPlaybackMode? = nil,
         expectedGatewayID: String) async throws -> OpenClawChatLoadedMedia
     {
-        let maximumBytes = Self.maximumBytes(for: kind)
+        let maximumBytes = kind.maximumDownloadBytes
         let declaredMIME = response.artifact.mimetype?.lowercased()
         if playback != .transcode,
            let encoded = response.data?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -72,14 +69,20 @@ struct IOSMediaArtifactLoader: Sendable {
                   playback: playback)
         else { throw LoadError.invalidSource }
 
-        let headers = url.scheme?.lowercased() == "https"
-            ? GatewayCustomHeaders.sanitized(connection.customHeaders)
-            : [:]
+        let ingress = connection.config.ingressAuthorization
+        let headers: [String: String] = if let ingress {
+            try await ingress.headers(url)
+        } else {
+            url.scheme?.lowercased() == "https"
+                ? GatewayCustomHeaders.sanitized(connection.customHeaders)
+                : [:]
+        }
         // AVPlayer cannot use the app's pinned TLS delegate or immutable proxy
         // headers. Those routes take the bounded authenticated download path.
         let canStreamDirectly = kind == .video &&
             url.scheme?.lowercased() == "https" &&
             connection.config.tls == nil &&
+            ingress == nil &&
             headers.isEmpty &&
             declaredMIME.map(kind.acceptsMIMEType) == true
         if canStreamDirectly, playback != .transcode, let declaredMIME {
@@ -106,11 +109,21 @@ struct IOSMediaArtifactLoader: Sendable {
         let data: Data
         let urlResponse: URLResponse
         do {
-            (data, urlResponse) = try await self.requestFactory(tls, maximumBytes)(request)
+            let operation = self.requestFactory(tls, maximumBytes)
+            if let ingress {
+                (data, urlResponse) = try await ingress.load(request, operation)
+            } else {
+                (data, urlResponse) = try await operation(request)
+            }
         } catch is GatewayBoundedDataError {
             throw LoadError.payloadTooLarge
         }
-        guard let http = urlResponse as? HTTPURLResponse else { throw LoadError.invalidResponse }
+        guard let http = urlResponse as? HTTPURLResponse, http.url == request.url else {
+            throw LoadError.invalidResponse
+        }
+        // The capability belongs to the captured ingress revision. A late download
+        // must not publish after expiry or replacement by another Access account.
+        try await ingress?.checkResponse(http)
         if http.statusCode == 202 {
             return .preparing
         }
@@ -128,14 +141,5 @@ struct IOSMediaArtifactLoader: Sendable {
         }
         guard data.count <= maximumBytes else { throw LoadError.payloadTooLarge }
         return .data(OpenClawChatMediaData(data: data, mimeType: mimeType))
-    }
-
-    private static func maximumBytes(for kind: OpenClawChatMediaKind) -> Int {
-        switch kind {
-        case .image: self.maximumImageBytes
-        case .audio: self.maximumAudioBytes
-        case .video: self.maximumVideoBytes
-        case .file: 100 * 1024 * 1024 // Gateway document limit (media-core/constants).
-        }
     }
 }

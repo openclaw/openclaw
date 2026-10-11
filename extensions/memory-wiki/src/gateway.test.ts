@@ -6,8 +6,6 @@ import { compileMemoryWikiVault } from "./compile.js";
 import {
   loadMemoryWikiCompiledDashboards,
   MemoryWikiDashboardUnavailableError,
-  type MemoryWikiImportInsightsStatus,
-  type MemoryWikiOverviewStatus,
 } from "./compiled-cache.js";
 import { deferred } from "./deferred.test-helpers.js";
 import { registerMemoryWikiGatewayMethods } from "./gateway.js";
@@ -19,6 +17,7 @@ import { resolveMemoryWikiStatus } from "./status.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 type ApplyMemoryWikiMutation = ReturnType<typeof normalizeMemoryWikiMutationInput>;
+type CompiledDashboards = Awaited<ReturnType<typeof loadMemoryWikiCompiledDashboards>>;
 
 vi.mock("./apply.js", () => ({
   applyMemoryWikiMutation: vi.fn(),
@@ -128,7 +127,7 @@ const VAULT_BACKED_GATEWAY_CASES = [
   ["wiki.obsidian.daily", {}],
 ] as const satisfies ReadonlyArray<readonly [string, Record<string, unknown>]>;
 
-const importInsights: MemoryWikiImportInsightsStatus = {
+const importInsights: CompiledDashboards["importInsights"] = {
   sourceType: "chatgpt",
   totalItems: 2,
   totalClusters: 1,
@@ -167,7 +166,7 @@ const importInsights: MemoryWikiImportInsightsStatus = {
   truncated: false,
 };
 
-const overview: MemoryWikiOverviewStatus = {
+const overview: CompiledDashboards["overview"] = {
   totalItems: 1,
   totalPages: 3,
   pageCounts: {
@@ -288,7 +287,7 @@ describe("memory-wiki gateway methods", () => {
       });
       const { api, registerGatewayMethod } = createPluginApi();
       const appConfig = {
-        agents: { list: [{ id: "support", default: true }, { id: "marketing" }] },
+        agents: { entries: { support: {}, marketing: {} } },
       };
       const agentConfig = {
         ...config,
@@ -334,7 +333,7 @@ describe("memory-wiki gateway methods", () => {
       config: { vault: { scope: "agent" } },
     });
     const { api, registerGatewayMethod } = createPluginApi();
-    const appConfig = { agents: { list: [{ id: "support", default: true }] } };
+    const appConfig = { agents: { entries: { support: {} } } };
 
     registerMemoryWikiGatewayMethods({ api, config, appConfig });
     const handler = requireGatewayHandler(registerGatewayMethod, "wiki.obsidian.search");
@@ -374,7 +373,7 @@ describe("memory-wiki gateway methods", () => {
     const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
     const { api, registerGatewayMethod } = createPluginApi();
     const appConfig = {
-      agents: { list: [{ id: "support", default: true }, { id: "marketing" }] },
+      agents: { entries: { support: {}, marketing: {} } },
     };
 
     registerMemoryWikiGatewayMethods({ api, config, appConfig });
@@ -403,7 +402,7 @@ describe("memory-wiki gateway methods", () => {
     });
     const { api, registerGatewayMethod } = createPluginApi();
     const appConfig = {
-      agents: { list: [{ id: "support", default: true }, { id: "marketing" }] },
+      agents: { entries: { support: {}, marketing: {} } },
     };
     const getAppConfig = vi.fn(() => appConfig);
 
@@ -441,7 +440,7 @@ describe("memory-wiki gateway methods", () => {
     });
     const { api, registerGatewayMethod } = createPluginApi();
     const appConfig = {
-      agents: { list: [{ id: "support", default: true }, { id: "marketing" }] },
+      agents: { entries: { support: {}, marketing: {} } },
     };
 
     registerMemoryWikiGatewayMethods({ api, config, appConfig });
@@ -627,6 +626,7 @@ describe("memory-wiki gateway methods", () => {
     });
 
     expect(searchMemoryWiki).toHaveBeenCalledWith({
+      memoryContext: expect.objectContaining({ assertCurrent: expect.any(Function) }),
       config,
       appConfig: undefined,
       query: "Teams Azure",
@@ -646,7 +646,7 @@ describe("memory-wiki gateway methods", () => {
     const { api, registerGatewayMethod } = createPluginApi();
     const appConfig = {
       agents: {
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
       },
     };
 
@@ -664,6 +664,7 @@ describe("memory-wiki gateway methods", () => {
     });
 
     expect(searchMemoryWiki).toHaveBeenCalledWith({
+      memoryContext: expect.objectContaining({ assertCurrent: expect.any(Function) }),
       config,
       appConfig,
       agentId: "main",

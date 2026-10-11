@@ -21,7 +21,7 @@ import {
   prepareExternalMessageActionTargetForResolution,
   shouldDeferExternalMessageActionTargetResolution,
 } from "./message-action-dispatch.js";
-import type { ChannelMessageActionContext, ChannelPlugin } from "./types.js";
+import type { ChannelMessageActionContext, ChannelPlugin } from "./types.public.js";
 
 const receipt = { content: [{ type: "text" as const, text: "delivered" }], details: { ok: true } };
 
@@ -353,8 +353,10 @@ describe("official plugin read-only authority", () => {
     async ({ change, origin }) => {
       const fixture = registerReader({ origin, trusted: origin !== "bundled" });
       const resume = createDeferred();
+      const entered = createDeferred();
       const nextRequest = vi.fn();
       fixture.handleAction.mockImplementation(async () => {
+        entered.resolve();
         const assertCurrent = captureChannelReadAuthority();
         await resume.promise;
         assertCurrent?.();
@@ -362,6 +364,7 @@ describe("official plugin read-only authority", () => {
         return receipt;
       });
       const read = dispatchChannelMessageAction(fixture.context);
+      await entered.promise;
       if (change === "adopt") {
         const next = createEmptyPluginRegistry();
         next.plugins.push(fixture.record);
@@ -434,8 +437,10 @@ describe("official plugin read-only authority", () => {
     async (change) => {
       const fixture = registerReader();
       const resume = createDeferred();
+      const entered = createDeferred();
       const nextRequest = vi.fn();
       fixture.handleAction.mockImplementation(async () => {
+        entered.resolve();
         const assertCurrent = captureChannelReadAuthority();
         expect(assertCurrent).toBeTypeOf("function");
         await resume.promise;
@@ -445,6 +450,7 @@ describe("official plugin read-only authority", () => {
       });
       const read = dispatchChannelMessageAction(fixture.context);
       const rejected = expect(read).rejects.toThrow("read authority is no longer active");
+      await entered.promise;
       switch (change) {
         case "replace":
           setActivePluginRegistry(createTestRegistry([]));
@@ -476,9 +482,14 @@ describe("official plugin read-only authority", () => {
     async (error) => {
       const fixture = registerReader();
       const pending = createDeferred<typeof receipt>();
-      fixture.handleAction.mockReturnValue(pending.promise);
+      const entered = createDeferred();
+      fixture.handleAction.mockImplementation(() => {
+        entered.resolve();
+        return pending.promise;
+      });
       const read = dispatchChannelMessageAction(fixture.context);
       const rejected = expect(read).rejects.toThrow("read authority is no longer active");
+      await entered.promise;
       fixture.record.enabled = false;
       if (error) {
         pending.reject(new Error("stale provider response"));

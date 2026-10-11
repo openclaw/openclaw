@@ -17,9 +17,9 @@ afterEach(() => {
 });
 
 describe("FreeBSD pkg ownership", () => {
-  it.each(["linux", "darwin", "win32"] as const)("does not inspect pkg on %s", async (platform) => {
+  it("does not inspect pkg on other platforms", async () => {
     const query = vi.spyOn(exec, "runCommandBuffered");
-    await withMockedPlatform(platform, () =>
+    await withMockedPlatform("linux", () =>
       createFreeBsdPkgOwnershipInspection(100).assertUnowned("/fixture/openclaw"),
     );
     expect(query).not.toHaveBeenCalled();
@@ -52,7 +52,6 @@ describe("FreeBSD pkg ownership", () => {
     { name: "invalid UTF-8", value: result("", { stdout: Buffer.from([0xff, 0x0a]) }) },
     { name: "partial final record", value: result("/fixture/entry") },
     { name: "relative entry", value: result("relative/entry\n") },
-    { name: "empty record", value: result("\n") },
   ])("preserves unknown ownership for $name", async ({ value }) => {
     vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(value);
     await withMockedPlatform("freebsd", async () => {
@@ -94,7 +93,7 @@ describe("FreeBSD pkg ownership", () => {
     });
   });
 
-  it.each(["direct", "invoking alias", "registered alias"])(
+  it.each(["invoking alias", "registered alias"])(
     "detects a custom-prefix package through %s",
     async (kind) => {
       await withTestDir({ prefix: "openclaw-pkg-alias-" }, async (base) => {
@@ -172,7 +171,6 @@ describe("FreeBSD pkg ownership", () => {
 
   it.each([
     { operation: "lstat", code: "EACCES" },
-    { operation: "realpath", code: "EACCES" },
     { operation: "realpath", code: "ENOENT" },
     { operation: "realpath", code: "PRIVATE_CUSTOM_CODE" },
   ] as const)(

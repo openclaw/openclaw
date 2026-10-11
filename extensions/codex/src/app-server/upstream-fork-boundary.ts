@@ -42,6 +42,9 @@ export type CodexUpstreamForkBoundaryResult =
     }
   | { ok: false; code: CodexUpstreamForkBoundaryFailureCode; message: string };
 
+const IN_PROGRESS_TURN_MESSAGE =
+  "This Codex turn is still in progress. Wait for it to finish, then try forking again.";
+
 const TURN_PAGE_LIMIT = 100;
 
 function failure(
@@ -62,14 +65,10 @@ function textOnlyMessage(content: unknown): string | undefined {
   // undefined marks the message unverifiable so boundary resolution fails closed.
   const texts: string[] = [];
   for (const block of content) {
-    if (!block || typeof block !== "object" || Array.isArray(block)) {
+    if (!isRecord(block) || block.type !== "text" || typeof block.text !== "string") {
       return undefined;
     }
-    const typed = block as { type?: unknown; text?: unknown };
-    if (typed.type !== "text" || typeof typed.text !== "string") {
-      return undefined;
-    }
-    texts.push(typed.text);
+    texts.push(block.text);
   }
   return texts.join("\n");
 }
@@ -145,10 +144,7 @@ function resolveCodexUpstreamForkBoundaryFromTurns(params: {
         );
       }
       if (turn.status === "inProgress") {
-        return failure(
-          "in-progress-turn",
-          "This Codex turn is still in progress. Wait for it to finish, then try forking again.",
-        );
+        return failure("in-progress-turn", IN_PROGRESS_TURN_MESSAGE);
       }
       // beforeTurnId at the first turn yields a valid empty-history fork upstream
       // (codex-rs thread_fork_inner has no minimum-turn guard), matching the empty
@@ -355,10 +351,7 @@ export function precheckCodexUpstreamForkBoundary(params: {
     );
   }
   if (target.status === "inProgress") {
-    return failure(
-      "in-progress-turn",
-      "This Codex turn is still in progress. Wait for it to finish, then try forking again.",
-    );
+    return failure("in-progress-turn", IN_PROGRESS_TURN_MESSAGE);
   }
   return { ok: true, boundary: params.boundary };
 }

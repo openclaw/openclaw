@@ -1,6 +1,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveEmbeddedSessionLane } from "../../../agents/embedded-agent-runner/lanes.js";
-import { clearCommandLane, countQueuedCommandsInLane } from "../../../process/command-queue.js";
+import {
+  clearCommandLane,
+  countQueuedCommandsInLane,
+  prepareCommandLaneClear,
+} from "../../../process/command-queue.js";
 import {
   agentSessionKeysMatchByRequestKey,
   normalizeAgentId,
@@ -9,8 +13,8 @@ import {
 import { defaultRuntime } from "../../../runtime.js";
 import { removeQueuedItemsByRef } from "../../../utils/queue-helpers.js";
 import { clearFollowupDrainCallback } from "./drain.js";
-import { completeFollowupRunLifecycle } from "./lifecycle.js";
-import { clearFollowupQueue, FOLLOWUP_QUEUES, followupQueueSources } from "./state.js";
+import { completeFollowupRuns } from "./lifecycle.js";
+import { FOLLOWUP_QUEUES, followupQueueSources } from "./state.js";
 import { consumeQueueSummaryDelivery } from "./summary-consumption.js";
 import type { FollowupRun } from "./types.js";
 
@@ -24,6 +28,7 @@ export type SessionLifecycleQueueTarget = {
   keys: Array<string | undefined>;
   agentId: string;
   sessionKey: string;
+  /** Omit to select every incarnation of this agent's conversation. */
   sessionId?: string;
 };
 
@@ -46,7 +51,7 @@ function matchesSessionQueueTarget(
       params.sessionKeyAliases?.some((key) =>
         agentSessionKeysMatchByRequestKey(source.sessionKey, key),
       ) === true) &&
-    source.sessionId === params.sessionId
+    (params.sessionId === undefined || source.sessionId === params.sessionId)
   );
 }
 
@@ -56,7 +61,9 @@ function matchesSessionFollowupRun(
 ): boolean {
   return (
     matchesSessionQueueTarget(source.run, params) &&
-    (source.admissionSessionId === undefined || source.admissionSessionId === params.sessionId)
+    (params.sessionId === undefined ||
+      source.admissionSessionId === undefined ||
+      source.admissionSessionId === params.sessionId)
   );
 }
 
@@ -90,7 +97,7 @@ export function prepareSessionFollowupCleanup(params: {
   agentId: string;
   sessionKey: string;
   sessionKeyAliases?: readonly string[];
-  sessionId: string;
+  sessionId?: string;
   assertCurrent: () => void;
 }): () => number {
   const keys = new Set(
@@ -106,18 +113,10 @@ export function prepareSessionFollowupCleanup(params: {
       !queue.inFlight.has(source) &&
       !queue.activeSummarySources.has(source);
     // Admission can retarget the next claim before run.sessionId is refreshed.
-    // Neither identity may transfer this Stop to another incarnation.
-    const sources = [...new Set(followupQueueSources(queue))]
-      .filter((source) => isPending(source) && matchesSessionFollowupRun(source, params))
-      .map((source) => ({
-        source,
-        run: source.run,
-        agentId: source.run.agentId,
-        sessionKey: source.run.sessionKey,
-        sessionId: source.run.sessionId,
-        admissionSessionId: source.admissionSessionId,
-        lifecycle: source.turnAdoptionLifecycle,
-      }));
+    // Exact Stop must not transfer to another incarnation; broad Stop includes both.
+    const sources = [...new Set(followupQueueSources(queue))].filter(
+      (source) => isPending(source) && matchesSessionFollowupRun(source, params),
+    );
     return [{ key, queue, isPending, sources }];
   });
   let consumed = false;
@@ -132,32 +131,18 @@ export function prepareSessionFollowupCleanup(params: {
       if (FOLLOWUP_QUEUES.get(key) !== queue) {
         continue;
       }
-      const matchesCapture = (source: FollowupRun, capture: (typeof sources)[number]) =>
-        isPending(source) &&
-        source.run === capture.run &&
-        source.run.agentId === capture.agentId &&
-        source.run.sessionKey === capture.sessionKey &&
-        source.run.sessionId === capture.sessionId &&
-        source.admissionSessionId === capture.admissionSessionId &&
-        source.turnAdoptionLifecycle === capture.lifecycle;
-      const current = sources.filter((capture) => matchesCapture(capture.source, capture));
-      const pending = current.flatMap(({ source }) =>
-        queue.items.includes(source) ? [source] : [],
+      const matchesCurrentTarget = (source: FollowupRun) =>
+        isPending(source) && matchesSessionFollowupRun(source, params);
+      const current = sources.filter(matchesCurrentTarget);
+      const pending = current.filter((source) => queue.items.includes(source));
+      const summaries = current.filter(
+        (source) =>
+          queue.summarySources.includes(source) ||
+          queue.summaryElisions.some((entry) => {
+            const mapped = entry.sourceRefs.get(source) ?? source;
+            return entry.sources.includes(mapped) && matchesCurrentTarget(mapped);
+          }),
       );
-      // Overflow records original -> compact-source custody. Follow only that owner mapping,
-      // retaining both original facts and the compact source's pending generation.
-      const summaries = current
-        .filter((capture) => {
-          const source = capture.source;
-          return (
-            queue.summarySources.includes(source) ||
-            queue.summaryElisions.some((entry) => {
-              const mapped = entry.sourceRefs.get(source) ?? source;
-              return entry.sources.includes(mapped) && matchesCapture(mapped, capture);
-            })
-          );
-        })
-        .map(({ source }) => source);
       // Detach the whole accepted set before lifecycle callbacks can revoke or re-enter Stop.
       removeQueuedItemsByRef(queue.items, pending);
       consumeQueueSummaryDelivery(
@@ -167,19 +152,14 @@ export function prepareSessionFollowupCleanup(params: {
       );
       const detached = new Set([...pending, ...summaries]);
       removed += detached.size;
-      for (const source of detached) {
-        try {
-          completeFollowupRunLifecycle(source);
-        } catch (error) {
-          defaultRuntime.error?.(`followup queue cancellation settlement failed: ${String(error)}`);
-        }
-      }
+      completeFollowupRuns(detached, (error) => {
+        defaultRuntime.error?.(`followup queue cancellation settlement failed: ${String(error)}`);
+      });
       // Settlement of accepted removals is unconditional; later effects need current authority.
       params.assertCurrent();
       if (
         FOLLOWUP_QUEUES.get(key) === queue &&
         !queue.draining &&
-        !queue.drainOwner &&
         queue.items.length === 0 &&
         queue.inFlight.size === 0 &&
         queue.droppedCount === 0
@@ -196,21 +176,51 @@ export function clearSessionLifecycleQueues(
   params: SessionLifecycleQueueTarget & { assertCurrent: () => void },
 ): ClearSessionQueueResult {
   params.assertCurrent();
+  const { keys, sessionKeyAliases } = resolveSessionLifecycleQueueKeys(params);
+  const followupCleared = prepareSessionFollowupCleanup({
+    ...params,
+    keys,
+    sessionKeyAliases,
+  })();
+  const laneCleared = clearSessionLifecycleLanes(params);
+  return { followupCleared, laneCleared, keys };
+}
+
+export function prepareSessionLifecycleQueueCleanup(
+  params: SessionLifecycleQueueTarget & { assertCurrent: () => void },
+): () => ClearSessionQueueResult {
+  params.assertCurrent();
   const { keys, sessionKeyAliases, matchesLaneEntry } = resolveSessionLifecycleQueueKeys(params);
-  const followupCleared = params.sessionId
-    ? prepareSessionFollowupCleanup({
-        ...params,
-        keys,
-        sessionKeyAliases,
-        sessionId: params.sessionId,
-      })()
-    : 0;
+  const clearFollowups = prepareSessionFollowupCleanup({
+    ...params,
+    keys,
+    sessionKeyAliases,
+  });
+  const lanes = keys.map((key) =>
+    prepareCommandLaneClear(resolveEmbeddedSessionLane(key), matchesLaneEntry(key)),
+  );
+  return () => {
+    params.assertCurrent();
+    const followupCleared = clearFollowups();
+    let laneCleared = 0;
+    for (const clearLane of lanes) {
+      params.assertCurrent();
+      laneCleared += clearLane();
+    }
+    return { followupCleared, laneCleared, keys };
+  };
+}
+
+export function clearSessionLifecycleLanes(
+  params: SessionLifecycleQueueTarget & { assertCurrent: () => void },
+): number {
+  const { keys, matchesLaneEntry } = resolveSessionLifecycleQueueKeys(params);
   let laneCleared = 0;
   for (const key of keys) {
     params.assertCurrent();
     laneCleared += clearCommandLane(resolveEmbeddedSessionLane(key), matchesLaneEntry(key));
   }
-  return { followupCleared, laneCleared, keys };
+  return laneCleared;
 }
 
 export function hasSessionLifecycleQueueWork(params: SessionLifecycleQueueTarget): boolean {
@@ -229,23 +239,4 @@ export function hasSessionLifecycleQueueWork(params: SessionLifecycleQueueTarget
   return keys.some(
     (key) => countQueuedCommandsInLane(resolveEmbeddedSessionLane(key), matchesLaneEntry(key)) > 0,
   );
-}
-
-export function clearSessionQueues(keys: Array<string | undefined>): ClearSessionQueueResult {
-  const seen = new Set<string>();
-  let followupCleared = 0;
-  let laneCleared = 0;
-
-  for (const key of keys) {
-    const cleaned = normalizeOptionalString(key);
-    if (!cleaned || seen.has(cleaned)) {
-      continue;
-    }
-    seen.add(cleaned);
-    followupCleared += clearFollowupQueue(cleaned);
-    clearFollowupDrainCallback(cleaned);
-    laneCleared += clearCommandLane(resolveEmbeddedSessionLane(cleaned));
-  }
-
-  return { followupCleared, laneCleared, keys: [...seen] };
 }

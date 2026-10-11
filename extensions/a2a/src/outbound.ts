@@ -48,6 +48,13 @@ export async function sendA2aChannelText(
   if (!peer?.url) {
     throw new Error(`peer ${peerName} has no url configured for outbound A2A`);
   }
+  if (account.unresolvedOutboundPeers.includes(peerName)) {
+    // Fail before any I/O: sending without the authored credential would deliver the
+    // message anonymously to a peer that was configured to require authentication.
+    throw new Error(
+      `peer ${peerName} outboundToken reference did not resolve; set the variable and reload before sending`,
+    );
+  }
 
   const messageId = randomUUID();
   const requestId = randomUUID();

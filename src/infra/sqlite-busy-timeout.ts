@@ -44,7 +44,11 @@ export function runWithSqliteBusyTimeout<T>(
   if (previousBusyTimeoutMs !== normalizedTimeoutMs) {
     setSqliteBusyTimeout(database, normalizedTimeoutMs);
   }
+  let restored = false;
   const restore = () => {
+    if (restored) {
+      return;
+    }
     if (database.isOpen && previousBusyTimeoutMs !== normalizedTimeoutMs) {
       setSqliteBusyTimeout(database, previousBusyTimeoutMs);
     }
@@ -53,6 +57,7 @@ export function runWithSqliteBusyTimeout<T>(
     } else {
       lockFailureReportingByDatabase.delete(database);
     }
+    restored = true;
   };
   try {
     return operation(restore);

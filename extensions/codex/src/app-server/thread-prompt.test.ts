@@ -152,14 +152,78 @@ describe("buildDeveloperInstructions credential routing", () => {
   });
 });
 
+describe("buildDeveloperInstructions deferred tool discovery", () => {
+  it.each([
+    { name: "deferred tools", overrides: { delegationCapability: "report_only" }, deferred: true },
+    { name: "native delegation", overrides: {}, deferred: false },
+  ] as const)("uses direct discovery for normal threads with $name", ({ overrides, deferred }) => {
+    const instructions = buildDeveloperInstructions(createParams(overrides), {
+      nativeCodeModeOnlyEnabled: false,
+      dynamicTools: deferred
+        ? [
+            {
+              type: "function",
+              name: "lookup",
+              description: "Lookup",
+              inputSchema: {},
+              deferLoading: true,
+            },
+          ]
+        : [],
+    });
+
+    expect(instructions).toContain(
+      "Deferred tools may be absent from the direct tool list. Call a tool that is in the direct tool list directly. Use `tool_search` to find a tool that is not listed; if `tool_search` is not directly callable, use `exec` to filter `ALL_TOOLS` by name and description and call the matching entry through `tools`. Never use `exec` to look up a tool that is already listed, and do not re-run a completed call to get a result you already have.",
+    );
+    expect(instructions).not.toContain("On code-mode-only models");
+    expect(instructions).not.toContain("use `exec` instead");
+  });
+
+  it("preserves exec discovery for code-mode-only threads", () => {
+    const instructions = buildDeveloperInstructions(createParams(), {
+      nativeCodeModeOnlyEnabled: true,
+    });
+
+    expect(instructions).toContain(
+      "Deferred tools may be absent from the direct tool list. Use `tool_search` when directly callable. On code-mode-only models, use `exec` instead: filter `ALL_TOOLS` by name and description, then call the matching entry through `tools`.",
+    );
+    expect(instructions).not.toContain("Do not use `exec`");
+  });
+
+  it.each([false, true])(
+    "omits discovery without deferred tools or delegation (code-mode-only=%s)",
+    (nativeCodeModeOnlyEnabled) => {
+      const instructions = buildDeveloperInstructions(createParams({ toolsAllow: [] }), {
+        dynamicTools: [],
+        nativeCodeModeOnlyEnabled,
+      });
+
+      expect(instructions).not.toContain("Deferred tools may be absent");
+      expect(instructions).not.toContain("ALL_TOOLS");
+    },
+  );
+});
+
 describe("buildDeveloperInstructions delegation guidance", () => {
+  it.each([{ pluginHarnessToolPolicyRestricted: true }, { requireWorkspaceOnly: true }] as const)(
+    "does not advertise native helpers for restricted runs (%j)",
+    (overrides) => {
+      const instructions = buildInstructions(overrides);
+      expect(instructions).not.toContain("spawn_agent");
+      expect(instructions).not.toContain("wait_agent");
+      expect(instructions).toContain("sessions_spawn");
+    },
+  );
+
   it("omits discovery and delegation guidance for an explicitly empty tool allowlist", () => {
     const params = createParams({ toolsAllow: [] });
     const instructions = buildDeveloperInstructions(params);
 
-    expect(instructions).not.toContain("ALL_TOOLS");
+    expect(instructions).not.toContain("Deferred tools may be absent");
     expect(instructions).not.toContain("spawn_agent");
-    expect(buildDeveloperInstructions({ ...params, toolsAllow: undefined })).toContain("ALL_TOOLS");
+    expect(buildDeveloperInstructions({ ...params, toolsAllow: undefined })).toContain(
+      "Deferred tools may be absent",
+    );
   });
 
   it("shares the visible-session delegation policy with a canonical main session", () => {

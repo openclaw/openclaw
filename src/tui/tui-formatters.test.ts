@@ -24,7 +24,7 @@ describe("resolveFinalAssistantText", () => {
     const rendered = resolveFinalAssistantText({ errorMessage: raw });
 
     expect(rendered).toBe(
-      "The AI service is temporarily unavailable (HTTP 502). Please try again in a moment.",
+      "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
     );
     expect(rendered).not.toContain("<html>");
   });

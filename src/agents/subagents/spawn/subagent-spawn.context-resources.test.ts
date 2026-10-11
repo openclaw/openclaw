@@ -21,6 +21,7 @@ import {
 function createEngineFixture(
   prepare?: ContextEngine["prepareSubagentSpawn"],
   dispose?: () => Promise<void>,
+  beforeNativeCleanup?: () => Promise<void>,
 ) {
   const registry = createEmptyPluginRegistry();
   const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
@@ -28,7 +29,14 @@ function createEngineFixture(
   const database = new DatabaseSync(":memory:");
   const read = () => expect(database.prepare("SELECT 42 AS value").get()?.value).toBe(42);
   const retired = vi.fn(() => database.close());
-  resources.register("fixture", { id: "native", dispose: retired });
+  resources.runRegistration(
+    "fixture",
+    () => resources.register("fixture", { id: "native", dispose: retired }),
+    async (runCleanup) => {
+      await beforeNativeCleanup?.();
+      await runCleanup();
+    },
+  );
   const engineDisposal = vi.fn(async () => {
     read();
     await dispose?.();
@@ -106,11 +114,98 @@ describe("spawn context-engine resource custody", () => {
 
   afterEach(() => {
     resetScheduler();
+    vi.useRealTimers();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
-  it.each(["absent-hook", "prepare-failure", "stale-resolution", "rollback-failure"] as const)(
+  it.each(["registration", "claim"] as const)(
+    "joins preactivation resource cleanup without awaiting the public spawn's %s",
+    async (blockedOn) => {
+      const registered = createDeferred<string>();
+      const registrationGate = createDeferred();
+      const claimEntered = createDeferred();
+      const claimGate = createDeferred();
+      const disposalEntered = createDeferred();
+      const disposalGate = createDeferred();
+      let claimed = true;
+      const rollback = vi.fn(async () => fixture.read());
+      const fixture = createEngineFixture(
+        async () => ({ rollback }),
+        async () => {
+          disposalEntered.resolve();
+          await disposalGate.promise;
+        },
+      );
+      resolveEngine.mockImplementation(() => fixture.resolve());
+      const scope = {
+        waitForClaim: () => {
+          if (!claimed) {
+            return undefined;
+          }
+          claimEntered.resolve();
+          return claimGate.promise;
+        },
+        waitForRetirementPublication: () => undefined,
+        canLaunch: () => false,
+        canCleanupSession: () => true,
+        canAcceptLaunch: () => true,
+        canAbortAcceptedRun: () => false,
+        canRetireReservation: () => false,
+        settleFailedLaunch: vi.fn(async () => {}),
+      } satisfies SubagentRegistrationScope;
+      registerRun.mockImplementation(
+        async (
+          { runId }: { runId: string },
+          options: { retainOwnership: (scope: SubagentRegistrationScope) => void },
+        ) => {
+          options.retainOwnership(scope);
+          registered.resolve(runId);
+          await registrationGate.promise;
+        },
+      );
+      const operation = spawn(
+        { task: "cancel before activation", collect: true, groupId: "owned-preparation" },
+        { agentSessionKey: "main" },
+      );
+      const runId = await registered.promise;
+      const cancellation = scheduler.holdQueuedSwarmRun(runId)!;
+      try {
+        if (blockedOn === "claim") {
+          registrationGate.resolve();
+          await claimEntered.promise;
+        }
+        expect(cancellation.withdraw()).toBe(true);
+        const publication = vi.fn();
+        const settlement = cancellation.settleCancellation().then((qualified) => {
+          if (qualified) {
+            publication();
+          }
+          return qualified;
+        });
+        await disposalEntered.promise;
+        fixture.read();
+        expect(publication).not.toHaveBeenCalled();
+        expect(fixture.retired).not.toHaveBeenCalled();
+        disposalGate.resolve();
+        expect(await settlement).toBe(true);
+        expect(fixture.database.isOpen).toBe(false);
+        expect(fixture.retired).toHaveBeenCalledOnce();
+        expect(rollback).toHaveBeenCalledOnce();
+        expect(callGateway.mock.calls.some(([request]) => request.method === "agent")).toBe(false);
+      } finally {
+        disposalGate.resolve();
+        registrationGate.resolve();
+        claimed = false;
+        claimGate.resolve();
+        await cancellation.release();
+        await operation;
+        await fixture.cleanup();
+      }
+    },
+  );
+
+  it.each(["prepare-failure", "stale-resolution", "rollback-failure"] as const)(
     "retires the resolved engine after %s",
     async (mode) => {
       let current = true;
@@ -122,17 +217,13 @@ describe("spawn context-engine resource custody", () => {
           throw new Error("rollback failed");
         }
       });
-      const fixture = createEngineFixture(
-        mode === "absent-hook"
-          ? undefined
-          : async () => {
-              fixture.read();
-              if (mode === "prepare-failure") {
-                throw new Error("preparation failed");
-              }
-              return { rollback };
-            },
-      );
+      const fixture = createEngineFixture(async () => {
+        fixture.read();
+        if (mode === "prepare-failure") {
+          throw new Error("preparation failed");
+        }
+        return { rollback };
+      });
       resolveEngine.mockImplementation(async () => {
         const engine = await fixture.resolve();
         resolved.resolve();
@@ -169,7 +260,7 @@ describe("spawn context-engine resource custody", () => {
         }
         resolutionGate.resolve();
         const result = await operation;
-        expect(result.status).toBe(mode === "absent-hook" ? "accepted" : "error");
+        expect(result.status).toBe("error");
         if (mode === "rollback-failure") {
           expect(result.error).toBe("launch failed");
           expect(rollback).toHaveBeenCalledTimes(1);
@@ -224,61 +315,72 @@ describe("spawn context-engine resource custody", () => {
     }
   });
 
-  it("rolls back a reservation withdrawn before scheduler activation", async () => {
-    let childPrepared = false;
-    const rollback = vi.fn(async () => {
-      fixture.read();
-      childPrepared = false;
-    });
-    const fixture = createEngineFixture(async () => {
-      childPrepared = true;
-      return { rollback };
-    });
-    resolveEngine.mockImplementation(() => fixture.resolve());
-    const settleFailedLaunch = vi.fn(async () => {});
-    const cancelledScope = {
-      waitForClaim: () => undefined,
-      waitForRetirementPublication: () => undefined,
-      canLaunch: () => false,
-      canCleanupSession: () => true,
-      canAcceptLaunch: () => true,
-      canRetireReservation: () => false,
-      settleFailedLaunch,
-    } satisfies SubagentRegistrationScope;
-    const reservationReleases: Promise<void>[] = [];
-    registerRun.mockImplementation(
-      async (
-        { runId }: { runId: string },
-        options: { retainOwnership?: (scope: SubagentRegistrationScope) => void },
-      ) => {
-        options.retainOwnership?.(cancelledScope);
-        const hold = scheduler.holdQueuedSwarmRun(runId);
-        const withdrawn = hold?.withdraw();
-        if (hold) {
-          reservationReleases.push(hold.release());
-        }
-        expect(withdrawn).toBe(true);
-      },
-    );
-    try {
-      await expect(
-        spawn(
-          { task: "withdrawn child", collect: true, groupId: "withdrawn-group" },
+  it.each(["success", "failure"] as const)(
+    "keeps the scheduler slot when native preparation cleanup is retained after %s",
+    async (outcome) => {
+      vi.useFakeTimers();
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const nativeCleanupStarted = createDeferred();
+      const releaseNativeCleanup = createDeferred();
+      const rollback = vi.fn(async () => fixture.read());
+      const fixture = createEngineFixture(
+        async () => ({ rollback }),
+        undefined,
+        async () => {
+          nativeCleanupStarted.resolve();
+          await releaseNativeCleanup.promise;
+          throw new Error("host cleanup could not reach the native closer");
+        },
+      );
+      resolveEngine.mockImplementation(() => fixture.resolve());
+      if (outcome === "failure") {
+        callGateway.mockImplementation(async (request: { method?: string }) => {
+          if (request.method === "agent") {
+            throw new Error("launch failed");
+          }
+          return { ok: true };
+        });
+      }
+      try {
+        const result = await spawn(
+          { task: "retained native cleanup", collect: true, groupId: "retained-preparation" },
           { agentSessionKey: "main" },
-        ),
-      ).resolves.toMatchObject({ status: "accepted" });
-      expect(callGateway.mock.calls.some(([request]) => request.method === "agent")).toBe(false);
-      expect(settleFailedLaunch).not.toHaveBeenCalled();
-      expect(childPrepared).toBe(false);
-      expect(rollback).toHaveBeenCalledTimes(1);
-      expect(fixture.engineDisposal).toHaveBeenCalledTimes(1);
-      expect(fixture.retired).toHaveBeenCalledTimes(1);
-      expect(fixture.database.isOpen).toBe(false);
-    } finally {
-      await Promise.all(reservationReleases);
-      await fixture.cleanup();
-    }
-  });
+        );
+        expect(result.status).toBe("accepted");
+        await nativeCleanupStarted.promise;
+        expect(fixture.database.isOpen).toBe(true);
+        releaseNativeCleanup.resolve();
+        await vi.runAllTimersAsync();
+
+        expect(scheduler.isSwarmRunActive(result.runId!)).toBe(true);
+        expect(fixture.retired).not.toHaveBeenCalled();
+        expect(completeLaunchCleanup).not.toHaveBeenCalled();
+        expect(settleLaunchFailure).toHaveBeenCalledTimes(outcome === "failure" ? 1 : 0);
+        expect(rollback).toHaveBeenCalledTimes(outcome === "failure" ? 1 : 0);
+        expect(
+          callGateway.mock.calls.filter(([request]) => request.method === "agent"),
+        ).toHaveLength(1);
+        if (outcome === "success") {
+          expect(callGateway.mock.calls.map(([request]) => request.method)).toEqual(["agent"]);
+          expect(scheduler.releaseSwarmRun(result.runId!)).toBe(true);
+        }
+        await expect(scheduler.closeSwarmScheduler()).rejects.toThrow(
+          "Swarm launch cleanup failed",
+        );
+        await expect(scheduler.closeSwarmScheduler()).rejects.toThrow(
+          "Swarm launch cleanup failed",
+        );
+      } finally {
+        releaseNativeCleanup.resolve();
+        await scheduler.closeSwarmScheduler().catch(() => {});
+        await fixture.cleanup().catch(() => {});
+        // The failed host closer is memoized; retire this test-owned native handle explicitly.
+        if (fixture.database.isOpen) {
+          fixture.database.close();
+        }
+      }
+    },
+  );
 
   it.each([
     "success",

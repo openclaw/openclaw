@@ -42,10 +42,8 @@ export async function wait(
 }
 
 export function parseApiBase(raw: string, label: string): URL {
-  let base: URL;
-  try {
-    base = new URL(`${raw.replace(/\/+$/, "")}/`);
-  } catch {
+  const base = URL.parse(`${raw.replace(/\/+$/, "")}/`);
+  if (!base) {
     throw new Error(`${label} API base URL is invalid.`);
   }
   if (base.protocol !== "https:" || base.username || base.password || base.search || base.hash) {

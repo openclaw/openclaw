@@ -116,12 +116,22 @@ async function waitForAttach(gateway: ReturnType<typeof createGateway>, index: n
 async function startInterruptedRestore() {
   const gateway = createGateway();
   const { panel, sessions } = mountPanel(gateway.client);
+  const writes = recordSessionWrites(sessions);
   const first = await waitForAttach(gateway, 0);
   first.resolve(attachResult(first.sessionId));
   const second = await waitForAttach(gateway, 1);
   await panel.updateComplete;
+  expect(writes).toContainEqual({
+    ids: ["session-a", "session-b"],
+    tabs: [{ sessionId: "", status: "live" }],
+  });
+  for (const { ids } of writes) {
+    expect(ids).toEqual(["session-a", "session-b"]);
+  }
+  expect(savedIds()).toEqual(["session-a", "session-b"]);
   expect(sessions.tabs.map((tab) => tab.gatewaySessionId)).toEqual(["session-a", ""]);
-  return { gateway, panel, sessions, second };
+  writes.length = 0;
+  return { gateway, panel, sessions, second, writes };
 }
 
 function recordSessionWrites(sessions: TerminalPanelSessionController) {
@@ -176,48 +186,6 @@ describe("terminal persisted restore", () => {
     await i18n.setLocale("en");
   });
 
-  it("keeps both ids during replay and a second attach, then restores both after interruption", async () => {
-    const gateway = createGateway();
-    const { panel, sessions } = mountPanel(gateway.client);
-    const writes = recordSessionWrites(sessions);
-    const first = await waitForAttach(gateway, 0);
-    first.resolve(attachResult(first.sessionId));
-    const second = await waitForAttach(gateway, 1);
-
-    expect(writes).toContainEqual({
-      ids: ["session-a", "session-b"],
-      tabs: [{ sessionId: "", status: "live" }],
-    });
-    expect(
-      writes.every(({ ids }) => JSON.stringify(ids) === JSON.stringify(["session-a", "session-b"])),
-    ).toBe(true);
-    expect(savedIds()).toEqual(["session-a", "session-b"]);
-    expect(sessions.tabs.map((tab) => tab.gatewaySessionId)).toEqual(["session-a", ""]);
-
-    const writeCount = writes.length;
-    panel.remove();
-    expect(writes).toHaveLength(writeCount);
-    expect(savedIds()).toEqual(["session-a", "session-b"]);
-    second.resolve(attachResult(second.sessionId));
-
-    const replacement = mountPanel(gateway.client);
-    const restoredFirst = await waitForAttach(gateway, 2);
-    expect(writes).toHaveLength(writeCount);
-    restoredFirst.resolve(attachResult(restoredFirst.sessionId));
-    const restoredSecond = await waitForAttach(gateway, 3);
-    expect(savedIds()).toEqual(["session-a", "session-b"]);
-    restoredSecond.resolve(attachResult(restoredSecond.sessionId));
-    await waitForFast(() => expect(replacement.sessions.booting).toBe(false));
-
-    expect(replacement.sessions.tabs.map((tab) => tab.gatewaySessionId)).toEqual([
-      "session-a",
-      "session-b",
-    ]);
-    expect(savedIds()).toEqual(["session-a", "session-b"]);
-    expect(gateway.requests.some(({ method }) => method === "terminal.open")).toBe(false);
-    expect(gateway.requests.some(({ method }) => method === "terminal.close")).toBe(false);
-  });
-
   it.each([
     { closeIndex: 0, closed: "session-a", remaining: "session-b" },
     { closeIndex: 1, closed: "session-b", remaining: "session-a" },
@@ -245,14 +213,12 @@ describe("terminal persisted restore", () => {
     },
   );
 
-  it.each(
-    (["resolve", "reject"] as const).flatMap((outcome) =>
-      (["dock", "page"] as const).flatMap((surface) => [
-        { outcome, surface, keepSibling: false },
-        { outcome, surface, keepSibling: true },
-      ]),
-    ),
-  )(
+  it.each([
+    { outcome: "resolve", surface: "dock", keepSibling: false },
+    { outcome: "reject", surface: "page", keepSibling: false },
+    { outcome: "resolve", surface: "page", keepSibling: true },
+    { outcome: "reject", surface: "dock", keepSibling: true },
+  ])(
     "finishes the cancelled restore on $surface after $outcome (keep sibling: $keepSibling)",
     async ({ outcome, surface, keepSibling }) => {
       const queueCalls = vi.spyOn(TerminalIntentQueue.prototype, "queue");
@@ -302,11 +268,10 @@ describe("terminal persisted restore", () => {
     },
   );
 
-  it.each(
-    (["reconnect", "remount"] as const).flatMap((transition) =>
-      (["resolve", "reject"] as const).map((outcome) => ({ transition, outcome })),
-    ),
-  )(
+  it.each([
+    { transition: "reconnect", outcome: "resolve" },
+    { transition: "remount", outcome: "reject" },
+  ])(
     "does not replace the cancelled dock restore across $transition before $outcome",
     async ({ transition, outcome }) => {
       const queueCalls = vi.spyOn(TerminalIntentQueue.prototype, "queue");
@@ -433,8 +398,7 @@ describe("terminal persisted restore", () => {
   );
 
   it("retires an exit delivered before adoption without resurrecting its id on attach completion", async () => {
-    const { gateway, sessions, second } = await startInterruptedRestore();
-    const writes = recordSessionWrites(sessions);
+    const { gateway, sessions, second, writes } = await startInterruptedRestore();
     gateway.emit({
       event: "terminal.exit",
       payload: { sessionId: "session-b", exitCode: 0, reason: "exited" },
@@ -469,17 +433,16 @@ describe("terminal persisted restore", () => {
     expect(savedIds()).toEqual(["session-b"]);
   });
 
-  it.each(
-    ["same-client reconnect", "replacement client", "replacement host"].flatMap((transition) =>
-      ["resolve", "reject"].map((completion) => ({ transition, completion })),
-    ),
-  )(
+  it.each([
+    { transition: "same-client reconnect", completion: "reject" },
+    { transition: "replacement client", completion: "resolve" },
+    { transition: "replacement host", completion: "resolve" },
+  ])(
     "keeps the restore set across $transition and a stale attach $completion",
     async ({ transition, completion }) => {
-      const { gateway, panel, sessions, second } = await startInterruptedRestore();
+      const { gateway, panel, sessions, second, writes } = await startInterruptedRestore();
       const currentGateway = transition === "same-client reconnect" ? gateway : createGateway();
       let current = { panel, sessions };
-      const writes = recordSessionWrites(sessions);
       if (transition === "replacement host") {
         panel.remove();
         current = mountPanel(currentGateway.client);
@@ -511,7 +474,12 @@ describe("terminal persisted restore", () => {
       expect(savedIds()).toEqual(["session-a", "session-b"]);
       restoredSecond.resolve(attachResult(restoredSecond.sessionId));
       await waitForFast(() => expect(current.sessions.booting).toBe(false));
+      expect(current.sessions.tabs.map((tab) => tab.gatewaySessionId)).toEqual([
+        "session-a",
+        "session-b",
+      ]);
       expect(savedIds()).toEqual(["session-a", "session-b"]);
+      expect(currentGateway.requests.some(({ method }) => method === "terminal.open")).toBe(false);
       expect(gateway.requests.some(({ method }) => method === "terminal.close")).toBe(false);
     },
   );

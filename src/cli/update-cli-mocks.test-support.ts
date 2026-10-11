@@ -179,6 +179,9 @@ vi.mock("../infra/update-managed-service-handoff.js", async (importOriginal) => 
   startManagedServiceUpdateHandoff: managedUpdateHandoff.start,
   transferManagedServiceUpdateHandoff: managedUpdateHandoff.transfer,
   cancelManagedServiceUpdateHandoff: managedUpdateHandoff.cancel,
+}));
+vi.mock("../infra/update-managed-service-handoff-current.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/update-managed-service-handoff-current.js")>()),
   isCurrentManagedServiceUpdateHandoffProcess: async () => false,
 }));
 vi.mock("../infra/update-repair-agent.js", () => ({
@@ -369,27 +372,70 @@ vi.mock("node:child_process", async () => {
   const { SQLITE_READONLY_CHILD_ARG } = await import("../infra/runtime-process-entrypoints.js");
   const { resolveRuntimeProcessEntrypointUrl } = await import("../infra/runtime-process-url.js");
   const { resolveRuntimeWorkerArgv } = await import("../infra/runtime-worker-url.js");
+  const hostExecPath = process.execPath;
+  const brokerUrl = resolveRuntimeProcessEntrypointUrl("spawnBroker");
+  const hostBrokerArgv = resolveRuntimeWorkerArgv(brokerUrl);
+  const hostSourcePrefix = resolveRuntimeWorkerArgv(new URL("./worker.ts", import.meta.url)).slice(
+    0,
+    -1,
+  );
+  const hostCompiledPrefix = resolveRuntimeWorkerArgv(
+    new URL("./worker.js", import.meta.url),
+  ).slice(0, -1);
+  const sqliteHostArgv = (argv: readonly string[]) => {
+    const entryIndex = argv.indexOf(SQLITE_READONLY_CHILD_ARG) - 1;
+    const entry = expectDefined(argv[entryIndex], "SQLite worker entrypoint");
+    // Simulated Bun metadata must not select flags for real host SQLite children.
+    const prefix = /\.[cm]?ts$/u.test(entry) ? hostSourcePrefix : hostCompiledPrefix;
+    return [...prefix, ...argv.slice(entryIndex)];
+  };
   return {
     ...actual,
     // SQLite snapshots and their native broker need real IPC; updater/service children stay simulated.
-    execFile: (...args: Parameters<typeof actual.execFile>) =>
-      args[0] === process.execPath &&
-      Array.isArray(args[1]) &&
-      args[1].includes(SQLITE_READONLY_CHILD_ARG)
-        ? actual.execFile(...args)
-        : execFile(...args),
+    spawnSync: (...args: Parameters<typeof actual.spawnSync>) => {
+      if (
+        args[0] === process.execPath &&
+        Array.isArray(args[1]) &&
+        args[1].includes(SQLITE_READONLY_CHILD_ARG)
+      ) {
+        args[0] = hostExecPath;
+        args[1] = sqliteHostArgv(args[1]);
+      }
+      return actual.spawnSync(...args);
+    },
+    execFile: (...args: Parameters<typeof actual.execFile>) => {
+      if (
+        args[0] === process.execPath &&
+        Array.isArray(args[1]) &&
+        args[1].includes(SQLITE_READONLY_CHILD_ARG)
+      ) {
+        args[0] = hostExecPath;
+        args[1] = sqliteHostArgv(args[1]);
+        return actual.execFile(...args);
+      }
+      return execFile(...args);
+    },
     spawn: (...args: Parameters<typeof actual.spawn>) => {
-      const brokerArgv = resolveRuntimeWorkerArgv(
-        resolveRuntimeProcessEntrypointUrl("spawnBroker"),
-      );
+      const brokerArgv = resolveRuntimeWorkerArgv(brokerUrl);
       const childArgs = args[1];
+      if (
+        args[0] === process.execPath &&
+        Array.isArray(childArgs) &&
+        childArgs.length === brokerArgv.length &&
+        childArgs.every((arg, index) => arg === brokerArgv[index])
+      ) {
+        // Simulated Node selection must not mix runtimes on the real broker's advanced IPC.
+        return actual.spawn(hostExecPath, hostBrokerArgv, args[2]);
+      }
+      if (
+        args[0] === process.execPath &&
+        Array.isArray(childArgs) &&
+        childArgs.includes(SQLITE_READONLY_CHILD_ARG)
+      ) {
+        return actual.spawn(hostExecPath, sqliteHostArgv(childArgs), args[2]);
+      }
       return Array.isArray(childArgs) &&
-        (isMacosAclInspection(args[0], childArgs) ||
-          isPlistStdinConversion(args[0], childArgs) ||
-          (args[0] === process.execPath &&
-            (childArgs.includes(SQLITE_READONLY_CHILD_ARG) ||
-              (childArgs.length === brokerArgv.length &&
-                childArgs.every((arg, index) => arg === brokerArgv[index])))))
+        (isMacosAclInspection(args[0], childArgs) || isPlistStdinConversion(args[0], childArgs))
         ? actual.spawn(...args)
         : spawn(...args);
     },
@@ -400,7 +446,7 @@ vi.mock("../process/exec.js", async (importOriginal) => {
   const transport = await import("./update-cli/update-command-transport.test-support.js");
   const actual = await importOriginal<typeof import("../process/exec.js")>();
   return {
-    isPlainCommandExitFailure: actual.isPlainCommandExitFailure,
+    ...actual,
     runCommandBuffered: transport.runUpdateStateSnapshotFixture,
     runCommandWithTimeout: await transport.createUpdateCommandTransportFixture({
       ...commandTransport,
@@ -454,8 +500,8 @@ vi.mock("../utils.js", async (importOriginal) => {
 
 vi.mock("../plugins/official-external-install-records.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/official-external-install-records.js")>()),
-  resolveTrustedSourceLinkedOfficialClawHubSpec: vi.fn(() => undefined),
-  resolveTrustedSourceLinkedOfficialNpmSpec: vi.fn(() => undefined),
+  resolveTrustedSourceLinkedOfficialClawHubInstall: vi.fn(() => undefined),
+  resolveTrustedSourceLinkedOfficialNpmInstall: vi.fn(() => undefined),
 }));
 
 vi.mock("../plugins/update.js", async (importOriginal) => {
@@ -513,6 +559,12 @@ vi.mock("../commands/doctor/shared/post-core-plugin-convergence.js", () => ({
 vi.mock("../config/backup-rotation.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/backup-rotation.js")>()),
   createPreUpdateConfigSnapshot: (...args: unknown[]) => createPreUpdateConfigSnapshotMock(...args),
+}));
+
+vi.mock("../daemon/inspect.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/inspect.js")>()),
+  // Service state is fixture-owned; never pair it with the host's installed services.
+  listManagedOpenClawGatewayServices: vi.fn(async () => ({ services: [], errors: [] })),
 }));
 
 vi.mock("../daemon/service.js", async () => {
@@ -581,6 +633,12 @@ vi.mock("../infra/ports-format.js", () => ({
 vi.mock("../gateway/call.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../gateway/call.js")>()),
   callGateway: (opts: CallGatewayOptions) => callGateway(opts),
+}));
+
+// These cases simulate a ready Gateway; no listener is started for HTTP startup probes.
+vi.mock("./daemon-cli/restart-health-probe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./daemon-cli/restart-health-probe.js")>()),
+  readGatewayStartupPhase: vi.fn(async () => undefined),
 }));
 
 vi.mock("./daemon-cli/restart-health.js", async (importOriginal) => {

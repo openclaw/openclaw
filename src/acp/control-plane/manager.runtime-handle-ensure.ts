@@ -17,8 +17,8 @@ import {
 import {
   matchesAcpSessionControlBinding,
   resolveAcpSessionControlOwner,
-  type AcpSessionRuntimeLocator,
 } from "../runtime/session-control-owner.js";
+import type { AcpSessionRuntimeLocator } from "../runtime/session-meta-control.types.js";
 import { assertAcpSessionMutationEntry } from "../runtime/session-meta-entry.kernel.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import {
@@ -100,9 +100,7 @@ export async function ensureManagerRuntimeHandle(
     normalizeText(params.meta.agent) || resolveAcpAgentFromSessionKey(params.sessionKey, "main");
   const mode = params.meta.mode;
   const runtimeOptions = resolveRuntimeOptionsFromMeta(params.meta);
-  const cwd = runtimeOptions.cwd ?? normalizeText(params.meta.cwd);
-  const model = normalizeText(runtimeOptions.model);
-  const thinking = normalizeText(runtimeOptions.thinking);
+  const { cwd, model, thinking } = runtimeOptions;
   const configuredBackend = (
     params.selectedBackend ||
     params.meta.backend ||

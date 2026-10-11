@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import type {
   CompactionAccountingFact,
   RunEmbeddedAgentInternalParams,
@@ -15,7 +14,6 @@ import {
   isMarkdownCapableMessageChannel,
   resolveMessageChannel,
 } from "../../utils/message-channel.js";
-import type { PartialReplyPayload } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../types.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveTerminalReplyDelivery } from "./agent-runner-core.js";
@@ -25,6 +23,7 @@ import {
 } from "./agent-runner-event-handler.js";
 import type { CompletedAgentAuthSelection } from "./agent-runner-execution.types.js";
 import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
+import { buildFallbackCandidateTurnParams } from "./agent-runner-run-params.js";
 import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import type { DirectBlockDelivery } from "./reply-delivery.js";
 import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
@@ -36,12 +35,11 @@ import {
 
 export async function runEmbeddedFallbackCandidate(
   params: AgentFallbackCandidateCommonParams & {
+    candidateAgentRuntime: string;
     effectiveRun: AgentFallbackCandidateCommonParams["candidateRun"];
     directBlockDeliveries: DirectBlockDelivery[];
-    sessionRuntimeOverride?: string;
     getLifecycleGeneration: () => string;
     onLifecycleGeneration: (generation: string) => void;
-    allowTransientCooldownProbe?: boolean;
     notifyUserAboutCompaction: boolean;
     messageToolDeliveryState: MessageToolDeliveryState;
     onCompactionFacts: (facts: {
@@ -53,7 +51,6 @@ export async function runEmbeddedFallbackCandidate(
   result: Awaited<ReturnType<typeof runEmbeddedAgent>>;
   maintenanceAuthProfile?: CompletedAgentAuthSelection;
   compactionRequestBudget?: CompactionRequestBudget;
-  bootstrapPromptWarningSignaturesSeen: string[];
 }> {
   const turn = params.turn;
   let maintenanceAuthProfile: CompletedAgentAuthSelection | undefined;
@@ -64,7 +61,7 @@ export async function runEmbeddedFallbackCandidate(
     ...params.candidateFastMode,
     thinkLevel: params.candidateThinkLevel,
   };
-  const { embeddedContext, senderContext, runBaseParams } = await buildEmbeddedRunExecutionParams({
+  const runBaseParams = await buildEmbeddedRunExecutionParams({
     run: candidateRun,
     replyRoute: turn.followupRun,
     sessionCtx: turn.sessionCtx,
@@ -74,12 +71,13 @@ export async function runEmbeddedFallbackCandidate(
     promptCacheKey: turn.opts?.promptCacheKey,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
     model: params.model,
+    agentRuntime: params.candidateAgentRuntime,
   });
   if (sourceReplyDeliveryRuntime) {
     bindSourceReplyDeliveryRuntime(runBaseParams, sourceReplyDeliveryRuntime);
   }
-  const agentHarnessPolicy = params.sessionRuntimeOverride
-    ? ({ runtime: params.sessionRuntimeOverride, runtimeSource: "model" } as const)
+  const agentHarnessPolicy = params.agentHarnessRuntimeOverride
+    ? ({ runtime: params.agentHarnessRuntimeOverride, runtimeSource: "model" } as const)
     : resolveAgentHarnessPolicy({
         provider: params.provider,
         modelId: params.model,
@@ -96,7 +94,7 @@ export async function runEmbeddedFallbackCandidate(
     workspaceDir: turn.followupRun.run.workspaceDir,
   });
   const embeddedRunHarnessOverride =
-    params.sessionRuntimeOverride ??
+    params.agentHarnessRuntimeOverride ??
     (agentHarnessPolicy.runtime === "openclaw" && embeddedRunProvider !== params.provider
       ? "openclaw"
       : undefined);
@@ -122,12 +120,9 @@ export async function runEmbeddedFallbackCandidate(
     let eventHandler: ReturnType<typeof createAgentRunEventHandler> | undefined;
     const result = await params.timing.measure("embedded_run", () => {
       const embeddedRunParams: RunEmbeddedAgentInternalParams = {
-        preparedRunAdmission: params.preparedRunAdmission,
-        ...embeddedContext,
-        messageActionTurnCapability: params.messageActionTurnCapability,
+        ...runBaseParams,
         lifecycleGeneration: params.getLifecycleGeneration(),
         allowGatewaySubagentBinding: true,
-        trigger: turn.isHeartbeat ? "heartbeat" : "user",
         cronCreatorAuthorityCapability: turn.opts?.cronCreatorAuthorityCapability,
         cronCreatorAuthorityUnavailableReason:
           turn.opts?.turnAdoptionLifecycle?.cronCreatorAuthorityUnavailable,
@@ -136,43 +131,20 @@ export async function runEmbeddedFallbackCandidate(
           normalizeOptionalString(turn.sessionCtx.GroupChannel) ??
           normalizeOptionalString(turn.sessionCtx.GroupSubject),
         groupSpace: normalizeOptionalString(turn.sessionCtx.GroupSpace),
-        ...senderContext,
-        ...runBaseParams,
+        ...buildFallbackCandidateTurnParams(params),
         contextWindow: turn.getActiveSessionEntry()?.contextWindow,
-        lane: params.runLane,
         provider: embeddedRunProvider,
         agentHarnessId: resolveSessionPinnedHarnessId(turn.getActiveSessionEntry()),
         agentHarnessRuntimeOverride: embeddedRunHarnessOverride,
         agentHarnessRuntimePreparationHint:
           agentHarnessPolicy.runtimeSource !== "implicit" ? agentHarnessPolicy.runtime : undefined,
-        fastModeStartedAtMs: params.fastModeStartedAtMs,
-        fastModeAutoProgressState: params.fastModeAutoProgressState,
-        isFinalFallbackAttempt: params.isFinalFallbackAttempt,
         sandboxSessionKey: turn.runtimePolicySessionKey,
-        prompt: turn.commandBody,
-        transcriptPrompt: turn.transcriptCommandBody,
-        media: turn.followupRun.media,
-        userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
-        contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
-        onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
-        currentInboundEventKind: turn.followupRun.currentInboundEventKind,
-        currentInboundContext: turn.followupRun.currentInboundContext,
         explicitSkillSelections: turn.followupRun.explicitSkillSelections,
-        extraSystemPrompt: turn.followupRun.run.extraSystemPrompt,
-        sourceReplyDeliveryMode: turn.followupRun.run.sourceReplyDeliveryMode,
         forceMessageTool: turn.followupRun.run.sourceReplyDeliveryMode === "message_tool_only",
-        // Heartbeat ambient routes are delivery context, never implicit message recipients.
-        // Omit false so subagent sessions keep their downstream default.
-        ...(turn.isHeartbeat ? { requireExplicitMessageTarget: true } : {}),
-        cleanupBundleMcpOnRunEnd: turn.opts?.cleanupBundleMcpOnRunEnd,
-        silentReplyPromptMode: turn.followupRun.run.silentReplyPromptMode,
-        suppressNextUserMessagePersistence: params.suppressQueuedUserPersistenceForCandidate,
-        onUserMessagePersisted: params.notifyUserMessagePersisted,
         suppressTranscriptOnlyAssistantPersistence:
           turn.followupRun.run.suppressTranscriptOnlyAssistantPersistence,
         assistantErrorTranscript: params.assistantErrorTranscript,
         authProfileFailurePolicy: params.authProfileFailurePolicy,
-        prepareAssistantTranscriptMessage: turn.opts?.prepareAssistantTranscriptMessage,
         onAutoCompactionSucceeded: (count) => {
           attemptCompactionCount = Math.max(attemptCompactionCount, count);
         },
@@ -181,18 +153,10 @@ export async function runEmbeddedFallbackCandidate(
           return !channel || isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
         })(),
         toolProgressDetail: turn.toolProgressDetail,
-        toolsAllow: turn.opts?.toolsAllow,
-        disableTools: turn.opts?.disableTools,
         // Marks reply-owned policy; final attempt preparation binds its concrete route.
         toolAuthorityFingerprint: turn.replyOperation?.toolAuthorityFingerprint,
         enableHeartbeatTool: turn.opts?.enableHeartbeatTool,
         forceHeartbeatTool: turn.opts?.forceHeartbeatTool,
-        bootstrapContextMode: turn.opts?.bootstrapContextMode,
-        bootstrapContextRunKind: params.bootstrapContextRunKind,
-        images: params.currentTurnImages.images,
-        imageOrder: params.currentTurnImages.imageOrder,
-        abortSignal: params.runAbortSignal,
-        replyOperation: turn.replyOperation,
         deferTerminalLifecycle: true,
         onAttemptStart: lifecycleBackstop.beginAttempt,
         onCompactionAccounting: (fact) => {
@@ -204,9 +168,12 @@ export async function runEmbeddedFallbackCandidate(
         onDeferredLifecycleOwner: params.deferredLifecycle.adopt,
         onDeferredLifecycleAbort: params.deferredLifecycle.abort,
         onRetryWait: params.deferredLifecycle.beginRetryWait,
-        onExecutionStarted: (info) => {
+        onExecutionStarted: async (info) => {
           if (info?.lifecycleGeneration) {
             params.onLifecycleGeneration(info.lifecycleGeneration);
+          }
+          if (agentHarnessPolicy.runtime !== "openclaw" || info?.backend === "cloud-worker") {
+            await params.prepareAgentRunStart();
           }
         },
         onExecutionPhase: (info) => {
@@ -224,31 +191,7 @@ export async function runEmbeddedFallbackCandidate(
         blockReplyBreak: turn.resolvedBlockStreamingBreak,
         blockReplyChunking: turn.blockReplyChunking,
         // Subscriber callbacks are detached. Stage channel presentation before typing I/O.
-        onPartialReply: async (payload) => {
-          const classified = params.presentation.classifyStreamingPartial(payload);
-          if (classified.skip || !classified.text) {
-            return false;
-          }
-          const textForTyping = classified.text;
-          let didMaterialize = false;
-          let materializedText: string | undefined;
-          const partialPayload: PartialReplyPayload = {
-            get text() {
-              if (!didMaterialize) {
-                const sanitized = params.presentation.sanitizeStreamingText(textForTyping, false);
-                materializedText = sanitized.skip ? undefined : sanitized.text;
-                didMaterialize = true;
-              }
-              return materializedText;
-            },
-            mediaUrls: payload.mediaUrls,
-          };
-          const onPartialReply = turn.opts?.onPartialReply;
-          return await params.presentation.presentWithTyping(
-            turn.typingSignals.signalTextDelta(textForTyping),
-            () => (onPartialReply ? onPartialReply(partialPayload) : false),
-          );
-        },
+        onPartialReply: (payload) => params.presentation.presentPartialReply(payload, "embedded"),
         onAssistantMessageStart: async () => {
           await params.presentation.presentWithTyping(turn.typingSignals.signalMessageStart(), () =>
             turn.opts?.onAssistantMessageStart?.(),
@@ -282,6 +225,7 @@ export async function runEmbeddedFallbackCandidate(
           eventHandler ??= createAgentRunEventHandler({
             turn,
             lifecycleBackstop,
+            prepareAgentRunStart: params.prepareAgentRunStart,
             notifyAgentRunStart: params.notifyAgentRunStart,
             sourceRepliesAreToolOnly:
               (sourceReplyDeliveryRuntime?.currentMode ??
@@ -315,8 +259,6 @@ export async function runEmbeddedFallbackCandidate(
             : undefined,
         shouldEmitToolResult: turn.shouldEmitToolResult,
         shouldEmitToolOutput: turn.shouldEmitToolOutput,
-        bootstrapPromptWarningSignaturesSeen: params.bootstrapPromptWarningSignaturesSeen,
-        bootstrapPromptWarningSignature: params.bootstrapPromptWarningSignaturesSeen.at(-1),
         onToolResult: turn.opts?.onToolResult
           ? (() => {
               // Serialized delivery preserves tool result order across detached callbacks.
@@ -364,9 +306,6 @@ export async function runEmbeddedFallbackCandidate(
       result,
       maintenanceAuthProfile,
       compactionRequestBudget,
-      bootstrapPromptWarningSignaturesSeen: resolveBootstrapWarningSignaturesSeen(
-        result.meta?.systemPromptReport,
-      ),
     };
   } finally {
     // Runtime event/result counts are observable, but cannot prove a durable write target.

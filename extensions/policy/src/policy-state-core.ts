@@ -1,4 +1,3 @@
-// Policy plugin channel, model, MCP, and network evidence.
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { asNonArrayRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -83,30 +82,19 @@ export function scanPolicyModelRefs(
 export function scanPolicyNetwork(cfg: Record<string, unknown>): readonly PolicyNetworkEvidence[] {
   return (
     [
-      ["browser-private-network", ["browser", "ssrfPolicy", "dangerouslyAllowPrivateNetwork"]],
-      ["browser-private-network-legacy", ["browser", "ssrfPolicy", "allowPrivateNetwork"]],
-      [
-        "web-fetch-private-network",
-        ["tools", "web", "fetch", "ssrfPolicy", "dangerouslyAllowPrivateNetwork"],
-      ],
-      [
-        "web-fetch-private-network-legacy",
-        ["tools", "web", "fetch", "ssrfPolicy", "allowPrivateNetwork"],
-      ],
+      ["browser-private-network", "browser/ssrfPolicy/dangerouslyAllowPrivateNetwork"],
+      ["browser-private-network-legacy", "browser/ssrfPolicy/allowPrivateNetwork"],
+      ["web-fetch-private-network", "tools/web/fetch/ssrfPolicy/dangerouslyAllowPrivateNetwork"],
+      ["web-fetch-private-network-legacy", "tools/web/fetch/ssrfPolicy/allowPrivateNetwork"],
       [
         "web-fetch-rfc2544-benchmark-range",
-        ["tools", "web", "fetch", "ssrfPolicy", "allowRfc2544BenchmarkRange"],
+        "tools/web/fetch/ssrfPolicy/allowRfc2544BenchmarkRange",
       ],
-      [
-        "web-fetch-ipv6-unique-local-range",
-        ["tools", "web", "fetch", "ssrfPolicy", "allowIpv6UniqueLocalRange"],
-      ],
+      ["web-fetch-ipv6-unique-local-range", "tools/web/fetch/ssrfPolicy/allowIpv6UniqueLocalRange"],
     ] as const
   ).flatMap(([id, path]) => {
-    const value = readBooleanPath(cfg, path);
-    return value === undefined
-      ? []
-      : [{ id, source: `oc://openclaw.config/${path.join("/")}`, value }];
+    const value = readBooleanPath(cfg, path.split("/"));
+    return value === undefined ? [] : [{ id, source: `oc://openclaw.config/${path}`, value }];
   });
 }
 
@@ -221,23 +209,15 @@ function isModelSettingKey(key: string): boolean {
 }
 
 function pushModelRef(refs: PolicyModelRefEvidence[], ref: string, source: string): void {
-  const parsed = parseModelRef(ref);
-  if (parsed === undefined) {
-    return;
-  }
-  refs.push({ ref, provider: parsed.provider, model: parsed.model, source });
-}
-
-function parseModelRef(
-  ref: string,
-): { readonly provider: string; readonly model: string } | undefined {
   const trimmed = ref.trim();
   const slash = trimmed.indexOf("/");
   if (slash <= 0 || slash >= trimmed.length - 1) {
-    return undefined;
+    return;
   }
-  return {
+  refs.push({
+    ref,
     provider: normalizeProviderId(trimmed.slice(0, slash)),
     model: trimmed.slice(slash + 1),
-  };
+    source,
+  });
 }

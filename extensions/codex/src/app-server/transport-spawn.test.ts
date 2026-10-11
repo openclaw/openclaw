@@ -8,8 +8,11 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerClient } from "./client.js";
 import { resolveManagedCodexNativeCommand } from "./managed-binary.js";
+import { observeManagedCodexLauncherFailure } from "./managed-launcher-failure.js";
 import { findCodexAppServerSpawnError } from "./spawn-error.js";
+import { RegistrationTestChildProcess } from "./transport-process-registration.test-support.js";
 import { createStdioTransport } from "./transport-stdio.js";
+import type { CodexAppServerTransport } from "./transport.js";
 
 const registration = vi.hoisted(() => ({ rejectOnExit: false, holdStderrUntilExit: false }));
 
@@ -53,8 +56,6 @@ describe("Codex app-server OS launch failure", () => {
   });
 
   it.runIf(process.platform !== "win32").each([
-    ["initialize", false],
-    ["registration", false],
     ["initialize", true],
     ["registration", true],
   ] as const)(
@@ -120,4 +121,37 @@ describe("Codex app-server OS launch failure", () => {
       }
     },
   );
+});
+
+describe("managed launcher diagnostic attribution", () => {
+  it.each([
+    { name: "matching Bun diagnostic", accepted: true },
+    { name: "different header command", header: "/other/codex", accepted: false },
+    { name: "different syscall command", syscall: "spawn /other/codex", accepted: false },
+    { name: "successful exit", exit: 0, accepted: false },
+    { name: "diagnostic beyond prefix limit", padding: `${"x".repeat(16_383)}\n`, accepted: false },
+  ])("classifies $name", ({ header, syscall, exit, padding, accepted }) => {
+    const native = `/synthetic/codex-${randomUUID()}`;
+    const child: RegistrationTestChildProcess & Pick<CodexAppServerTransport, "startupFailure"> =
+      new RegistrationTestChildProcess(1);
+    observeManagedCodexLauncherFailure(child, native);
+    const diagnostic = `${padding ?? ""}EACCES: permission denied, posix_spawn '${header ?? native}'
+   syscall: "${syscall ?? `spawn ${native}`}",
+`;
+    for (const chunk of [diagnostic.slice(0, 12), diagnostic.slice(12)]) {
+      child.stderr.emit("data", Buffer.from(chunk));
+    }
+    child.exitCode = exit ?? 1;
+    child.emit("exit", child.exitCode);
+    child.emit("close", child.exitCode);
+    if (accepted) {
+      expect(child.startupFailure?.error).toMatchObject({
+        name: "CodexAppServerSpawnError",
+        command: native,
+        cause: expect.objectContaining({ code: "EACCES" }),
+      });
+    } else {
+      expect(child.startupFailure?.error).toBeUndefined();
+    }
+  });
 });

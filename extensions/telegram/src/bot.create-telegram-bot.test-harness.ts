@@ -29,7 +29,7 @@ type GetSessionEntryFn = typeof import("openclaw/plugin-sdk/session-store-runtim
 type ResolveStorePathFn =
   typeof import("openclaw/plugin-sdk/session-store-runtime").resolveStorePath;
 type ReadSessionUpdatedAtFn =
-  typeof import("openclaw/plugin-sdk/session-store-runtime").readSessionUpdatedAt;
+  typeof import("openclaw/plugin-sdk/session-store-runtime").readSessionUpdatedAtAsync;
 type LoadWebMediaFn = typeof import("openclaw/plugin-sdk/web-media").loadWebMedia;
 type ResolveTelegramApprovalForTest = NonNullable<TelegramBotDeps["resolveApproval"]>;
 type DispatchReplyWithBufferedBlockDispatcherFn =
@@ -59,10 +59,6 @@ const { loadWebMedia } = vi.hoisted((): { loadWebMedia: MockFn<LoadWebMediaFn> }
   loadWebMedia: vi.fn<LoadWebMediaFn>(),
 }));
 
-export function getLoadWebMediaMock(): MockFn<LoadWebMediaFn> {
-  return loadWebMedia;
-}
-
 vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia,
 }));
@@ -86,7 +82,7 @@ const {
       (storePath?: string) => storePath ?? sessionStorePath,
     ),
     getSessionEntryMock: vi.fn<GetSessionEntryFn>(() => undefined),
-    readSessionUpdatedAtMock: vi.fn<ReadSessionUpdatedAtFn>(() => undefined),
+    readSessionUpdatedAtMock: vi.fn<ReadSessionUpdatedAtFn>(async () => undefined),
     recordInboundSessionMock: vi.fn(async () => undefined),
   }),
 );
@@ -392,7 +388,7 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
   getRuntimeConfig,
   getSessionEntry: getSessionEntryMock,
   resolveStorePath: resolveStorePathMock,
-  readSessionUpdatedAt: readSessionUpdatedAtMock,
+  readSessionUpdatedAtAsync: readSessionUpdatedAtMock,
   recordInboundSession: recordInboundSessionMock as TelegramBotDeps["recordInboundSession"],
   recordChannelActivity: vi.fn() as TelegramBotDeps["recordChannelActivity"],
   resolveInboundLastRouteSessionKey: ({ route, sessionKey }) =>
@@ -417,7 +413,9 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
 vi.doMock("./bot.runtime.js", () => telegramBotRuntimeForTest);
 
 export const getOnHandler = (event: string) => {
-  const handler = onSpy.mock.calls.find((call) => call[0] === event)?.[1];
+  const handler = onSpy.mock.calls.find(([filter]) =>
+    Array.isArray(filter) ? filter.includes(event) : filter === event,
+  )?.[1];
   if (!handler) {
     throw new Error(`Missing handler for event: ${event}`);
   }
@@ -447,7 +445,7 @@ beforeEach(() => {
   getSessionEntryMock.mockReset();
   getSessionEntryMock.mockReturnValue(undefined);
   readSessionUpdatedAtMock.mockReset();
-  readSessionUpdatedAtMock.mockReturnValue(undefined);
+  readSessionUpdatedAtMock.mockResolvedValue(undefined);
   recordInboundSessionMock.mockReset();
   recordInboundSessionMock.mockResolvedValue(undefined);
   loadWebMedia.mockReset();

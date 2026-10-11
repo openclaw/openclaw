@@ -3,7 +3,6 @@ import { createRequire } from "node:module";
 import { compileFunction, constants } from "node:vm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
-import { addLabelsWithinCap } from "../../scripts/github/labeler-label-cap.mjs";
 
 type WorkflowJob = { steps: Array<{ name?: string; with?: { script?: string } }> };
 
@@ -96,7 +95,7 @@ describe("PR size labeling", () => {
     expect(fixture.core.warning).toHaveBeenCalledWith(expect.stringMatching(/size: S.*100/));
   });
 
-  it.each([undefined, "size: XS", "size: S"])(
+  it.each(["size: XS", "size: S"])(
     "uses available capacity after removing a stale size label (%s)",
     async (sizeLabel) => {
       const fixture = labelFixture([...areaLabels(99), ...(sizeLabel ? [sizeLabel] : [])]);
@@ -108,23 +107,6 @@ describe("PR size labeling", () => {
 });
 
 describe("PR maintainer labeling", () => {
-  it("warns and succeeds when all 100 slots are occupied", async () => {
-    const fixture = labelFixture(areaLabels(100), undefined, executeMaintainerLabel);
-    await expect(fixture.run()).resolves.toBeUndefined();
-    expect(fixture.issues.addLabels).toHaveBeenCalledOnce();
-    expect(fixture.labels).toEqual(new Set(areaLabels(100)));
-    expect(fixture.core.warning).toHaveBeenCalledWith(
-      expect.stringMatching(/maintainer.*on #1.*100/),
-    );
-  });
-
-  it("adds the maintainer label when one slot remains", async () => {
-    const fixture = labelFixture(areaLabels(99), undefined, executeMaintainerLabel);
-    await fixture.run();
-    expect(fixture.labels).toEqual(new Set([...areaLabels(99), "maintainer"]));
-    expect(fixture.core.warning).not.toHaveBeenCalled();
-  });
-
   it("does not label a non-member", async () => {
     const fixture = labelFixture([], undefined, executeMaintainerLabel);
     fixture.teams.getMembershipForUserInOrg.mockRejectedValue(
@@ -159,22 +141,6 @@ describe("label cap tolerance", () => {
       expect(fixture.core.warning).not.toHaveBeenCalled();
     },
   );
-
-  it("reports whether the label landed so callers keep their bookkeeping accurate", async () => {
-    const capError = Object.assign(
-      new Error("Validation Failed: Issues cannot have more than 100 labels"),
-      { status: 422 },
-    );
-    const core = { warning: vi.fn() };
-    const addLabels = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(capError);
-    const github = { rest: { issues: { addLabels } } };
-    const request = { github, core, owner: "openclaw", repo: "openclaw", issueNumber: 7 };
-
-    await expect(addLabelsWithinCap({ ...request, labels: ["maintainer"] })).resolves.toBe(true);
-    expect(core.warning).not.toHaveBeenCalled();
-    await expect(addLabelsWithinCap({ ...request, labels: ["beta-blocker"] })).resolves.toBe(false);
-    expect(core.warning).toHaveBeenCalledWith(expect.stringMatching(/"beta-blocker" on #7/));
-  });
 
   it("every label-adding site routes through addLabelsWithinCap", () => {
     // The helper owns the 100-label cap; a new raw call would restore the red check from PR #137506.

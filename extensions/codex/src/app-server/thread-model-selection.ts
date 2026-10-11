@@ -31,7 +31,10 @@ export function resolveCodexBindingModelProviderFallback(params: {
   ) {
     return params.bindingModelProvider;
   }
-  return hasProviderQualifiedModelRef(currentModel) ? undefined : params.bindingModelProvider;
+  const slashIndex = currentModel?.indexOf("/") ?? -1;
+  return slashIndex > 0 && slashIndex < (currentModel?.length ?? 0) - 1
+    ? undefined
+    : params.bindingModelProvider;
 }
 
 export function resolveCodexAppServerThreadModelSelection(
@@ -98,12 +101,6 @@ export function resolveCodexAppServerRequestModelSelection(
     model: model.slice(slashIndex + 1).trim(),
     ...(inferredModelProvider ? { modelProvider: inferredModelProvider } : {}),
   };
-}
-
-function hasProviderQualifiedModelRef(model: string | undefined): boolean {
-  const trimmed = model?.trim();
-  const slashIndex = trimmed?.indexOf("/") ?? -1;
-  return slashIndex > 0 && slashIndex < (trimmed?.length ?? 0) - 1;
 }
 
 export function resolveCodexAppServerModelProvider(

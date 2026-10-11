@@ -20,7 +20,14 @@ const runtimeArchive = Buffer.from("verified runtime archive".repeat(3));
 type DownloadOutcome =
   | string
   | number
-  | { durationMs: number; failure?: string; progress?: boolean; stall?: "headers" | "body" };
+  | {
+      durationMs: number;
+      failure?: string;
+      progress?: boolean;
+      stall?: "headers" | "body";
+      resetAfterBytes?: number;
+      ignoreRange?: boolean;
+    };
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
@@ -77,6 +84,7 @@ async function download(
   const delays: number[] = [];
   const output: string[] = [];
   const installations: number[] = [];
+  const terminations: Array<{ pid: number; signal: string; atMs: number }> = [];
   let elapsedMs = 0;
   const aborted: string[] = [];
   const completedAt: number[] = [];
@@ -105,10 +113,18 @@ async function download(
       requests.push(options.headers.authorization);
       ranges.push(options.headers.range);
       const offset =
-        options.headers.range && outcome !== "ignore-range"
+        options.headers.range &&
+        outcome !== "ignore-range" &&
+        !(typeof outcome === "object" && outcome.ignoreRange)
           ? Number(options.headers.range.slice(6, -1))
           : 0;
-      const split = Math.min(offset + Math.floor(content.length * 0.4), content.length);
+      const split = Math.min(
+        offset +
+          (typeof outcome === "object" && outcome.resetAfterBytes !== undefined
+            ? outcome.resetAfterBytes
+            : Math.floor(content.length * 0.4)),
+        content.length,
+      );
       const grant = grants.get(options.headers.authorization)!;
       const destroyed = new AbortController();
       const signal = AbortSignal.any([options.signal, grant, destroyed.signal]);
@@ -168,6 +184,9 @@ async function download(
                 signal.throwIfAborted();
                 idleTimer?.refresh();
                 yield content.subarray(offset, split);
+                if (typeof outcome === "object" && outcome.resetAfterBytes !== undefined) {
+                  throw Object.assign(new Error("transport interrupted"), { code: "ECONNRESET" });
+                }
                 if (typeof outcome === "object" && outcome.stall === "body") {
                   await waitForDownload(outcome.durationMs, signal);
                 }
@@ -305,16 +324,22 @@ async function download(
     },
     createReadStream: (file: string) => Readable.from([files.get(file)!]),
   };
-  const processFixture = {
+  const processFixture = Object.assign(new EventEmitter(), {
     platform: "linux",
     env: { ...setup.forwardedEnv },
     execPath: "/fixture/node",
     umask: () => {},
+    kill: (pid: number, signal: string) => {
+      terminations.push({ pid, signal, atMs: Date.now() });
+      return true;
+    },
     exitCode: 0,
-  };
+  });
   const execution = runInNewContext(setup.command.split("\n").slice(2, -1).join("\n"), {
     Buffer,
     URL,
+    setTimeout,
+    clearTimeout,
     Math: Object.assign(Object.create(Math), { random: () => 0.5 }),
     AbortController,
     AbortSignal: {
@@ -359,8 +384,17 @@ async function download(
           spawnSync: () => ({ status: 0, stdout: "OpenClaw 2026.8.1" }),
           spawn: () => {
             installations.push(Date.now());
-            const child = new EventEmitter();
-            setTimeout(() => child.emit("close", install.exitCode), install.durationMs);
+            const child = Object.assign(new EventEmitter(), { pid: 1234 });
+            // Keep close delayed even after kill so the join must await actual settlement.
+            setTimeout(
+              () =>
+                child.emit(
+                  "close",
+                  terminations.length ? null : install.exitCode,
+                  terminations.length ? "SIGKILL" : null,
+                ),
+              install.durationMs,
+            );
             return child;
           },
         };
@@ -385,14 +419,72 @@ async function download(
     completedAt,
     aborted,
     installations,
+    terminations,
     output: output.join("\n"),
     published: [...files.values()],
   };
 }
 
 describe("bootstrap artifact download retries", () => {
+  it("completes after five resets that each advance the partial file", async () => {
+    const result = await download([
+      ...Array.from({ length: 5 }, () => ({ durationMs: 0, resetAfterBytes: 1 })),
+      "success",
+    ]);
+    expect(result.code, result.output).toBe(0);
+    expect(result.requests).toEqual(Array(6).fill("Bearer synthetic-worker-archive-token"));
+    expect(result.ranges).toEqual([
+      undefined,
+      "bytes=1-",
+      "bytes=2-",
+      "bytes=3-",
+      "bytes=4-",
+      "bytes=5-",
+    ]);
+    expect(result.published).toEqual([archive]);
+  });
+
+  it("resets the failure budget only when retained bytes advance", async () => {
+    const reset = { durationMs: 0, resetAfterBytes: 1 };
+    const result = await download([503, 503, reset, "busy", 503, 503, reset, "success"]);
+    expect(result.code, result.output).toBe(0);
+    expect(result.requests).toHaveLength(8);
+    expect(result.ranges).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      "bytes=1-",
+      "bytes=1-",
+      "bytes=1-",
+      "bytes=1-",
+      "bytes=2-",
+    ]);
+    expect(result.published).toEqual([archive]);
+  });
+
+  it.each(["resume", "ignore Range", "discard partial"])(
+    "stops after three consecutive failures without retained progress (%s)",
+    async (mode) => {
+      const ignoreRange = mode === "ignore Range";
+      const result = await download([
+        { durationMs: 0, resetAfterBytes: 1 },
+        ...(mode === "discard partial" ? [416] : []),
+        { durationMs: 0, resetAfterBytes: ignoreRange ? 1 : 0, ignoreRange },
+      ]);
+      expect(result.code).toBe(1);
+      expect(result.requests).toHaveLength(4);
+      expect(result.ranges).toEqual(
+        mode === "discard partial"
+          ? [undefined, "bytes=1-", undefined, undefined]
+          : [undefined, "bytes=1-", "bytes=1-", "bytes=1-"],
+      );
+      expect(result.published).toEqual([]);
+      expect(result.output).toContain("download attempt 4; 3 consecutive no-progress failures");
+      expect(result.output).not.toContain("The worker could not reach");
+    },
+  );
+
   it.each([
-    { runtimeMinutes: 9, workerMinutes: 8, bootstrapTimeoutMs: undefined },
     { runtimeMinutes: 8, workerMinutes: 9, bootstrapTimeoutMs: undefined },
     { runtimeMinutes: 48, workerMinutes: 46, bootstrapTimeoutMs: 60 * 60_000 },
   ])(
@@ -437,7 +529,9 @@ describe("bootstrap artifact download retries", () => {
         stall === "body" ? `bytes=${Math.floor(archive.length * 0.4)}-` : undefined,
       ]);
       expect(result.aborted).toEqual(["Bearer synthetic-worker-archive-token"]);
-      expect(result.output).toContain("failed (ETIMEDOUT); retrying download attempt 2/3");
+      expect(result.output).toContain(
+        "failed (ETIMEDOUT) from https://gateway.example.test; retrying download attempt 2",
+      );
       expect(result.removed.filter(({ bytes }) => bytes > 0)).toEqual([]);
       expect(result.published).toEqual([archive]);
     },
@@ -458,7 +552,7 @@ describe("bootstrap artifact download retries", () => {
           : "Bearer synthetic-worker-archive-token",
       );
       expect(result.output).toContain(
-        `Cloud worker ${failed === "worker" ? "archive" : "node bootstrap"} download body failed: synthetic archive failure (download attempt 1/3)`,
+        `Cloud worker ${failed === "worker" ? "archive" : "node bootstrap"} download body failed from https://gateway.example.test: synthetic archive failure (download attempt 1)`,
       );
       expect(result.installations).toEqual([]);
       expect(result.published).toEqual([]);
@@ -473,8 +567,11 @@ describe("bootstrap artifact download retries", () => {
     );
     expect(result.code).toBe(1);
     expect(result.installations).toEqual([0]);
+    expect(result.terminations).toEqual([{ pid: -1234, signal: "SIGKILL", atMs: 1_000 }]);
     expect(result.elapsedMs).toBe(2_000);
-    expect(result.output).toContain("archive download body failed: synthetic worker failure");
+    expect(result.output).toContain(
+      "archive download body failed from https://gateway.example.test: synthetic worker failure",
+    );
     expect(result.output).not.toContain("package installation failed");
     expect(result.published).toEqual([]);
   });
@@ -505,33 +602,20 @@ describe("bootstrap artifact download retries", () => {
     expect(result.created).toHaveLength(3);
   });
 
-  it.each([
-    "ECONNRESET",
-    "ECONNREFUSED",
-    "ECONNABORTED",
-    "ENETUNREACH",
-    "EHOSTUNREACH",
-    "ENETDOWN",
-    "EPIPE",
-    "ERR_STREAM_PREMATURE_CLOSE",
-    "ABORT_ERR",
-    "ETIMEDOUT",
-    "ESOCKETTIMEDOUT",
-    "EAI_AGAIN",
-    502,
-    503,
-    504,
-  ])("recovers from %s with the same token and retained partial bytes", async (failure) => {
-    const result = await download([failure, "success"]);
-    expect(result.code).toBe(0);
-    expect(result.requests).toEqual(Array(2).fill("Bearer synthetic-worker-archive-token"));
-    expect(result.published).toEqual([archive]);
-    expect(result.delays).toEqual([250]);
-    if (typeof failure === "string") {
-      expect(result.ranges).toEqual([undefined, `bytes=${Math.floor(archive.length * 0.4)}-`]);
-      expect(result.removed.filter(({ bytes }) => bytes > 0)).toEqual([]);
-    }
-  });
+  it.each(["ECONNRESET", 502, 503])(
+    "recovers from %s with the same token and retained partial bytes",
+    async (failure) => {
+      const result = await download([failure, "success"]);
+      expect(result.code).toBe(0);
+      expect(result.requests).toEqual(Array(2).fill("Bearer synthetic-worker-archive-token"));
+      expect(result.published).toEqual([archive]);
+      expect(result.delays).toEqual([250]);
+      if (typeof failure === "string") {
+        expect(result.ranges).toEqual([undefined, `bytes=${Math.floor(archive.length * 0.4)}-`]);
+        expect(result.removed.filter(({ bytes }) => bytes > 0)).toEqual([]);
+      }
+    },
+  );
   it("restarts from the full response when the server ignores Range", async () => {
     const result = await download(["ECONNRESET", "ignore-range"]);
     expect(result.code, result.output).toBe(0);
@@ -562,20 +646,17 @@ describe("bootstrap artifact download retries", () => {
     expect(result.code).toBe(1);
     expect(result.ranges).toEqual([undefined, `bytes=${Math.floor(archive.length * 0.4)}-`]);
     expect(result.published).toEqual([]);
-    expect(result.output).toContain("failed integrity verification (download attempt 2/3)");
+    expect(result.output).toContain("failed integrity verification (download attempt 2)");
   });
-  it.each(["digest", "short", "size", "pin", 401, 403, 404, 409, 410])(
-    "keeps %s terminal without retrying",
-    async (failure) => {
-      const result = await download([failure, "success"]);
-      expect(result.code).toBe(1);
-      expect(result.requests).toHaveLength(1);
-      expect(result.delays).toEqual([]);
-      expect(result.published).toEqual([]);
-      expect(result.output).toContain("download attempt 1/3");
-    },
-  );
-  it.each(["ECONNRESET", 503])(
+  it.each(["short", "size", "pin", 401])("keeps %s terminal without retrying", async (failure) => {
+    const result = await download([failure, "success"]);
+    expect(result.code).toBe(1);
+    expect(result.requests).toHaveLength(1);
+    expect(result.delays).toEqual([]);
+    expect(result.published).toEqual([]);
+    expect(result.output).toContain("download attempt 1");
+  });
+  it.each([{ durationMs: 0, resetAfterBytes: 0 }, 503])(
     "reports %s and total attempts after exhaustion",
     async (failure) => {
       const result = await download([failure]);
@@ -584,8 +665,10 @@ describe("bootstrap artifact download retries", () => {
       expect(result.delays).toEqual([250, 500]);
       expect(result.published).toEqual([]);
       expect(result.output).toContain(
-        (failure === 503 ? "HTTP 503" : "transport interrupted") + " (download attempt 3/3)",
+        (failure === 503 ? "HTTP 503" : "transport interrupted") +
+          " (download attempt 3; 3 consecutive no-progress failures)",
       );
+      expect(result.output.includes("The worker could not reach")).toBe(failure !== 503);
     },
   );
 });

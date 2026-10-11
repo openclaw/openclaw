@@ -54,14 +54,19 @@ describe("collectEnvSecretRefIds", () => {
         nested: [{ token: "$DISCORD_BOT_TOKEN" }],
         ignored: { source: "file", provider: "default", id: "/run/secret" },
       }),
-    ).toEqual(new Set(["OPENAI_API_KEY", "LEGACY_API_KEY", "DISCORD_BOT_TOKEN"]));
+    ).toEqual(new Set(["OPENAI_API_KEY", "DISCORD_BOT_TOKEN"]));
   });
 });
 
 describe("store SecretRef coercion", () => {
   it("applies the store-specific default provider to providerless refs", () => {
-    expect(
-      coerceSecretRef({ source: "store", id: "STORED_API_KEY" }, { store: "teamstore" }),
-    ).toEqual({ source: "store", provider: "teamstore", id: "STORED_API_KEY" });
+    const input = { source: "store", id: "STORED_API_KEY", opaque: { keep: true } };
+    expect(coerceSecretRef(input, { store: "teamstore" })).toEqual({
+      source: "store",
+      provider: "teamstore",
+      id: "STORED_API_KEY",
+    });
+    expect(coerceSecretRef({ ...input, provider: "teamstore" })).toBeNull();
+    expect(input).toEqual({ source: "store", id: "STORED_API_KEY", opaque: { keep: true } });
   });
 });

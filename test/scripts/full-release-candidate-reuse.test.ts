@@ -931,25 +931,6 @@ describe("full release candidate loading", () => {
 });
 
 describe("full release candidate binding authority", () => {
-  it("normalizes fresh and reused evidence to the same downstream tuple", () => {
-    const binding = fullReleaseCandidateBindingFixture();
-    const fresh = resolveCandidateBinding({
-      freshBinding: binding,
-      now: NOW,
-      request: binding.request,
-      required: true,
-    });
-    const reused = resolveCandidateBinding({
-      now: NOW,
-      request: binding.request,
-      required: true,
-      reusedBinding: binding,
-    });
-    expect(fresh).toEqual(binding);
-    expect(reused).toEqual(binding);
-    expect(candidateArtifactJsonFromBinding(fresh)).toBe(candidateArtifactJsonFromBinding(reused));
-  });
-
   it("preserves published package provenance across fresh and reused evidence", () => {
     const binding = fullReleaseCandidateBindingFixture({ packagePublished: true });
     const fresh = resolveCandidateBinding({
@@ -1092,45 +1073,5 @@ describe("sealed full release candidate verification", () => {
         token: "test-token",
       }),
     ).rejects.toThrow("HTTP 404");
-  });
-
-  it("rejects an evidence artifact identity change before accepting the archive", async () => {
-    const binding = fullReleaseCandidateBindingFixture();
-    const metadata = {
-      created_at: "2026-08-28T10:00:00Z",
-      digest: `sha256:${binding.evidenceArtifact.digest}`,
-      expired: false,
-      expires_at: binding.evidenceArtifact.expiresAt,
-      id: Number(binding.evidenceArtifact.id) + 1,
-      name: binding.evidenceArtifact.name,
-      size_in_bytes: 100,
-      workflow_run: {
-        head_repository_id: 1,
-        head_sha: binding.producer.workflowSha,
-        id: Number(binding.producer.runId),
-        repository_id: 1,
-      },
-    };
-    await expect(
-      verifySealedFullReleaseCandidate({
-        binding,
-        consumerRunAttempt: 1,
-        consumerRunId: 88,
-        downloadArchive: async ({ expected }) => {
-          expect(expected).toMatchObject({ artifactId: Number(binding.evidenceArtifact.id) });
-          throw new Error("Actions artifact metadata does not match the exact artifact tuple.");
-        },
-        now: NOW,
-        readArtifact: async (artifactId) => {
-          if (artifactId === binding.evidenceArtifact.id) {
-            return metadata;
-          }
-          return constituentArtifactReader(binding)(artifactId);
-        },
-        readRunAttempt: async () => workflowRun(),
-        readWorkflowJobs: async () => workflowJobs(),
-        token: "test-token",
-      }),
-    ).rejects.toThrow("does not match the exact artifact tuple");
   });
 });

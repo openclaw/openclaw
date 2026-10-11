@@ -4,7 +4,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { listAgentEntriesWithSource } from "../agents/agent-scope.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
-import { normalizePluginsConfig, normalizePluginId } from "../plugins/config-state.js";
+import { normalizePluginId } from "../plugins/config-state.js";
 import {
   findUninspectedPluginDiagnostic,
   pluginDiagnosticToConfigWarning,
@@ -15,6 +15,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { resolveWebSearchInstallCatalogEntries } from "../plugins/web-search-install-catalog.js";
 import { isRecord } from "../utils.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import {
   collectChannelDmPolicyMetadata,
@@ -65,7 +66,6 @@ type RegistryInfo = {
   registry: PluginManifestRegistry;
   knownIds?: Set<string>;
   overriddenPluginIds?: Set<string>;
-  normalizedPlugins?: ReturnType<typeof normalizePluginsConfig>;
   channelSchemaSelection?: ReadonlySet<string>;
   channelSchemas?: Map<
     string,
@@ -79,32 +79,28 @@ export function validatePreparedConfigWithPlugins(
   opts: ValidateConfigWithPluginsParams & {
     applyDefaults: boolean;
     installedPluginRecordIds?: ReadonlySet<string>;
-    onManifestRegistryResolved?: (registry: PluginManifestRegistry) => void;
     schemaValidations?: PreparedPluginSchemaValidations;
   },
 ): ValidateConfigWithPluginsResult {
-  const rememberRegistry = (registry: PluginManifestRegistry): RegistryInfo => {
-    opts.onManifestRegistryResolved?.(registry);
-    return { registry };
-  };
   let registryInfo: RegistryInfo | null = opts.pluginMetadataSnapshot
-    ? rememberRegistry(opts.pluginMetadataSnapshot.manifestRegistry)
+    ? { registry: opts.pluginMetadataSnapshot.manifestRegistry }
     : null;
   const ensureLoadedRegistryInfo = (): RegistryInfo => {
-    registryInfo ??= rememberRegistry(
-      opts.loadPluginMetadataSnapshot?.(parsedConfig)?.manifestRegistry ??
+    registryInfo ??= {
+      registry:
+        opts.loadPluginMetadataSnapshot?.(parsedConfig)?.manifestRegistry ??
         resolveConfigWidePluginManifestRegistry({
           config: parsedConfig,
           env: opts.env ?? process.env,
         }),
-    );
+    };
     return registryInfo;
   };
 
   if (opts.applyDefaults && !registryInfo && opts.pluginValidation !== "core-only") {
     const pluginMetadataSnapshot = opts.loadPluginMetadataSnapshot?.(parsedConfig);
     if (pluginMetadataSnapshot) {
-      registryInfo = rememberRegistry(pluginMetadataSnapshot.manifestRegistry);
+      registryInfo = { registry: pluginMetadataSnapshot.manifestRegistry };
     }
   }
   const config = opts.applyDefaults
@@ -183,7 +179,7 @@ export function validatePreparedConfigWithPlugins(
 
   const ensureKnownIds = (): Set<string> => {
     const info = ensureRegistry();
-    info.knownIds ??= new Set(info.registry.plugins.map((record) => record.id));
+    info.knownIds ??= new Set(info.registry.plugins.map((record) => normalizePluginId(record.id)));
     return info.knownIds;
   };
 
@@ -198,12 +194,6 @@ export function validatePreparedConfigWithPlugins(
     return info.overriddenPluginIds;
   };
 
-  const ensureNormalizedPlugins = (): ReturnType<typeof normalizePluginsConfig> => {
-    const info = ensureRegistry();
-    info.normalizedPlugins ??= normalizePluginsConfig(config.plugins);
-    return info.normalizedPlugins;
-  };
-
   const ensureChannelSchemaSelection = (): ReadonlySet<string> => {
     const info = ensureLoadedRegistryInfo();
     info.channelSchemaSelection ??= resolveChannelSchemaSelection(
@@ -214,10 +204,7 @@ export function validatePreparedConfigWithPlugins(
     return info.channelSchemaSelection;
   };
 
-  const ensureChannelSchemas = (): Map<
-    string,
-    { schema?: Record<string, unknown>; pluginId?: string; origin: PluginOrigin }
-  > => {
+  const ensureChannelSchemas = (): NonNullable<RegistryInfo["channelSchemas"]> => {
     const info = ensureRegistry();
     if (!info.channelSchemas) {
       info.channelSchemas = new Map(
@@ -386,18 +373,12 @@ export function validatePreparedConfigWithPlugins(
       return;
     }
     const { registry } = ensureRegistry();
-    const suppressedModels = new Map<
-      string,
-      { provider: string; model: string; reason?: string }
-    >();
-    for (const suppression of planManifestModelCatalogSuppressions({ registry }).suppressions) {
+    const { suppressions } = planManifestModelCatalogSuppressions({ registry });
+    const suppressedModels = new Map<string, (typeof suppressions)[number]>();
+    for (const suppression of suppressions) {
       const key = `${suppression.provider}/${suppression.model}`;
       if (!suppression.when && !suppressedModels.has(key)) {
-        suppressedModels.set(key, {
-          provider: suppression.provider,
-          model: suppression.model,
-          ...(suppression.reason ? { reason: suppression.reason } : {}),
-        });
+        suppressedModels.set(key, suppression);
       }
     }
     const seen = new Set<string>();
@@ -451,21 +432,26 @@ export function validatePreparedConfigWithPlugins(
     mutatedConfig.plugins!.entries![pluginId] = { ...currentEntry, config: nextValue };
   };
 
-  const allowedChannels = new Set<string>(["defaults", "modelByChannel", ...bundledChannelIds]);
+  const allowedChannels = new Set<string>(bundledChannelIds);
+  let registryChannelsLoaded = false;
+  const isKnownChannel = (channelId: string): boolean => {
+    if (!allowedChannels.has(channelId) && !registryChannelsLoaded) {
+      for (const record of ensureRegistry().registry.plugins) {
+        for (const id of record.channels) {
+          allowedChannels.add(id);
+        }
+      }
+      registryChannelsLoaded = true;
+    }
+    return allowedChannels.has(channelId);
+  };
   if (config.channels && isRecord(config.channels)) {
     for (const key of Object.keys(config.channels)) {
       const trimmed = key.trim();
       if (!trimmed) {
         continue;
       }
-      if (!allowedChannels.has(trimmed)) {
-        for (const record of ensureRegistry().registry.plugins) {
-          for (const channelId of record.channels) {
-            allowedChannels.add(channelId);
-          }
-        }
-      }
-      if (!allowedChannels.has(trimmed)) {
+      if (trimmed !== "defaults" && trimmed !== "modelByChannel" && !isKnownChannel(trimmed)) {
         if (preserveUnavailableConfig(`channels.${trimmed}`)) {
           continue;
         }
@@ -528,6 +514,22 @@ export function validatePreparedConfigWithPlugins(
     }
   }
 
+  for (const key of ["byChannel", "debounceMsByChannel"] as const) {
+    for (const channelId of Object.keys(config.messages?.queue?.[key] ?? {})) {
+      if (channelId === INTERNAL_MESSAGE_CHANNEL || isKnownChannel(channelId)) {
+        continue;
+      }
+      const path = `messages.queue.${key}.${channelId}`;
+      if (preserveUnavailableConfig(path)) {
+        continue;
+      }
+      warnings.push({
+        path,
+        message: `unknown channel id: ${channelId} (install its channel plugin or correct this setting)`,
+      });
+    }
+  }
+
   const heartbeatChannelIds = new Set(bundledChannelIds);
   const validateHeartbeatTarget = (target: string | undefined, issuePath: string): void => {
     if (typeof target !== "string") {
@@ -586,8 +588,6 @@ export function validatePreparedConfigWithPlugins(
       applyDefaults: opts.applyDefaults,
       schemaValidations: opts.schemaValidations,
       registry,
-      knownIds: ensureKnownIds(),
-      normalizedPlugins: ensureNormalizedPlugins(),
       deferredPluginIds,
       ensureCompatPluginIds,
       ensureOverriddenPluginIds,

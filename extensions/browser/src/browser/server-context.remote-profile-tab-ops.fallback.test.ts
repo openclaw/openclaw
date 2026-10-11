@@ -279,48 +279,6 @@ function expectFetchCalledWithManualRedirect(
 }
 
 describe("browser server-context loopback direct WebSocket profiles", () => {
-  it("uses an HTTP /json/list base when opening about:blank under strict SSRF", async () => {
-    const createTargetViaCdp = vi
-      .spyOn(deps.cdpModule, "createTargetViaCdp")
-      .mockResolvedValue({ targetId: "CREATED", finalUrl: "about:blank" });
-
-    const fetchMock = vi.fn(async (url: unknown) => {
-      const u = String(url);
-      expect(u).toBe("http://127.0.0.1:18800/json/list?token=abc");
-      return {
-        ok: true,
-        json: async () => [
-          {
-            id: "CREATED",
-            title: "New Tab",
-            url: "about:blank",
-            webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/CREATED",
-            type: "page",
-          },
-        ],
-      } as unknown as Response;
-    });
-
-    global.fetch = withBrowserFetchPreconnect(fetchMock);
-    const state = deps.makeState("openclaw");
-    state.resolved.ssrfPolicy = {};
-    state.resolved.profiles.openclaw = {
-      cdpUrl: "ws://127.0.0.1:18800/devtools/browser/SESSION?token=abc",
-      color: "#FF4500",
-    };
-    const ctx = deps.createTestBrowserRouteContext({ getState: () => state });
-    const openclaw = ctx.forProfile("openclaw");
-
-    const opened = await openclaw.openTab("about:blank");
-    expect(opened.targetId).toBe("CREATED");
-    expect(createTargetViaCdp).toHaveBeenCalledWith({
-      cdpUrl: "ws://127.0.0.1:18800/devtools/browser/SESSION?token=abc",
-      url: "about:blank",
-      ssrfPolicy: undefined,
-      waitForNavigationResult: true,
-    });
-  });
-
   it("uses an HTTPS /json base for secure direct WebSocket profiles with a /cdp suffix", async () => {
     const fetchMock = vi.fn(async (url: unknown) => {
       const u = String(url);

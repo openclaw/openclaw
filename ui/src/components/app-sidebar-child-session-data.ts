@@ -303,6 +303,25 @@ export async function hydrateSidebarChildSessions(params: {
   }
 }
 
+export function discardEmptyChildSessionSnapshot(
+  owner: {
+    childSessionRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>;
+    loadedChildSessionKeys: ReadonlySet<string>;
+    requestSessionDataUpdate(): void;
+  },
+  sessionKey: string,
+): void {
+  if (owner.childSessionRowsByParent[sessionKey]?.length === 0) {
+    const childRows = { ...owner.childSessionRowsByParent };
+    delete childRows[sessionKey];
+    owner.childSessionRowsByParent = childRows;
+    const loadedKeys = new Set(owner.loadedChildSessionKeys);
+    loadedKeys.delete(sessionKey);
+    owner.loadedChildSessionKeys = loadedKeys;
+    owner.requestSessionDataUpdate();
+  }
+}
+
 export function retireStaleChildSessionRows(
   owner: {
     childSessionRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>;

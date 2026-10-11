@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { Worker } from "node:worker_threads";
-import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { expect, it, vi } from "vitest";
 import { getPreparedModelCatalogWorkerPoolSnapshot } from "../agents/prepared-model-catalog-worker.js";
 import {
@@ -16,7 +15,7 @@ import { registerPreparedModelRuntimeClose } from "../agents/prepared-model-runt
 import { getPreparedModelRuntimeStartupStatus } from "../agents/prepared-model-runtime.startup-status.js";
 import { readConfigFileSnapshot } from "../config/io.js";
 import { GATEWAY_SHUTDOWN_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
-import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
+import { flushLogger, setLoggerOverride } from "../logging/logger.js";
 import { getPluginValueInstance } from "../plugins/plugin-instance-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
@@ -34,7 +33,7 @@ it.each(["final Gateway", "live sibling", "closing sibling"] as const)(
     fixture.config.gateway = { reload: { mode: "hybrid" } };
     fixture.config.agents = {
       defaults: { workspace: fixture.state.workspaceDir, model: `${fixture.pluginId}/before` },
-      entries: { main: { default: true, workspace: fixture.state.workspaceDir } },
+      entries: { main: { workspace: fixture.state.workspaceDir } },
     };
     const entered = createDeferredCore();
     const cancelled = createDeferredCore();
@@ -302,12 +301,19 @@ it.each(["static catalog", "synthetic auth"] as const)(
       };`,
     );
     fixture.config.agents = {
-      defaults: { workspace: fixture.state.workspaceDir, model: `${provider}/model` },
+      ownership: "explicit",
+      defaults: {
+        workspace: fixture.state.workspaceDir,
+        model: `${provider}/model`,
+        heartbeat: { agentId: "main" },
+        systemAgent: { agentId: "main" },
+      },
       entries: {
-        main: { default: true, workspace: fixture.state.workspaceDir },
+        main: { workspace: fixture.state.workspaceDir },
         late: { workspace: fixture.state.path("late-workspace") },
       },
     };
+    fixture.config.talk = { agentId: "main" };
     const unsubscribe = registerPreparedModelRuntimePublicationListener(({ phase: event }) => {
       if (event === "published" && getPreparedModelRuntimeStartupStatus()?.degraded === false) {
         completePublications++;
@@ -318,6 +324,8 @@ it.each(["static catalog", "synthetic auth"] as const)(
     });
     let closing: Promise<void> | undefined;
     let publication: Promise<void> | undefined;
+    const logFile = fixture.state.path("shutdown.log");
+    setLoggerOverride({ file: logFile, level: "debug", consoleLevel: "silent" });
     try {
       const port = await fixture.reservePort();
       const server = await fixture.start(port);
@@ -376,19 +384,12 @@ it.each(["static catalog", "synthetic auth"] as const)(
       expect(cleanupFinished).toBe(false);
       expect(closeFinished).toBe(false);
       finishCleanup.resolve();
-      const closeError = await closing.then(
-        () => undefined,
-        (error: unknown) => error,
-      );
+      await closing;
       if (cleanupFailure) {
-        // Other shutdown work must not hide a discarded plugin cleanup outcome.
-        expect(collectNestedErrorCandidates(closeError)).toContain(cleanupFailure);
-        // The process-cache reset retains the same outcome for its next observer.
-        expect((await waitForPluginCacheRetirement()).failures).toEqual([
-          { pluginId: fixture.pluginId, hookId: "instance", error: cleanupFailure },
-        ]);
-      } else {
-        expect(closeError).toBeUndefined();
+        await flushLogger();
+        expect(await fs.readFile(logFile, "utf8")).toContain(
+          `Plugin ${fixture.pluginId} cleanup failed (instance): ${cleanupFailure.message}`,
+        );
       }
       expect(cleanupFinished).toBe(true);
       expect(process.listenerCount(fixture.event)).toBe(fixture.listeners);
@@ -420,7 +421,7 @@ it.each(["static catalog", "synthetic auth"] as const)(
       }
       unregisterClose();
       unsubscribe();
-      await fixture.cleanup();
+      await fixture.cleanup().finally(() => setLoggerOverride(null));
       Reflect.deleteProperty(globalThis, bridgeKey);
     }
   },

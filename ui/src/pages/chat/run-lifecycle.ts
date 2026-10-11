@@ -15,7 +15,7 @@ import {
   type SessionRunTerminal,
 } from "../../lib/sessions/index.ts";
 import {
-  areUiSessionKeysEquivalent,
+  normalizeDefaultMainSessionAliasForUi,
   resolveUiSelectedSessionAgentId,
   resolveUiConversationIdentity,
   uiSessionRowMatchesSelectedChat,
@@ -33,7 +33,6 @@ import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { formatConnectError } from "./connect-error.ts";
 import {
   getChatSessionProjection,
-  observeChatRunModel,
   reduceChatSessionProjection,
   setChatRunOwner,
 } from "./history-merge.ts";
@@ -41,7 +40,7 @@ import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./i
 import type { ToolStreamHost } from "./tool-stream-contract.ts";
 import { canResetToolStream, resetToolStream, resetToolStreamRun } from "./tool-stream-state.ts";
 
-export const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
+const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
 
 export type ChatHistoryRunObservation = {
   runId: string;
@@ -50,7 +49,7 @@ export type ChatHistoryRunObservation = {
 };
 
 export type ChatRunError = {
-  kind?: "auth_refresh" | "state_contention";
+  kind?: "auth_refresh" | "state_contention" | "stop";
   summary: string;
   /** Display ownership only; the session reducer retains each run's diagnostic. */
   runId?: string;
@@ -199,34 +198,35 @@ type SessionRunHost = {
   sessionsResult?: SessionsListResult | null;
 };
 
-export function hasDirectSessionRun(host: SessionRunHost): boolean {
+function hasSessionRun(host: SessionRunHost, includeSubagents: boolean): boolean {
+  if (host.chatRunId) {
+    return true;
+  }
+  const key = normalizeDefaultMainSessionAliasForUi(host.sessionKey);
   return Boolean(
-    host.chatRunId ||
+    key &&
     host.sessionsResult?.sessions.some(
       (session) =>
-        areUiSessionKeysEquivalent(session.key, host.sessionKey) && isSessionRunActive(session),
+        normalizeDefaultMainSessionAliasForUi(session.key) === key &&
+        (isSessionRunActive(session) ||
+          (includeSubagents && session.hasActiveSubagentRun === true)),
     ),
   );
 }
 
+export function hasDirectSessionRun(host: SessionRunHost): boolean {
+  return hasSessionRun(host, false);
+}
+
 export function hasAbortableSessionRun(host: SessionRunHost): boolean {
-  return (
-    hasDirectSessionRun(host) ||
-    Boolean(
-      host.sessionsResult?.sessions.some(
-        (session) =>
-          areUiSessionKeysEquivalent(session.key, host.sessionKey) &&
-          session.hasActiveSubagentRun === true,
-      ),
-    )
-  );
+  return hasSessionRun(host, true);
 }
 
 export function isChatStopCommand(text: string) {
-  return CHAT_STOP_COMMANDS.has(normalizeLowercaseStringOrEmpty(text.trim()));
+  return CHAT_STOP_COMMANDS.has(normalizeLowercaseStringOrEmpty(text));
 }
 
-type ChatAbortOptions = { preserveDraft?: boolean };
+type ChatAbortOptions = { preserveDraft?: boolean; scope?: "session" };
 
 function ownsChatAbortIntent(state: ChatAbortRunState, intent: ChatAbortIntent): boolean {
   const conversation = resolveUiConversationIdentity(state, state.sessionKey);
@@ -268,11 +268,11 @@ async function settleChatAbortResponse(
       } else if (state.chatRunId) {
         setChatError(state, message);
       } else {
-        setChatRunError(state, message, intent.runId ?? undefined);
+        setChatRunError(state, message, intent.runId ?? undefined, "stop");
       }
       state.requestUpdate?.();
     } else if (result.warning) {
-      setChatRunError(state, result.warning, intent.runId ?? undefined);
+      setChatRunError(state, result.warning, intent.runId ?? undefined, "stop");
       state.requestUpdate?.();
     } else if (result.noActiveRun && state.connected) {
       // Only the refreshed owner may retire a run that is still finalizing.
@@ -282,13 +282,15 @@ async function settleChatAbortResponse(
   return result.ok;
 }
 
-async function abortChatRun(state: ChatAbortRunState, intent?: ChatAbortIntent) {
+async function abortChatRun(state: ChatAbortRunState, intent?: ChatAbortIntent, scope?: "session") {
   const client = state.client;
   if (!client || !state.connected) {
     return false;
   }
   const captured = intent ?? currentChatAbortIntent(state, client);
-  const result = await requestChatAbort(client, captured);
+  // Session cancellation still answers to the run that owned the Stop action.
+  const target = scope ? currentChatAbortIntent(state, client, scope) : captured;
+  const result = await requestChatAbort(client, target);
   return settleChatAbortResponse(state, captured, result);
 }
 
@@ -368,7 +370,7 @@ export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptio
     host.pendingAbort = pendingAbort;
     return;
   }
-  await abortChatRun(host);
+  await abortChatRun(host, undefined, opts?.scope);
 }
 
 function clearTimer(timer: TimerHandle | number | null | undefined) {
@@ -498,7 +500,9 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
     host.chatStreamStartedAt = null;
   }
   if (options.clearLocalRun) {
-    observeChatRunModel(host, undefined);
+    if (!runId || host.chatReasoning?.runId === runId) {
+      host.chatReasoning = null;
+    }
     if (host.chatRunId) {
       host.chatRunLifecycleGeneration = (host.chatRunLifecycleGeneration ?? 0) + 1;
     }
@@ -643,26 +647,13 @@ export function reconcileChatRunFromSessionRow(
     historyRun?: ChatHistoryRunObservation | null;
   } = {},
 ): boolean {
-  if (!uiSessionRowMatchesSelectedChat(host, row.key, host.sessionKey, row.agentId)) {
-    return false;
-  }
-  if (!host.chatRunId && host.chatStream == null) {
-    return false;
-  }
-  if (row.hasActiveRun === true) {
-    return false;
-  }
-  if (isSessionRunActive(row)) {
-    return false;
-  }
-  // Transcript snapshots can briefly lose the active-run projection while the
-  // persisted lifecycle is still running. Wait for a real terminal status so
-  // tool updates cannot flash an interrupted composer state mid-turn.
-  if (row.hasActiveRun !== false && row.status === "running") {
-    return false;
-  }
-  const terminalStatus = row.status !== undefined;
-  if (row.hasActiveRun !== false && !terminalStatus) {
+  if (
+    !uiSessionRowMatchesSelectedChat(host, row.key, host.sessionKey, row.agentId) ||
+    (!host.chatRunId && host.chatStream == null) ||
+    row.hasActiveRun === true ||
+    isSessionRunActive(row) ||
+    (row.hasActiveRun !== false && row.status === undefined)
+  ) {
     return false;
   }
   const runId = host.chatRunId;

@@ -24,7 +24,7 @@ import {
   readOpenClawAgentDatabaseRegistryToken,
 } from "../state/openclaw-agent-db-registry-listing.js";
 import { createOpenClawAgentDatabasePathMatcher } from "../state/openclaw-agent-db.paths.js";
-import { resolveGatewaySessionStoreLookupCandidates } from "./session-utils-store-lookup.js";
+import { resolveGatewaySessionStoreLookupCandidates } from "./session-utils-store-candidates.js";
 import type {
   GatewaySessionStoreReadSources,
   GatewaySessionStoreSourceRequest,
@@ -167,8 +167,6 @@ export function prepareGatewaySessionStoreReadSources(params: {
   currentSource: SessionEntryReadSource;
   env: NodeJS.ProcessEnv;
   registryPath: string;
-  /** Only synchronous consumers may defer binding filesystem addresses. */
-  deferSources?: boolean;
 }): { sources: GatewaySessionStoreReadSources; assertCurrent: () => void } {
   const registryOptions = {
     env: cloneEnvWithPlatformSemantics(params.env),
@@ -197,52 +195,40 @@ export function prepareGatewaySessionStoreReadSources(params: {
     }
     throw new Error("Session store changed while preparing its metadata. Retry the request.");
   };
-  const bindSources = () =>
-    withAgentRosterFactsBatch(params.cfg, () => {
-      let registered: ReturnType<typeof listOpenClawRegisteredAgentDatabases>;
-      try {
-        registered = listOpenClawRegisteredAgentDatabases(registryOptions);
-      } catch {
-        return {};
-      }
-      const registryFacts = registered;
-      const resolved = resolveGatewaySessionStoreReadSources({
-        routing: captureSessionStoreRouting(params.cfg),
-        currentSource,
-        env: params.env,
-        registeredDatabases: registered,
-      });
-      discoveryIsCurrent = () => {
-        const current = listOpenClawRegisteredAgentDatabases(registryOptions);
-        return (
-          currentSource.agentId === currentSourceAgentId &&
-          currentSource.path === currentSourcePath &&
-          sameRegistrations(current, registryFacts) &&
-          resolved.isCurrent()
-        );
-      };
-      return resolved.sources;
+  const sources = withAgentRosterFactsBatch(params.cfg, () => {
+    let registered: ReturnType<typeof listOpenClawRegisteredAgentDatabases>;
+    try {
+      registered = listOpenClawRegisteredAgentDatabases(registryOptions);
+    } catch {
+      return {};
+    }
+    const registryFacts = registered;
+    const resolved = resolveGatewaySessionStoreReadSources({
+      routing: captureSessionStoreRouting(params.cfg),
+      currentSource,
+      env: params.env,
+      registeredDatabases: registered,
     });
-  let sources = params.deferSources ? undefined : bindSources();
-  return {
-    get sources() {
-      if (!sources) {
-        assertCurrent();
-        sources = bindSources();
-      }
-      return sources;
-    },
-    assertCurrent,
-  };
+    discoveryIsCurrent = () => {
+      const current = listOpenClawRegisteredAgentDatabases(registryOptions);
+      return (
+        currentSource.agentId === currentSourceAgentId &&
+        currentSource.path === currentSourcePath &&
+        sameRegistrations(current, registryFacts) &&
+        resolved.isCurrent()
+      );
+    };
+    return resolved.sources;
+  });
+  return { sources, assertCurrent };
 }
 
 /** Capture source routing for the existing history worker; no native discovery runs here. */
-export async function prepareGatewaySessionStoreReadSourcesAsync(params: {
-  cfg: OpenClawConfig;
-  currentSource: SessionEntryReadSource;
-  env: NodeJS.ProcessEnv;
-  registryPath: string;
-}) {
+export async function prepareGatewaySessionStoreReadSourcesAsync(
+  params: Parameters<typeof prepareGatewaySessionStoreReadSources>[0],
+  signal?: AbortSignal,
+) {
+  signal?.throwIfAborted();
   const routing = captureSessionStoreRouting(params.cfg);
   const env = captureSessionTranscriptStorageEnvironment(params.env);
   const inventory = prepareSessionStoreTargetInventory(
@@ -287,12 +273,12 @@ export async function prepareGatewaySessionStoreReadSourcesAsync(params: {
       throw storeChanged();
     }
   };
-  const readRegistry = async (assertCallerCurrent?: () => void) => {
+  const readRegistry = async (assertCallerCurrent?: () => void, readSignal?: AbortSignal) => {
     for (let attempt = 0; ; attempt++) {
       assertCallerCurrent?.();
       assertSourceCurrent();
       try {
-        const current = await registryRead.read();
+        const current = await registryRead.read(readSignal);
         assertCallerCurrent?.();
         assertSourceCurrent();
         current.assertCurrent();
@@ -306,7 +292,7 @@ export async function prepareGatewaySessionStoreReadSourcesAsync(params: {
       }
     }
   };
-  let registry = await readRegistry();
+  let registry = await readRegistry(undefined, signal);
   const original = registry.result;
   const assertCurrent = () => {
     assertSourceCurrent();

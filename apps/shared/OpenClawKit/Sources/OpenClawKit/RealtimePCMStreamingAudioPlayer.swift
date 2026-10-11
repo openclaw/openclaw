@@ -2,14 +2,27 @@
 import AVFAudio
 import Foundation
 
-@MainActor
-public final class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
+/// The lock guards playback/generation state; backend closures run on backendQueue without it.
+/// Completion callbacks are queued, including callbacks invoked synchronously by node.stop.
+public final nonisolated class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying,
+    @unchecked Sendable
+{
+    private let lock = NSLock()
+    /// Backend operations never hold the state lock or block a relay control. Ordering on this
+    /// queue ensures a retired generation's stop precedes preparation of its replacement.
+    private let backendQueue = DispatchQueue(label: "ai.openclaw.realtime-playback", qos: .userInitiated)
     static let frameDurationSeconds = 0.020
-    static let maxScheduledBuffers = 3
+    /// Bound scheduled audio to the relay's 60 s reply limit; completions refill off-main.
+    static let maxScheduledBuffers = 3000
 
     typealias Completion = @Sendable () -> Void
     private let preparePlayback: (Double) throws -> Void
     private let scheduleFrame: (Data, Double, @escaping Completion) throws -> Void
+    private let startPlayback: () -> Void
+    /// Frames queued before the node starts: 300 ms of cushion so the first seconds of a reply,
+    /// which arrive while the UI is busy, don't underrun.
+    static let prebufferFrames = 15
+    private var playbackStarted = false
     private let stopPlayback: () -> Void
     private let playbackTime: () -> Double?
 
@@ -17,7 +30,7 @@ public final class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
     private var nextBufferID: UInt64 = 0
     private var scheduledBufferIDs: Set<UInt64> = []
     private var slotWaiters: [CheckedContinuation<Bool, Never>] = []
-    private var playbackContinuation: CheckedContinuation<StreamingPlaybackResult, Never>?
+    private var playbackContinuation: AsyncStream<StreamingPlaybackResult>.Continuation?
     private var inputTask: Task<Void, Never>?
     private var inputFinished = false
 
@@ -43,7 +56,13 @@ public final class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
                 engine.connect(node, to: engine.mainMixerNode, format: nextFormat)
                 engine.prepare()
                 try engine.start()
-                node.play()
+                // Preserve the device-startup cushion before the first audible frames.
+                let padFrames = AVAudioFrameCount(sampleRate * 0.3)
+                if let pad = AVAudioPCMBuffer(pcmFormat: nextFormat, frameCapacity: padFrames) {
+                    pad.frameLength = padFrames
+                    pad.int16ChannelData?[0].update(repeating: 0, count: Int(padFrames))
+                    node.scheduleBuffer(pad)
+                }
             },
             scheduleFrame: { data, _, completion in
                 guard let format else {
@@ -65,6 +84,7 @@ public final class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
                     completionCallbackType: .dataPlayedBack)
                 { _ in completion() }
             },
+            startPlayback: { node.play() },
             stopPlayback: {
                 node.stop()
                 engine.stop()
@@ -80,11 +100,13 @@ public final class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
     init(
         preparePlayback: @escaping (Double) throws -> Void,
         scheduleFrame: @escaping (Data, Double, @escaping Completion) throws -> Void,
+        startPlayback: @escaping () -> Void = {},
         stopPlayback: @escaping () -> Void,
         playbackTime: @escaping () -> Double?)
     {
         self.preparePlayback = preparePlayback
         self.scheduleFrame = scheduleFrame
+        self.startPlayback = startPlayback
         self.stopPlayback = stopPlayback
         self.playbackTime = playbackTime
     }
@@ -93,37 +115,65 @@ public final class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
         stream: AsyncThrowingStream<Data, Error>,
         sampleRate: Double) async -> StreamingPlaybackResult
     {
-        _ = self.stop()
-        guard sampleRate > 0 else {
-            return StreamingPlaybackResult(finished: false, interruptedAt: nil)
-        }
-        self.generation &+= 1
-        let generation = self.generation
-        do {
-            try self.preparePlayback(sampleRate)
-        } catch {
-            return StreamingPlaybackResult(finished: false, interruptedAt: nil)
-        }
-        return await withCheckedContinuation { continuation in
-            self.playbackContinuation = continuation
-            self.inputTask = Task { @MainActor [weak self] in
-                await self?.consume(stream: stream, sampleRate: sampleRate, generation: generation)
+        await self.beginPlayback(stream: stream, sampleRate: sampleRate).value
+    }
+
+    /// Register synchronously so relay controls can retire playback before its task runs.
+    func beginPlayback(
+        stream: AsyncThrowingStream<Data, Error>,
+        sampleRate: Double) -> Task<StreamingPlaybackResult, Never>
+    {
+        self.lock.withLock {
+            self.finish(StreamingPlaybackResult(finished: false, interruptedAt: nil), cancelInput: true)
+            let results = AsyncStream<StreamingPlaybackResult>.makeStream(bufferingPolicy: .bufferingOldest(1))
+            let resultTask = Task.detached(priority: .high) {
+                for await result in results.stream {
+                    return result
+                }
+                return StreamingPlaybackResult(finished: false, interruptedAt: nil)
             }
+            guard sampleRate > 0 else {
+                results.continuation.finish()
+                return resultTask
+            }
+            self.generation &+= 1
+            let generation = self.generation
+            self.playbackStarted = false
+            self.playbackContinuation = results.continuation
+            // Registration and queue submission are atomic with stop; engine work is not.
+            self.backendQueue.async { [weak self] in
+                guard let self, self.isCurrent(generation) else { return }
+                do {
+                    try self.preparePlayback(sampleRate)
+                    self.lock.withLock {
+                        guard self.generation == generation else { return }
+                        self.inputTask = Task.detached(priority: .high) { [weak self] in
+                            await self?.consume(stream: stream, sampleRate: sampleRate, generation: generation)
+                        }
+                    }
+                } catch {
+                    self.lock.withLock { self.finish(generation: generation, finished: false) }
+                }
+            }
+            return resultTask
         }
     }
 
     public func stop() -> Double? {
+        // AVAudioPlayerNode's render-time query is thread-safe and does not wait for preparation.
         let interruptedAt = self.playbackTime()
-        self.finish(StreamingPlaybackResult(
-            finished: false,
-            interruptedAt: interruptedAt), cancelInput: true)
+        self.lock.withLock {
+            self.finish(StreamingPlaybackResult(finished: false, interruptedAt: interruptedAt), cancelInput: true)
+        }
         return interruptedAt
     }
 
+    private func isCurrent(_ generation: UInt64) -> Bool {
+        self.lock.withLock { self.generation == generation }
+    }
+
     private func consume(
-        stream: AsyncThrowingStream<Data, Error>,
-        sampleRate: Double,
-        generation: UInt64) async
+        stream: AsyncThrowingStream<Data, Error>, sampleRate: Double, generation: UInt64) async
     {
         let frameBytes = max(
             MemoryLayout<Int16>.size,
@@ -136,63 +186,95 @@ public final class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
                 while pending.count >= frameBytes {
                     let frame = Data(pending.prefix(frameBytes))
                     pending.removeFirst(frameBytes)
-                    guard await self.schedule(
-                        frame: frame,
-                        sampleRate: sampleRate,
-                        generation: generation)
+                    guard await self.schedule(frame: frame, sampleRate: sampleRate, generation: generation)
                     else { return }
                 }
             }
             if !pending.isEmpty {
                 pending.append(Data(repeating: 0, count: frameBytes - pending.count))
-                guard await self.schedule(
-                    frame: pending,
-                    sampleRate: sampleRate,
-                    generation: generation)
+                guard await self.schedule(frame: pending, sampleRate: sampleRate, generation: generation)
                 else { return }
             }
-            guard self.generation == generation else { return }
-            self.inputFinished = true
-            self.finishIfDrained(generation: generation)
+            self.backendQueue.async { [weak self] in
+                guard let self, self.isCurrent(generation) else { return }
+                self.startPlaybackOnce(generation: generation)
+                self.lock.withLock {
+                    guard self.generation == generation else { return }
+                    self.inputFinished = true
+                    self.finishIfDrained(generation: generation)
+                }
+            }
         } catch {
-            self.finish(generation: generation, finished: false)
+            let interruptedAt = self.playbackTime()
+            self.lock.withLock {
+                guard self.generation == generation else { return }
+                self.finish(StreamingPlaybackResult(finished: false, interruptedAt: interruptedAt))
+            }
         }
     }
 
     private func schedule(frame: Data, sampleRate: Double, generation: UInt64) async -> Bool {
-        while self.generation == generation,
-              self.scheduledBufferIDs.count >= Self.maxScheduledBuffers
-        {
-            let admitted = await withCheckedContinuation { continuation in
-                self.slotWaiters.append(continuation)
+        let admitted = await withCheckedContinuation { continuation in
+            self.lock.withLock {
+                guard self.generation == generation, !Task.isCancelled else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                if self.scheduledBufferIDs.count >= Self.maxScheduledBuffers {
+                    self.slotWaiters.append(continuation)
+                } else { continuation.resume(returning: true) }
             }
-            guard admitted else { return false }
         }
-        guard self.generation == generation, !Task.isCancelled else { return false }
-        self.nextBufferID &+= 1
-        let bufferID = self.nextBufferID
-        self.scheduledBufferIDs.insert(bufferID)
-        do {
-            try self.scheduleFrame(frame, sampleRate) { [weak self] in
-                Task { @MainActor in
-                    self?.completed(bufferID: bufferID, generation: generation)
+        guard admitted else { return false }
+        return await withCheckedContinuation { continuation in
+            self.backendQueue.async { [weak self] in
+                guard let self else { continuation.resume(returning: false)
+                    return
+                }
+                let bufferID: UInt64? = self.lock.withLock {
+                    guard self.generation == generation else { return nil }
+                    self.nextBufferID &+= 1
+                    self.scheduledBufferIDs.insert(self.nextBufferID)
+                    return self.nextBufferID
+                }
+                guard let bufferID else { continuation.resume(returning: false)
+                    return
+                }
+                do {
+                    try self.scheduleFrame(frame, sampleRate) { [weak self] in
+                        guard let self else { return }
+                        self.backendQueue.async { [weak self] in
+                            self?.lock.withLock { self?.completed(bufferID: bufferID, generation: generation) }
+                        }
+                    }
+                    let shouldStart = self.lock.withLock {
+                        self.generation == generation && self.scheduledBufferIDs.count >= Self.prebufferFrames
+                    }
+                    if shouldStart { self.startPlaybackOnce(generation: generation) }
+                    continuation.resume(returning: self.isCurrent(generation))
+                } catch {
+                    self.lock.withLock { self.finish(generation: generation, finished: false) }
+                    continuation.resume(returning: false)
                 }
             }
+        }
+    }
+
+    /// Called only on backendQueue. A concurrently retired generation is stopped next on that queue.
+    private func startPlaybackOnce(generation: UInt64) {
+        let start = self.lock.withLock {
+            guard self.generation == generation, !self.playbackStarted else { return false }
+            self.playbackStarted = true
             return true
-        } catch {
-            self.scheduledBufferIDs.remove(bufferID)
-            self.finish(generation: generation, finished: false)
-            return false
+        }
+        if start {
+            self.startPlayback()
         }
     }
 
     private func completed(bufferID: UInt64, generation: UInt64) {
-        guard self.generation == generation,
-              self.scheduledBufferIDs.remove(bufferID) != nil
-        else { return }
-        if !self.slotWaiters.isEmpty {
-            self.slotWaiters.removeFirst().resume(returning: true)
-        }
+        guard self.generation == generation, self.scheduledBufferIDs.remove(bufferID) != nil else { return }
+        if !self.slotWaiters.isEmpty { self.slotWaiters.removeFirst().resume(returning: true) }
         self.finishIfDrained(generation: generation)
     }
 
@@ -203,11 +285,10 @@ public final class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
 
     private func finish(generation: UInt64, finished: Bool) {
         guard self.generation == generation else { return }
-        self.finish(StreamingPlaybackResult(
-            finished: finished,
-            interruptedAt: finished ? nil : self.playbackTime()))
+        self.finish(StreamingPlaybackResult(finished: finished, interruptedAt: nil))
     }
 
+    /// State-only retirement. Even synchronous backend stop callbacks cannot re-enter this lock.
     private func finish(_ result: StreamingPlaybackResult, cancelInput: Bool = false) {
         self.generation &+= 1
         if cancelInput { self.inputTask?.cancel() }
@@ -221,8 +302,20 @@ public final class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
         self.inputFinished = false
         let continuation = self.playbackContinuation
         self.playbackContinuation = nil
-        self.stopPlayback()
-        continuation?.resume(returning: result)
+        if continuation != nil {
+            self.backendQueue.async { [self] in self.stopPlayback() }
+        }
+        continuation?.yield(result)
+        continuation?.finish()
     }
+
+    #if DEBUG
+    // periphery:ignore - tests observe completion processing, not just callback submission.
+    func _test_waitForBackendOperations() async {
+        await withCheckedContinuation { continuation in
+            self.backendQueue.async { continuation.resume() }
+        }
+    }
+    #endif
 }
 #endif

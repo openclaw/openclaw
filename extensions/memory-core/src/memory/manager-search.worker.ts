@@ -1,4 +1,3 @@
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { openOpenClawAgentDatabaseReadOnly } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import {
   readCuratedMemoryTriggerCandidates,
@@ -15,30 +14,38 @@ import type {
   MemoryOriginReadInput,
   MemoryOriginReadOutput,
 } from "../memory-entry-origins-task.js";
-import { bm25RankToScore, buildFtsQuery } from "./keyword-query.js";
+import { readMemoryForgetIndexInWorker } from "../memory-forget-index-read.js";
+import type { ForgetIndexPlan, ForgetIndexReadInput } from "../memory-forget-index-task.js";
 import {
+  readMemoryDatabaseFacts,
   readMemoryRetrievalIndexState,
   readMemoryRecallData,
+  type MemoryRecallData,
   type MemoryRecallQuery,
 } from "./manager-retrieval-read.js";
 import { searchChunksByEmbedding } from "./manager-search-vector.js";
-import { searchKeyword, searchPathKeyword } from "./manager-search.js";
+import {
+  searchKeywordWithFallback,
+  type searchKeyword,
+  type searchPathKeyword,
+} from "./manager-search.js";
+import { assertMemoryShadowIdentity, type MemoryShadowConnection } from "./manager-shadow-task.js";
+import { loadMemorySourceFileState } from "./manager-source-state.js";
 import { inspectMemoryIndexPresenceInWorker } from "./manager-status-presence.js";
 
-type KeywordParameters = Omit<
-  Parameters<typeof searchKeyword>[0],
-  "db" | "buildFtsQuery" | "bm25RankToScore"
->;
-type PathParameters = Omit<
-  Parameters<typeof searchPathKeyword>[0],
-  "db" | "buildFtsQuery" | "bm25RankToScore"
->;
-export type MemoryKeywordWorkerQuery = { body: KeywordParameters; path: PathParameters };
+type KeywordParameters = Omit<Parameters<typeof searchKeyword>[0], "db">;
+type PathParameters = Omit<Parameters<typeof searchPathKeyword>[0], "db">;
+export type MemoryKeywordWorkerQuery = {
+  body: KeywordParameters;
+  path: PathParameters;
+  includeRecallMetadata?: boolean;
+};
 export type MemoryVectorWorkerQuery = Omit<
   Parameters<typeof searchChunksByEmbedding>[0],
   "db" | "signal"
 >;
 export type MemorySearchWorkerInput =
+  | ForgetIndexReadInput
   | MemoryOriginReadInput
   | { kind: "prewarm" }
   | { kind: "presence"; databasePath: string }
@@ -46,6 +53,12 @@ export type MemorySearchWorkerInput =
       | { kind: "keyword"; query: MemoryKeywordWorkerQuery; includeIndexState?: boolean }
       | { kind: "vector"; query: MemoryVectorWorkerQuery }
       | { kind: "index-state" }
+      | { kind: "index-facts" }
+      | {
+          kind: "source-state";
+          query: Omit<Parameters<typeof loadMemorySourceFileState>[0], "db">;
+          fileIdentity: MemoryShadowConnection["fileIdentity"];
+        }
       | ({ kind: "recall-metadata" } & MemoryRecallQuery)
       | {
           kind: "curated";
@@ -57,10 +70,13 @@ export type MemorySearchWorkerInput =
     ));
 type QueryResult<T> = { rows: T; error?: string };
 export type MemorySearchWorkerOutput =
+  | { kind: "forget-index-plan"; plan: ForgetIndexPlan }
   | MemoryOriginReadOutput
   | { kind: "prewarm" }
   | { kind: "presence"; present: boolean }
   | { kind: "index-state"; state: ReturnType<typeof readMemoryRetrievalIndexState> }
+  | { kind: "index-facts"; facts: ReturnType<typeof readMemoryDatabaseFacts> }
+  | { kind: "source-state"; rows: ReturnType<typeof loadMemorySourceFileState> }
   | ({ kind: "recall-metadata" } & ReturnType<typeof readMemoryRecallData>)
   | {
       kind: "curated";
@@ -70,6 +86,7 @@ export type MemorySearchWorkerOutput =
   | {
       kind: "keyword";
       indexState?: ReturnType<typeof readMemoryRetrievalIndexState>;
+      recallData?: MemoryRecallData;
       body: QueryResult<Awaited<ReturnType<typeof searchKeyword>>>;
       path: QueryResult<Awaited<ReturnType<typeof searchPathKeyword>>>;
     }
@@ -88,11 +105,13 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
     // This pre-manager probe also recognizes shipped memory-only databases.
     return { kind: "presence", present: inspectMemoryIndexPresenceInWorker(request.databasePath) };
   }
+  if (request.kind === "forget-index-plan") {
+    return { kind: request.kind, plan: await readMemoryForgetIndexInWorker(request) };
+  }
   if (
     request.kind === "origin-rows" ||
     request.kind === "origin-exists" ||
-    request.kind === "session-tombstones" ||
-    request.kind === "origin-index-keys"
+    request.kind === "session-tombstones"
   ) {
     return readMemoryOriginsInWorker(request);
   }
@@ -105,6 +124,9 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
       throw new Error(`Memory search database unavailable: ${result.reason}`);
     }
     return { kind: "recall-metadata", ...result.value };
+  }
+  if (request.kind === "source-state") {
+    assertMemoryShadowIdentity(request.databasePath, request.fileIdentity);
   }
   const opened = openOpenClawAgentDatabaseReadOnly({
     agentId: request.agentId,
@@ -129,8 +151,15 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
   }
   const { db } = opened.database;
   try {
+    if (request.kind === "source-state") {
+      assertMemoryShadowIdentity(request.databasePath, request.fileIdentity);
+      return { kind: "source-state", rows: loadMemorySourceFileState({ db, ...request.query }) };
+    }
     if (request.kind === "index-state") {
       return { kind: "index-state", state: readMemoryRetrievalIndexState(db) };
+    }
+    if (request.kind === "index-facts") {
+      return { kind: "index-facts", facts: readMemoryDatabaseFacts(db) };
     }
     if (request.kind === "curated") {
       const provenanceRepairPending =
@@ -158,18 +187,20 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
       return { kind: "vector", rows: await searchChunksByEmbedding({ ...request.query, db }) };
     }
     const indexState = request.includeIndexState ? readMemoryRetrievalIndexState(db) : undefined;
-    const body = await searchKeyword({ ...request.query.body, db, buildFtsQuery, bm25RankToScore })
-      .then((rows) => ({ rows }))
-      .catch((error: unknown) => ({ rows: [], error: formatErrorMessage(error) }));
-    const path = await searchPathKeyword({
-      ...request.query.path,
-      db,
-      buildFtsQuery,
-      bm25RankToScore,
-    })
-      .then((rows) => ({ rows }))
-      .catch((error: unknown) => ({ rows: [], error: formatErrorMessage(error) }));
-    return { kind: "keyword", body, path, ...(indexState ? { indexState } : {}) };
+    const { body, path } = await searchKeywordWithFallback({ ...request.query, db });
+    const recallData = request.query.includeRecallMetadata
+      ? readMemoryRecallData(db, {
+          candidates: [...body.rows, ...path.rows],
+          includeMemoryMtimes: false,
+        })
+      : undefined;
+    return {
+      kind: "keyword",
+      body,
+      path,
+      ...(indexState ? { indexState } : {}),
+      ...(recallData ? { recallData } : {}),
+    };
   } finally {
     // The caller retains its published-generation lease until this close and reply,
     // or until the pool confirms worker termination after cancellation.

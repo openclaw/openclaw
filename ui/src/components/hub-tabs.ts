@@ -3,7 +3,7 @@ import { ref } from "lit/directives/ref.js";
 import "../styles/hub-tabs.css";
 import { syncTabGroupLabel } from "./web-awesome-tabs.ts";
 
-export type HubTabOption<T extends string> = {
+type HubTabOption<T extends string> = {
   value: T;
   label: unknown;
   badge?: unknown;
@@ -83,6 +83,27 @@ export function renderHubTabs<T extends string>(props: HubTabsProps<T>): Templat
     >
       ${props.tabs.map((tab) => {
         const selected = props.active === tab.value;
+        const activate = (event: Event, keyboard = false) => {
+          const activeElement = event.currentTarget;
+          if (
+            !(activeElement instanceof HTMLElement) ||
+            tab.disabled ||
+            tab.value === requestedActive
+          ) {
+            return;
+          }
+          if (keyboard) {
+            event.preventDefault();
+            pendingFocus = {
+              hubId: props.id,
+              tab: tab.value,
+              at: Date.now(),
+              source: activeElement,
+            };
+          }
+          props.onSelect(tab.value);
+          props.onActivate?.(activeElement);
+        };
         return html`
           <wa-tab
             id=${`${props.id}-tab-${tab.value}`}
@@ -95,39 +116,13 @@ export function renderHubTabs<T extends string>(props: HubTabsProps<T>): Templat
             aria-selected=${selected ? "true" : "false"}
             data-test-id=${tab.testId ?? nothing}
             @click=${(event: MouseEvent) => {
-              const activeElement = event.currentTarget;
-              if (!(activeElement instanceof HTMLElement)) {
-                return;
-              }
-              if (
-                !tab.disabled &&
-                (event.detail > 0 || event.isTrusted) &&
-                tab.value !== requestedActive
-              ) {
-                props.onSelect(tab.value);
-                props.onActivate?.(activeElement);
+              if (event.detail > 0 || event.isTrusted) {
+                activate(event);
               }
             }}
             @keydown=${(event: KeyboardEvent) => {
-              const activeElement = event.currentTarget;
-              if (!(activeElement instanceof HTMLElement)) {
-                return;
-              }
-              if (
-                !tab.disabled &&
-                !event.repeat &&
-                (event.key === "Enter" || event.key === " ") &&
-                tab.value !== requestedActive
-              ) {
-                event.preventDefault();
-                pendingFocus = {
-                  hubId: props.id,
-                  tab: tab.value,
-                  at: Date.now(),
-                  source: activeElement,
-                };
-                props.onSelect(tab.value);
-                props.onActivate?.(activeElement);
+              if (!event.repeat && (event.key === "Enter" || event.key === " ")) {
+                activate(event, true);
               }
             }}
             ${selected ? ref((element) => reclaimFocus(props.id, tab.value, element)) : nothing}

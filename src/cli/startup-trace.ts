@@ -1,9 +1,11 @@
 // Shared startup tracing for the entry wrapper and CLI dispatcher.
 import process from "node:process";
+import { isForegroundGatewayRunArgv } from "../../gateway-run-argv.mjs";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import {
   isUpdateCanaryStartupMilestone,
+  supportsUpdateCanaryProgress,
   UPDATE_CANARY_PROGRESS_PREFIX,
 } from "../infra/update-candidate-canary-progress.js";
 
@@ -27,6 +29,18 @@ type PendingTimelineEvent =
     };
 
 const CLI_STARTUP_TIMELINE_PHASE = "cli.startup";
+const STARTUP_PROGRESS_PHASES = new Set([
+  "entry.run-main-import",
+  "cli.main.gateway-run-select-environment",
+  "cli.main.gateway-run-imports",
+  "cli.main.gateway-run-pre-bootstrap",
+  "cli.main.gateway-run-bootstrap",
+  "cli.main.gateway-run-reload-environment",
+]);
+const BOOTSTRAP_PROGRESS_PHASES = new Set([
+  "cli.bootstrap.admission.database-readiness",
+  "gateway.server-start-import",
+]);
 
 type GatewayBootstrapStep = {
   name: string;
@@ -77,47 +91,45 @@ export async function measureGatewayBootstrapStep<T>(
   run: () => T | Promise<T>,
   metrics?: () => Readonly<Record<string, number>>,
 ): Promise<T> {
-  if (!isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE)) {
+  const traceEnabled = isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE);
+  const progressEnabled =
+    BOOTSTRAP_PROGRESS_PHASES.has(name) ||
+    (isForegroundGatewayRunArgv(process.argv) &&
+      (name.startsWith("cli.bootstrap.") ||
+        name === "cli.command.config-ready" ||
+        name === "cli.command.config-guard-import"));
+  if (!traceEnabled && !progressEnabled) {
     return await run();
   }
   const startedAt = performance.now();
+  const { formatConsoleDiagnosticLine } = await import("../logging/json-console-line.js");
+  if (progressEnabled) {
+    process.stderr.write(
+      `${formatConsoleDiagnosticLine({ level: "info", message: `[gateway] startup phase: ${name} starting total=${startedAt.toFixed(1)}ms` })}\n`,
+    );
+  }
   try {
     return await run();
   } finally {
     const completedAt = performance.now();
     const facts = metrics?.() ?? {};
     recordGatewayBootstrapStep(name, startedAt, completedAt, facts);
-    const { formatConsoleDiagnosticLine } = await import("../logging/json-console-line.js");
     const counts = Object.entries(facts)
       .map(([key, value]) => ` ${key}=${value}`)
       .join("");
-    const message = `[gateway] startup trace: ${name} ${(completedAt - startedAt).toFixed(1)}ms total=${completedAt.toFixed(1)}ms start=${startedAt.toFixed(1)}ms${counts}`;
+    const message = `[gateway] startup ${traceEnabled ? "trace" : "phase"}: ${name} ${(completedAt - startedAt).toFixed(1)}ms total=${completedAt.toFixed(1)}ms start=${startedAt.toFixed(1)}ms${counts}`;
     process.stderr.write(`${formatConsoleDiagnosticLine({ level: "info", message })}\n`);
   }
-}
-
-function hasDiagnosticsTimelinePath(env: NodeJS.ProcessEnv): boolean {
-  return Boolean(env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH?.trim());
 }
 
 export function createGatewayDispatchStartupTrace(
   argv: string[],
   source: GatewayStartupTraceSource,
-): {
-  enabled: boolean;
-  requiresDiagnosticsConfig(): Promise<boolean>;
-  configureDiagnosticsTimeline(config: OpenClawConfig): Promise<void>;
-  setLineFormatter(formatter: GatewayStartupTraceLineFormatter): void;
-  mark(name: string): void;
-  measure<T>(
-    name: string,
-    run: () => T | PromiseLike<T>,
-    options?: StartupTraceMeasureOptions,
-  ): Promise<T>;
-} {
+) {
   const gatewayInvocation = argv.slice(2).includes("gateway");
   const enabled = isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE) && gatewayInvocation;
-  const updateCanary = gatewayInvocation && argv.includes("--update-canary");
+  const progressEnabled = isForegroundGatewayRunArgv(argv);
+  const updateCanary = gatewayInvocation && supportsUpdateCanaryProgress(argv);
   const started = performance.now();
   if (source === "entry" && enabled) {
     bootstrapSteps = new Map();
@@ -125,15 +137,14 @@ export function createGatewayDispatchStartupTrace(
   }
   let last = started;
   let lineFormatter: GatewayStartupTraceLineFormatter | null = null;
-  let pendingMessages: string[] = [];
-  const timelineModule = hasDiagnosticsTimelinePath(process.env)
+  const pendingMessages: string[] = [];
+  const timelineModule = process.env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH?.trim()
     ? import("../infra/diagnostics-timeline.js").catch(() => null)
     : null;
   let timelineActivation: "unknown" | "enabled" | "disabled" = timelineModule
     ? "unknown"
     : "disabled";
   let timelineConfig: OpenClawConfig | undefined;
-  let timelineConfigResolved = false;
   const pendingTimelineEvents: PendingTimelineEvent[] = [];
   let pendingTimelineWrites = Promise.resolve();
   const timelineName = (name: string) => `${source}.${name}`;
@@ -150,7 +161,7 @@ export function createGatewayDispatchStartupTrace(
       timelineActivation = "enabled";
       return timelineActivation;
     }
-    if (timelineConfigResolved) {
+    if (timelineConfig !== undefined) {
       timelineActivation = module.isDiagnosticsTimelineEnabled({
         config: timelineConfig,
         env: process.env,
@@ -221,9 +232,7 @@ export function createGatewayDispatchStartupTrace(
     });
   };
   const flushPending = (formatter: GatewayStartupTraceLineFormatter) => {
-    const queued = pendingMessages;
-    pendingMessages = [];
-    for (const message of queued) {
+    for (const message of pendingMessages.splice(0)) {
       process.stderr.write(`${formatter(message)}\n`);
     }
   };
@@ -249,28 +258,28 @@ export function createGatewayDispatchStartupTrace(
     if (updateCanary && completed && isUpdateCanaryStartupMilestone(milestone)) {
       process.stderr.write(`${UPDATE_CANARY_PROGRESS_PREFIX}${milestone}\n`);
     }
-    if (!enabled) {
+    if (!enabled && !(progressEnabled && STARTUP_PROGRESS_PHASES.has(milestone))) {
       return;
     }
     const startedAt = completedAt - durationMs;
     recordGatewayBootstrapStep(`${source}.${name}`, startedAt, completedAt);
     writeMessage(
-      `[gateway] startup trace: ${source}.${name} ${durationMs.toFixed(1)}ms total=${completedAt.toFixed(1)}ms start=${startedAt.toFixed(1)}ms`,
+      `[gateway] startup ${enabled ? "trace" : "phase"}: ${source}.${name} ${durationMs.toFixed(1)}ms total=${completedAt.toFixed(1)}ms start=${startedAt.toFixed(1)}ms${completed ? "" : " failed"}`,
     );
   };
   return {
     enabled,
+    consoleEnabled: enabled || progressEnabled,
     async requiresDiagnosticsConfig() {
       await flushPendingTimelineEvents();
       return timelineActivation === "unknown";
     },
-    async configureDiagnosticsTimeline(config) {
+    async configureDiagnosticsTimeline(config: OpenClawConfig) {
       timelineConfig = config;
-      timelineConfigResolved = true;
       await flushPendingTimelineEvents();
       await pendingTimelineWrites;
     },
-    setLineFormatter(formatter) {
+    setLineFormatter(formatter: GatewayStartupTraceLineFormatter) {
       lineFormatter = formatter;
       process.off("exit", flushPendingPlainOnExit);
       flushPending(formatter);
@@ -294,6 +303,11 @@ export function createGatewayDispatchStartupTrace(
       options: StartupTraceMeasureOptions = {},
     ): Promise<T> {
       const before = performance.now();
+      if (progressEnabled && STARTUP_PROGRESS_PHASES.has(timelineName(name))) {
+        writeMessage(
+          `[gateway] startup phase: ${timelineName(name)} starting total=${before.toFixed(1)}ms`,
+        );
+      }
       let bufferCompletedTimelineSpan = false;
       let completed = false;
       try {
@@ -359,7 +373,7 @@ export async function configureCliStartupDiagnostics(
 export async function prepareGatewayStartupTraceConsoleFormatting(
   trace: ReturnType<typeof createGatewayDispatchStartupTrace>,
 ): Promise<() => void> {
-  if (!trace.enabled) {
+  if (!trace.consoleEnabled) {
     return () => {};
   }
   const { formatConsoleDiagnosticLine } = await import("../logging/json-console-line.js");

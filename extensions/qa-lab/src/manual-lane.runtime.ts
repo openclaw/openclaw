@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { asPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { toQaError } from "./errors.js";
 import { createQaGatewayChild } from "./gateway-child.js";
 import { startQaLabServer } from "./lab-server.js";
@@ -41,17 +42,6 @@ async function stopManualLaneAuxiliaryResources(resources: {
   const results = await Promise.allSettled(stopTasks);
   const failed = results.find((result) => result.status === "rejected");
   return failed ? toQaError(failed.reason) : undefined;
-}
-
-function resolveManualLaneTimeoutMs(params: QaManualLaneParams) {
-  if (
-    typeof params.timeoutMs === "number" &&
-    Number.isFinite(params.timeoutMs) &&
-    params.timeoutMs > 0
-  ) {
-    return params.timeoutMs;
-  }
-  return resolveQaLiveTurnTimeoutMs(params, 120_000, params.primaryModel);
 }
 
 export async function runQaManualLane(params: QaManualLaneParams) {
@@ -95,7 +85,9 @@ export async function runQaManualLane(params: QaManualLaneParams) {
       controlUiEnabled: false,
     });
 
-    const timeoutMs = resolveManualLaneTimeoutMs(params);
+    const timeoutMs =
+      asPositiveFiniteNumber(params.timeoutMs) ??
+      resolveQaLiveTurnTimeoutMs(params, 120_000, params.primaryModel);
     const delivery = transport.buildAgentDelivery({
       target: "dm:qa-operator",
     });

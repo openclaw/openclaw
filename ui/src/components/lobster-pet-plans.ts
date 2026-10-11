@@ -9,9 +9,8 @@ import type {
   LobsterPetPersonalityId,
   LobsterRunOutcome,
 } from "./lobster-pet-contract.ts";
-import { canonicalLobsterLook, lobsterPetName, mulberry32 } from "./lobster-pet-look.ts";
+import { canonicalLobsterLook, lobsterPetName, mulberry32 } from "./lobster-pet-identity.ts";
 import { LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
-import { THEME_CRITTER_CROSS_MS } from "./theme-flair-sprites.ts";
 
 export type LobsterPetAct =
   | "wave"
@@ -156,7 +155,8 @@ const LOBSTER_PASSER_CROSS_MS: Partial<Record<LobsterPasserKind, number>> = {
   snail: 90_000,
   duck: 14_000,
   jellyfish: 16_000,
-  ...THEME_CRITTER_CROSS_MS,
+  penguin: 13_000,
+  fedora: 9_000,
 };
 
 export type LobsterPetAnchor = "top" | "floor";

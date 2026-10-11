@@ -32,7 +32,7 @@ import type {
   WorkerEnvironmentFacts,
   WorkerEnvironmentPruneReadInput,
   WorkerEnvironmentPrunePage,
-} from "./store-worker-contract.js";
+} from "./store.types.js";
 import { readTerminalWorkerEnvironmentPrunePage } from "./terminal-environment-retention.js";
 type WorkerDb = Pick<
   StateDatabase,
@@ -132,15 +132,7 @@ export function decodeWorkerEnvironmentRow(
     destroyRequestedAtMs: row.destroy_requested_at_ms,
     lastError: row.last_error,
   };
-  assertShape(
-    record.state,
-    record.leaseId,
-    record.nodeDeviceId,
-    record.sshEndpoint,
-    record.desktop,
-    record.bootstrapReceipt,
-    record.attachedSessionIds,
-  );
+  assertShape(record);
   // SAFETY: assertShape validates the state's lease, transport, and attachment invariants.
   return record as WorkerEnvironmentRecord;
 }

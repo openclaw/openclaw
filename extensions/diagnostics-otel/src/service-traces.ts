@@ -6,6 +6,7 @@ import {
   type SpanKind,
   type Tracer,
 } from "@opentelemetry/api";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type {
   DiagnosticEventMetadata,
@@ -298,28 +299,21 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
       spanContext,
       ...(owner ? { owner } : {}),
     });
-    // Map iteration is insertion-ordered, so this removes the oldest mapping first.
-    while (retainedTrustedSpanContexts.size > MAX_RETAINED_TRUSTED_SPAN_CONTEXTS) {
-      const oldestKey = retainedTrustedSpanContexts.keys().next().value;
-      if (!oldestKey) {
-        break;
-      }
-      retainedTrustedSpanContexts.delete(oldestKey);
-    }
+    pruneMapToMaxSize(retainedTrustedSpanContexts, MAX_RETAINED_TRUSTED_SPAN_CONTEXTS);
   };
   // Retention keys on the diagnostic ids the event carries. Taking the whole context
   // (not a bare trace id) makes an OTel SpanContext a type error here; keying by OTel
   // ids instead would silently split every late child into its own trace.
   const completeTrackedLifecycleSpan = (
-    traceContext: DiagnosticTraceContext,
+    traceContext: DiagnosticTraceContext | undefined,
     span: ReturnType<typeof tracer.startSpan>,
     endTimeMs: number,
   ) => {
-    const spanId = traceContext.spanId;
-    if (!spanId) {
+    if (!traceContext?.spanId) {
       span.end(endTimeMs);
       return;
     }
+    const spanId = traceContext.spanId;
     const spanContext = span.spanContext();
     const retainedKeys: Array<{ spanId: string; owner?: TrustedSpanAliasOwner }> = [{ spanId }];
     for (const [aliasKey, alias] of activeTrustedSpanAliases) {
@@ -388,11 +382,9 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     activeTrustedSpans,
     activeTrustedSpanAliases,
     trustedSpanAliasKey,
-    trustedSpanAliasOwner,
     spanWithDuration,
     trustedTraceContext,
     internalOrTrustedTraceContext,
-    internalOrTrustedParentContext,
     internalOrTrustedExplicitParentContext,
     activeTrustedParentContext,
     activeInternalOrTrustedContext,

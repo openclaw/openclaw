@@ -27,7 +27,7 @@ For Gateway setup, say `configure gateway` to choose the port, bind address, tok
 
 Say `import memory` to copy detected local memory into the existing default agent workspace. This flow does not change config or import credentials or skills, needs no Gateway restart, and distinguishes confirmed imports, nothing to import, provider failures, and failures where some files may already have been copied. Finish onboarding first if the default workspace does not exist. See [Import assistant memory](/web/control-ui/settings#import-assistant-memory) for the broader page that can target another agent or replace existing imports, and [`openclaw setup`](/cli/openclaw) for the operation and approval contract.
 
-Outside onboarding, this page can show at most one dismissible event chip per visit. It stays silent for routine Gateway traffic and reacts only to health snapshots that report a disabled configuration reloader, a configured channel disconnect/degradation, a failed channel probe, or unavailable channel credentials. A newer event replaces the pending chip only when it is more severe; dismissing or using the chip silences event prompts for that visit. Clicking the chip sends its diagnosis question as a real `openclaw.chat` message, so the transcript records the request and OpenClaw performs the diagnosis. Onboarding never shows these event chips.
+Outside onboarding, this page can show at most one dismissible event chip per visit. It stays silent for routine Gateway traffic and reacts only to health snapshots that report a disabled configuration reloader, a configured channel disconnect/degradation, a failed channel check, or unavailable channel credentials. A newer event replaces the pending chip only when it is more severe; dismissing or using the chip silences event prompts for that visit. Clicking the chip sends its diagnosis question as a real `openclaw.chat` message, so the transcript records the request and OpenClaw performs the diagnosis. Onboarding never shows these event chips.
 
 ## Home dock
 
@@ -38,6 +38,17 @@ Your Home draft and attachments follow the conversation between the page and doc
 Home can include a bounded, quoted work-context reference with your message. Before sending, that reference follows the page's agent, session, title, and visible file, not merely the Home conversation receiving it. You can remove it before sending.
 
 Sent messages show **Context attached** below your words instead of displaying the generated context as message text. Open it to inspect the captured session, page, agent, workspace, file, or selection; **Technical details** shows the snapshot as JSON. The snapshot is frozen when you send, including through queues and retries. Copying or editing your message does not include the generated reference. It remains reference data, not instructions or permission to access another conversation. Older messages without a recorded attachment are left unchanged.
+
+## Plugin conversation docks
+
+A plugin page can offer an action to open its conversation beside the page.
+It uses the same chat pane, drafts, attachments, right-or-bottom placement,
+resizing, and close controls as Home. Opening it replaces Home, Ask OpenClaw,
+or another conversation dock. It stays open across page navigation and hides
+while the same conversation is open as the Chat or Dashboard page. Closing
+leaves no dock open. Read-only access and session errors follow the normal
+chat rules. A plugin can include a bounded page reference, shown as
+**Context attached** after sending; it remains untrusted reference data.
 
 ## Operator terminal
 
@@ -63,6 +74,8 @@ The terminal is an unconfined host shell and inherits the Gateway process enviro
 </Warning>
 
 Use **Ctrl + backtick** to toggle the **Terminal** tab in the selected Chat pane's unified side panel. You can also open **Terminal** from the panel's **+** menu. The shared panel docks right or bottom, resizes with the browser viewport, can expand over the Chat pane, and keeps multiple shell tabs. The dock remains available for ad-hoc operator shells. Starting a native CLI from **New session**, or opening a Claude Code or Codex catalog session in the terminal, opens the [main terminal page](/web/urls#terminal-urls), keeping the sidebar and application chrome while replacing the composer. See [Gateway configuration](/gateway/configuration-reference#gateway) for `gateway.terminal.enabled` and the optional `gateway.terminal.shell` override.
+
+Selecting terminal text copies it automatically. A brief **Copied to clipboard** notice confirms a successful copy without taking keyboard focus. If clipboard access fails, no success notice appears.
 
 Terminal sessions appear as tabs in the Chat side-panel header; choosing **Terminal** again in the panel's **+** menu opens another shell, while sessions, upload, and dock-to-bottom actions sit in the header. A Terminal moved to the main area keeps its own tab strip.
 
@@ -101,6 +114,8 @@ Eligibility is per session and per host. Gateway-local sessions start the provid
 
 Standalone operator sessions, including the main terminal page and terminal focus presentation, are connection-owned. Leaving the main terminal route does not close its PTY; returning to its terminal session URL reattaches it. The main page and the dock keep separate terminal tabs. A page reload, laptop sleep, or network blip detaches one on the Gateway instead of killing it, and the same browser tab reattaches on reconnect with recent output replayed. Detached connection-owned sessions are killed after `gateway.terminal.detachedSessionTimeoutSeconds` (default 300 seconds; `0` restores kill-on-disconnect). Attaching one of these sessions remains tmux-style take-over.
 
+A shell that exits normally with code zero closes its terminal tab automatically, including after `logout`, `exit`, or EOF. Closing the last terminal tab closes its panel, whether docked right or bottom, unless other tool tabs remain. Nonzero exits, signals, disconnects, and errors stay visible for inspection. The fullscreen terminal keeps its new-session control available after the last tab closes.
+
 Closing a connecting tab cancels that opening or attachment request. Other tabs and queued requests remain available, and a late response does not reopen the cancelled tab or display its error.
 
 Conversation-owned sessions opened from a Chat session's Terminal panel are not bound to a browser connection. `terminal.attach` adds each browser as a viewer without taking ownership, and closing an established viewer tab detaches only that browser. Conversation-owned PTYs remain until the exact-session agent closes them, their shell exits, the session is archived, policy disables them, or the Gateway shuts down. `terminal.list` marks each entry as connection- or agent-owned.
@@ -111,6 +126,23 @@ All Gateway terminal PTYs are process-local. A Gateway restart ends them; the
 PTY sessions and their scrollback are not recovered after the new process starts.
 
 The main terminal page at `/terminal` is also available as a [focus presentation](/web/urls#focus-presentation-routes). The iOS and Android apps embed this page in their Terminal screens, reusing the stored gateway credentials; availability follows the same `gateway.terminal.enabled` and `operator.admin` gate, and the page shows a notice when the connected Gateway does not offer the terminal. Focus presentation removes the application chrome; it does not invoke browser fullscreen.
+
+### Terminal fonts
+
+The terminal bundles **JetBrains Mono** with **Symbols Nerd Font Mono** for
+Powerline separators and standard Nerd Font icons. No font installation or
+third-party font service is required for the default.
+
+In **Settings → Appearance → Typography → Terminal font**, enter a local
+monospace family name such as `FiraCode Nerd Font Mono` or choose **Use default**. Clear the field to
+reset it. The font must be installed on the computer running your browser,
+not the remote Gateway or shell host. The setting stays in this browser for
+this Gateway; missing fonts fall back to the bundled default. Changes apply
+to open terminals without restarting their shells, including the full-page
+and focused terminal views.
+
+Programming ligatures (such as a joined arrow for `=>`) are not currently
+supported by the terminal renderer, even with a ligature-capable font.
 
 ## Browser panel
 

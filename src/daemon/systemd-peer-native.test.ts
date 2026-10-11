@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { mockNodeBuiltinModule } from "../plugin-sdk/test-helpers/node-builtin-mocks.js";
+import {
+  withServiceInspectionBudget,
+  runServiceInspectionGuard,
+} from "./service-inspection-budget.js";
 import { ServiceOwnershipRefusalError } from "./service-inspection-error.js";
 import {
   GatewayServiceAuthorityError,
@@ -18,12 +22,15 @@ const kernel = vi.hoisted(() => {
     startTime: number | null;
     alive: boolean;
     closes: number;
+    calls: number;
+    onCall?: () => void;
   } = {
     uid: 1000,
     pid: 1234,
     startTime: 100,
     alive: true,
     closes: 0,
+    calls: 0,
   };
   return state;
 });
@@ -64,7 +71,11 @@ vi.mock("node:module", async (importOriginal) => {
                       if (name === "sd_bus_close_unref") {
                         kernel.closes++;
                       }
-                      return name === "sd_bus_is_ready" ? 1 : 0;
+                      if (name === "sd_bus_call") {
+                        kernel.calls++;
+                        kernel.onCall?.();
+                      }
+                      return name === "sd_bus_is_ready" || name === "sd_bus_message_at_end" ? 1 : 0;
                     };
                     return Object.assign(call, {
                       async: (...args: unknown[]) => {
@@ -84,7 +95,15 @@ vi.mock("node:module", async (importOriginal) => {
 });
 
 beforeEach(() => {
-  Object.assign(kernel, { uid: 1000, pid: 1234, startTime: 100, alive: true, closes: 0 });
+  Object.assign(kernel, {
+    uid: 1000,
+    pid: 1234,
+    startTime: 100,
+    alive: true,
+    closes: 0,
+    calls: 0,
+    onCall: undefined,
+  });
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -92,32 +111,34 @@ const expected = { uid: 1000, pid: 1234, startTime: 100 };
 const address = "unix:path=/synthetic-systemd-peer/private";
 
 it.each([
-  { name: "UID", change: { uid: 2001 } },
-  { name: "PID", change: { pid: 4321 } },
-  { name: "process generation", change: { startTime: 200 } },
-])("preserves an observed native $name refusal", async ({ change }) => {
-  Object.assign(kernel, change);
-  await expect(
-    openSystemdPrivatePeer(address, expected, performance.now() + 1000),
-  ).rejects.toMatchObject({
-    reason: "systemd-manager-changed",
-  });
-  expect(kernel.closes).toBe(1);
-});
-
-it.each([
-  { name: "unreadable process", change: { startTime: null } },
-  { name: "unavailable process", change: { alive: false } },
-  { name: "invalid credentials", change: { pid: 0 } },
-])("keeps $name diagnostic instead of reporting changed ownership", async ({ change }) => {
-  Object.assign(kernel, change);
-  const failure = await openSystemdPrivatePeer(address, expected, performance.now() + 1000).catch(
-    (error: unknown) => error,
-  );
-  expect(failure).toBeInstanceOf(Error);
-  expect(failure).not.toBeInstanceOf(ServiceOwnershipRefusalError);
-  expect(kernel.closes).toBe(1);
-});
+  { name: "UID", change: { uid: 2001 }, ownership: true, initial: false },
+  { name: "PID", change: { pid: 4321 }, ownership: true, initial: false },
+  { name: "process generation", change: { startTime: 200 }, ownership: true, initial: false },
+  { name: "unreadable process", change: { startTime: null }, ownership: false, initial: false },
+  { name: "unavailable process", change: { alive: false }, ownership: false, initial: false },
+  { name: "invalid credentials", change: { pid: 0 }, ownership: false, initial: false },
+  { name: "initial account", change: { uid: 2001 }, ownership: true, initial: true },
+])(
+  "distinguishes observed ownership refusals from unavailable peers: $name",
+  async ({ change, ownership, initial }) => {
+    Object.assign(kernel, change);
+    if (initial) {
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      vi.spyOn(process, "geteuid").mockReturnValue(1000);
+    }
+    const operation = initial
+      ? openSystemdUserManager(address, performance.now() + 1000)
+      : openSystemdPrivatePeer(address, expected, performance.now() + 1000);
+    if (ownership) {
+      await expect(operation).rejects.toMatchObject({ reason: "systemd-manager-changed" });
+    } else {
+      const failure = await operation.catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure).not.toBeInstanceOf(ServiceOwnershipRefusalError);
+    }
+    expect(kernel.closes).toBe(1);
+  },
+);
 
 it("revalidates a retained peer without misclassifying a closed connection", async () => {
   const peer = await openSystemdPrivatePeer(address, expected, performance.now() + 1000);
@@ -126,15 +147,6 @@ it("revalidates a retained peer without misclassifying a closed connection", asy
   await peer.close();
   expect(() => peer.verify()).toThrow("peer inspection is unavailable");
   expect(kernel.closes).toBe(1);
-});
-
-it("rejects an initial private manager authenticated as another account", async () => {
-  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-  vi.spyOn(process, "geteuid").mockReturnValue(1000);
-  kernel.uid = 2001;
-  await expect(openSystemdUserManager(address, performance.now() + 1000)).rejects.toMatchObject({
-    reason: "systemd-manager-changed",
-  });
 });
 
 it("checks inherited update authority before loading or opening a native transport", async () => {
@@ -164,4 +176,130 @@ it("checks inherited update authority before loading or opening a native transpo
     ),
   ).rejects.toSatisfy(isAuthorityRevocation);
   expect(transportFailure).toSatisfy(isAuthorityRevocation);
+});
+
+const resetFailed = [
+  "call",
+  ":1.42",
+  "/org/freedesktop/systemd1",
+  "org.freedesktop.systemd1.Manager",
+  "ResetFailedUnit",
+  "s",
+  "fixture.service",
+];
+
+it("checks effect custody inside the native queue immediately before dispatch", async () => {
+  const peer = await openSystemdBroker(address, performance.now() + 1000);
+  let current = true;
+  const failure = new Error("effect custody expired while queued");
+  try {
+    const queued = peer.query(
+      resetFailed,
+      [],
+      performance.now() + 1000,
+      () => {},
+      () => {
+        if (!current) {
+          throw failure;
+        }
+      },
+    );
+    current = false;
+    await expect(queued).rejects.toBe(failure);
+    expect(kernel.calls).toBe(0);
+  } finally {
+    await peer.close();
+  }
+});
+
+it("does not require effect custody after the native call intentionally ends it", async () => {
+  const peer = await openSystemdBroker(address, performance.now() + 1000);
+  let current = true;
+  kernel.onCall = () => {
+    current = false;
+  };
+  const guard = vi.fn(() => {
+    if (!current) {
+      throw new Error("effect already happened");
+    }
+  });
+  try {
+    await expect(
+      peer.query(resetFailed, [], performance.now() + 1000, () => {}, guard),
+    ).resolves.toEqual([]);
+    expect(guard).toHaveBeenCalledOnce();
+    expect(kernel.calls).toBe(1);
+  } finally {
+    await peer.close();
+  }
+});
+
+it.each(["healthy", "slow-io", "revoked"] as const)(
+  "retained native queries separate caller guards from manager I/O: %s",
+  async (mode) => {
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    // Admission's clock must not be retained by later reads on this connection.
+    const peer = await withServiceInspectionBudget((budget) =>
+      openSystemdBroker(address, budget.now() + 100),
+    );
+    try {
+      await withServiceInspectionBudget(async (budget) => {
+        const guard = () => {
+          now += 2_000;
+          if (mode === "revoked") {
+            throw new Error("original guard retired");
+          }
+        };
+        kernel.onCall = () => {
+          now += mode === "slow-io" ? 101 : 1;
+        };
+        const work = peer.query(resetFailed, [], budget.now() + 100, guard);
+        if (mode === "healthy") {
+          await expect(work).resolves.toEqual([]);
+          expect(budget.now()).toBe(1);
+        } else {
+          await expect(work).rejects.toThrow(
+            mode === "revoked" ? "original guard retired" : "deadline expired",
+          );
+        }
+        expect(kernel.calls).toBe(mode === "revoked" ? 0 : 1);
+      });
+    } finally {
+      await peer.close();
+    }
+    expect(kernel.closes).toBe(1);
+  },
+);
+
+it("keeps the dispatched mutation wall deadline despite later synchronous guards", async () => {
+  let now = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => now);
+  await withServiceInspectionBudget(async (budget) => {
+    const peer = await openSystemdBroker(address, budget.now() + 100);
+    let dispatched = false;
+    kernel.onCall = () => {
+      dispatched = true;
+    };
+    try {
+      await expect(
+        peer.query(
+          resetFailed,
+          [],
+          budget.now() + 100,
+          () => {
+            runServiceInspectionGuard(() => {
+              now += dispatched ? 101 : 2_000;
+            });
+          },
+          undefined,
+          100,
+        ),
+      ).rejects.toThrow("deadline expired");
+      expect(kernel.calls).toBe(1);
+      expect(budget.now()).toBe(0);
+    } finally {
+      await peer.close();
+    }
+  });
 });

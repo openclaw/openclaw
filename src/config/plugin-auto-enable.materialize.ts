@@ -19,6 +19,7 @@ import type {
   PluginAutoEnableResult,
 } from "./plugin-auto-enable.types.js";
 import { ensurePluginAllowlisted } from "./plugins-allowlist.js";
+import { copyConfigResolutionFactsThroughRewrite } from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 function resolvePluginAutoEnableCandidateReason(candidate: PluginAutoEnableCandidate): string {
@@ -33,6 +34,8 @@ function resolvePluginAutoEnableCandidateReason(candidate: PluginAutoEnableCandi
       return `${candidate.providerId} speech provider selected`;
     case "worker-provider-selected":
       return `${candidate.providerId} worker provider selected`;
+    case "storage-provider-selected":
+      return `${candidate.providerId} storage provider selected`;
     case "decision-provider-selected":
       return `${candidate.providerId} decision provider selected`;
     case "agent-harness-runtime-configured":
@@ -256,7 +259,7 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
 }): PluginAutoEnableResult {
   let next = params.config ?? {};
   const changes: string[] = [];
-  const autoEnabledReasons = new Map<string, string[]>();
+  const autoEnabledReasons: Record<string, string[]> = Object.create(null);
 
   if (
     next.plugins?.enabled === false ||
@@ -330,10 +333,9 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
       next = ensurePluginAllowlisted(next, entry.pluginId);
     }
     const reason = resolvePluginAutoEnableCandidateReason(entry);
-    autoEnabledReasons.set(entry.pluginId, [
-      ...(autoEnabledReasons.get(entry.pluginId) ?? []),
-      reason,
-    ]);
+    if (!isBlockedObjectKey(entry.pluginId)) {
+      (autoEnabledReasons[entry.pluginId] ??= []).push(reason);
+    }
     changes.push(formatAutoEnableChange(entry, params.manifestRegistry));
   }
 
@@ -343,12 +345,13 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
     manifestRegistry: params.manifestRegistry,
   });
 
-  const autoEnabledReasonRecord: Record<string, string[]> = Object.create(null);
-  for (const [pluginId, reasons] of autoEnabledReasons) {
-    if (!isBlockedObjectKey(pluginId)) {
-      autoEnabledReasonRecord[pluginId] = [...reasons];
-    }
+  if (next !== params.config) {
+    // Auto-enable rebuilds the touched config sections, so the result reaches callers
+    // without the loader's unresolved-reference facts. Credential consumers (for example
+    // A2A peer tokens on the message CLI path) read those facts to tell an unset `${VAR}`
+    // from literal text, so carry them over for every path the rewrite left untouched.
+    copyConfigResolutionFactsThroughRewrite(params.config, next);
   }
 
-  return { config: next, changes, autoEnabledReasons: autoEnabledReasonRecord };
+  return { config: next, changes, autoEnabledReasons };
 }

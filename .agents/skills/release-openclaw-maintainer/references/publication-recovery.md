@@ -39,9 +39,15 @@ Classify a failure before changing Git state:
   downstream evidence; after npm publication use a new beta/version.
 - Changelog-only defect: replace Release SHA and reuse Code SHA evidence only
   after proving the exact changelog delta.
-- Tooling, source mismatch, credential, infrastructure, wrapper, approval, or selector
-  failure: keep the candidate and recover the smallest failed surface. Change
-  Tooling SHA only when needed and record the invalidated evidence.
+- Qualification harness/contract defect: repair the frozen candidate closure,
+  freeze a new C/Q, and rebind evidence. Missing contracts require deliberate
+  backports, not a newer-main harness.
+- P-only admission/verifier/publisher, credential, infrastructure, monitor,
+  approval, or selector failure: keep C/Q and recover the smallest failed surface.
+  Change independent P only when needed; preserve original producer identities.
+- Uncertain qualification dispatch: reconcile the retained request read-only.
+  Explicit resume is allowed only before any Q ref mutation or FRV POST; never
+  retry an uncertain mutation or relabel historical requests as candidate-owned.
 
 After one diagnosis, fix when needed, and narrow retry, reassess. Do not rerun
 all phases or scan moving main automatically. Operator-authorized beta-attempt
@@ -136,8 +142,15 @@ uncertain dispatch or rerun all publication jobs to fix a download failure.
 
 ClawHub v2 publishes stage immutable bytes before the parent succeeds. With
 `wait_for_clawhub=true`, one plugin failure fails the child and parent, stranding
-staged siblings. Recover their attempts before resuming the parent. A public
-version 404 does not prove absence; attempt status requires publisher auth.
+staged siblings. Recover their attempts before resuming the parent. The release
+plan checks the public version publication-state endpoint: pending and failed
+versions are excluded from republishing, while only absent versions become
+candidates. Pending attempts wait for their original parent; failed attempts
+appear in the workflow summary with a recovery command when eligible, or an
+operator-action notice otherwise. Edit the pinned-checkout and reason placeholders
+before running recovery with a human publisher token. Recovery eligibility is
+advisory and is revalidated by ClawHub. A version 404 alone does not prove absence;
+older servers fall back to that probe until the publication endpoint is deployed.
 
 Download the original child's `*-publish-json` artifacts (retain its exact run
 and attempt), then render recovery commands for that release version:

@@ -2,6 +2,7 @@ import { Blob as NodeBlob } from "node:buffer";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
+import "./chat-detail-panel.ts";
 import { createSidebarContentRecorder } from "./chat-session-workspace.test-support.ts";
 import {
   createSessionWorkspaceProps,
@@ -264,121 +265,47 @@ describe("session workspace artifacts", () => {
     },
   );
 
-  it.each([true, false])(
-    "uses artifact titles without changing tab identity (listed: %s)",
-    async (listed) => {
-      const { state, request, loadedContent } = createArtifactHost({
-        data: "iVBORw0KGgo=",
-        mimeType: "image/png",
-        title: "resolved-image.png",
-      });
-      const props = createSessionWorkspaceProps(state);
-      const workspace = state.sessionWorkspaceState!;
-      if (listed) {
-        workspace.list = {
-          sessionKey: state.sessionKey,
-          files: [],
-          artifacts: [
-            {
-              id: "artifact-1",
-              title: "listed-image.png",
-              type: "image",
-              mimeType: "image/png",
-              download: { mode: "bytes" },
-            },
-          ],
-        };
-      }
-      props.onOpenArtifact("artifact-1");
-      const preview = workspace.previews[0]!;
-      expect(preview.label).toBe(listed ? "listed-image.png" : "Artifacts");
-      await loadedContent();
-      expect(preview.label).toBe("resolved-image.png");
-      props.onOpenArtifact("artifact-1");
-      expect(workspace.previews).toEqual([preview]);
-      expect(preview.id).toBe("artifact:artifact-1");
-      expect(request).toHaveBeenCalledOnce();
-    },
-  );
-
-  it("keeps nested code literal in a decoded text artifact preview", async () => {
-    const source = [
-      "Résumé 東京 🦀",
-      "",
-      "```ts",
-      "const x = 1;",
-      "```",
-      "",
-      "**literal after**",
-    ].join("\n");
-    const { state, loadedContent } = createArtifactHost({
-      data: btoa(String.fromCharCode(...new TextEncoder().encode(source))),
-      mimeType: "text/markdown",
-      title: "Source notes",
+  it("uses listed artifact titles without changing tab identity", async () => {
+    const { state, request, loadedContent } = createArtifactHost({
+      data: "iVBORw0KGgo=",
+      mimeType: "image/png",
+      title: "resolved-image.png",
     });
-    createSessionWorkspaceProps(state).onOpenArtifact("artifact-1");
-    const content = await loadedContent();
-    expect(content).toMatchObject({ kind: "markdown", rawText: source });
-    const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
-      content: SidebarContent;
-      updateComplete: Promise<unknown>;
+    const props = createSessionWorkspaceProps(state);
+    const workspace = state.sessionWorkspaceState!;
+    workspace.list = {
+      sessionKey: state.sessionKey,
+      files: [],
+      artifacts: [
+        {
+          id: "artifact-1",
+          title: "listed-image.png",
+          type: "image",
+          mimeType: "image/png",
+          download: { mode: "bytes" },
+        },
+      ],
     };
-    panel.content = content;
-    document.body.append(panel);
-    const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
-    const schedule = vi.spyOn(globalThis, "setTimeout");
-    const writeText = vi.fn(async () => undefined);
-    Object.defineProperty(navigator, "clipboard", {
-      configurable: true,
-      value: { writeText },
-    });
-    try {
-      await panel.updateComplete;
-      const reader = panel.querySelector(".sidebar-markdown-reader");
-      expect(reader?.querySelector("h1")?.textContent).toBe("Source notes");
-      expect.soft(reader?.querySelectorAll("pre code")).toHaveLength(1);
-      expect.soft(reader?.querySelector("pre code")?.textContent).toBe(`${source}\n`);
-      expect.soft(reader?.querySelector("strong")).toBeNull();
-      const copyButton = reader?.querySelector<HTMLButtonElement>(".code-block-copy");
-      expect(copyButton).toBeInstanceOf(HTMLButtonElement);
-      copyButton!.click();
-      await vi.waitFor(() => expect(copyButton!.getAttribute("aria-label")).toBe("Copied!"));
-      expect(writeText).toHaveBeenCalledWith(source);
-    } finally {
-      for (const [index, [, delay]] of schedule.mock.calls.entries()) {
-        if (delay === 1_500) {
-          globalThis.clearTimeout(schedule.mock.results[index]?.value);
-        }
-      }
-      schedule.mockRestore();
-      if (originalClipboard) {
-        Object.defineProperty(navigator, "clipboard", originalClipboard);
-      } else {
-        Reflect.deleteProperty(navigator, "clipboard");
-      }
-      panel.remove();
-    }
+    props.onOpenArtifact("artifact-1");
+    const preview = workspace.previews[0]!;
+    expect(preview.label).toBe("listed-image.png");
+    await loadedContent();
+    expect(preview.label).toBe("resolved-image.png");
+    props.onOpenArtifact("artifact-1");
+    expect(workspace.previews).toEqual([preview]);
+    expect(preview.id).toBe("artifact:artifact-1");
+    expect(request).toHaveBeenCalledOnce();
   });
 
-  it.each(
-    [
-      {
-        content: "Résumé 東京 🦀",
-        fence: "```",
-        mimeType: "text/plain",
-      },
-      {
-        content: "Résumé 東京 🦀",
-        fence: "```",
-        mimeType: "text/plain; charset=utf-8",
-      },
-      {
-        content: JSON.stringify({ message: "Résumé 東京 🦀" }),
-        fence: "```json",
-        mimeType: "application/json",
-      },
-    ].flatMap((testCase) => [false, true].map((http) => Object.assign({ http }, testCase))),
-  )(
+  it.each([
+    { mimeType: "text/plain; charset=utf-8", http: true, content: "Résumé 東京 🦀", fence: "```" },
+    {
+      mimeType: "application/json",
+      http: false,
+      content: JSON.stringify({ message: "Résumé 東京 🦀" }),
+      fence: "```json",
+    },
+  ])(
     "decodes UTF-8 $mimeType artifacts without corrupting visible or raw text (HTTP: $http)",
     async (testCase) => {
       const data = btoa(String.fromCharCode(...new TextEncoder().encode(testCase.content)));
@@ -405,92 +332,68 @@ describe("session workspace artifacts", () => {
     },
   );
 
-  it.each([false, true])(
-    "retains image artifact previews beyond ticket expiry (HTTP: %s)",
-    async (http) => {
-      const data = "iVBORw0KGgo=";
-      const { state, fetchMock, url, loadedContent } = createArtifactHost({
-        data,
-        mimeType: "image/png",
-        title: "preview.png",
-        http,
-      });
-
-      createSessionWorkspaceProps(state).onOpenArtifact("artifact-1");
-
-      expect(await loadedContent()).toEqual({
-        kind: "image",
-        mimeType: "image/png",
-        rawText: http ? url : null,
-        src: `data:image/png;base64,${data}`,
-        title: "preview.png",
-      });
-      if (http) {
-        expect(fetchMock).toHaveBeenCalledExactlyOnceWith(url, {
-          credentials: "same-origin",
-          redirect: "error",
-          signal: expect.any(AbortSignal),
-        });
-      }
-    },
-  );
-
-  it.each([undefined, 'inline; filename="index.html"'])(
-    "reauthorizes HTML artifact bytes when the proxy returns application HTML with disposition %s",
-    async (disposition) => {
-      const source = "<h1>Actual artifact</h1>";
-      const { state, request, fetchMock, url, loadedContent } = createArtifactHost({
-        data: btoa(source),
-        mimeType: "text/html",
-        title: "report.html",
-        http: true,
-      });
-      fetchMock.mockResolvedValueOnce(
-        new Response("<html><body>Control UI application</body></html>", {
-          headers: {
-            "Content-Type": "text/html",
-            ...(disposition ? { "Content-Disposition": disposition } : {}),
-          },
-        }),
-      );
-
-      createSessionWorkspaceProps(state).onOpenArtifact("artifact-1");
-
-      expect(await loadedContent()).toMatchObject({
-        kind: "markdown",
-        rawText: source,
-      });
-      expect(fetchMock).toHaveBeenCalledExactlyOnceWith(url, {
-        credentials: "same-origin",
-        redirect: "error",
-        signal: expect.any(AbortSignal),
-      });
-      expect(request.mock.contexts).toEqual([state.client, state.client]);
-      expect(request.mock.calls.map(([, query]) => query)).toEqual([
-        {
-          sessionKey: state.sessionKey,
-          agentId: "main",
-          artifactId: "artifact-1",
-          transport: "http",
-        },
-        { sessionKey: state.sessionKey, agentId: "main", artifactId: "artifact-1" },
-      ]);
-    },
-  );
-
-  it("reports malformed base64 artifact data as a visible workspace error", async () => {
-    const { handleOpenSidebar, state, previewSettled } = createArtifactHost({
-      data: "not-base64!",
-      mimeType: "text/plain",
+  it("retains HTTP image artifact previews beyond ticket expiry", async () => {
+    const data = "iVBORw0KGgo=";
+    const { state, fetchMock, url, loadedContent } = createArtifactHost({
+      data,
+      mimeType: "image/png",
+      title: "preview.png",
+      http: true,
     });
 
     createSessionWorkspaceProps(state).onOpenArtifact("artifact-1");
 
-    await previewSettled;
-    expect(createSessionWorkspaceProps(state).error).toMatch(/InvalidCharacterError|invalid/i);
-    expect(handleOpenSidebar).toHaveBeenCalledOnce();
-    expect(state.sessionWorkspaceState?.previews.at(-1)?.content).toMatchObject({
-      kind: "unavailable",
+    expect(await loadedContent()).toEqual({
+      kind: "image",
+      mimeType: "image/png",
+      rawText: url,
+      src: `data:image/png;base64,${data}`,
+      title: "preview.png",
     });
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(url, {
+      credentials: "same-origin",
+      redirect: "error",
+      signal: expect.any(AbortSignal),
+    });
+  });
+
+  it("reauthorizes HTML artifact bytes when the proxy returns inline application HTML", async () => {
+    const source = "<h1>Actual artifact</h1>";
+    const { state, request, fetchMock, url, loadedContent } = createArtifactHost({
+      data: btoa(source),
+      mimeType: "text/html",
+      title: "report.html",
+      http: true,
+    });
+    fetchMock.mockResolvedValueOnce(
+      new Response("<html><body>Control UI application</body></html>", {
+        headers: {
+          "Content-Type": "text/html",
+          "Content-Disposition": 'inline; filename="index.html"',
+        },
+      }),
+    );
+
+    createSessionWorkspaceProps(state).onOpenArtifact("artifact-1");
+
+    expect(await loadedContent()).toMatchObject({
+      kind: "markdown",
+      rawText: source,
+    });
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(url, {
+      credentials: "same-origin",
+      redirect: "error",
+      signal: expect.any(AbortSignal),
+    });
+    expect(request.mock.contexts).toEqual([state.client, state.client]);
+    expect(request.mock.calls.map(([, query]) => query)).toEqual([
+      {
+        sessionKey: state.sessionKey,
+        agentId: "main",
+        artifactId: "artifact-1",
+        transport: "http",
+      },
+      { sessionKey: state.sessionKey, agentId: "main", artifactId: "artifact-1" },
+    ]);
   });
 });

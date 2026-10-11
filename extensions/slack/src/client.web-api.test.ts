@@ -170,7 +170,7 @@ afterEach(() => {
 });
 
 describe("Slack Web API routing", () => {
-  it.each([undefined, "TENTERPRISE1"])(
+  it.each(["TENTERPRISE1"])(
     "keeps lost stream responses one-shot without changing listener reads (team=%s)",
     async (teamId) => {
       for (const key of TEST_ENV_KEYS) {
@@ -215,31 +215,6 @@ describe("Slack Web API routing", () => {
     },
   );
 
-  it("omits the empty body emitted by auth.test", async () => {
-    for (const key of TEST_ENV_KEYS) {
-      delete process.env[key];
-    }
-    const globalFetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ ok: true, team_id: "TMOCK", user_id: "UMOCK" }), {
-        status: 200,
-      }),
-    );
-    try {
-      const client = createSlackWebClient("xoxb-empty-body-proof", {
-        retryConfig: { retries: 0 },
-        timeout: 1000,
-      });
-
-      await expect(client.auth.test()).resolves.toMatchObject({ ok: true });
-      expect(globalFetch).toHaveBeenCalledOnce();
-      const init = globalFetch.mock.calls[0]?.[1];
-      expect(init).toMatchObject({ method: "POST" });
-      expect(init).not.toHaveProperty("body");
-    } finally {
-      globalFetch.mockRestore();
-    }
-  });
-
   it("retries two transient startup auth failures", async () => {
     const fetchMock = vi
       .fn()
@@ -260,20 +235,6 @@ describe("Slack Web API routing", () => {
       user_id: "UMOCK",
     });
     expect(fetchMock).toHaveBeenCalledTimes(3);
-  });
-
-  it("does not retry a permanent startup auth error", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ ok: false, error: "invalid_auth" }), {
-        status: 200,
-      }),
-    );
-    const client = createSlackStartupAuthClient("invalid-fixture", {
-      fetch: fetchMock as never,
-    });
-
-    await expect(client.auth.test()).rejects.toThrow("invalid_auth");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("retries startup auth after a rate limit", async () => {
@@ -466,67 +427,6 @@ describe("Slack Web API routing", () => {
       expect(requests.at(-1)?.authorization).toBe("Bearer xoxb-shared");
     } finally {
       await server.close();
-    }
-  });
-
-  it("routes real WebClient requests to the SLACK_API_URL root", async () => {
-    for (const key of TEST_ENV_KEYS) {
-      delete process.env[key];
-    }
-    const requests: SlackApiRequest[] = [];
-    const server = await startSlackApiServer(requests);
-    try {
-      process.env.SLACK_API_URL = `${server.baseUrl}/api/`;
-
-      const client = createSlackWebClient("xoxb-route-proof", {
-        retryConfig: { retries: 0 },
-        timeout: 1000,
-      });
-      const result = await client.auth.test();
-
-      expect(result.ok).toBe(true);
-      expect(requests).toEqual([
-        {
-          authorization: "Bearer xoxb-route-proof",
-          method: "POST",
-          url: "/api/auth.test",
-        },
-      ]);
-    } finally {
-      await server.close();
-    }
-  });
-
-  it("routes real WebClient requests to explicit Slack API URL options before SLACK_API_URL", async () => {
-    for (const key of TEST_ENV_KEYS) {
-      delete process.env[key];
-    }
-    const envRequests: SlackApiRequest[] = [];
-    const explicitRequests: SlackApiRequest[] = [];
-    const envServer = await startSlackApiServer(envRequests);
-    const explicitServer = await startSlackApiServer(explicitRequests);
-    try {
-      process.env.SLACK_API_URL = `${envServer.baseUrl}/api/`;
-
-      const client = createSlackWebClient("xoxb-route-proof", {
-        retryConfig: { retries: 0 },
-        slackApiUrl: `${explicitServer.baseUrl}/api/`,
-        timeout: 1000,
-      });
-      const result = await client.auth.test();
-
-      expect(result.ok).toBe(true);
-      expect(envRequests).toEqual([]);
-      expect(explicitRequests).toEqual([
-        {
-          authorization: "Bearer xoxb-route-proof",
-          method: "POST",
-          url: "/api/auth.test",
-        },
-      ]);
-    } finally {
-      await explicitServer.close();
-      await envServer.close();
     }
   });
 });

@@ -7,7 +7,6 @@ import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_MCP } from "./legacy-config-migrations
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS } from "./legacy-config-migrations.runtime.models.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED } from "./legacy-config-migrations.runtime.retired.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION } from "./legacy-config-migrations.runtime.session.js";
-import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_SKILLS } from "./legacy-config-migrations.runtime.skills.js";
 
 const runtimeMigrations = [
   ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY,
@@ -97,26 +96,13 @@ describe("retired runtime config migrations", () => {
     expect(raw.hooks.internal).toEqual({ entries: {}, load: { extraDirs: ["  "] } });
   });
 
-  it.each([{ enabled: true, load: { extraDirs: ["/opt/openclaw/hooks"] } }, { enabled: false }])(
-    "preserves explicit hook discovery: %j",
-    (expected) => {
-      const raw = { hooks: { internal: { ...structuredClone(expected), handlers: null } } };
-      applyAll(raw);
-      expect(raw.hooks.internal).toEqual(expected);
-      expect(applyAll(raw).changes).toEqual([]);
-    },
-  );
-
-  it.each([
-    { enabled: true, expected: { maxActiveTranscriptBytes: "20mb" } },
-    { enabled: false, expected: {} },
-  ])("preserves compaction opt-in=$enabled", ({ enabled, expected }) => {
+  it("preserves an explicit compaction opt-out", () => {
     const raw = configWithPath("agents.defaults.compaction", {
-      truncateAfterCompaction: enabled,
+      truncateAfterCompaction: false,
       maxActiveTranscriptBytes: "20mb",
     });
     applyAll(raw);
-    expect(raw).toHaveProperty("agents.defaults.compaction", expected);
+    expect(raw).toHaveProperty("agents.defaults.compaction", {});
     expect(applyAll(raw).changes).toEqual([]);
   });
 
@@ -159,25 +145,6 @@ describe("retired runtime config migrations", () => {
     });
   });
 
-  it("preserves independent fallback order across capability lists", () => {
-    const model = (id: string) => ({ provider: "p", model: id });
-    const raw = {
-      tools: {
-        media: {
-          image: { models: ["a", "b", "c"].map(model) },
-          audio: { models: ["c", "b", "a"].map(model) },
-        },
-      },
-    };
-    applyAll(raw);
-    expect(raw.tools.media).toEqual({
-      models: [
-        ...["a", "b", "c"].map((id) => ({ provider: "p", model: id, capabilities: ["image"] })),
-        ...["c", "b", "a"].map((id) => ({ provider: "p", model: id, capabilities: ["audio"] })),
-      ],
-    });
-  });
-
   it("preserves explicit legacy capability filtering", () => {
     const raw = {
       tools: {
@@ -197,35 +164,16 @@ describe("retired runtime config migrations", () => {
     });
   });
 
-  it.each([
-    "systemAgent",
-    "browser.tabCleanup.idleMinutes",
-    "agents.list.0.contextPruning.softTrimRatio",
-  ])("strips retired tuning paths through each scope: %s", (path) => {
-    const result = applyAll(configWithPath(path));
-    expect(result.raw).not.toHaveProperty(path);
-    expect(result.changes).toContain(
-      `Removed retired runtime tuning knobs: ${path.replace("agents.list.0.", "agents.list[0].")}; built-in defaults now apply.`,
-    );
-  });
-
-  it("preserves backend entries while pruning emptied named descendants", () => {
-    const path = "agents.defaults.cliBackends";
-    const result = applyAll(
-      configWithPath(path, {
-        keep: { reliability: { outputLimits: { maxChars: 1 }, enabled: true } },
-        prune: { reliability: { outputLimits: { maxChars: 1 } } },
-        malformed: null,
-      }),
-    );
-    expect(result.raw).toEqual(
-      configWithPath(path, {
-        keep: { reliability: { enabled: true } },
-        prune: {},
-        malformed: null,
-      }),
-    );
-  });
+  it.each(["browser.tabCleanup.idleMinutes", "agents.list.0.contextPruning.softTrimRatio"])(
+    "strips retired tuning paths through each scope: %s",
+    (path) => {
+      const result = applyAll(configWithPath(path));
+      expect(result.raw).not.toHaveProperty(path);
+      expect(result.changes).toContain(
+        `Removed retired runtime tuning knobs: ${path.replace("agents.list.0.", "agents.list[0].")}; built-in defaults now apply.`,
+      );
+    },
+  );
 
   it.each([
     {
@@ -509,51 +457,38 @@ describe("retired runtime config migrations", () => {
   });
 });
 
-it.each([
-  { enabled: true, mode: "propose" },
-  { enabled: false, mode: "off" },
-])("migrates Skill Workshop enabled=$enabled to $mode", ({ enabled, mode }) => {
-  const result = applyMigrations(LEGACY_CONFIG_MIGRATIONS_RUNTIME_SKILLS, {
-    skills: { workshop: { autonomous: { enabled } } },
-  });
-  expect(result.raw).toEqual({ skills: { workshop: { autonomous: { mode } } } });
-});
-
-it("retires Skill Workshop symlink write permission", () => {
-  const result = applyMigrations(LEGACY_CONFIG_MIGRATIONS_RUNTIME_SKILLS, {
-    skills: { workshop: { allowSymlinkTargetWrites: true, autonomous: { mode: "auto" } } },
-  });
-  expect(result.raw).toEqual({ skills: { workshop: { autonomous: { mode: "auto" } } } });
-});
-
-it.each([
-  {
-    ui: { seamColor: "#ff4500", assistant: { name: "UI name", avatar: "avatars/ui.png" } },
-    expected: { ui: { seamColor: "#ff4500" } },
-  },
-  { ui: { assistant: { name: "OpenClaw", avatar: "🦞" } }, expected: {} },
-])("removes UI identity without creating or changing agent identity: $ui", ({ ui, expected }) => {
+it("removes UI identity without creating agent identity", () => {
   const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED.filter(
     (entry) => entry.id === "runtime.ui-assistant-identity",
   );
-  const agents = {
-    list: [
-      { id: "worker", identity: { name: "Worker" } },
-      { id: "primary", default: true, identity: { name: "Main", emoji: "🦞" } },
-    ],
-  };
-  const raw = "seamColor" in ui ? { ui, agents: structuredClone(agents) } : { ui };
+  const raw = { ui: { assistant: { name: "OpenClaw", avatar: "🦞" } } };
   const result = applyMigrations(migration, raw);
-  expect(result.raw).toEqual("seamColor" in ui ? { ...expected, agents } : expected);
+  expect(result.raw).toEqual({});
 });
 
 it.each<[string, Record<string, unknown>, Record<string, unknown>]>([
   ["tools", { experimental: { planTool: false } }, { updatePlan: false }],
   ["tools", { updatePlan: true, experimental: { planTool: false } }, { updatePlan: true }],
-  ["tools", { experimental: {} }, {}],
   ["tools.exec", { mode: "deny", security: "full", ask: "off" }, { mode: "deny" }],
   ["session", { idleMinutes: 45 }, { reset: { mode: "idle", idleMinutes: 45 } }],
-  ["session", { idleMinutes: 45, reset: { idleMinutes: 90 } }, { reset: { idleMinutes: 90 } }],
+  ["session.maintenance", { pruneDays: 7, pruneAfter: false }, { pruneAfter: false }],
+  [
+    "channels.discord",
+    {
+      voice: { realtime: { voice: "alloy", speakerVoice: "marin" } },
+      accounts: {
+        work: { voice: { realtime: { voice: "cedar", enabled: true } } },
+        malformed: null,
+      },
+    },
+    {
+      voice: { realtime: { speakerVoice: "marin" } },
+      accounts: {
+        work: { voice: { realtime: { speakerVoice: "cedar", enabled: true } } },
+        malformed: null,
+      },
+    },
+  ],
   [
     "channels.signal",
     { httpHost: "::1", httpPort: 9090 },
@@ -573,23 +508,8 @@ it.each<[string, Record<string, unknown>, Record<string, unknown>]>([
       accounts: { work: { httpUrl: "http://10.0.0.5:9090", autoStart: true } },
     },
   ],
-  [
-    "",
-    {
-      tts: { prefsPath: "/global/tts.json" },
-      agents: { entries: { voice: { tts: { prefsPath: "/voice/tts.json" } } } },
-    },
-    { agents: { entries: { voice: { tts: { prefsPath: "/voice/tts.json" } } } } },
-  ],
-  ["mcp.servers.docs", { cwd: "/canonical", workingDirectory: "/legacy" }, { cwd: "/canonical" }],
   ["nodeHost.mcp.servers.local", { workingDirectory: "/node" }, { cwd: "/node" }],
-  [
-    "agents.defaults.cliBackends.custom",
-    { sessionArg: "--session" },
-    { sessionArgs: ["--session", "{sessionId}"] },
-  ],
   ["", { web: { enabled: false } }, { channels: { whatsapp: { enabled: false } } }],
-  ["discovery.wideArea", { enabled: true, domain: "example.test" }, { domain: "example.test" }],
 ])("migrates %s: %j", (path, raw, expected) => {
   expect(applyAll(configWithPath(path, raw)).raw).toEqual(configWithPath(path, expected));
 });

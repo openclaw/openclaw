@@ -8,7 +8,7 @@ import type {
   QaBusConversationKind,
   QaBusStateSnapshot,
 } from "openclaw/plugin-sdk/qa-channel-protocol";
-import type { QaLabLatestReport, QaLabScenarioOutcome, QaLabScenarioRun } from "../../api.js";
+import type { QaLabLatestReport, QaLabScenarioRun } from "../../api.js";
 import type {
   QaLabExecutionKind,
   QaLabResolvedRunPlan,
@@ -71,7 +71,6 @@ export type Bootstrap = {
   };
 };
 
-export type ScenarioOutcome = QaLabScenarioOutcome;
 type ScenarioRun = QaLabScenarioRun;
 
 export type RunnerSelection = QaLabRunSelection;
@@ -217,7 +216,6 @@ export type UiState = {
   captureDetailSplitPct: number;
   captureDetailSplitDragging: boolean;
   captureDetailView: "overview" | "flow" | "payload" | "headers";
-  capturePreferredDetailView: "overview" | "flow" | "payload" | "headers" | null;
   captureFlowDetailLayout: "nav-first" | "pair-first" | null;
   capturePayloadDetailLayout: "formatted" | "raw" | null;
   capturePayloadExtent: "preview" | "full";

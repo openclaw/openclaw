@@ -119,18 +119,15 @@ export function createManagedHandoffProcessIdentityReader(options: {
     if (!isPidAlive(value.pid)) {
       return "dead";
     }
-    if (process.platform === "win32" && WINDOWS_ARGV_IDENTITY_PATTERN.test(value.startIdentity)) {
-      const argvIdentity = readWindowsArgvIdentity(value.pid);
-      return argvIdentity === null
-        ? ownedCustody
-          ? "live"
-          : "unknown"
-        : argvIdentity === value.startIdentity
-          ? "live"
-          : "mismatch";
+    const argvIdentity =
+      process.platform === "win32" && WINDOWS_ARGV_IDENTITY_PATTERN.test(value.startIdentity);
+    const start = argvIdentity
+      ? readWindowsArgvIdentity(value.pid)
+      : readProcessStartIdentity(value.pid);
+    if (start === null) {
+      return argvIdentity && ownedCustody ? "live" : "unknown";
     }
-    const start = readProcessStartIdentity(value.pid);
-    return start === null ? "unknown" : start === value.startIdentity ? "live" : "mismatch";
+    return start === value.startIdentity ? "live" : "mismatch";
   }
   function processState(value: HandoffProcessIdentity): "live" | "dead" | "unknown" {
     const state = inspectProcessIdentity(value);

@@ -10,7 +10,11 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-con
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { commandTransport } from "../update-cli-mocks.test-support.js";
+import {
+  commandTransport,
+  managedUpdateHandoff,
+  serviceReadRuntime,
+} from "../update-cli-mocks.test-support.js";
 import { packageTargetStatus } from "./update-cli-package.test-support.js";
 import {
   createCandidateAdmissionFixtures,
@@ -64,102 +68,77 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
   const { prepareCandidateAdmissionFixture, candidateAdmissionVerdict } =
     createCandidateAdmissionFixtures(f);
 
-  it.each([
-    "refuse-artifact",
-    "admit-artifact",
-    "unsupported-artifact",
-    "changed-admit",
-    "changed-refuse",
-  ] as const)("candidate admission: gates fresh profile bootstrap (%s)", async (outcome) => {
-    const refused = outcome === "refuse-artifact";
-    const changed = outcome === "changed-admit" || outcome === "changed-refuse";
-    const refreshedRefusal = outcome === "changed-refuse";
-    const marker = outcome !== "unsupported-artifact";
-    const verdict = candidateAdmissionVerdict(refused ? "config" : undefined);
-    const { pkgRoot, stages, contexts, events, databaseExistsAtAdmission } =
-      await prepareCandidateAdmissionFixture({ marker, verdict, pendingLifecycle: true });
-    const stateDir = makeTempDir("candidate-admission-fresh-");
-    const configPath = path.join(stateDir, "openclaw.json");
-    const configBytes = refused ? '{"gateway":{"port":"invalid"}}\n' : "{}\n";
-    const editedConfigBytes = '{"gateway":{"mode":"local","port":19801}}\n';
-    await fs.writeFile(configPath, configBytes);
-    const { createConfigIO } = await import("../../config/io.js");
-    vi.mocked(readConfigFileSnapshot).mockImplementation(() =>
-      createConfigIO({ observe: false, pluginValidation: "skip" }).readConfigFileSnapshot(),
-    );
-    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
-      packageTargetStatus({
-        schemaVersions: {
-          state: OPENCLAW_STATE_SCHEMA_VERSION,
-          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-        },
-      }),
-    );
-    const env = { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath };
-    const databasePath = resolveOpenClawStateSqlitePath(env);
-    expect(fsSync.existsSync(databasePath)).toBe(false);
-    if (changed) {
-      const commandRun = await import("./update-command-run.js");
-      const admit = commandRun.admitUpdateCommandRun;
-      vi.spyOn(commandRun, "admitUpdateCommandRun").mockImplementation(async (params) => {
-        expect(contexts).toHaveLength(1);
-        expect(params.initialization?.target?.configSnapshot.raw).toBe(configBytes);
-        await fs.writeFile(configPath, editedConfigBytes);
-        if (refreshedRefusal) {
-          Object.assign(verdict, candidateAdmissionVerdict("config"));
+  it.each(["refuse-artifact", "admit-artifact", "unsupported-artifact"] as const)(
+    "candidate admission: gates fresh profile bootstrap (%s)",
+    async (outcome) => {
+      const refused = outcome === "refuse-artifact";
+      const marker = outcome !== "unsupported-artifact";
+      const verdict = candidateAdmissionVerdict(refused ? "config" : undefined);
+      const { pkgRoot, stages, contexts, events, databaseExistsAtAdmission } =
+        await prepareCandidateAdmissionFixture({ marker, verdict, pendingLifecycle: true });
+      const stateDir = makeTempDir("candidate-admission-fresh-");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const configBytes = refused ? '{"gateway":{"port":"invalid"}}\n' : "{}\n";
+      await fs.writeFile(configPath, configBytes);
+      const { createConfigIO } = await import("../../config/io.js");
+      vi.mocked(readConfigFileSnapshot).mockImplementation(() =>
+        createConfigIO({ observe: false, pluginValidation: "skip" }).readConfigFileSnapshot(),
+      );
+      vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
+        packageTargetStatus({
+          schemaVersions: {
+            state: OPENCLAW_STATE_SCHEMA_VERSION,
+            agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+          },
+        }),
+      );
+      const env = { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath };
+      const databasePath = resolveOpenClawStateSqlitePath(env);
+      expect(fsSync.existsSync(databasePath)).toBe(false);
+      await withEnvAsync(env, async () => {
+        const updating = invokeUpdateCli({
+          admission: "auto",
+          yes: true,
+          restart: false,
+          json: true,
+          tag: path.join(stateDir, "candidate.tgz"),
+        });
+        if (refused) {
+          await expect(updating).rejects.toEqual(new ExitError(1));
+        } else {
+          await updating;
         }
-        return await admit(params);
       });
-    }
 
-    await withEnvAsync(env, async () => {
-      const updating = invokeUpdateCli({
-        admission: "auto",
-        yes: true,
-        restart: false,
-        json: true,
-        tag: path.join(stateDir, "candidate.tgz"),
-      });
-      if (refused || refreshedRefusal) {
-        await expect(updating).rejects.toEqual(new ExitError(1));
+      expect(stages).toHaveLength(1);
+      expect(stages.every((root) => !fsSync.existsSync(root))).toBe(true);
+      expect(contexts).toHaveLength(marker ? 1 : 0);
+      expect(databaseExistsAtAdmission).toEqual(marker ? [false] : []);
+      expect(await fs.readFile(configPath, "utf8")).toBe(configBytes);
+      if (refused) {
+        expect(events).toEqual(["admission"]);
+        expect(fsSync.existsSync(databasePath)).toBe(false);
+        expect(lastWriteJsonCall()).toMatchObject({ status: "error", reason: "invalid-config" });
+        expectNoSideEffects(candidateValidation, replaceConfigFile, serviceStop);
+        expect(
+          JSON.parse(await fs.readFile(path.join(pkgRoot, "package.json"), "utf8")),
+        ).toMatchObject({ version: "1.0.0" });
       } else {
-        await updating;
+        expect(events.slice(0, marker ? 3 : 2)).toEqual(
+          marker ? ["admission", "preinstall", "postinstall"] : ["preinstall", "postinstall"],
+        );
+        expect(lastWriteJsonCall()).toMatchObject({
+          status: "ok",
+          run: {
+            admission: marker
+              ? { owner: "candidate", checks: verdict.facts.checks }
+              : { owner: "installed", fallbackReason: "unsupported-target" },
+          },
+        });
+        expect(fsSync.existsSync(databasePath)).toBe(true);
       }
-    });
-
-    expect(stages).toHaveLength(1);
-    expect(stages.every((root) => !fsSync.existsSync(root))).toBe(true);
-    expect(contexts).toHaveLength(changed ? 2 : marker ? 1 : 0);
-    expect(databaseExistsAtAdmission).toEqual(changed ? [false, true] : marker ? [false] : []);
-    expect(await fs.readFile(configPath, "utf8")).toBe(changed ? editedConfigBytes : configBytes);
-    if (changed) {
-      expect(events.slice(0, 4)).toEqual(["admission", "preinstall", "postinstall", "admission"]);
-    }
-    if (refused || refreshedRefusal) {
-      expect(events).toEqual(
-        refreshedRefusal ? ["admission", "preinstall", "postinstall", "admission"] : ["admission"],
-      );
-      expect(fsSync.existsSync(databasePath)).toBe(refreshedRefusal);
-      expect(lastWriteJsonCall()).toMatchObject({ status: "error", reason: "invalid-config" });
-      expectNoSideEffects(candidateValidation, replaceConfigFile, serviceStop);
-      expect(
-        JSON.parse(await fs.readFile(path.join(pkgRoot, "package.json"), "utf8")),
-      ).toMatchObject({ version: "1.0.0" });
-    } else {
-      expect(events.slice(0, marker ? 3 : 2)).toEqual(
-        marker ? ["admission", "preinstall", "postinstall"] : ["preinstall", "postinstall"],
-      );
-      expect(lastWriteJsonCall()).toMatchObject({
-        status: "ok",
-        run: {
-          admission: marker
-            ? { owner: "candidate", checks: verdict.facts.checks }
-            : { owner: "installed", fallbackReason: "unsupported-target" },
-        },
-      });
-      expect(fsSync.existsSync(databasePath)).toBe(true);
-    }
-  });
+    },
+  );
 
   it.each([
     { source: "candidate", check: "database-schema" },
@@ -168,6 +147,9 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
   ] as const)(
     "candidate admission: reports $check refusals from $source before mutation",
     async ({ source, check }) => {
+      if (check === "node-runtime") {
+        runtimeRecovery.stubNodeRuntime();
+      }
       const verdict = candidateAdmissionVerdict(check);
       const { pkgRoot, stages, contexts } = await prepareCandidateAdmissionFixture({
         marker: source !== "unsupported",
@@ -258,6 +240,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
   it.each([undefined, "17"])(
     "candidate admission: retains work deadline %s and installed Node preflight",
     async (timeout) => {
+      runtimeRecovery.stubNodeRuntime();
       const verdict = candidateAdmissionVerdict();
       verdict.warnings = [
         {
@@ -343,6 +326,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
   it.each(["existing", "fresh"] as const)(
     "candidate admit with warn does not bypass runtime recovery (%s profile)",
     async (profile) => {
+      runtimeRecovery.stubNodeRuntime();
       const verdict = candidateAdmissionVerdict();
       verdict.facts.nodeEngines = ">=26.1.0";
       verdict.facts.checks[2] = {
@@ -421,6 +405,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
   );
 
   it("candidate admission: retains a check the candidate did not report", async () => {
+    runtimeRecovery.stubNodeRuntime();
     const verdict = candidateAdmissionVerdict();
     verdict.facts.checks = verdict.facts.checks.filter((check) => check.name !== "node-runtime");
     const { stages, contexts } = await prepareCandidateAdmissionFixture({ marker: true, verdict });
@@ -442,6 +427,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
   });
 
   it("candidate admission: forces installed checks through the option before staging", async () => {
+    runtimeRecovery.stubNodeRuntime();
     const { stages, contexts } = await prepareCandidateAdmissionFixture({
       marker: true,
       verdict: candidateAdmissionVerdict(),
@@ -460,6 +446,41 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
       run: { admission: { owner: "installed", fallbackReason: "forced-installed" } },
     });
     expectNoSideEffects(serviceStop, candidateValidation);
+  });
+
+  it("candidate admission: leaves an accepted Gateway handoff pending after disposing staging", async () => {
+    const { pkgRoot, stages, contexts } = await prepareCandidateAdmissionFixture({
+      marker: true,
+      verdict: candidateAdmissionVerdict(),
+    });
+    primeServiceCommand(["node", path.join(pkgRoot, "dist", "index.js"), "gateway", "run"]);
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({ status: "running", pid: gatewayFixturePid });
+    mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set([process.pid, gatewayFixturePid]));
+    managedUpdateHandoff.start.mockResolvedValue({
+      status: "started",
+      handoffId: "candidate-handoff",
+      installRoot: pkgRoot,
+      logPath: path.join(pkgRoot, "handoff.log"),
+      command: "openclaw update --yes",
+      pid: 12345,
+    });
+    managedUpdateHandoff.transfer.mockResolvedValue(true);
+
+    await invokeUpdateCli({ admission: "auto", yes: true, json: true });
+
+    expect(managedUpdateHandoff.transfer).toHaveBeenCalled();
+    expect(stages).toHaveLength(1);
+    expect(stages.every((root) => !fsSync.existsSync(root))).toBe(true);
+    expect(contexts).toEqual([]);
+    expect(lastWriteJsonCall()).toMatchObject({
+      status: "skipped",
+      reason: "managed-service-handoff-started",
+    });
+    expect(process.exitCode).toBe(75);
+    expect(listUpdateRuns({ limit: 1 })[0]).toMatchObject({ status: "running" });
+    expect(getTriageFailures()).toEqual([]);
+    expectNoSideEffects(serviceStop, serviceStart, serviceRestart, candidateValidation);
   });
 
   it("candidate admission: refuses managed ancestry before spawning candidate code and disposes staging", async () => {
@@ -492,6 +513,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
   });
 
   it("candidate admission: keeps dry-run on installed checks without staging", async () => {
+    runtimeRecovery.stubNodeRuntime();
     const { stages, contexts } = await prepareCandidateAdmissionFixture({
       marker: true,
       verdict: candidateAdmissionVerdict(),
@@ -535,7 +557,10 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
     expect(databasePreflightMocks.preflightOpenClawDatabaseSchemas).toHaveBeenCalledWith({
       // The inspection snapshot retains the scoped marker after the updater
       // restores process.env on refusal.
-      env: { ...process.env, OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+      env: expect.objectContaining({
+        OPENCLAW_STATE_DIR: profileStateDir(),
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+      }),
       supportedVersions: { state: 3, agent: 9 },
       preserveSourceArtifacts: false,
       configuredAgentDatabaseTargets: [],
@@ -554,21 +579,22 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
     ]);
   });
 
-  it("refuses incompatible managed-state schemas before stopping the package service", async () => {
+  it("refuses incompatible shared caller and managed schemas before stopping the package service", async () => {
     const { pkgRoot } = await setupInstalledPackageRoot(createCaseDir("schema-package"), "1.0.0");
     const entrypoint = path.join(pkgRoot, "dist", "index.js");
     const nodeRunner = path.join(fixtureRoot, "managed", "node");
+    const managedState = profileStateDir();
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(entrypoint);
     mockOwnedGitService(pkgRoot);
     primeServiceCommand([nodeRunner, entrypoint, "gateway", "run"], {
-      OPENCLAW_STATE_DIR: profileStateDir(),
+      OPENCLAW_STATE_DIR: managedState,
     });
     serviceLoaded.mockResolvedValue(true);
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
       packageTargetStatus({ schemaVersions: { state: 3, agent: 11 } }),
     );
     databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockImplementation(({ env }) =>
-      env?.OPENCLAW_STATE_DIR === profileStateDir()
+      env?.OPENCLAW_STATE_DIR === managedState
         ? {
             incompatible: [
               {
@@ -590,16 +616,17 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
     });
 
     expect(serviceStop).not.toHaveBeenCalled();
-    expect(databasePreflightMocks.preflightOpenClawDatabaseSchemas.mock.calls[1]?.[0].env).toEqual(
-      expect.objectContaining({ OPENCLAW_STATE_DIR: profileStateDir() }),
+    const refusal = lastWriteJsonCall();
+    expect(isRecord(refusal) ? refusal.reason : undefined).toBe("database-schema-preflight");
+    expect(databasePreflightMocks.preflightOpenClawDatabaseSchemas).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        env: expect.objectContaining({ OPENCLAW_STATE_DIR: managedState }),
+      }),
     );
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
     expect(freshRestartCalls()).toEqual([]);
     expectNoSideEffects(serviceStart, serviceRestart);
-    expect(lastWriteJsonCall()).toMatchObject({
-      status: "error",
-      reason: "database-schema-preflight",
-    });
+    expect(refusal).toMatchObject({ status: "error" });
     expect(getTriageFailures()).toContainEqual(
       expect.objectContaining({
         error: expect.stringContaining("openclaw-agent.sqlite"),
@@ -624,12 +651,13 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
   });
 
   it("blocks package updates when the target requires a newer Node runtime", async () => {
+    runtimeRecovery.stubNodeRuntime();
     // This case specifies system-runtime guidance, independent of the host Node manager.
     vi.spyOn(versionManagerPath, "resolveNodeVersionManager").mockReturnValue("system");
     const root = await mockPackageInstallAtCaseDir();
     primeNpmChannelTag("latest", "2026.3.23-2");
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
-      packageTargetStatus({ target: "latest", version: "2026.3.23-2" }),
+      packageTargetStatus({ version: "2026.3.23-2" }),
     );
     nodeVersionSatisfiesEngine.mockReturnValue(false);
 
@@ -640,8 +668,15 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
     expectNoSideEffects(updateGitCheckout, defaultRuntime.exit);
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
     expect(listUpdateRuns({ limit: 1 })[0]?.reason).toBe("node-runtime-preflight");
+    const refusal = "Failing check node-runtime (node-runtime-preflight); key engines.node: ";
     expect(defaultRuntime.log).toHaveBeenCalledWith(
-      `openclaw@2026.3.23-2 requires Node >=22.19.0; selected runtime is Node ${process.versions.node}.\n${runtimeRecovery.expectedPlainRecovery("2026.3.23-2", "24.16.0", "absent", undefined, root)}`,
+      [
+        `${refusal}Required: openclaw@2026.3.23-2 Node >=22.19.0; detected: Node ${process.versions.node} at ${process.execPath}`,
+        `${refusal}Update install root: ${fsSync.realpathSync(root)}`,
+        `${refusal}Update binary: ${path.join(root, "openclaw.mjs")}`,
+        `${refusal}Gateway install root: unresolved`,
+        `${refusal}${runtimeRecovery.expectedPlainRecovery("2026.3.23-2", "24.16.0", "absent", undefined, root)}`,
+      ].join("\n"),
     );
   });
 }

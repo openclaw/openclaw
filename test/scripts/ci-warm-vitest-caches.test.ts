@@ -18,14 +18,14 @@ vi.mock(import("../../scripts/lib/ci-node-test-plan.mts"), async (importOriginal
     ...actual,
     createVitestCacheWarmGroups: vi.fn((profile: "full" | "hybrid-hosted" = "full") => {
       const hosted = actual.createVitestCacheWarmGroups("hybrid-hosted");
-      // Keep one compatible file beside a Node-only file and a tooling file.
+      // Keep one compatible file beside a Node-required file and a tooling file.
       // The planner suite owns the production inventory; this proves partitioning.
       const tooling = {
         ...hosted[0]!,
         configs: ["test/vitest/vitest.unit-fast.config.ts", "test/vitest/vitest.tooling.config.ts"],
         includePatterns: [
           "packages/media-core/src/mime.test.ts",
-          "packages/markdown-core/src/render-aware-chunking.test.ts",
+          "test/scripts/update-restart-module-outcome.test.ts",
           "test/scripts/ci-workflow-guards.test.ts",
         ],
       };

@@ -3,6 +3,7 @@ import {
   consumeRootCommandOptionToken,
   getCommandArgsWithRootOptions,
 } from "../infra/cli-root-options.js";
+import { normalizeFsSafeNativeEnv } from "../infra/fs-safe-env.js";
 import type { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 
@@ -67,6 +68,7 @@ export async function tryRunUpdateAdmissionBeforeStartup(
   if (profile.profile) {
     applyCliProfileEnv({ profile: profile.profile });
   }
+  normalizeFsSafeNativeEnv();
   const { updateAdmitCommand } = await import("./update-cli/update-command-admit.js");
   await updateAdmitCommand(contextPath);
   return true;

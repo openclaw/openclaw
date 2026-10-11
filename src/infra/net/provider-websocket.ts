@@ -45,38 +45,6 @@ function targetTlsOptions(policy: PinnedDispatcherPolicy | undefined): Record<st
   return policy?.mode === "direct" || policy?.mode === "env-proxy" ? { ...policy.connect } : {};
 }
 
-function proxyPolicy(
-  policy: SsrFPolicy | undefined,
-  allowPrivateProxy: boolean,
-): SsrFPolicy | undefined {
-  if (!policy && !allowPrivateProxy) {
-    return undefined;
-  }
-  return {
-    ...policy,
-    hostnameAllowlist: undefined,
-    ...(allowPrivateProxy ? { allowPrivateNetwork: true } : {}),
-  };
-}
-
-async function createProxyAgent(params: {
-  policy: SsrFPolicy | undefined;
-  proxyUrl: URL;
-  proxyTls?: Record<string, unknown>;
-  allowPrivateProxy: boolean;
-  signal?: AbortSignal;
-}): Promise<HttpAgent> {
-  const pinnedProxy = await resolvePinnedHostnameWithPolicy(params.proxyUrl.hostname, {
-    policy: proxyPolicy(params.policy, params.allowPrivateProxy),
-    signal: params.signal,
-  });
-  return createNodeProxyAgent({
-    mode: "explicit",
-    proxyUrl: params.proxyUrl,
-    proxyConnect: { ...params.proxyTls, lookup: pinnedProxy.lookup },
-  });
-}
-
 async function createProviderWebSocketAgent(params: {
   dispatcherPolicy?: PinnedDispatcherPolicy;
   policy: SsrFPolicy | undefined;
@@ -90,7 +58,7 @@ async function createProviderWebSocketAgent(params: {
     useManagedProxy || dispatcherPolicy?.mode !== "direct"
       ? resolveEnvNodeProxyUrlForTarget(url)
       : undefined;
-  let proxyUrl: URL | undefined;
+  let proxyUrl = envProxyUrl;
   if (dispatcherPolicy?.mode === "explicit-proxy") {
     try {
       proxyUrl = new URL(dispatcherPolicy.proxyUrl);
@@ -100,8 +68,6 @@ async function createProviderWebSocketAgent(params: {
     if (proxyUrl.protocol !== "http:" && proxyUrl.protocol !== "https:") {
       throw new Error("Explicit proxy URL must use http or https");
     }
-  } else if (dispatcherPolicy?.mode !== "direct") {
-    proxyUrl = envProxyUrl;
   }
   if (useManagedProxy) {
     proxyUrl = envProxyUrl;
@@ -124,19 +90,30 @@ async function createProviderWebSocketAgent(params: {
   } else {
     assertHostnameAllowedWithPolicy(url.hostname, policy);
   }
-  return await createProxyAgent({
-    policy,
-    proxyUrl,
-    proxyTls:
-      !useManagedProxy &&
-      (dispatcherPolicy?.mode === "explicit-proxy" || dispatcherPolicy?.mode === "env-proxy")
-        ? dispatcherPolicy.proxyTls
-        : resolveActiveManagedProxyTlsOptions({ proxyUrl: proxyUrl.href }),
-    allowPrivateProxy:
-      useManagedProxy ||
-      dispatcherPolicy?.mode !== "explicit-proxy" ||
-      dispatcherPolicy.allowPrivateProxy === true,
+  const proxyTls =
+    !useManagedProxy &&
+    (dispatcherPolicy?.mode === "explicit-proxy" || dispatcherPolicy?.mode === "env-proxy")
+      ? dispatcherPolicy.proxyTls
+      : resolveActiveManagedProxyTlsOptions({ proxyUrl: proxyUrl.href });
+  const allowPrivateProxy =
+    useManagedProxy ||
+    dispatcherPolicy?.mode !== "explicit-proxy" ||
+    dispatcherPolicy.allowPrivateProxy === true;
+  const pinnedProxy = await resolvePinnedHostnameWithPolicy(proxyUrl.hostname, {
+    policy:
+      policy || allowPrivateProxy
+        ? {
+            ...policy,
+            hostnameAllowlist: undefined,
+            ...(allowPrivateProxy ? { allowPrivateNetwork: true } : {}),
+          }
+        : undefined,
     signal,
+  });
+  return createNodeProxyAgent({
+    mode: "explicit",
+    proxyUrl,
+    proxyConnect: { ...proxyTls, lookup: pinnedProxy.lookup },
   });
 }
 

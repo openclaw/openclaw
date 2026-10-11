@@ -8,6 +8,7 @@ import {
   validateGatewaySuspendStatusResult,
   validateGatewaySuspendPrepareParams,
   validateGatewaySuspendHandoffParams,
+  GatewaySuspendHandoffResultSchema,
 } from "./index.js";
 
 describe("gateway suspension protocol", () => {
@@ -22,10 +23,13 @@ describe("gateway suspension protocol", () => {
     const target = { pid: 1, processInstanceId: "gateway-process" };
     const params = { suspensionId: "held-lease", target };
     expect(validateGatewaySuspendHandoffParams(params)).toBe(true);
+    expect(validateGatewaySuspendHandoffParams({ ...params, commit: true })).toBe(true);
     for (const rejected of [
       { ...params, target: undefined },
       { ...params, force: true },
       { ...params, waitMs: 0 },
+      { ...params, commit: false },
+      { ...params, commit: "true" },
       { ...params, target: { ...target, processInstanceId: " " } },
       { ...params, target: { ...target, pid: 0 } },
       { ...params, target: { ...target, port: 18789 } },
@@ -33,6 +37,16 @@ describe("gateway suspension protocol", () => {
     ]) {
       expect(validateGatewaySuspendHandoffParams(rejected)).toBe(false);
     }
+    const receipt = { suspensionId: "held-lease", expiresAtMs: 2_000 };
+    expect(Value.Check(GatewaySuspendHandoffResultSchema, { ...receipt, status: "armed" })).toBe(
+      true,
+    );
+    expect(
+      Value.Check(GatewaySuspendHandoffResultSchema, { ...receipt, status: "committed" }),
+    ).toBe(true);
+    expect(
+      Value.Check(GatewaySuspendHandoffResultSchema, { ...receipt, status: "scheduled" }),
+    ).toBe(false);
   });
   it("keeps prepare params closed and bounded", () => {
     expect(validateGatewaySuspendPrepareParams({ requestId: "host-request" })).toBe(true);

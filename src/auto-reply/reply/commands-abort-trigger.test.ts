@@ -2,7 +2,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { handleAbortTrigger } from "./commands-session-abort.js";
-import "./commands-session-abort.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const abortEmbeddedAgentRunMock = vi.hoisted(() => vi.fn());
@@ -34,8 +33,9 @@ vi.mock("./abort-cutoff.js", () => ({
   shouldPersistAbortCutoff: vi.fn(() => false),
 }));
 
-vi.mock("./abort-operation.js", () => ({
-  abortSessionRunTargetWithOutcome: abortSessionRunTargetWithOutcomeMock,
+vi.mock(import("./abort-operation.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  prepareSessionRunTargetAbort: () => () => abortSessionRunTargetWithOutcomeMock(),
   stopSubagentsForRequester: vi.fn(async () => ({ stopped: 0, failed: 0 })),
 }));
 

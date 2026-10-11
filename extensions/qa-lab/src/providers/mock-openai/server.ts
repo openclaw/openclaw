@@ -4,7 +4,6 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { format as formatUrl } from "node:url";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   closeQaHttpServer,
   dispatchQaHttpRequest,
@@ -32,7 +31,6 @@ import {
 import {
   type ResponsesInputItem,
   type StreamEvent,
-  type MockOpenAiRequestSnapshotBase,
   type MockOpenAiRequestKind,
   type MockCompactionSummaryFaultMode,
   type AnthropicMessagesRequest,
@@ -60,7 +58,6 @@ import {
   QA_TOOL_PROGRESS_PROMPT_RE,
   QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE,
   QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE,
-  QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE,
   QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE,
   QA_THREAD_REPLY_RECEIPT_PROMPT_RE,
   QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE,
@@ -122,6 +119,8 @@ import {
   extractEmbeddingInputTexts,
   buildDeterministicEmbedding,
 } from "./mock-openai-contracts.js";
+import { planCronBlockedOutcomeTurn } from "./mock-openai-cron-blocked-outcome.js";
+import { planCronFailureRepairTurn } from "./mock-openai-cron-failure-repair.js";
 import {
   extractExactReplyDirective,
   extractExactMarkerDirective,
@@ -140,10 +139,9 @@ import {
   buildRemoteCompactionV2Events,
   buildReleaseAuditJson,
   buildReleaseHandoffMarkdown,
-  extractPlannedToolIdentity,
   splitMockStreamingText,
   buildChannelStreamingFixtureEvents,
-  QA_TELEGRAM_PREPARED_DELIVERY_RE,
+  resolveTelegramChannelStreamingPause,
   buildAssistantThenToolCallEvents,
   buildAssistantEvents,
   buildStreamingFinalAnswerEvents,
@@ -152,6 +150,7 @@ import {
   buildReasoningAndAssistantEvents,
   buildFailedResponseEvents,
 } from "./mock-openai-events.js";
+import { planGroupMessageToolTurn } from "./mock-openai-group-message-tool.js";
 import {
   extractLatestScenarioFamilyPrompt,
   extractLastUserText,
@@ -164,7 +163,8 @@ import {
   extractToolOutputStructuredError,
   extractToolOutputCallId,
   extractAllToolOutputText,
-  extractUserTextAfterLatestToolOutput,
+  extractFollowthroughEvidenceText,
+  normalizeResponsesInput,
   buildSlackMpimHistoryReply,
   extractUserTurnTexts,
   extractInstructionsText,
@@ -178,6 +178,7 @@ import {
   parseToolOutputJson,
 } from "./mock-openai-input.js";
 import { createMockOpenAiRequestLog } from "./mock-openai-request-log.js";
+import { writeMockOpenAiResponsesHttp } from "./mock-openai-responses-http.js";
 import { attachQaMockResponsesWebSocketServer } from "./mock-openai-responses-websocket.js";
 import {
   buildSlackOwnedRequesterEvents,
@@ -210,7 +211,6 @@ import {
   isSnackRecallPrompt,
   extractSnackPreference,
 } from "./mock-openai-tooling.js";
-import { createQaMockScenarioStateStore } from "./scenario-state.js";
 import type { QaMockOpenAiServerOptions } from "./server-options.js";
 import {
   createQaSessionIdentityResolver,
@@ -337,16 +337,6 @@ const QA_REPEATED_REQUEST_STALL_ATTEMPT = 5;
 const QA_STALLED_TURN_RESPONSE_PAUSE_MS = 8_000;
 const QA_STALLED_TURN_STALLED_RESPONSE_PAUSE_MS = 90_000;
 
-function normalizeResponsesInput(value: unknown): ResponsesInputItem[] {
-  if (Array.isArray(value)) {
-    return value.map(asOptionalRecord).filter((item) => item !== undefined);
-  }
-  if (typeof value === "string") {
-    return [{ role: "user", content: [{ type: "input_text", text: value }] }];
-  }
-  return [];
-}
-
 function resolveCompactionSummaryFaultMode(params: {
   allInputText: string;
   requestKind: MockOpenAiRequestKind;
@@ -356,25 +346,14 @@ function resolveCompactionSummaryFaultMode(params: {
     return "none";
   }
   const emptyMarker = QA_COMPACTION_EMPTY_OUTPUT_ONCE_MARKER_RE.exec(params.allInputText)?.[0];
-  const reasoningMarker = QA_COMPACTION_REASONING_ONLY_OUTPUT_ONCE_MARKER_RE.exec(
-    params.allInputText,
-  )?.[0];
-  const selected = emptyMarker
-    ? {
-        key: emptyMarker,
-        mode: "empty-output-once" as const,
-      }
-    : reasoningMarker
-      ? {
-          key: reasoningMarker,
-          mode: "reasoning-only-output-once" as const,
-        }
-      : undefined;
-  if (!selected?.key || params.servedFaultMarkers.has(selected.key)) {
+  const marker =
+    emptyMarker ??
+    QA_COMPACTION_REASONING_ONLY_OUTPUT_ONCE_MARKER_RE.exec(params.allInputText)?.[0];
+  if (!marker || params.servedFaultMarkers.has(marker)) {
     return "none";
   }
-  params.servedFaultMarkers.add(selected.key);
-  return selected.mode;
+  params.servedFaultMarkers.add(marker);
+  return emptyMarker ? "empty-output-once" : "reasoning-only-output-once";
 }
 
 function buildMemoryGetArgs(result: Record<string, unknown>) {
@@ -387,10 +366,19 @@ function buildMemoryGetArgs(result: Record<string, unknown>) {
   return { path: result.path, from, lines: 4 };
 }
 
-function extractFollowthroughEvidenceText(input: ResponsesInputItem[]): string {
-  return [extractAllToolOutputText(input), extractUserTextAfterLatestToolOutput(input)]
-    .filter(Boolean)
-    .join("\n");
+function isSessionMemoryResult(result: Record<string, unknown>) {
+  return (
+    result.source === "sessions" ||
+    (typeof result.path === "string" && result.path.startsWith("sessions/"))
+  );
+}
+
+function memoryResultText(result: Record<string, unknown> | undefined) {
+  return typeof result?.snippet === "string"
+    ? result.snippet
+    : typeof result?.text === "string"
+      ? result.text
+      : "";
 }
 
 const PERSONAL_FOLLOWTHROUGH_FIXTURES = [
@@ -465,9 +453,9 @@ async function buildResponsesPayload(
   scenarioState: MockScenarioState,
   options: {
     subagentTurn: ReturnType<typeof resolveMockSubagentTurn>;
-    waitForTerminalRequesterSettled?: (caseName: string, childSessionKey: string) => Promise<void>;
-    requestKind?: MockOpenAiRequestKind;
-    compactionSummaryFaultMode?: MockCompactionSummaryFaultMode;
+    waitForTerminalRequesterSettled: (caseName: string, childSessionKey: string) => Promise<void>;
+    requestKind: MockOpenAiRequestKind;
+    compactionSummaryFaultMode: MockCompactionSummaryFaultMode;
   },
 ) {
   const model = typeof body.model === "string" ? body.model : "";
@@ -519,8 +507,7 @@ async function buildResponsesPayload(
     QA_COMPACTION_RETRY_PROMPT_RE.test(allInputText) ||
     hasCompactionRetryDurableContext ||
     allInputText.includes(QA_COMPACTION_RETRY_BULKY_MARKER);
-  const requestKind = options.requestKind ?? classifyMockOpenAiRequest(input, body);
-  if (requestKind === "compaction-summary") {
+  if (options.requestKind === "compaction-summary") {
     if (options.compactionSummaryFaultMode === "empty-output-once") {
       return buildAssistantEvents("");
     }
@@ -547,6 +534,14 @@ async function buildResponsesPayload(
   }
   const compactionRetryScenarioActive =
     scenarioState.compactionRetryActive || hasCompactionRetryMarker;
+  const cronFailureRepairTurn = planCronFailureRepairTurn(prompt, input);
+  if (cronFailureRepairTurn) {
+    return cronFailureRepairTurn;
+  }
+  const cronBlockedOutcomeTurn = planCronBlockedOutcomeTurn(prompt);
+  if (cronBlockedOutcomeTurn) {
+    return cronBlockedOutcomeTurn;
+  }
   // The queued followup carries the stalled prompt in transcript history, so
   // current-turn dispatch must win before the persistent recovery fixture.
   if (QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE.test(prompt)) {
@@ -669,6 +664,9 @@ async function buildResponsesPayload(
     toolJson?.unavailable === true ||
     toolJson?.disabled === true ||
     (typeof toolJson?.error === "string" && toolJson.error.trim().length > 0);
+  const memoryResults = Array.isArray(toolJson?.results)
+    ? (toolJson.results as Array<Record<string, unknown>>)
+    : [];
   const promptExactReplyDirective = extractExactReplyDirective(prompt);
   const promptExactMarkerDirective = extractExactMarkerDirective(prompt);
   const allUserTexts = extractUserTurnTexts(input);
@@ -863,7 +861,7 @@ async function buildResponsesPayload(
   if (privateWorker) {
     const childSessionKey = resolveQaChildSessionKey(input, body);
     if (privateWorker === "first" && childSessionKey) {
-      await options.waitForTerminalRequesterSettled?.("private", childSessionKey);
+      await options.waitForTerminalRequesterSettled("private", childSessionKey);
     }
     return buildAssistantEvents(
       privateWorker === "first"
@@ -874,7 +872,7 @@ async function buildResponsesPayload(
   const terminalCompletionCase = terminalTurn?.caseName;
   const current = terminalTurn?.text ?? "";
   if (terminalCompletionCase && terminalTurn?.kind === "settled") {
-    return buildAssistantEvents("NO_REPLY");
+    return buildAssistantEvents("Completion processed.");
   }
   if (terminalCompletionCase === "private") {
     const nonce = QA_SUBAGENT_PRIVATE_RESULT_RE.exec(current)?.[0];
@@ -897,7 +895,11 @@ async function buildResponsesPayload(
           mode: "run",
         });
       }
-      return buildAssistantEvents("NO_REPLY");
+      return buildAssistantEvents(
+        current.includes(QA_SUBAGENT_PRIVATE_SECOND_RESULT)
+          ? "Private review complete."
+          : "Second worker started.",
+      );
     }
     if (hasCompletedToolOutput) {
       return buildAssistantEvents("Worker started.");
@@ -947,7 +949,7 @@ async function buildResponsesPayload(
   const terminalWorkerCase = terminalTurn?.kind === "worker" ? terminalTurn.caseName : undefined;
   if (terminalWorkerCase) {
     const childSessionKey = resolveQaChildSessionKey(input, body);
-    if (options.waitForTerminalRequesterSettled && childSessionKey) {
+    if (childSessionKey) {
       await options.waitForTerminalRequesterSettled(terminalWorkerCase, childSessionKey);
     }
   }
@@ -1213,25 +1215,21 @@ async function buildResponsesPayload(
       return buildAssistantEvents(slackChartMatch[2]);
     }
   }
-  if (QA_MESSAGE_DECISION_SUPPRESSION_PROMPT_RE.test(allInputText)) {
+  const suppressMessageDecision = QA_MESSAGE_DECISION_SUPPRESSION_PROMPT_RE.test(allInputText);
+  if (suppressMessageDecision || QA_MESSAGE_DECISION_SEND_PROMPT_RE.test(allInputText)) {
     if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
       return buildToolCallEventsWithArgs("message", {
         action: "send",
-        message:
-          "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
-      });
-    }
-    if (hasCompletedToolOutput) {
-      return buildAssistantEvents("NO_REPLY");
-    }
-  }
-  if (QA_MESSAGE_DECISION_SEND_PROMPT_RE.test(allInputText)) {
-    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
-      return buildToolCallEventsWithArgs("message", {
-        action: "send",
-        message: "QA-MESSAGE-DELIVERY-OK",
-        final: true,
-        presentation: { blocks: [{ type: "text", text: "QA-MESSAGE-DELIVERY-OK" }] },
+        ...(suppressMessageDecision
+          ? {
+              message:
+                "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
+            }
+          : {
+              message: "QA-MESSAGE-DELIVERY-OK",
+              final: true,
+              presentation: { blocks: [{ type: "text", text: "QA-MESSAGE-DELIVERY-OK" }] },
+            }),
       });
     }
     if (hasCompletedToolOutput) {
@@ -1409,15 +1407,15 @@ async function buildResponsesPayload(
     }
     return buildAssistantEvents(divergentFinal || marker);
   }
-  if (QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE.test(allInputText)) {
-    const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-GROUP-TOOL-OK";
-    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
-      return buildToolCallEventsWithArgs("message", {
-        action: "send",
-        message: marker,
-      });
-    }
-    return buildAssistantEvents("");
+  const groupMessageToolTurn = planGroupMessageToolTurn({
+    allInputText,
+    body,
+    marker: exactMarkerDirective ?? exactReplyDirective,
+    hasCompletedToolOutput,
+    isSettledToolContinuation,
+  });
+  if (groupMessageToolTurn) {
+    return groupMessageToolTurn;
   }
   if (QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE.test(allInputText)) {
     const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-MSTEAMS-THREAD-DEDUPE-OK";
@@ -1574,10 +1572,7 @@ async function buildResponsesPayload(
         maxResults: 3,
       });
     }
-    const results = Array.isArray(toolJson?.results)
-      ? (toolJson.results as Array<Record<string, unknown>>)
-      : [];
-    const first = results[0];
+    const first = memoryResults[0];
     if (typeof first?.path === "string") {
       return buildToolCallEventsWithArgs("memory_get", buildMemoryGetArgs(first));
     }
@@ -1615,10 +1610,7 @@ async function buildResponsesPayload(
       }
       return buildAssistantEvents("NONE");
     }
-    const results = Array.isArray(toolJson?.results)
-      ? (toolJson.results as Array<Record<string, unknown>>)
-      : [];
-    const first = results[0];
+    const first = memoryResults[0];
     if (typeof first?.path === "string" && hasDeclaredTool(body, "memory_get")) {
       return buildToolCallEventsWithArgs("memory_get", buildMemoryGetArgs(first));
     }
@@ -1641,41 +1633,19 @@ async function buildResponsesPayload(
     if (memoryToolUnavailable) {
       return buildAssistantEvents("NONE");
     }
-    const results = Array.isArray(toolJson?.results)
-      ? (toolJson.results as Array<Record<string, unknown>>)
-      : [];
-    const preferredSessionResult = results.find((result) => {
-      const resultPath = typeof result.path === "string" ? result.path : undefined;
-      if (result.source !== "sessions" && !resultPath?.startsWith("sessions/")) {
-        return false;
-      }
-      const memoryText =
-        typeof result.snippet === "string"
-          ? result.snippet
-          : typeof result.text === "string"
-            ? result.text
-            : "";
-      return extractOrbitCode(memoryText) !== null;
-    });
-    const sessionMemoryText =
-      typeof preferredSessionResult?.snippet === "string"
-        ? preferredSessionResult.snippet
-        : typeof preferredSessionResult?.text === "string"
-          ? preferredSessionResult.text
-          : "";
+    const preferredSessionResult = memoryResults.find(
+      (result) =>
+        isSessionMemoryResult(result) && extractOrbitCode(memoryResultText(result)) !== null,
+    );
     const retrievedOrbitCode =
-      extractOrbitCode(sessionMemoryText) ??
+      extractOrbitCode(memoryResultText(preferredSessionResult)) ??
       (typeof toolJson?.text === "string" ? extractOrbitCode(toolJson.text) : null);
     if (retrievedOrbitCode) {
       return buildAssistantEvents(
         `Protocol note: I checked memory and the current Project Nebula codename is ${retrievedOrbitCode}.`,
       );
     }
-    const first =
-      results.find((result) => {
-        const resultPath = typeof result.path === "string" ? result.path : undefined;
-        return result.source === "sessions" || resultPath?.startsWith("sessions/");
-      }) ?? results[0];
+    const first = memoryResults.find(isSessionMemoryResult) ?? memoryResults[0];
     if (
       typeof first?.path === "string" &&
       (typeof first.startLine === "number" || typeof first.endLine === "number")
@@ -2022,7 +1992,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
     params?.repeatedRequestStalledResponsePauseMs ?? QA_REPEATED_REQUEST_STALLED_RESPONSE_PAUSE_MS;
   const terminalRequesterSettleGate = createTerminalRequesterSettleGate();
   const servedCompactionSummaryFaultMarkers = new Set<string>();
-  const scenarioStateFor = createQaMockScenarioStateStore();
+  const scenarioStates = new Map<string, MockScenarioState>();
   const requestLog = createMockOpenAiRequestLog();
   const inflightRequests = new Map<number, { prompt: string; allInputText: string }>();
   let nextInflightRequestId = 1;
@@ -2052,7 +2022,19 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
     const prompt = extractLastUserText(input);
     const allInputText = extractAllRequestTexts(input, body);
     const sessionId = sessionIdentity.resolve(request, normalized);
-    const scenarioState = scenarioStateFor(sessionId);
+    // Transport identity survives prompt edits, provider switches, and cache boundaries.
+    const scenarioState = scenarioStates.get(sessionId ?? "") ?? {
+      anthropicThinkingErrorScenarioKeys: new Set<string>(),
+      compactionOverflowInjected: false,
+      compactionRetryActive: false,
+      subagentFanoutCompletedWorkers: new Set<"alpha" | "beta">(),
+      subagentFanoutPhase: 0,
+      subagentHandoffSpawned: false,
+      repeatedRequestRecoveryAttempts: 0,
+      stalledTurnRecoveryAttempts: 0,
+      toolLoopReadAttempts: 0,
+    };
+    scenarioStates.set(sessionId ?? "", scenarioState);
     const compactionSummaryFaultMode = resolveCompactionSummaryFaultMode({
       allInputText,
       requestKind,
@@ -2081,7 +2063,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
       requestKind,
       compactionSummaryFaultMode,
       rawByteLength,
-    } satisfies MockOpenAiRequestSnapshotBase;
+    };
     if (
       requestKind === "agent-initial" &&
       (QA_COMPACTION_RETRY_PROMPT_RE.test(allInputText) ||
@@ -2151,7 +2133,6 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
     if (request.route === "anthropic-messages") {
       events = adaptAnthropicToolCallIds(events);
     }
-    const plannedToolIdentity = extractPlannedToolIdentity(events);
     const plannedTool = extractScenarioPlannedTool(events);
     const terminalRequesterCase =
       subagentTurn?.kind === "kickoff" ? subagentTurn.caseName : undefined;
@@ -2190,9 +2171,9 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
       ...(events.some((event) => event.type === "response.failed")
         ? { errorCode: "response_failed_no_details" }
         : {}),
-      plannedToolCallId: plannedToolIdentity.callId,
-      ...(request.route === "responses" && plannedToolIdentity.itemId
-        ? { plannedToolItemId: plannedToolIdentity.itemId }
+      plannedToolCallId: plannedTool.callId,
+      ...(request.route === "responses" && plannedTool.itemId
+        ? { plannedToolItemId: plannedTool.itemId }
         : {}),
       plannedToolName: plannedTool.name,
       ...(plannedTool.wireName && plannedTool.wireName !== plannedTool.name
@@ -2227,11 +2208,17 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
           }
         : {}),
       ...(failure ? { failure } : {}),
-      ...(QA_TELEGRAM_PREPARED_DELIVERY_RE.test(splitMockConversationContext(prompt).current)
-        ? { previewPauseMs: 3_000 }
-        : QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText)
+      ...((() => {
+        const telegramPause = resolveTelegramChannelStreamingPause(
+          splitMockConversationContext(prompt).current,
+        );
+        return telegramPause && params?.telegramChannelStreamingPause
+          ? { previewPause: params.telegramChannelStreamingPause }
+          : telegramPause;
+      })() ??
+        (QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText)
           ? { previewPauseMs: finalOnlyMarkerPauseMs }
-          : {}),
+          : {})),
       // Stall one request; later failures let the normal retry budget settle the turn.
       ...(repeatedRequestRecovery &&
       scenarioState.repeatedRequestRecoveryAttempts <= QA_REPEATED_REQUEST_STALL_ATTEMPT
@@ -2367,35 +2354,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
       }
       if (url.pathname === "/v1/responses") {
         const dispatched = await dispatchResponses({ body, raw, headers: req.headers });
-        if (dispatched.failure) {
-          if (dispatched.failure.retryAfterSeconds !== undefined) {
-            res.setHeader("retry-after", String(dispatched.failure.retryAfterSeconds));
-          }
-          writeJson(res, dispatched.failure.status, {
-            error: {
-              type: dispatched.failure.type,
-              ...(dispatched.failure.code ? { code: dispatched.failure.code } : {}),
-              message: dispatched.failure.message,
-            },
-          });
-          return;
-        }
-        const { events } = dispatched;
-        if (dispatched.responsePauseMs !== undefined) {
-          await sleep(dispatched.responsePauseMs);
-        }
-        if (body.stream !== true) {
-          const completion = events.at(-1);
-          if (!completion || completion.type !== "response.completed") {
-            writeJson(res, 500, { error: "mock completion failed" });
-            return;
-          }
-          writeJson(res, 200, completion.response);
-          dispatched.onResponseSent?.();
-          return;
-        }
-        await writeSse(res, events, "responses", dispatched.previewPauseMs);
-        dispatched.onResponseSent?.();
+        await writeMockOpenAiResponsesHttp(res, body.stream === true, dispatched);
         return;
       }
       const dispatched = await dispatchProvider({

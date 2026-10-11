@@ -2,76 +2,99 @@ import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import type { UpdateRunPhasePatch } from "../../infra/update-run-mutation.types.js";
-import type { UpdateRunPhase } from "../../infra/update-run-record.js";
+import type { UpdateRunPhase, UpdateRunStep } from "../../infra/update-run-record.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import {
   recordUpdateRunPhaseAsync,
+  recordUpdateRunStepAsync,
   type UpdateRunWriteOptions,
 } from "../../infra/update-run-write.async.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import type { UpdateCommandExecutionGuards } from "./update-command-execution.types.js";
 import { captureUpdateCommandExecutorAuthority } from "./update-command-executor.js";
-import { retainMutableUpdateSignalWrite } from "./update-command-mutable-signals.js";
+import {
+  recordMutableUpdateSignalPhase,
+  retainMutableUpdateSignalWrite,
+} from "./update-command-mutable-signals.js";
 import { assertUpdateCommandRecoveryState } from "./update-command-recovery.js";
 
+type PhaseOwner = Readonly<{
+  kind: "current-core-finalization" | "package-compensation";
+  assertCurrent: () => void;
+}>;
+type PhaseWriter = Pick<UpdateCommandExecutionGuards, "recordPhase">;
+
+export function createUpdateCommandExecutionGuards(
+  opts: UpdateCommandOptions,
+  root: string,
+  owner: PhaseOwner,
+): PhaseWriter;
+export function createUpdateCommandExecutionGuards(
+  opts: UpdateCommandOptions,
+  root: string,
+): UpdateCommandExecutionGuards;
 /** Pin the invocation across parent work and the separately bound Doctor child. */
-export function createUpdateCommandExecutionGuards(opts: UpdateCommandOptions, root: string) {
+export function createUpdateCommandExecutionGuards(
+  opts: UpdateCommandOptions,
+  root: string,
+  owner?: PhaseOwner,
+) {
   const run = opts.run;
-  const runId = run?.runId;
   let executor = run?.executorFence;
   const requester = run?.requesterAuthority;
   let stateHandedOff = false;
-  const assertInvocation = (phase?: "restore", readRecovery = true) => {
+  const assertInvocation = (phase?: "restore") => {
     const readStatePolicy = !stateHandedOff && phase !== "restore";
-    if (opts.recovery || (readRecovery && readStatePolicy)) {
+    if (opts.recovery || readStatePolicy) {
       assertUpdateCommandRecoveryState(opts);
     }
-    if (
-      opts.run !== run ||
-      run?.runId !== runId ||
-      run?.executorFence !== executor ||
-      run?.requesterAuthority !== requester ||
-      (readStatePolicy && requester?.isCurrent() === false)
-    ) {
+    if (readStatePolicy && requester?.isCurrent() === false) {
       throw new UpdateRequesterRevokedError();
     }
   };
-  const captureWriteOptions = () => {
+  const captureWriteOptions = (): ReturnType<
+    UpdateCommandExecutionGuards["captureWriteOptions"]
+  > => {
     const assertAccepting = () => {
-      if (run?.interrupted) {
+      if (owner?.kind !== "package-compensation" && run?.interrupted) {
         throw new UpdateRequesterRevokedError();
       }
     };
     assertAccepting();
-    const capturedExecutor = executor;
-    const capturedHandoff = stateHandedOff;
-    const env = run?.env;
-    const assertCurrent = () => {
-      if (executor !== capturedExecutor || stateHandedOff !== capturedHandoff || run?.env !== env) {
-        throw new UpdateRequesterRevokedError();
-      }
-      assertInvocation(undefined, false);
-      capturedExecutor?.assertCurrent();
-    };
-    assertCurrent();
-    const capturedEnv = cloneEnvWithPlatformSemantics(env ?? process.env);
+    const capturedEnv = cloneEnvWithPlatformSemantics(run?.env ?? process.env);
     const context = captureOpenClawStateWorkerContext({ env: capturedEnv });
     return {
       env: capturedEnv,
       context,
-      assertCurrent,
+      // Driver-only wait; these writes run in the worker, never on the Gateway event loop.
+      busyTimeoutMs: 120_000,
       assertAccepting,
       retainSettlement: (completion: Promise<void>) =>
         retainMutableUpdateSignalWrite(run, completion),
-      ...(!capturedHandoff ? { requireNoRecovery: true as const } : {}),
+      ...(owner || !stateHandedOff ? { requireNoRecovery: true as const } : {}),
     } satisfies UpdateRunWriteOptions;
   };
+  const recordPhase = async (phase: UpdateRunPhase, patch?: UpdateRunPhasePatch) => {
+    if (run) {
+      owner?.assertCurrent();
+      const captured = captureWriteOptions();
+      await recordUpdateRunPhaseAsync(run.runId, phase, patch, captured);
+      recordMutableUpdateSignalPhase(run, phase);
+    }
+  };
+  if (owner) {
+    return { recordPhase };
+  }
   return {
     captureWriteOptions,
-    recordPhase: async (phase: UpdateRunPhase, patch?: UpdateRunPhasePatch) => {
-      if (run) {
-        await recordUpdateRunPhaseAsync(run.runId, phase, patch, captureWriteOptions());
+    recordPhase,
+    recordStep: async (step: UpdateRunStep) => {
+      if (!run) {
+        throw new Error("Update step receipt requires an admitted run.");
       }
+      const captured = captureWriteOptions();
+      return await recordUpdateRunStepAsync(run.runId, step, captured);
     },
     onStateHandoff: () => {
       stateHandedOff = true;
@@ -87,7 +110,6 @@ export function createUpdateCommandExecutionGuards(opts: UpdateCommandOptions, r
       if (authority.installKey !== resolveUpdateInstallRoot(root)) {
         throw new UpdateRequesterRevokedError();
       }
-      assertUpdateCommandRecoveryState(opts);
       run.executorFence = acquired;
       executor = acquired;
     },

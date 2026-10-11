@@ -2,7 +2,7 @@
 import type { App } from "@slack/bolt";
 import { resolveEnvelopeFormatOptions } from "openclaw/plugin-sdk/channel-inbound";
 import type { ContextVisibilityMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SlackMessageEvent } from "../../types.js";
 import * as mediaModule from "../media.js";
 import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
@@ -14,14 +14,6 @@ import {
 
 describe("resolveSlackThreadContextData", () => {
   const storeFixture = createSlackSessionStoreFixture("openclaw-slack-thread-context-");
-
-  beforeAll(() => {
-    storeFixture.setup();
-  });
-
-  afterAll(() => {
-    storeFixture.cleanup();
-  });
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -80,7 +72,7 @@ describe("resolveSlackThreadContextData", () => {
       ctx.channelRuntime = {
         ...ctx.channelRuntime!,
         session: {
-          resolveEntryResetFreshness: () =>
+          resolveEntryResetFreshnessAsync: async () =>
             params.sessionState === "missing"
               ? { state: "missing", entry: undefined }
               : {

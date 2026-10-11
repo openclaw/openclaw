@@ -3,7 +3,7 @@ import { once } from "node:events";
 import net from "node:net";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -56,9 +56,9 @@ const storeOptions = {
   overflowPolicy: "reject-new" as const,
 };
 const openStore = () =>
-  createPluginStateKeyedStoreForTests<
+  createPluginStateKeyedStoreV2ForTests<
     Omit<PendingFaceTimeDial, "callUUIDAliases"> & { callUUIDAliases?: string[] }
-  >("facetime", storeOptions);
+  >("facetime", storeOptions, { assertCurrent() {} });
 
 class WireHelper {
   readonly actions: Array<Record<string, unknown>> = [];
@@ -222,7 +222,7 @@ describe("FaceTime production authority boundary", () => {
       logger: log,
       pluginRoot: "/isolated",
       runtime: {
-        state: { openKeyedStore: openStore },
+        state: { openKeyedStoreV2: openStore },
         system: {
           runCommandWithTimeout: vi.fn(async () => {
             throw new Error("host command is forbidden in authority proof");
@@ -252,30 +252,33 @@ describe("FaceTime production authority boundary", () => {
     expect(peer.actions).toEqual([]);
   });
 
-  describe.each([4, 1])("native call status %s", (status) => {
-    it.each([
-      { name: "unlisted caller", data: { handle: { value: "unlisted@example.com" } } },
-      {
-        name: "forbidden cellular transport",
-        data: {
-          transport: {
-            ...call().data.transport,
-            kind: "cellular",
-            provider_is_facetime: false,
-            provider_is_telephony: true,
-          },
+  it.each([
+    {
+      name: "unlisted ringing caller",
+      status: 4,
+      data: { handle: { value: "unlisted@example.com" } },
+    },
+    {
+      name: "active cellular transport",
+      status: 1,
+      data: {
+        transport: {
+          ...call().data.transport,
+          kind: "cellular",
+          provider_is_facetime: false,
+          provider_is_telephony: true,
         },
       },
-    ])("rejects $name before capture or native media commands", async ({ data }) => {
-      const { runtime, peer } = await start();
-      peer.send(call(status, data));
-      await vi.waitFor(() =>
-        expect(log.info).toHaveBeenCalledWith(expect.stringContaining("ignored unauthorized")),
-      );
-      expect((await runtime.status()).calls).toEqual([]);
-      expect(peer.actions).toEqual([]);
-      expect(isolation.spawn).not.toHaveBeenCalled();
-    });
+    },
+  ])("rejects $name before capture or native media commands", async ({ status, data }) => {
+    const { runtime, peer } = await start();
+    peer.send(call(status, data));
+    await vi.waitFor(() =>
+      expect(log.info).toHaveBeenCalledWith(expect.stringContaining("ignored unauthorized")),
+    );
+    expect((await runtime.status()).calls).toEqual([]);
+    expect(peer.actions).toEqual([]);
+    expect(isolation.spawn).not.toHaveBeenCalled();
   });
 
   it.each(["cancelled", "revoked"] as const)(

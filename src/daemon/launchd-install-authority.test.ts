@@ -94,7 +94,7 @@ it.each([
     let loaded = true;
     const activations: string[] = [];
     const bootstrapDefinitions: string[] = [];
-    native.command.mockImplementation(async ([binary, nativeAction]) => {
+    native.command.mockImplementation(async ([binary, nativeAction, target]) => {
       const action = expectDefined(nativeAction, "Expected a native launchctl action");
       expect(binary).toBe("launchctl");
       if (action === "bootout" || action === "unload") {
@@ -112,7 +112,7 @@ it.each([
       }
       return {
         code: action === "print" && !loaded ? 1 : 0,
-        stdout: action === "print" && loaded ? "state = waiting\n" : "",
+        stdout: action === "print" && loaded ? `${target} = {\n\tstate = waiting\n}` : "",
         stderr: action === "print" && !loaded ? "Could not find service" : "",
         signal: null,
         killed: false,
@@ -231,14 +231,14 @@ it.each([
 it("retains another writer's artifact instead of claiming successful LaunchAgent recovery", async () => {
   const { args, plist, environment } = await fixture();
   let current = true;
-  native.command.mockResolvedValue({
+  native.command.mockImplementation(async (argv) => ({
     code: 0,
-    stdout: "state = waiting\n",
+    stdout: `${argv[2]} = {\n\tstate = waiting\n}`,
     stderr: "",
     signal: null,
     killed: false,
     termination: "exit",
-  });
+  }));
   const rename = fs.rename;
   vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
     await rename(from, to);

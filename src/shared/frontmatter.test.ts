@@ -31,32 +31,11 @@ describe("shared/frontmatter", () => {
     expect(
       resolveOpenClawManifestBlock({
         frontmatter: {
-          pluginMeta: "{ openclaw: { foo: 2 } }",
+          pluginMeta: "{ anotherTool: { foo: 99 }, openclaw: { foo: 2 } }",
         },
         key: "pluginMeta",
       }),
     ).toEqual({ foo: 2 });
-  });
-
-  test("resolveOpenClawManifestBlock reads legacy manifest keys", () => {
-    expect(
-      resolveOpenClawManifestBlock({
-        frontmatter: {
-          metadata: "{ clawdbot: { requires: { bins: ['op'] }, install: [] } }",
-        },
-      }),
-    ).toEqual({ requires: { bins: ["op"] }, install: [] });
-  });
-
-  test("resolveOpenClawManifestBlock prefers current manifest keys over legacy keys", () => {
-    expect(
-      resolveOpenClawManifestBlock({
-        frontmatter: {
-          metadata:
-            "{ openclaw: { requires: { bins: ['current'] } }, clawdbot: { requires: { bins: ['legacy'] } } }",
-        },
-      }),
-    ).toEqual({ requires: { bins: ["current"] } });
   });
 
   test("resolveOpenClawManifestBlock returns undefined for invalid input", () => {

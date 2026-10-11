@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eSuite,
   holdModuleResponse,
@@ -86,7 +87,10 @@ suite.define(() => {
     "preserves newer main focus while %s opens a delayed rail",
     async (command) => {
       await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
-        const held = await holdModuleResponse(page, /\/assets\/chat-session-rail-[^/]+\.js$/u);
+        const held = await holdModuleResponse(
+          page,
+          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.ts"),
+        );
         try {
           await installMockGateway(page);
           await page.goto(`${suite.server.baseUrl}chat`);
@@ -121,7 +125,10 @@ suite.define(() => {
     "focuses a new Side chat opening after %s supersedes an unmounted command",
     async (action) => {
       await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
-        const held = await holdModuleResponse(page, /\/assets\/chat-session-rail-[^/]+\.js$/u);
+        const held = await holdModuleResponse(
+          page,
+          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.ts"),
+        );
         try {
           await installMockGateway(page);
           await page.goto(`${suite.server.baseUrl}chat`);
@@ -324,7 +331,10 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
       const held =
         intent === "sidebar menu before mount"
-          ? await holdModuleResponse(page, /\/assets\/chat-session-rail-[^/]+\.js$/u)
+          ? await holdModuleResponse(
+              page,
+              controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.ts"),
+            )
           : null;
       try {
         const gateway = await installMockGateway(page, {
@@ -367,6 +377,7 @@ suite.define(() => {
             .locator('[data-session-key="agent:main:sidebar-focus"] .sidebar-recent-session__link')
             .focus();
           await page.keyboard.press("Shift+F10");
+          await openSessionMenuSubmenu(page, "Advanced");
           await openSessionMenuSubmenu(page, "Icon & color");
           await page.getByRole("button", { name: "Custom icon…", exact: true }).click();
           foregroundInput = page.getByRole("textbox", { name: "Custom icon", exact: true });

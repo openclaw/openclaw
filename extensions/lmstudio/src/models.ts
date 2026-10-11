@@ -144,10 +144,6 @@ export function resolveLmstudioReasoningCapability(
   return defaultOption !== undefined && defaultOption !== "off";
 }
 
-/**
- * Reads loaded LM Studio instances and returns the largest valid context window.
- * Returns null when no usable loaded context is present.
- */
 export function resolveLoadedContextWindow(
   entry: Pick<LmstudioModelWire, "loaded_instances">,
 ): number | null {
@@ -302,30 +298,23 @@ export function resolveLmstudioServerBase(configuredBaseUrl?: string): string {
   const configured = configuredBaseUrl?.trim();
   const resolved = configured || LMSTUDIO_DEFAULT_BASE_URL;
   const fetchableBaseUrl = toFetchableLmstudioBaseUrl(resolved);
-  try {
-    const parsed = new URL(fetchableBaseUrl);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      throw new TypeError(`Unsupported LM Studio protocol: ${parsed.protocol}`);
-    }
+  const parsed = URL.parse(fetchableBaseUrl);
+  if (parsed && (parsed.protocol === "http:" || parsed.protocol === "https:")) {
     const pathname = normalizeUrlPath(parsed.pathname);
     parsed.pathname = pathname.length > 0 ? pathname : "/";
     parsed.search = "";
     parsed.hash = "";
     return parsed.toString().replace(/\/$/, "");
-  } catch {
-    const trimmed = resolved.replace(/\/+$/, "");
-    const normalized = normalizeUrlPath(trimmed);
-    return normalized.length > 0 ? normalized : LMSTUDIO_DEFAULT_BASE_URL;
   }
+  const normalized = normalizeUrlPath(resolved.replace(/\/+$/, ""));
+  return normalized.length > 0 ? normalized : LMSTUDIO_DEFAULT_BASE_URL;
 }
 
-/** Resolves LM Studio inference base URL and always appends /v1. */
 export function resolveLmstudioInferenceBase(configuredBaseUrl?: string): string {
   const serverBase = resolveLmstudioServerBase(configuredBaseUrl);
   return `${serverBase}/v1`;
 }
 
-/** Canonicalizes persisted LM Studio provider config to the inference base URL form. */
 export function normalizeLmstudioProviderConfig(
   provider: ModelProviderConfig,
 ): ModelProviderConfig {
@@ -431,7 +420,6 @@ export function buildLmstudioModelName(model: {
 }
 
 /**
- * Base model fields extracted from a single LM Studio wire entry.
  * Shared by the setup layer (persists simple names to config) and the runtime
  * discovery path (which enriches the name with format/state tags).
  */
@@ -451,14 +439,6 @@ export type LmstudioModelBase = {
   maxTokens: number;
 };
 
-/**
- * Maps a single LM Studio wire entry to its base model fields.
- * Returns null for non-LLM entries or entries with no usable key.
- *
- * Shared by both the setup layer (persists simple names to config) and the
- * runtime discovery path (which enriches the name with format/state tags via
- * buildLmstudioModelName).
- */
 export function mapLmstudioWireEntry(entry: LmstudioModelWire): LmstudioModelBase | null {
   if (entry.type !== "llm") {
     return null;

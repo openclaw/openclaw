@@ -1,5 +1,3 @@
-import type { ReactiveControllerHost } from "lit";
-
 type McpAppUnmountTarget = Element & {
   restartAfterTeardown(): void;
   teardown(): Promise<void>;
@@ -13,16 +11,13 @@ function isMcpAppUnmountTarget(value: Element): value is McpAppUnmountTarget {
   );
 }
 
-function findMcpAppUnmountTargets(
-  roots: Iterable<ParentNode>,
-  selector = "mcp-app-view",
-): McpAppUnmountTarget[] {
+function findMcpAppUnmountTargets(roots: Iterable<ParentNode>): McpAppUnmountTarget[] {
   const targets = new Set<McpAppUnmountTarget>();
   for (const root of roots) {
-    if (root instanceof Element && root.matches(selector) && isMcpAppUnmountTarget(root)) {
+    if (root instanceof Element && root.matches("mcp-app-view") && isMcpAppUnmountTarget(root)) {
       targets.add(root);
     }
-    for (const candidate of root.querySelectorAll(selector)) {
+    for (const candidate of root.querySelectorAll("mcp-app-view")) {
       if (isMcpAppUnmountTarget(candidate)) {
         targets.add(candidate);
       }
@@ -32,22 +27,19 @@ function findMcpAppUnmountTargets(
 }
 
 /** Keeps rendered DOM and owner state together until one coalesced MCP teardown completes. */
-export class McpAppUnmountGate {
+export class McpAppUnmountGate<T = unknown> {
   private renderedKey: McpAppUnmountKey | null = null;
-  private renderedValue: unknown;
+  private renderedValue: T | undefined;
   private pending = false;
   private restartTargets: McpAppUnmountTarget[] | null = null;
 
-  constructor(
-    private readonly host: ReactiveControllerHost,
-    private readonly selector = "mcp-app-view",
-  ) {}
+  constructor(private readonly host: { requestUpdate(): void }) {}
 
   get retiring(): boolean {
     return this.pending || this.restartTargets !== null;
   }
 
-  private apply(key: McpAppUnmountKey, renderValue: () => unknown): unknown {
+  private apply(key: McpAppUnmountKey, renderValue: () => T): T | undefined {
     this.renderedValue = renderValue();
     this.renderedKey = key;
     return this.renderedValue;
@@ -55,18 +47,18 @@ export class McpAppUnmountGate {
 
   render(
     key: McpAppUnmountKey,
-    renderValue: () => unknown,
+    renderValue: () => T,
     leavingRoots: () => Iterable<ParentNode>,
     options: { retainRenderedValue?: boolean } = {},
-  ): unknown {
+  ): T | undefined {
     if (this.pending) {
       return this.renderedValue;
     }
     if (this.restartTargets) {
       const targets = this.restartTargets;
       this.restartTargets = null;
-      // Lit commits the parent update synchronously after render. Restart only
-      // torn-down views that survived that commit; retained siblings stay intact.
+      // Restart only torn-down views that survived the parent commit;
+      // retained siblings stay intact.
       queueMicrotask(() => {
         for (const target of targets) {
           if (target.isConnected) {
@@ -85,7 +77,7 @@ export class McpAppUnmountGate {
       return this.apply(key, renderValue);
     }
 
-    const targets = findMcpAppUnmountTargets(leavingRoots(), this.selector);
+    const targets = findMcpAppUnmountTargets(leavingRoots());
     if (targets.length === 0) {
       return this.apply(key, renderValue);
     }

@@ -20,23 +20,9 @@ import {
 } from "./chat-broadcast.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
-import { appendAssistantTranscriptMessage } from "./chat-transcript-persistence.js";
+import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
-
-export {
-  augmentChatHistoryWithCanvasBlocks,
-  DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-  dropPreSessionStartAnnouncePairs,
-  resolveEffectiveChatHistoryMaxChars,
-  sanitizeChatHistoryMessages,
-} from "../chat-display-projection.js";
-export { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
-export {
-  CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
-  replaceOversizedChatHistoryMessages,
-  reportOmittedChatHistory,
-} from "./chat-history-budget.js";
 
 export const chatHandlers: GatewayRequestHandlers = {
   ...chatHistoryHandlers,
@@ -53,18 +39,15 @@ export const chatHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateChatInjectParams, "chat.inject", respond)) {
       return;
     }
-    const p = params;
-
-    const rawSessionKey = p.sessionKey;
-    const agentIdOverride = normalizeOptionalString(p.agentId);
+    const rawSessionKey = params.sessionKey;
+    const agentIdOverride = normalizeOptionalString(params.agentId);
     const cfg = context.getRuntimeConfig();
     const requestedAgent = resolveRequestedSessionAgentId(cfg, rawSessionKey, agentIdOverride);
     if (!requestedAgent.ok) {
       respond(false, undefined, requestedAgent.error);
       return;
     }
-    const requestedAgentId = requestedAgent.agentId;
-    const sessionLoadOptions = { agentId: requestedAgentId };
+    const sessionLoadOptions = { agentId: requestedAgent.agentId };
     const {
       agentId,
       storePath,
@@ -77,7 +60,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    let appended: Awaited<ReturnType<typeof appendAssistantTranscriptMessage>>;
+    let appended: Awaited<ReturnType<typeof appendInjectedAssistantMessageToTranscript>>;
     try {
       const admission = await beginSessionWorkAdmission({
         scope: storePath,
@@ -99,15 +82,14 @@ export const chatHandlers: GatewayRequestHandlers = {
       try {
         appended = await admission.run(
           async () =>
-            await appendAssistantTranscriptMessage({
+            await appendInjectedAssistantMessageToTranscript({
               sessionKey,
-              message: p.message,
-              label: p.label,
+              message: params.message,
+              label: params.label,
               sessionId,
               storePath,
               agentId,
-              createIfMissing: true,
-              cfg,
+              config: cfg,
             }),
         );
       } finally {

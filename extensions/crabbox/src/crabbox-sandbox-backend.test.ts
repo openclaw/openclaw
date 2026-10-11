@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
+import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import type {
   CreateReservedSandboxBackendParamsV1,
   RemoteShellCommandSpec,
@@ -27,6 +27,10 @@ const remote = vi.hoisted(() => ({
   createSession: vi.fn(),
   commands: [] as RemoteShellCommandSpec[],
 }));
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>()),
+  runCommandWithTimeout: vi.fn(),
+}));
 vi.mock("openclaw/plugin-sdk/sandbox", () => ({
   createRemoteShellSandboxBackend: remote.createBackend,
   createRemoteShellSandboxSession: remote.createSession,
@@ -38,7 +42,6 @@ vi.mock("openclaw/plugin-sdk/sandbox", () => ({
   },
 }));
 
-type Runner = NonNullable<Parameters<typeof createCrabboxSandboxBackendFactory>[0]["runCommand"]>;
 const LEASE_ID = "cbx_0123456789ab";
 const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-crabbox-test-"));
 afterAll(async () => await fs.rm(temporaryRoot, { recursive: true, force: true }));
@@ -91,7 +94,9 @@ function params(
   };
 }
 function setup(handler: (argv: string[]) => SpawnResult | Promise<SpawnResult> = respond) {
-  const runCommand = vi.fn<Runner>(async (argv) => await handler(argv));
+  const runCommand = vi
+    .mocked(runCommandWithTimeout)
+    .mockImplementation(async (argv) => await handler(argv));
   const dependencies = {
     openclawRoot: temporaryRoot,
     pluginConfig: {
@@ -101,7 +106,6 @@ function setup(handler: (argv: string[]) => SpawnResult | Promise<SpawnResult> =
       ttl: "2h",
       idleTimeout: "30m",
     },
-    runCommand,
   };
   return {
     runCommand,
@@ -110,6 +114,7 @@ function setup(handler: (argv: string[]) => SpawnResult | Promise<SpawnResult> =
   };
 }
 beforeEach(() => {
+  vi.mocked(runCommandWithTimeout).mockReset();
   remote.commands.length = 0;
   remote.createBackend.mockReset();
   remote.createSession.mockReset();
@@ -294,7 +299,7 @@ it("keeps management routed by the stored claim and original workspace", async (
     "stop",
   ]);
   for (const [argv, options] of runCommand.mock.calls) {
-    expect(options.cwd).toBe(temporaryRoot);
+    expect(options).toMatchObject({ cwd: temporaryRoot });
     if (argv[1] === "stop" || argv[1] === "inspect") {
       expect(argv).not.toContain("--provider");
     }

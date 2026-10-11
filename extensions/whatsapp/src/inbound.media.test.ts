@@ -3,6 +3,9 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as waitForLogTick } from "node:timers/promises";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   mockExtractMessageContent,
@@ -291,24 +294,40 @@ function requireMediaPath(value: unknown): string {
   return value;
 }
 
-async function waitForLogLine(messageId: string): Promise<string> {
-  let matchingLine = "";
-  await vi.waitFor(
-    async () => {
-      const content = await fs.readFile(LOG_PATH, "utf8").catch(() => "");
-      matchingLine =
-        content
-          .split("\n")
-          .find(
-            (line) =>
-              line.includes("WhatsApp inbound media materialization failed") &&
-              line.includes(messageId),
-          ) ?? "";
-      expect(matchingLine).not.toBe("");
-    },
-    { timeout: 2_000, interval: 5 },
-  );
-  return matchingLine;
+// The async file transport's flush promise is not exposed through the plugin SDK.
+async function waitForLogLine(messageId: string, signal: AbortSignal): Promise<string> {
+  try {
+    for (;;) {
+      signal.throwIfAborted();
+      const content = await withinTest(
+        fs.readFile(LOG_PATH, "utf8").catch((error: unknown) => {
+          if (extractErrorCode(error) === "ENOENT") {
+            return "";
+          }
+          throw error;
+        }),
+        signal,
+      );
+      const matchingLine = content
+        .split("\n")
+        .find(
+          (line) =>
+            line.includes("WhatsApp inbound media materialization failed") &&
+            line.includes(messageId),
+        );
+      if (matchingLine) {
+        return matchingLine;
+      }
+      await waitForLogTick(10, undefined, { signal });
+    }
+  } catch (error) {
+    if (signal.aborted) {
+      throw new Error(`Timed out waiting for the media failure log for ${messageId}`, {
+        cause: error,
+      });
+    }
+    throw error;
+  }
 }
 
 async function createBaileysMediaHttpError(statusCode: number, details: string): Promise<Error> {
@@ -619,7 +638,7 @@ describe("web inbound media saves with extension", () => {
     await listener.close();
   });
 
-  it("keeps a failed image fact with an unavailable notice", async () => {
+  it("keeps a failed image fact with an unavailable notice", async ({ signal, onTestFinished }) => {
     downloadMediaMessageMock.mockRejectedValueOnce(
       await createBaileysMediaHttpError(
         410,
@@ -628,6 +647,7 @@ describe("web inbound media saves with extension", () => {
     );
     const onMessage = vi.fn();
     const listener = await startMediaMonitor(onMessage);
+    onTestFinished(() => listener.close());
     const realSock = await getMockSocket();
 
     realSock.ev.emit("messages.upsert", {
@@ -656,7 +676,7 @@ describe("web inbound media saves with extension", () => {
       type: "media",
       payload: { contentType: "image/jpeg", kind: "image" },
     });
-    const diagnostic = await waitForLogLine("img-failed");
+    const diagnostic = await waitForLogLine("img-failed", signal);
     expect(diagnostic).toContain('"channel":"whatsapp"');
     expect(diagnostic).toContain('"mediaKind":"image"');
     expect(diagnostic).toContain('"mimeType":"image/jpeg"');
@@ -685,11 +705,9 @@ describe("web inbound media saves with extension", () => {
     expect(terminalDiagnostic).not.toContain("42@c.us");
     expect(terminalDiagnostic).not.toContain(DIRECT_SYNTHETIC_BEARER);
     expect(terminalDiagnostic).not.toContain(DEPLOYMENT_REDACTION_SENTINEL);
-
-    await listener.close();
   });
 
-  it("logs quoted media failures without verbose logging", async () => {
+  it("logs quoted media failures without verbose logging", async ({ signal, onTestFinished }) => {
     downloadMediaMessageMock.mockRejectedValueOnce(
       await createBaileysMediaHttpError(
         410,
@@ -698,6 +716,7 @@ describe("web inbound media saves with extension", () => {
     );
     const onMessage = vi.fn();
     const listener = await startMediaMonitor(onMessage);
+    onTestFinished(() => listener.close());
     const realSock = await getMockSocket();
 
     realSock.ev.emit("messages.upsert", {
@@ -723,7 +742,7 @@ describe("web inbound media saves with extension", () => {
     const inbound = await waitForMessage(onMessage);
     expect(inbound.payload.body).toBe("inspect this\n\n[whatsapp quoted attachment unavailable]");
     expect(inbound.payload.commandBody).toBe("inspect this");
-    const diagnostic = await waitForLogLine("quoted-failed");
+    const diagnostic = await waitForLogLine("quoted-failed", signal);
     expect(diagnostic).toContain('"channel":"whatsapp"');
     expect(diagnostic).toContain('"mediaKind":"image"');
     expect(diagnostic).toContain('"mimeType":"image/jpeg"');
@@ -744,7 +763,5 @@ describe("web inbound media saves with extension", () => {
     expect(terminalDiagnostic).not.toContain("88@newsletter");
     expect(terminalDiagnostic).not.toContain(QUOTED_SYNTHETIC_API_KEY);
     expect(terminalDiagnostic).not.toContain(DEPLOYMENT_REDACTION_SENTINEL);
-
-    await listener.close();
   });
 });

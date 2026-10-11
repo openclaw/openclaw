@@ -1,14 +1,15 @@
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { splitArgsPreservingQuotes } from "../daemon/arg-split.js";
 import { isBunRuntime, resolveRuntimeScriptPosition } from "../daemon/runtime-binary.js";
 import { readDarwinProcessCommand } from "../process/supervisor/darwin-process-command.js";
 import {
   readProcessGroupMembers,
   type ProcessCommand,
 } from "../process/supervisor/service-child-group-ownership.js";
+import { parseWindowsNativeCommandLine } from "../process/windows-command-line.js";
 import { isPidDefinitelyDead } from "../shared/pid-alive.js";
 import { escapeRegExp } from "../shared/regexp.js";
+import { isRosettaTranslatedProcess } from "../shared/rosetta-translation.js";
 import { getRootOptionAwareCommandPath } from "./cli-root-options.js";
 import { isContainerEnvironment } from "./container-environment.js";
 import {
@@ -63,10 +64,22 @@ function classifyProcessArtifactCustody(
     if (identity.kind === "unclassified" && identity.cause !== "runtime-syntax") {
       throw new Error(identity.reason);
     }
+    const { position, operands } = resolveRuntimeScriptPosition(argv);
     if (!cwd || !path.isAbsolute(cwd)) {
+      const inspectorUid = process.getuid?.();
+      if (
+        cwd === undefined &&
+        identity.kind === "other" &&
+        typeof position !== "number" &&
+        position.kind === "not-runtime" &&
+        command.uid !== undefined &&
+        inspectorUid !== undefined &&
+        command.uid !== inspectorUid
+      ) {
+        return { kind: "non-holder" };
+      }
       throw new Error("working directory is unavailable");
     }
-    const { position, operands } = resolveRuntimeScriptPosition(argv);
     if (typeof position !== "number" && position.kind === "not-runtime") {
       return { kind: "non-holder" };
     }
@@ -129,19 +142,14 @@ export function inspectOtherOpenClawProcesses(handoff?: HandoffReferences) {
     const deadline = Date.now() + (handoff ? 15_000 : 1_000);
     const native = windows && handoff ? [...readWindowsProcessCensus(15_000)] : undefined;
     const nativeByPid = new Map(native?.map((entry) => [entry.pid, entry]));
-    const processes: CensusProcess[] = native?.map(({ pid, parentPid, commandLine }) => ({
-      pid,
-      state: "",
-      command:
-        commandLine && parentPid !== undefined
-          ? {
-              ppid: parentPid,
-              argv:
-                splitArgsPreservingQuotes(commandLine, { escapeMode: "backslash-quote-only" }) ??
-                [],
-            }
-          : undefined,
-    })) ?? [
+    const processes: CensusProcess[] = native?.map(({ pid, parentPid, commandLine }) => {
+      const argv = commandLine ? parseWindowsNativeCommandLine(commandLine) : null;
+      return {
+        pid,
+        state: "",
+        command: argv?.length && parentPid !== undefined ? { ppid: parentPid, argv } : undefined,
+      };
+    }) ?? [
       ...readProcessGroupMembers(handoff ? 15_000 : 1_000, {
         readDarwinCommand: readDarwinProcessCommand,
       }),
@@ -244,7 +252,7 @@ export function inspectOtherOpenClawProcesses(handoff?: HandoffReferences) {
           (command?.uid !== undefined &&
             process.getuid?.() !== undefined &&
             command.uid !== process.getuid?.());
-        if (((!argv && observation?.commandLine === undefined) || cwd === undefined) && !foreign) {
+        if ((!argv || cwd === undefined) && !foreign) {
           result.unverifiedPids.push(pid);
           if (windows) {
             result.error = "Retry update repair as Administrator using the same Windows account.";
@@ -265,9 +273,11 @@ export function inspectOtherOpenClawProcesses(handoff?: HandoffReferences) {
     if (handoff && pid) {
       result.unverifiedPids.push(Number(pid[1]));
     }
-    result.error = handoff
-      ? "Host process census is incomplete; verify process-inspection permissions and retry update repair."
-      : `Could not inspect OpenClaw processes: ${String(error)}`;
+    result.error = !handoff
+      ? `Could not inspect OpenClaw processes: ${String(error)}`
+      : isRosettaTranslatedProcess()
+        ? "Host process census is unavailable under Rosetta; run openclaw update repair with native arm64 Node.js."
+        : "Host process census is incomplete; verify process-inspection permissions and retry update repair.";
   }
   return handoff ? result : result.error ? { error: result.error } : { pids: result.matchingPids };
 }

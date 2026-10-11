@@ -136,6 +136,7 @@ export async function createChildAdapter(
     return await createServiceChildRelayAdapter({
       assertCurrent: params.assertCurrent,
       beforeSpawn: params.beforeSpawn,
+      initiateSpawn: params.initiateSpawn,
       command: process.platform === "win32" ? params.anchoredShellCommand : "/bin/sh",
       args: process.platform === "win32" ? [] : ["-c", params.anchoredShellCommand],
       windowsShellCommand: process.platform === "win32" ? params.anchoredShellCommand : undefined,
@@ -177,6 +178,7 @@ export async function createChildAdapter(
     return await createServiceChildRelayAdapter({
       assertCurrent: params.assertCurrent,
       beforeSpawn: params.beforeSpawn,
+      initiateSpawn: params.initiateSpawn,
       command: preparedSpawn.command,
       args: preparedSpawn.args,
       argv0: preparedSpawn.argv0,
@@ -229,9 +231,10 @@ export async function createChildAdapter(
     spawnWithFallback({
       ...(process.platform === "win32"
         ? {
-            spawnImpl: (command, args, spawnOptions) => {
+            spawnImpl: (command, args, spawnOptions, initiateSpawn) => {
+              const launchNative = () => spawn(command, args, spawnOptions);
               if (!tryWindowsJob) {
-                return spawn(command, args, spawnOptions);
+                return initiateSpawn ? initiateSpawn(launchNative) : launchNative();
               }
               const owned = spawnWindowsJobChild(
                 command,
@@ -241,11 +244,23 @@ export async function createChildAdapter(
                   await launchGate.promise;
                   assertCurrent();
                   params.beforeSpawn?.();
-                  launch();
+                  if (initiateSpawn) {
+                    // A failed Job observation is uncertainty, not permission to release custody.
+                    const settlement = windowsJob?.ready.catch(async () => {
+                      const outcome = await windowsJob?.certify();
+                      if (outcome?.status !== "confirmed") {
+                        throw new Error("Windows Job launch retirement is unconfirmed");
+                      }
+                    });
+                    void settlement?.catch(() => {});
+                    initiateSpawn(launch, settlement);
+                  } else {
+                    launch();
+                  }
                 },
               );
               if (!owned) {
-                return spawn(command, args, spawnOptions);
+                return initiateSpawn ? initiateSpawn(launchNative) : launchNative();
               }
               windowsJob = owned.job;
               windowsCleanup = owned.job.certify();
@@ -259,6 +274,7 @@ export async function createChildAdapter(
         assertCurrent();
         params.beforeSpawn?.();
       },
+      initiateSpawn: params.initiateSpawn,
       argv: [preparedSpawn.command, ...preparedSpawn.args],
       options,
       fallbacks: useDetached && params.ownedWorker === undefined ? [{ detached: false }] : [],
@@ -348,8 +364,7 @@ export async function createChildAdapter(
   let windowsTreeKillCompleted = false;
   let childExitState: { code: number | null; signal: NodeJS.Signals | null } | null = null;
   let childCloseState: { code: number | null; signal: NodeJS.Signals | null } | null = null;
-  let stdoutDrained = child.stdout == null;
-  let stderrDrained = child.stderr == null;
+  const pendingOutput = new Set([child.stdout, child.stderr].filter((stream) => stream != null));
   let workerIpcDisconnected = false;
   let openWorkerStdio = 0;
 
@@ -439,8 +454,7 @@ export async function createChildAdapter(
       (process.platform !== "win32" && (!workerIpcDisconnected || openWorkerStdio > 0)) ||
       isWindowsHardKillSettlementBlocked() ||
       childExitState == null ||
-      !stdoutDrained ||
-      !stderrDrained
+      pendingOutput.size > 0
     ) {
       return;
     }
@@ -466,18 +480,14 @@ export async function createChildAdapter(
     }
   }
 
-  const markStdoutDrained = () => {
-    stdoutDrained = true;
-    maybeSettleAfterExit();
-  };
-  const markStderrDrained = () => {
-    stderrDrained = true;
-    maybeSettleAfterExit();
-  };
-  child.stdout?.once("end", markStdoutDrained);
-  child.stdout?.once("close", markStdoutDrained);
-  child.stderr?.once("end", markStderrDrained);
-  child.stderr?.once("close", markStderrDrained);
+  for (const stream of pendingOutput) {
+    const markDrained = () => {
+      pendingOutput.delete(stream);
+      maybeSettleAfterExit();
+    };
+    stream.once("end", markDrained);
+    stream.once("close", markDrained);
+  }
 
   // Worker IPC failures close authority; ordinary post-spawn errors are nonterminal.
   child.on("error", (error) => {
@@ -547,6 +557,13 @@ export async function createChildAdapter(
         },
       });
     });
+  const signalChild = (signal?: NodeJS.Signals) => {
+    try {
+      child.kill(signal);
+    } catch {
+      // The native close observation still owns confirmation.
+    }
+  };
   const kill = (signal?: NodeJS.Signals) => {
     if (windowsJob) {
       try {
@@ -577,11 +594,7 @@ export async function createChildAdapter(
         treeSignaling = (async () => {
           try {
             await signalProcessTreeForChildAndWait(pid, "SIGKILL");
-            try {
-              child.kill("SIGKILL");
-            } catch {
-              // The native close observation still owns confirmation.
-            }
+            signalChild("SIGKILL");
             windowsTreeKillCompleted = true;
             if (childCloseState) {
               settleObservedClose(childExitState ?? childCloseState);
@@ -598,11 +611,7 @@ export async function createChildAdapter(
         })();
       } else {
         windowsTreeKillCompleted = true;
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // ignore kill errors
-        }
+        signalChild("SIGKILL");
       }
       scheduleForceKillWaitFallback("SIGKILL");
       return;
@@ -611,11 +620,7 @@ export async function createChildAdapter(
       signalProcessTreeForChild(pid, "SIGTERM");
       return;
     }
-    try {
-      child.kill(signal);
-    } catch {
-      // ignore kill errors for non-kill signals
-    }
+    signalChild(signal);
   };
 
   const dispose = () => {

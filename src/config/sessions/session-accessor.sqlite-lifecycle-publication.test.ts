@@ -2,8 +2,9 @@ import { statSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { retainCachedOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-scope.js";
 import {
@@ -12,6 +13,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config.js";
+import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
 import {
   isPreparedSessionSharingChange,
   projectSessionSharingEntry,
@@ -23,13 +25,18 @@ import {
 import {
   loadSessionEntry,
   loadSessionEntryReadOnly,
+  replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "./session-accessor.sqlite-entry.js";
+import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.sqlite-projection.js";
-import { loadTranscriptEvents } from "./session-accessor.sqlite-read.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
+import { resolveSessionReclamationDatabaseOptions } from "./session-accessor.sqlite-reclamation.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { loadTranscriptEvents } from "./session-transcript-events.js";
+import { waitForSessionTranscriptIndexReconcilesInStateDir } from "./session-transcript-reconcile.js";
 
 const failures = vi.hoisted(() => ({
   publication: undefined as Error | undefined,
@@ -39,6 +46,14 @@ vi.mock("./session-accessor.sqlite-identity.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-accessor.sqlite-identity.js")>();
   return {
     ...actual,
+    publishCommittedSessionIdentity: (
+      ...args: Parameters<typeof actual.publishCommittedSessionIdentity>
+    ) => {
+      if (failures.publication) {
+        throw failures.publication;
+      }
+      return actual.publishCommittedSessionIdentity(...args);
+    },
     prepareLifecycleIdentityPublication: (
       ...args: Parameters<typeof actual.prepareLifecycleIdentityPublication>
     ) => {
@@ -69,7 +84,121 @@ afterEach(async () => {
   resetConfigRuntimeState();
 });
 
-it.each(["success", "publication", "writer return", "rollback"] as const)(
+it("publishes history changes only after deletion while fresh reads observe sibling protection", async () => {
+  const stateDir = tempDirs.make("session-history-publication-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  const database = openOpenClawAgentDatabase({ agentId: "main" });
+  const sessionKey = "agent:main:history-publication";
+  const sessionId = "history-publication-old";
+  const scope = { agentId: "main", storePath: database.path, sessionKey, sessionId };
+  await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
+  const events = [
+    {
+      id: "retained-event",
+      type: "message",
+      message: { role: "user", content: "retained history" },
+    },
+  ];
+  await replaceTranscriptEvents(scope, events);
+  const successor = { sessionId: "history-publication-current", updatedAt: 2 };
+  replaceSessionEntrySync(scope, successor);
+  await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
+  // Warm the unpinned native reader before a separate connection changes protection.
+  expect(loadSessionEntryReadOnly(scope)).toMatchObject(successor);
+  const prepared = planSessionStateDeleteIfUnreferenced({
+    archiveDirectory: stateDir,
+    archiveTranscript: false,
+    database,
+    referencedSessionIds: new Set(),
+    sessionId,
+  });
+  if (!prepared) {
+    throw new Error("Expected an unreferenced historical generation");
+  }
+  const plan = {
+    kind: "history-eviction",
+    databaseOptions: resolveSessionReclamationDatabaseOptions({
+      agentId: "main",
+      path: database.path,
+    }),
+    diskBudget: { preserveRecentMs: 7 * 24 * 60 * 60 * 1000 },
+    materializedPlans: [{ ...prepared, archive: null, archivedTranscript: null }],
+    protectedSessionIds: [],
+    sessionId,
+  } satisfies SqliteSessionReclamationPlan;
+  const completed: boolean[] = [];
+  const reclaim = () =>
+    runSqliteSessionReclamation({
+      forceInProcess: false,
+      plan,
+      onWorkerResult(result) {
+        if (result.kind === "history-eviction") {
+          completed.push(result.value.deleted);
+        }
+      },
+    });
+  const changes: SessionRowChange[] = [];
+  const stop = sessionChanges.subscribeFacts((change) => {
+    if ("sessionKey" in change && change.sessionKey === sessionKey) {
+      changes.push(change);
+    }
+  });
+  const peer = openNodeSqliteDatabase(database.path);
+  const writeProtection = (updatedAt: number) => {
+    peer.exec("BEGIN IMMEDIATE");
+    try {
+      peer
+        .prepare("UPDATE session_nodes SET updated_at = ?, entry_json = ? WHERE session_key = ?")
+        .run(
+          updatedAt,
+          JSON.stringify({ ...successor, updatedAt, label: "sibling protection" }),
+          sessionKey,
+        );
+      peer
+        .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+        .run(sessionKey);
+      peer.exec("COMMIT");
+    } catch (error) {
+      peer.exec("ROLLBACK");
+      throw error;
+    }
+  };
+  try {
+    const updatedAt = Date.now();
+    writeProtection(updatedAt);
+    await expect(reclaim()).resolves.toMatchObject({
+      kind: "history-eviction",
+      value: { deleted: false },
+    });
+    expect(completed).toEqual([false]);
+    expect(changes).toEqual([]);
+    expect(loadSessionEntryReadOnly(scope)).toMatchObject({
+      ...successor,
+      updatedAt,
+      label: "sibling protection",
+    });
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual(events);
+
+    writeProtection(2);
+    await expect(reclaim()).resolves.toMatchObject({
+      kind: "history-eviction",
+      value: { deleted: true },
+    });
+    expect(completed).toEqual([false, true]);
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toMatchObject({ sessionKey, factsInvalidated: true });
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual([]);
+    expect(loadSessionEntryReadOnly(scope)).toMatchObject({
+      ...successor,
+      label: "sibling protection",
+    });
+  } finally {
+    stop();
+    peer.close();
+  }
+});
+
+it.each(["publication", "writer return", "rollback"] as const)(
   "records the committed lifecycle before %s settlement",
   async (outcome) => {
     const stateDir = tempDirs.make("session-lifecycle-publication-");
@@ -117,11 +246,7 @@ it.each(["success", "publication", "writer return", "rollback"] as const)(
             }
           : {}),
       });
-      if (outcome === "success") {
-        await operation;
-      } else {
-        await expect(operation).rejects.toBe(failure);
-      }
+      await expect(operation).rejects.toBe(failure);
       expect(committed).toHaveBeenCalledTimes(outcome === "rollback" ? 0 : 1);
       expect(events).toEqual(
         outcome === "rollback"
@@ -204,14 +329,15 @@ it("publishes removal invalidations before identity and row observers without ar
   expect(sharing.readCurrent()?.entry).toEqual(sharingEntry);
   expect(generation.readCurrent()).toEqual(sharingEntry);
   const order: string[] = [];
-  const observedFacts: Array<{
-    invalidated: boolean;
-    ownerTagged: boolean;
-    sharing: ReturnType<typeof sharing.readCurrent>;
-    generation: ReturnType<typeof generation.readCurrent>;
-    writableCache: ReturnType<typeof readCommittedSessionEntryCache>;
-    readOnlyCache: ReturnType<typeof readCommittedSessionEntryCache>;
-  }> = [];
+  const readFacts = () => ({
+    sharing: sharing.readCurrent(),
+    generation: generation.readCurrent(),
+    writableCache: readCommittedSessionEntryCache(database.db),
+    readOnlyCache: readCommittedSessionEntryCache(reader.database.db),
+  });
+  const observedFacts: Array<
+    ReturnType<typeof readFacts> & { invalidated: boolean; ownerTagged: boolean }
+  > = [];
   const stopFacts = sessionChanges.subscribeFacts((change) => {
     if (!("sessionKey" in change) || change.sessionKey !== scope.sessionKey) {
       return;
@@ -220,10 +346,7 @@ it("publishes removal invalidations before identity and row observers without ar
     observedFacts.push({
       invalidated: change.factsInvalidated === true,
       ownerTagged: isPreparedSessionSharingChange(change),
-      sharing: sharing.readCurrent(),
-      generation: generation.readCurrent(),
-      writableCache: readCommittedSessionEntryCache(database.db),
-      readOnlyCache: readCommittedSessionEntryCache(reader.database.db),
+      ...readFacts(),
     });
   });
   const stopProjection = sessionChanges.subscribeProjection((change) => {
@@ -245,18 +368,13 @@ it("publishes removal invalidations before identity and row observers without ar
       order.push("row");
     }
   });
-  const lifecycleFacts: unknown[] = [];
+  const lifecycleFacts: Array<ReturnType<typeof readFacts>> = [];
   try {
     const result = await applySessionEntryLifecycleMutation({
       storePath,
       onLifecycleCommitted: () => {
         order.push("committed");
-        lifecycleFacts.push({
-          sharing: sharing.readCurrent(),
-          generation: generation.readCurrent(),
-          writableCache: readCommittedSessionEntryCache(database.db),
-          readOnlyCache: readCommittedSessionEntryCache(reader.database.db),
-        });
+        lifecycleFacts.push(readFacts());
       },
       removals: [{ expectedSessionId: scope.sessionId, sessionKey: scope.sessionKey }],
     });
@@ -270,24 +388,14 @@ it("publishes removal invalidations before identity and row observers without ar
     });
     expect(order).toEqual(["facts", "projection", "committed", "identity", "row"]);
     expect(rowPaths).toEqual([database.path]);
-    expect(lifecycleFacts).toEqual([
-      {
-        sharing: undefined,
-        generation: null,
-        writableCache: undefined,
-        readOnlyCache: undefined,
-      },
-    ]);
-    expect(observedFacts).toEqual([
-      {
-        invalidated: true,
-        ownerTagged: true,
-        sharing: undefined,
-        generation: null,
-        writableCache: undefined,
-        readOnlyCache: undefined,
-      },
-    ]);
+    const retiredFacts = {
+      sharing: undefined,
+      generation: null,
+      writableCache: undefined,
+      readOnlyCache: undefined,
+    };
+    expect(lifecycleFacts).toEqual([retiredFacts]);
+    expect(observedFacts).toEqual([{ invalidated: true, ownerTagged: true, ...retiredFacts }]);
     expect(() =>
       acquiring.initialize({ entry: sharingEntry, membership: new Set(["member"]) }),
     ).toThrow("Session sharing acquisition is no longer current");

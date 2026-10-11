@@ -2,27 +2,25 @@
 // Kept dependency-light (no chat-sidebar/chat-tool-cards imports) so both
 // consumers can use them without creating an import cycle.
 import { html, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import { t } from "../../../i18n/index.ts";
 import type { ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
 import type { DiffFilePaths, DiffLine, DiffStat } from "../../../lib/chat/tool-call-diff.ts";
 import { renderHighlightedDiff } from "./chat-diff-highlight.ts";
 
 export function renderDiffStatChips(stat: DiffStat & { modified?: number }) {
-  // Tool cards omit `modified`; keep their original template byte-for-byte.
-  if (stat.modified === undefined) {
-    return html`<span class="chat-diffstat">
-      <span class="chat-diffstat__add">+${stat.added}</span>
-      <span class="chat-diffstat__del">-${stat.removed}</span>
-    </span>`;
-  }
-  if (stat.added === 0 && stat.removed === 0 && !stat.modified) {
+  const showZeros = stat.modified === undefined;
+  if (!showZeros && stat.added === 0 && stat.removed === 0 && !stat.modified) {
     return nothing;
   }
-  return html`<span class="chat-diffstat">
-    ${stat.added > 0 ? html`<span class="chat-diffstat__add">+${stat.added}</span>` : nothing}
-    ${stat.removed > 0 ? html`<span class="chat-diffstat__del">-${stat.removed}</span>` : nothing}
-    ${stat.modified > 0 ? html`<span class="chat-diffstat__mod">~${stat.modified}</span>` : nothing}
-  </span>`;
+  return keyed(
+    showZeros,
+    html`<span class="chat-diffstat">
+      ${showZeros || stat.added > 0 ? html`<span class="chat-diffstat__add">+${stat.added}</span>` : nothing}
+      ${showZeros || stat.removed > 0 ? html`<span class="chat-diffstat__del">-${stat.removed}</span>` : nothing}
+      ${(stat.modified ?? 0) > 0 ? html`<span class="chat-diffstat__mod">~${stat.modified}</span>` : nothing}
+    </span>`,
+  );
 }
 
 export function renderDiffBlock(

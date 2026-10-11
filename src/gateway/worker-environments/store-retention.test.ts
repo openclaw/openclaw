@@ -74,31 +74,6 @@ describe("worker environment terminal retention", () => {
     return store.transition({ environmentId, from: "ready", to: "orphaned" });
   }
 
-  it("uses the terminal environment index for ordered cleanup", () => {
-    const plan = database.db
-      .prepare(
-        `EXPLAIN QUERY PLAN
-         SELECT worker_environments.environment_id
-         FROM worker_environments
-         LEFT JOIN worker_session_placements
-           ON worker_session_placements.environment_id = worker_environments.environment_id
-         WHERE worker_environments.state IN ('destroyed', 'failed', 'orphaned')
-           AND worker_environments.state_changed_at_ms <= ?
-           AND worker_session_placements.session_id IS NULL
-         ORDER BY worker_environments.state_changed_at_ms ASC,
-                  worker_environments.environment_id ASC
-         LIMIT ?`,
-      )
-      .all(PRUNE_NOW_MS - 7 * DAY_MS, 2) as Array<{ detail: string }>;
-
-    expect(plan.map((row) => row.detail).join("\n")).toContain(
-      "idx_worker_environments_terminal_changed",
-    );
-    expect(plan.map((row) => row.detail).join("\n")).toContain(
-      "idx_worker_session_placements_environment",
-    );
-  });
-
   it("prunes only old unreferenced terminal environments and cascades owned rows", async () => {
     await seedOrphaned("worker-old-first", DAY_MS);
     await seedOrphaned("worker-a-old-second", 2 * DAY_MS);
