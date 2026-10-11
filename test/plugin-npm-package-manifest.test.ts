@@ -37,7 +37,6 @@ import { writeJsonFile } from "./helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
 const fixtureDirs = useAutoCleanupTempDirTracker(afterEach);
-const tsxImport = import.meta.resolve("tsx");
 const execFileAsync = promisify(execFile);
 const registryDependencyArtifacts = new Map<string, { tarball: Buffer; integrity: string }>();
 
@@ -1211,9 +1210,7 @@ process.stdout.write("PACKED_PLUGIN_CHANNEL_STATE_OK\\n");
     const result = spawnSync(
       process.execPath,
       [
-        "--import",
-        tsxImport,
-        fileURLToPath(new URL("../scripts/lib/plugin-npm-package-manifest.mts", import.meta.url)),
+        fileURLToPath(new URL("../scripts/lib/plugin-npm-package-manifest.mjs", import.meta.url)),
         "--run",
         packageDir,
         "--",
@@ -1397,10 +1394,8 @@ console.log(JSON.stringify({ path: path.join(destination, packed.filename) }));
         const packing = execFileAsync(
           process.execPath,
           [
-            "--import",
-            tsxImport,
             fileURLToPath(
-              new URL("../scripts/lib/plugin-npm-package-manifest.mts", import.meta.url),
+              new URL("../scripts/lib/plugin-npm-package-manifest.mjs", import.meta.url),
             ),
             "--run",
             packageDir,
@@ -1629,9 +1624,7 @@ console.log(JSON.stringify({ path: path.join(destination, packed.filename) }));
       const packed = await execFileAsync(
         process.execPath,
         [
-          "--import",
-          tsxImport,
-          fileURLToPath(new URL("../scripts/lib/plugin-npm-package-manifest.mts", import.meta.url)),
+          fileURLToPath(new URL("../scripts/lib/plugin-npm-package-manifest.mjs", import.meta.url)),
           "--run",
           packageDir,
           "--",

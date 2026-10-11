@@ -153,12 +153,12 @@ export function renderSessionCopyOptions(params: {
   return html`
     ${
       params.navigationAllowed
-        ? (
-            [
-              ["copy-session-link", "sessionsView.copySessionLink"],
-              ["copy-session-preview-link", "sessionsView.copySessionPreviewLink"],
-            ] as const
-          ).map(([kind, label]) => params.renderItem(kind, t(label), icons.link, { inline }))
+        ? params.renderItem(
+            "copy-session-preview-link",
+            t("sessionsView.copySessionPreviewLink"),
+            icons.link,
+            { inline },
+          )
         : nothing
     }
     ${params.renderItem("copy-markdown", t("sessionsView.copyMarkdown"), icons.fileText, {

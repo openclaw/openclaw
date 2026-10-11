@@ -474,7 +474,10 @@ describeControlUiE2e("Control UI chat file links", () => {
         .toMatchObject({ path: "packages/app" });
       await expect
         .poll(() =>
-          page.getByRole("button", { name: "All", exact: true }).getAttribute("aria-pressed"),
+          page
+            .getByRole("group", { name: "Filter files", exact: true })
+            .getByRole("button", { name: "All", exact: true })
+            .getAttribute("aria-pressed"),
         )
         .toBe("true");
       const browserRow = page

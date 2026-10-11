@@ -52,8 +52,18 @@ For transcript callbacks, use the separate
 [transcript preparation contract](/plugins/sdk-migration/how-to-migrate#await-locked-transcript-preparation),
 which checks duplicates before preparation and supports explicit suppression.
 
-The original synchronous keyed stores and opaque `update`/`deleteIf` callbacks
-remain compatibility APIs. They
+For account-scoped conversation bindings, use
+`createAccountScopedConversationBindingManagerV2` from
+`openclaw/plugin-sdk/thread-bindings-runtime`. Await bind, touch, unbind, and
+lookup methods, including lookups that expire bindings. Register custom adapters
+with `registerSessionBindingAdapterV2`; the V2 interface requires asynchronous
+readers and current-owner checks. The service exposes `listBySessionAsync`,
+`resolveByConversationAsync`, and `touchAsync`. An async failure never selects a
+synchronous fallback. External adapters remain responsible for their own
+storage, currentness, and committed publication.
+
+The original synchronous keyed stores, opaque `update`/`deleteIf` callbacks,
+binding managers, and adapter registrations remain compatibility APIs. They
 preserve synchronous commit-before-return and callback ordering, and are
 **removed in the next Plugin SDK major** after the approved compatibility window.
 Actual legacy use emits one diagnostic per plugin and capability family per
@@ -61,6 +71,26 @@ Gateway process; importing a module does not warn. Diagnostics contain the metho
 replacement, and compatibility promise, without paths or stored values.
 
 This migration changes no schema, stored format, retention, or update behavior.
+
+When state-backed reads feed a channel, migrate its config and security adapters
+to the [async channel hooks](/plugins/sdk-channel-plugins). Forward these hooks
+through wrapper and setup adapters while keeping existing synchronous signatures
+for older hosts.
+
+## Await Gateway approval publication
+
+Use `await context.approvalEvents.publishRequestedAsync(kind, request)` to prepare
+subscriber eligibility before publishing. If an older host supplies only
+`publishRequested`, select that synchronous callback before dispatch; never retry
+a failed async publication through the old callback.
+
+`publishRequested(kind, request)` retains its synchronous numeric result for
+synchronous subscribers. It is deprecated and **removed in the next Plugin SDK
+major**. If any subscriber requires asynchronous eligibility, the old method
+throws a migration error before sending the request to any subscriber. Use the
+async method for bundled native approval runtimes, whose route selection can
+prepare account state in workers. Legacy publisher objects need not implement
+the optional async companion.
 
 ## Workspace mutation guards
 

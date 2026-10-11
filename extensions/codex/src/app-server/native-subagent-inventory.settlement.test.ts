@@ -134,7 +134,7 @@ it("settles delayed close writes without consuming a replacement monitor's resum
     .toBe(false);
   expect
     .soft(
-      f.store.readNativeSubagentAssignments?.(f.identity, f.historyOwner()),
+      await f.store.readNativeSubagentAssignments?.(f.identity, f.historyOwner()),
       "The previous monitor must not consume the resumed assignment",
     )
     .toEqual([
@@ -158,7 +158,7 @@ it("settles delayed close writes without consuming a replacement monitor's resum
       result: "Resumed result",
     }),
   );
-  expect(f.store.readNativeSubagentAssignments?.(f.identity, f.historyOwner())).toEqual([]);
+  expect(await f.store.readNativeSubagentAssignments?.(f.identity, f.historyOwner())).toEqual([]);
   nextClient.close();
   const duplicate = await f.register(createClient());
   await duplicate.ready;

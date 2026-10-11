@@ -1,3 +1,6 @@
+import { deserialize } from "node:v8";
+import { Worker } from "node:worker_threads";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -57,6 +60,70 @@ function fixture(
 }
 
 describe("plugin state data-only comparison", () => {
+  it("serves independent observations from native and worker write receipts without requests", async () => {
+    const { store, legacy } = fixture("receipt-cache");
+    legacy.register("counter", { count: 1 });
+    const messages = vi.spyOn(Worker.prototype, "postMessage");
+    const first = await store.observe("counter");
+    first.value!.count = 99;
+    expect((await store.observe("counter")).value).toEqual({ count: 1 });
+    expect(messages).not.toHaveBeenCalled();
+
+    legacy.register("counter", { count: 2 });
+    expect((await store.observe("counter")).value).toEqual({ count: 2 });
+    await store.register("counter", { count: 3 });
+    messages.mockClear();
+    expect((await store.observe("counter")).value).toEqual({ count: 3 });
+    legacy.delete("counter");
+    expect((await store.observe("counter")).value).toBeUndefined();
+    expect(messages).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { operation: "update", present: true },
+    { operation: "delete", present: true },
+    { operation: "update", present: false },
+  ] as const)(
+    "does not lose a native write after preparing cached $operation (present=$present)",
+    async ({ operation, present }) => {
+      const { store, legacy } = fixture(`cached-race-${operation}-${present}`);
+      legacy.register("counter", { count: 1 });
+      if (!present) {
+        legacy.delete("counter");
+      }
+      const before = await store.observe("counter");
+      // Forward the original method with the intercepted worker as its receiver below.
+      // eslint-disable-next-line @typescript-eslint/unbound-method
+      const postMessage = Worker.prototype.postMessage;
+      const dispatch = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+        this: Worker,
+        message,
+        transferList,
+      ) {
+        const request = asOptionalRecord(message);
+        if (request?.type === "execute" && request.input instanceof Uint8Array) {
+          const command = asOptionalRecord(deserialize(request.input));
+          if (
+            command?.type === `pluginState.compare${operation === "update" ? "Update" : "Delete"}`
+          ) {
+            legacy.register("counter", { count: 2 });
+          }
+        }
+        return postMessage.call(this, message, transferList);
+      });
+      const result = await store.compareAndApply(
+        "counter",
+        before.comparison,
+        operation === "update"
+          ? { operation, action: "set", value: { count: 3 } }
+          : { operation, action: "delete" },
+      );
+      dispatch.mockRestore();
+      expect(result).toMatchObject({ status: "conflict", current: { value: { count: 2 } } });
+      expect(await store.lookup("counter")).toEqual({ count: 2 });
+    },
+  );
+
   it("observes and applies through the real worker without parent SQL", async () => {
     const { store } = fixture("cold");
     const observation = observeHostDataSql();
@@ -249,7 +316,7 @@ describe("plugin state data-only comparison", () => {
 
   it("retains writable admission for both keep intents", async () => {
     const f = fixture("keep-ownership");
-    f.legacy.register("counter", { count: 1 });
+    await f.store.register("counter", { count: 1 });
     const observed = await f.store.observe("counter");
     claimOpenClawStateOwnership("comparison-owner", {
       env: { ...f.env, OPENCLAW_SUPERVISOR_MODE: "external" },
