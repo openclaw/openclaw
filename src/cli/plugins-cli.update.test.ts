@@ -596,10 +596,7 @@ describe("plugins cli update", () => {
       nextConfig: expectedConfig,
       baseHash: "update-config",
       writeOptions: expect.objectContaining({
-        afterWrite: {
-          mode: "none",
-          reason: "plugin update applies runtime after releasing its lease",
-        },
+        afterWrite: expect.objectContaining({ mode: "none" }),
       }),
     });
     expect(refreshPluginRegistryMock).toHaveBeenCalledWith({

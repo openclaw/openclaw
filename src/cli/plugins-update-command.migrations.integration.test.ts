@@ -35,7 +35,8 @@ vi.mock("../plugins/update.js", async (importOriginal) => ({
   updateNpmInstalledPlugins: vi.fn(),
 }));
 const gateway = vi.hoisted(() => ({ call: vi.fn() }));
-vi.mock("./plugins-lifecycle-client.js", () => ({
+vi.mock("./plugins-lifecycle-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugins-lifecycle-client.js")>()),
   resolvePluginLifecycleGateway: async () => gateway.call,
 }));
 afterEach(() => vi.restoreAllMocks());
