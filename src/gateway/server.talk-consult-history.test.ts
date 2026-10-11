@@ -128,7 +128,9 @@ beforeEach(async () => {
         try {
           await persist();
         } catch (error) {
-          const isCurrent = expectedRevokedWriters.get(params.event.runId);
+          const isCurrent = params.event.runId
+            ? expectedRevokedWriters.get(params.event.runId)
+            : undefined;
           if (!isCurrent || isCurrent()) {
             throw error;
           }
