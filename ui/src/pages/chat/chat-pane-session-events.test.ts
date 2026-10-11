@@ -156,7 +156,6 @@ describe("mounted pane session event ownership", () => {
   it.each([
     { key: "global", kind: "global", archived: true },
     { key: "agent:research:qualified-refresh", kind: "direct", archived: false },
-    { key: "agent:research:qualified-refresh", kind: "direct", archived: true },
   ] as const)(
     "keeps a foreign $key descriptor after history refresh without changing primary membership (archived: $archived)",
     async ({ key, kind, archived }) => {

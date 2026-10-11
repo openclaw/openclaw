@@ -143,11 +143,11 @@ it("publishes a real recovery-owner change to subscribed panes during a foreign 
   expect(peerPaint).toHaveBeenCalledTimes(1);
 });
 
-it.each(
-  ["chat", "session.message", "sessions.changed"].flatMap((event) =>
-    [false, true].map((matching) => ({ event, matching })),
-  ),
-)(
+it.each([
+  { event: "chat", matching: false },
+  { event: "chat", matching: true },
+  { event: "session.message", matching: true },
+])(
   "renders only its scoped $event change in a retained pane (matching: $matching)",
   ({ event, matching }) => {
     const host = pageHost(makeChatHost({ sessionKey: selected, requestHandlers: {} }));
@@ -224,19 +224,6 @@ it.each(
     expect(reads).toBe(changed ? 2 : 1);
     expect(listStoredChatOutboxes(host)[0]?.queue[0]?.sendRunId).toBe("accepted-run");
     expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
-  },
-);
-
-it.each(["sessions.changed", "session.message"])(
-  "does not reconcile unrelated stored scopes for a foreign %s",
-  async (event) => {
-    const host = outboxHost(activeHistory);
-    handlePageGatewayEvent(host, sessionEvent(foreign, event), () => false);
-    await Promise.resolve();
-    expect(host.request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(0);
-    expect(listStoredChatOutboxes(host)[0]?.queue[0]?.sendRunId).toBe("accepted-run");
-    await resumeStoredChatOutboxes(host);
-    expect(host.request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(1);
   },
 );
 

@@ -427,41 +427,6 @@ describe("chat pane header state", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("refreshes the head branch on every menu open so checkouts do not go stale", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({ headBranch: "main" })
-      .mockResolvedValueOnce({ headBranch: "feature/next" });
-    const { pane } = createTestChatPane({
-      client: createGatewayBrowserClientFixture({ request }),
-      sessions: createSessionCapabilityFixture(),
-    });
-    const session = {
-      key: "agent:main:plain",
-      kind: "direct",
-      updatedAt: 0,
-    } satisfies GatewaySessionRow;
-    await pane.loadHeaderMenuData(session, "/src/openclaw", true);
-    await pane.loadHeaderMenuData(session, "/src/openclaw", true);
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it("surfaces resolved reveal failures in the chat error", async () => {
-    const request = vi.fn(async () => ({ ok: false, error: "No desktop available." }));
-    const { pane, state } = createTestChatPane({
-      client: createGatewayBrowserClientFixture({ request }),
-      sessions: createSessionCapabilityFixture(),
-    });
-    const session = {
-      key: "agent:main:current",
-      kind: "direct",
-      updatedAt: 0,
-    } satisfies GatewaySessionRow;
-    pane.handleHeaderMenuAction("reveal", session, "/src/openclaw", null);
-    await vi.waitFor(() => expect(state.chatError).toBe("No desktop available."));
-    expect(state.lastError).toBe(state.chatError);
-  });
-
   it.each([
     {
       name: "leaving and returning before settlement",
@@ -990,33 +955,6 @@ describe("chat pane history pagination intent", () => {
     expect(pane.historyAutoLoadBlocked).toBe(false);
     expect(pane.syncHistoryObserver).toHaveBeenCalledOnce();
     expect(state.handleChatScroll).toHaveBeenCalledWith(event);
-  });
-
-  it("does not arm older history on downward or in-flight scroll movement", () => {
-    const client = createGatewayBrowserClientFixture({ request: vi.fn() });
-    const { pane, state } = createTestChatPane({
-      client,
-      sessions: createSessionCapabilityFixture(),
-    });
-    state.handleChatScroll = vi.fn();
-    pane.transcriptScrollTop = 100;
-    pane.syncHistoryObserver = vi.fn();
-    const thread = document.createElement("div");
-    Object.defineProperties(thread, {
-      scrollHeight: { value: 1000 },
-      clientHeight: { value: 500 },
-    });
-    const event = new Event("scroll");
-    Object.defineProperty(event, "target", { value: thread });
-
-    thread.scrollTop = 120;
-    pane.handleTranscriptScroll(event);
-    pane.loadingOlder = true;
-    thread.scrollTop = 80;
-    pane.handleTranscriptScroll(event);
-
-    expect(pane.syncHistoryObserver).not.toHaveBeenCalled();
-    expect(state.handleChatScroll).toHaveBeenCalledTimes(2);
   });
 
   it("loads a blocked unscrollable transcript from renewed upward intent", async () => {

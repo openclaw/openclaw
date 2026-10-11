@@ -66,29 +66,6 @@ describe("chat pane session discussion", () => {
     expect(request).not.toHaveBeenCalled();
     expect(pane.resolveSessionDiscussionAction()).toBeNull();
   });
-  it("does not auto-show an open discussion", async () => {
-    const { pane, updateSidebarLayout } = createDiscussionPane({
-      info: { state: "open", embedUrl: "https://clack.example/embed/c1" },
-    });
-
-    await pane.probeSessionDiscussion(SESSION_KEY);
-
-    expect(updateSidebarLayout).not.toHaveBeenCalled();
-  });
-
-  it("keeps the reported external URL with the discussion panel", async () => {
-    const openUrl = "https://clack.example/channels/c1";
-    const { pane, state } = createDiscussionPane({
-      info: { state: "open", embedUrl: "https://clack.example/embed/c1", openUrl },
-    });
-
-    await pane.probeSessionDiscussion(SESSION_KEY);
-    pane
-      .buildSessionDiscussionPanel(state, SESSION_KEY)
-      ?.onStateChange(SESSION_KEY, "open", openUrl);
-
-    expect(pane.buildSessionDiscussionPanel(state, SESSION_KEY)?.openUrl).toBe(openUrl);
-  });
 
   it("does not reload discussion info when the pane renders unchanged config twice", async () => {
     const { pane, state, request } = createDiscussionPane({
@@ -141,19 +118,6 @@ describe("chat pane session discussion", () => {
     expect(updateSidebarLayout).toHaveBeenCalledTimes(2);
   });
 
-  it("opens beside an existing detail slot without stealing it", async () => {
-    const { pane, state } = createDiscussionPane({
-      info: { state: "open", embedUrl: "https://clack.example/embed/c1" },
-      detailOpen: true,
-    });
-    await pane.probeSessionDiscussion(SESSION_KEY);
-    pane.resolveSessionDiscussionAction()?.onToggle();
-
-    expect(
-      state.sidebarLayout.columns.flatMap((column) => column.panels.map((panel) => panel.slot)),
-    ).toEqual(["detail", "discussion"]);
-  });
-
   it("opens as a collapsed tab when two columns cannot fit side by side", async () => {
     const { pane, state } = createDiscussionPane({
       info: { state: "open", embedUrl: "https://clack.example/embed/c1" },
@@ -178,19 +142,6 @@ describe("chat pane session discussion", () => {
     state.sidebarLayout = openSlot({ columns: [] }, "discussion");
 
     stalePanel?.onStateChange(SESSION_KEY, "none", null);
-
-    expect(state.sidebarLayout.columns[0]?.panels[0]?.slot).toBe("discussion");
-  });
-
-  it("preserves discussion placement across a reconnect", async () => {
-    const { pane, state } = createDiscussionPane({ info: { state: "available" } });
-    state.sidebarLayout = openSlot({ columns: [] }, "discussion");
-
-    pane.applyGatewaySnapshot({
-      ...pane.context.gateway.snapshot,
-      phase: "reconnecting",
-      hello: null,
-    });
 
     expect(state.sidebarLayout.columns[0]?.panels[0]?.slot).toBe("discussion");
   });

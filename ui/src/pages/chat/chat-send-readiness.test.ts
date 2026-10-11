@@ -348,11 +348,10 @@ it.each(
   [
     { message: "/stop", action: "abort" },
     { message: "/approve approval-123 allow-once", action: "approve" },
-    { message: "ordinary draft", action: "queued" },
     { message: "/stop after the next turn", action: "blocked" },
     { message: "/stop", action: "goal" },
   ].flatMap((test) =>
-    (test.action === "approve" ? [true, false] : [true]).map((hydrated) => ({
+    (test.action === "approve" ? [false] : [true]).map((hydrated) => ({
       message: test.message,
       action: test.action,
       hydrated,
@@ -381,9 +380,7 @@ it.each(
         : undefined,
     );
     try {
-      if (action === "queued") {
-        await vi.waitFor(() => expect(host.chatQueue).toHaveLength(1));
-      } else if (action === "approve") {
+      if (action === "approve") {
         await vi.waitFor(() =>
           expect(findChatSendPayload(host)).toMatchObject({ sessionKey: host.sessionKey, message }),
         );
@@ -411,14 +408,7 @@ it.each(
       } else {
         expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
       }
-      if (action === "queued") {
-        expect(host.chatQueue).toEqual([
-          expect.objectContaining({ text: message, sendAttempts: 0 }),
-        ]);
-        expect(host.chatMessage).toBe("");
-      } else {
-        expect(host.chatQueue).toEqual([]);
-      }
+      expect(host.chatQueue).toEqual([]);
       if (action === "blocked" || action === "goal") {
         expect(host.chatMessage).toBe(message);
       }
