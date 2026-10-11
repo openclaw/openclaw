@@ -16,10 +16,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import {
-  consultRealtimeVoiceAgent,
-  prepareRealtimeVoiceAgentExecutionContext,
-} from "./agent-consult-runtime.js";
+import { consultRealtimeVoiceAgent } from "./agent-consult-runtime.js";
 
 let state: OpenClawTestState;
 beforeEach(async () => {
@@ -30,52 +27,70 @@ afterEach(async () => {
 });
 
 describe("voice consult concrete store ownership", () => {
-  it("refreshes prepared policy and delivery after an in-process write without a native read", async () => {
+  it("refreshes consult policy and delivery after an in-process write", async () => {
     const cfg: OpenClawConfig = {
       agents: { entries: { main: { workspace: state.workspaceDir } } },
     };
-    const agentRuntime = createRuntimeAgent();
+    const runEmbeddedAgent = vi.fn(async () => ({
+      payloads: [{ text: "Checked" }],
+      meta: { durationMs: 0 },
+    }));
+    const agentRuntime = { ...createRuntimeAgent(), runEmbeddedAgent };
     const sessionKey = "agent:main:voice-preparation";
     const storePath = state.statePath("consult", "sessions.sqlite");
     const target = { agentId: "main", sessionKey, storePath };
-    const prepare = () =>
-      prepareRealtimeVoiceAgentExecutionContext({
+    const consult = () =>
+      consultRealtimeVoiceAgent({
         cfg,
         agentRuntime,
+        logger: { warn: vi.fn() },
         ...target,
         messageProvider: "voice",
+        lane: "talk",
+        runIdPrefix: "policy-consult",
+        args: { question: "Check this" },
+        transcript: [],
+        surface: "test voice",
+        userLabel: "User",
       });
-    const nativeRead = vi.spyOn(agentRuntime.session, "getSessionEntry").mockImplementation(() => {
-      throw new Error("voice preparation must use the session worker");
-    });
-    try {
-      await replaceSessionEntry(target, {
-        sessionId: "voice-session",
-        updatedAt: 1,
-        permissionMode: "workspace",
-      });
-      expect((await prepare()).toolAuthorityOverlay.permissionMode).toBe("workspace");
 
-      await replaceSessionEntry(target, {
-        sessionId: "voice-session",
-        updatedAt: 2,
+    await replaceSessionEntry(target, {
+      sessionId: "voice-session",
+      updatedAt: 1,
+      permissionMode: "workspace",
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "telegram", to: "chat:initial", accountId: "initial-account" },
+      }),
+    });
+    await expect(consult()).resolves.toEqual({ text: "Checked" });
+    expect(runEmbeddedAgent).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        permissionMode: "workspace",
+        messageProvider: "telegram",
+        messageTo: "chat:initial",
+        agentAccountId: "initial-account",
+      }),
+    );
+
+    await replaceSessionEntry(target, {
+      sessionId: "voice-session",
+      updatedAt: 2,
+      permissionMode: "guarded",
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "discord", to: "channel:updated", accountId: "updated-account" },
+      }),
+    });
+    await expect(consult()).resolves.toEqual({ text: "Checked" });
+    expect(runEmbeddedAgent).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
         permissionMode: "guarded",
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: "discord", to: "channel:updated", accountId: "updated-account" },
-        }),
-      });
-      expect(await prepare()).toMatchObject({
-        sessionEntry: { permissionMode: "guarded", updatedAt: 2 },
-        deliveryContext: { channel: "discord", to: "channel:updated" },
-        toolAuthorityOverlay: {
-          permissionMode: "guarded",
-          messageProvider: "discord",
-          agentAccountId: "updated-account",
-        },
-      });
-    } finally {
-      nativeRead.mockRestore();
-    }
+        messageProvider: "discord",
+        messageTo: "channel:updated",
+        agentAccountId: "updated-account",
+      }),
+    );
   });
 
   it("preserves live run identity through transcript storage and redaction", async () => {

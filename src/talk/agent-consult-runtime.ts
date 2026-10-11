@@ -188,7 +188,7 @@ async function resolveRealtimeVoiceAgentDeliveryContext(params: {
 }
 
 /** Prepare caller-side session and routing facts for a voice consultation. */
-export async function prepareRealtimeVoiceAgentExecutionContext(params: {
+async function prepareRealtimeVoiceAgentExecutionContext(params: {
   cfg: OpenClawConfig;
   agentRuntime: RealtimeVoiceAgentConsultRuntime;
   agentId?: string;
