@@ -161,9 +161,6 @@ function ChatAudioPlayerContent(
   };
 
   const setWaveform = (waveform: HTMLDivElement) => {
-    if (waveformElement === waveform) {
-      return;
-    }
     waveformResizeObserver?.disconnect();
     waveformResizeObserver = null;
     waveformElement = waveform;
@@ -563,7 +560,9 @@ function ChatAudioPlayerContent(
       >
         <Show when={!props.voiceNote}>
           <LitContent
-            value={renderAttachmentCardHeader({ ...card(), visualMode: "preview-with-favicon" })}
+            render={() =>
+              renderAttachmentCardHeader({ ...card(), visualMode: "preview-with-favicon" })
+            }
           />
         </Show>
         <Show
@@ -671,7 +670,7 @@ function ChatAudioPlayerContent(
       fallback={
         <Show
           when={props.voiceNote}
-          fallback={<LitContent value={renderCompactAttachmentCard(card())} />}
+          fallback={<LitContent render={() => renderCompactAttachmentCard(card())} />}
         >
           <div class="chat-assistant-attachment-card chat-assistant-attachment-card--voice-note">
             <div class="chat-audio-player" role="group" aria-label={t("chat.messages.voiceNote")}>

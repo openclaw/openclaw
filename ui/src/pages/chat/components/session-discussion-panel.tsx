@@ -171,14 +171,16 @@ function DiscussionPanel(props: DiscussionProps, host: SolidBridgeElement<Discus
     if (current.status === "loading" || current.status === "opening") {
       return (
         <LitContent
-          value={renderPanelLoadingSkeleton(
-            "discussion",
-            t(
-              current.status === "opening"
-                ? "chat.sessionDiscussion.opening"
-                : "chat.sessionDiscussion.loading",
-            ),
-          )}
+          render={() =>
+            renderPanelLoadingSkeleton(
+              "discussion",
+              t(
+                state().status === "opening"
+                  ? "chat.sessionDiscussion.opening"
+                  : "chat.sessionDiscussion.loading",
+              ),
+            )
+          }
         />
       );
     }

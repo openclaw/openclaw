@@ -38,7 +38,7 @@ function commandResult(overrides: Partial<SpawnResult> = {}): SpawnResult {
 }
 
 describe("Crabbox runtime preflight cleanup", () => {
-  support.setupWorkerEnvironmentServiceSuite({ reuseReadWorkers: true });
+  support.setupWorkerEnvironmentServiceSuite();
   const pluginServices: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
   let scheduler: ReturnType<typeof createTestPluginServiceScheduler>;
   async function registerProvider(): Promise<WorkerProvider> {

@@ -84,7 +84,7 @@ export const ChatSkillLearnedNotice = defineSolidBridge<{
             >
               <div class="chat-skill-notice__line">
                 <span class="chat-skill-notice__icon" aria-hidden="true">
-                  <LitContent value={toolIcons.lightbulb} />
+                  <LitContent render={() => toolIcons.lightbulb} />
                 </span>
                 <span class="chat-skill-notice__label">{t("chat.skillLearned.label")}</span>
                 <For each={notice.skills}>

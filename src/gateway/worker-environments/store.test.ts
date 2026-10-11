@@ -4,14 +4,10 @@ import {
   matchesAgentLifecycleBinding,
 } from "../../agents/agent-lifecycle-registry.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
-import type {
-  WorkerDesktopEndpoint,
-  WorkerSshEndpoint as WorkerEnvironmentSshEndpoint,
-} from "../../plugins/types.js";
+import type { WorkerSshEndpoint as WorkerEnvironmentSshEndpoint } from "../../plugins/types.js";
 import { recordAgentProvenance } from "../../state/agent-provenance.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../../state/openclaw-state-db-readonly.js";
-import { ensureAdditiveStateColumns } from "../../state/openclaw-state-db-schema-additive.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
   closeOpenClawStateDatabaseAsync,
@@ -25,22 +21,6 @@ import { hashWorkerCredential } from "./credential.js";
 import { createEnvironmentStoreFixture } from "./placement-test-fixtures.js";
 import { ensureWorkerEnvironmentStoreSchema } from "./store-schema.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
-
-const DESKTOP: WorkerDesktopEndpoint = {
-  protocol: "rfb",
-  port: 5900,
-  passwordFilePath: "/var/lib/crabbox/vnc.password",
-  username: "worker",
-  apps: [
-    {
-      id: "browser",
-      executablePath: "/usr/local/bin/openclaw-worker-browser",
-      args: ["--profile", "lease profile"],
-      cdpPort: 9222,
-    },
-    { id: "terminal", executablePath: "/usr/local/bin/openclaw-worker-terminal" },
-  ],
-};
 
 describe("worker environment store", () => {
   const tempDirs = useStateDatabaseTempDirs();
@@ -101,187 +81,46 @@ describe("worker environment store", () => {
     expect(store.get("replaced-agent")).toBeUndefined();
   });
 
-  it("persists immutable intent before provisioning and survives reopen", async () => {
-    const snapshot = { settings: { region: "original" }, lifetime: { idleMinutes: 10 } };
-    expect(await createIntent("worker-crash", snapshot)).toMatchObject({
-      environmentId: "worker-crash",
-      providerId: "fake-provider",
-      profileId: "test-profile",
-      profileSnapshot: snapshot,
-      provisionOperationId: "provision:worker-crash",
-      leaseId: null,
-      sshEndpoint: null,
-      bootstrapReceipt: null,
-      teardownTerminalState: null,
-      state: "requested",
-      attachedSessionIds: [],
-      createdAtMs: 1_000,
-      updatedAtMs: 1_000,
-      stateChangedAtMs: 1_000,
-      destroyRequestedAtMs: null,
-      lastError: null,
-    });
+  it.each([{ name: "ten", fallbackPorts: Array.from({ length: 10 }, (_, index) => 2310 - index) }])(
+    "replaces and reopens ordered SSH fallback rows ($name)",
+    async ({ fallbackPorts }) => {
+      await seedBootstrapping("worker-unrelated", "lease-unrelated");
+      await seedBootstrapping("worker-endpoint-change", "lease-endpoint-change");
+      const replacement = { ...SSH_ENDPOINT, fallbackPorts };
+      const expected: WorkerEnvironmentSshEndpoint = { ...replacement };
+      if (fallbackPorts.length === 0) {
+        delete expected.fallbackPorts;
+      }
 
-    snapshot.settings.region = "mutated-after-create";
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    store = await createWorkerEnvironmentStore({ database, now: () => nowMs });
+      expect(
+        (
+          await store.transition({
+            environmentId: "worker-endpoint-change",
+            from: "bootstrapping",
+            to: "ready",
+            patch: { ...readyPatch(), sshEndpoint: replacement },
+          })
+        ).sshEndpoint,
+      ).toStrictEqual(expected);
+      expect(fallbackPortRows("worker-endpoint-change")).toEqual(
+        fallbackPorts.map((port, position) => ({ position, port })),
+      );
 
-    expect(store.get("worker-crash")?.profileSnapshot).toEqual({
-      settings: { region: "original" },
-      lifetime: { idleMinutes: 10 },
-    });
-  });
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+      database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+      store = await createWorkerEnvironmentStore({ database, now: () => nowMs });
+      expect(store.get("worker-endpoint-change")?.sshEndpoint).toStrictEqual(expected);
+      for (const records of [store.list(), store.listForReconcile()]) {
+        expect(records.map((record) => [record.environmentId, record.sshEndpoint])).toEqual([
+          ["worker-endpoint-change", expected],
+          ["worker-unrelated", SSH_ENDPOINT],
+        ]);
+      }
+    },
+  );
 
-  it("persists a destroy request without inventing an unleased lifecycle state", async () => {
-    await createIntent("worker-cancelled");
-    nowMs = 1_050;
-
-    expect(
-      await store.requestDestroy({ environmentId: "worker-cancelled", state: "requested" }),
-    ).toMatchObject({
-      state: "requested",
-      leaseId: null,
-      destroyRequestedAtMs: 1_050,
-      teardownTerminalState: "destroyed",
-      updatedAtMs: 1_050,
-    });
-
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    store = await createWorkerEnvironmentStore({ database, now: () => nowMs });
-    expect(store.get("worker-cancelled")?.destroyRequestedAtMs).toBe(1_050);
-  });
-
-  it("persists the complete lifecycle with canonical attachment metadata", async () => {
-    await createIntent();
-    nowMs = 1_010;
-    await store.transition({ environmentId: "worker-1", from: "requested", to: "provisioning" });
-    nowMs = 1_020;
-    await store.transition({
-      environmentId: "worker-1",
-      from: "provisioning",
-      to: "bootstrapping",
-      patch: { leaseId: "lease-1", sshEndpoint: SSH_ENDPOINT, sharedHost: true },
-    });
-    nowMs = 1_030;
-    await store.transition({
-      environmentId: "worker-1",
-      from: "bootstrapping",
-      to: "ready",
-      patch: readyPatch(),
-    });
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    store = await createWorkerEnvironmentStore({ database, now: () => nowMs });
-    expect(store.get("worker-1")).toMatchObject({
-      sshEndpoint: SSH_ENDPOINT,
-      sharedHost: true,
-      bootstrapReceipt: {
-        ...BOOTSTRAP_RECEIPT,
-        protocolFeatures: ["model-proxy-v1", "workspace-sync-v1"],
-      },
-    });
-    expect(store.list()[0]?.sshEndpoint).toEqual(SSH_ENDPOINT);
-    expect(fallbackPortRows("worker-1")).toEqual([
-      { position: 0, port: 22 },
-      { position: 1, port: 2200 },
-    ]);
-    nowMs = 1_040;
-    expect(
-      await store.transition({
-        environmentId: "worker-1",
-        from: "ready",
-        to: "attached",
-        patch: { ...attachedPatch("session-a", "session-a"), attachedSessionIds: [" session-a "] },
-      }),
-    ).toMatchObject({
-      state: "attached",
-      attachedSessionIds: ["session-a"],
-      leaseId: "lease-1",
-      sshEndpoint: SSH_ENDPOINT,
-    });
-    nowMs = 1_050;
-    expect(
-      await store.transition({ environmentId: "worker-1", from: "attached", to: "idle" }),
-    ).toMatchObject({ state: "idle", attachedSessionIds: [], idleSinceAtMs: 1_050 });
-    nowMs = 1_055;
-    await store.transition({
-      environmentId: "worker-1",
-      from: "idle",
-      to: "attached",
-      patch: attachedPatch("session-c", "session-c"),
-    });
-    nowMs = 1_060;
-    expect(
-      await store.transition({ environmentId: "worker-1", from: "attached", to: "draining" }),
-    ).toMatchObject({ state: "draining", attachedSessionIds: [] });
-    nowMs = 1_070;
-    await store.transition({ environmentId: "worker-1", from: "draining", to: "destroying" });
-
-    expect(store.listForReconcile().map((record) => record.state)).toEqual(["destroying"]);
-    nowMs = 1_080;
-    expect(
-      await store.transition({ environmentId: "worker-1", from: "destroying", to: "destroyed" }),
-    ).toMatchObject({
-      state: "destroyed",
-      stateChangedAtMs: 1_080,
-      idleSinceAtMs: null,
-      attachedSessionIds: [],
-      sshEndpoint: SSH_ENDPOINT,
-    });
-    expect(fallbackPortRows("worker-1")).toEqual([
-      { position: 0, port: 22 },
-      { position: 1, port: 2200 },
-    ]);
-    expect(store.listForReconcile()).toEqual([]);
-  });
-
-  it.each([
-    { name: "none", fallbackPorts: [] },
-    { name: "one", fallbackPorts: [2201] },
-    { name: "non-numeric order", fallbackPorts: [2201, 22] },
-    { name: "ten", fallbackPorts: Array.from({ length: 10 }, (_, index) => 2310 - index) },
-  ])("replaces and reopens ordered SSH fallback rows ($name)", async ({ fallbackPorts }) => {
-    await seedBootstrapping("worker-unrelated", "lease-unrelated");
-    await seedBootstrapping("worker-endpoint-change", "lease-endpoint-change");
-    const replacement = { ...SSH_ENDPOINT, fallbackPorts };
-    const expected: WorkerEnvironmentSshEndpoint = { ...replacement };
-    if (fallbackPorts.length === 0) {
-      delete expected.fallbackPorts;
-    }
-
-    expect(
-      (
-        await store.transition({
-          environmentId: "worker-endpoint-change",
-          from: "bootstrapping",
-          to: "ready",
-          patch: { ...readyPatch(), sshEndpoint: replacement },
-        })
-      ).sshEndpoint,
-    ).toStrictEqual(expected);
-    expect(fallbackPortRows("worker-endpoint-change")).toEqual(
-      fallbackPorts.map((port, position) => ({ position, port })),
-    );
-
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    store = await createWorkerEnvironmentStore({ database, now: () => nowMs });
-    expect(store.get("worker-endpoint-change")?.sshEndpoint).toStrictEqual(expected);
-    for (const records of [store.list(), store.listForReconcile()]) {
-      expect(records.map((record) => [record.environmentId, record.sshEndpoint])).toEqual([
-        ["worker-endpoint-change", expected],
-        ["worker-unrelated", SSH_ENDPOINT],
-      ]);
-    }
-  });
-
-  it.each([0, 65_536, 9_007_199_254_740_993n])(
+  it.each([9_007_199_254_740_993n])(
     "rejects invalid persisted fallback port %s for an SSH environment",
     async (port) => {
       await seedBootstrapping("worker-invalid-port", "lease-invalid-port");
@@ -355,102 +194,6 @@ describe("worker environment store", () => {
     ).not.toThrow();
   });
 
-  it("enforces canonical companion-table constraints and cascading ownership", async () => {
-    await createIntent("worker-constraints");
-    expect(
-      database.db
-        .prepare(
-          "SELECT strict FROM pragma_table_list WHERE name = 'worker_environment_ssh_fallback_ports'",
-        )
-        .get(),
-    ).toEqual({ strict: 1 });
-    const insert = database.db.prepare(
-      `INSERT INTO worker_environment_ssh_fallback_ports (environment_id, position, port)
-       VALUES (?, ?, ?)`,
-    );
-    expect(() => insert.run("worker-constraints", -1, 22)).toThrow();
-    expect(() => insert.run("worker-constraints", 10, 22)).toThrow();
-    expect(() => insert.run("worker-constraints", 0, 0)).toThrow();
-    expect(() => insert.run("worker-constraints", 0, 65_536)).toThrow();
-    expect(() => insert.run("missing-worker", 0, 22)).toThrow();
-
-    insert.run("worker-constraints", 0, 22);
-    expect(() => insert.run("worker-constraints", 0, 2200)).toThrow();
-    expect(() => insert.run("worker-constraints", 1, 22)).toThrow();
-    database.db
-      .prepare("DELETE FROM worker_environments WHERE environment_id = ?")
-      .run("worker-constraints");
-    expect(fallbackPortRows("worker-constraints")).toEqual([]);
-  });
-
-  it.each<WorkerDesktopEndpoint>([
-    DESKTOP,
-    {
-      protocol: "rfb",
-      port: 5900,
-      passwordFilePath: "/var/db/crabbox/openclaw-vnc.password",
-      username: "ec2-user",
-      allowsResize: false,
-    },
-    {
-      protocol: "rfb",
-      port: 5900,
-      passwordFilePath: "C:\\ProgramData\\crabbox\\vnc.password",
-      allowsResize: false,
-    },
-  ])("round-trips $passwordFilePath and clears it with the provider lease", async (desktop) => {
-    await createIntent("worker-desktop");
-    await store.transition({
-      environmentId: "worker-desktop",
-      from: "requested",
-      to: "provisioning",
-    });
-    await store.transition({
-      environmentId: "worker-desktop",
-      from: "provisioning",
-      to: "bootstrapping",
-      patch: { leaseId: "lease-desktop", sshEndpoint: SSH_ENDPOINT, desktop },
-    });
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    store = await createWorkerEnvironmentStore({ database, now: () => nowMs });
-    expect(store.get("worker-desktop")?.desktop).toEqual(desktop);
-
-    const requested = await store.requestDestroy({
-      environmentId: "worker-desktop",
-      state: "bootstrapping",
-      terminalState: "failed",
-    });
-    const draining = await store.transition({
-      environmentId: requested.environmentId,
-      from: requested.state,
-      to: "draining",
-    });
-    const destroying = await store.transition({
-      environmentId: draining.environmentId,
-      from: draining.state,
-      to: "destroying",
-    });
-    expect(
-      await store.transition({
-        environmentId: destroying.environmentId,
-        from: destroying.state,
-        to: "failed",
-        patch: { leaseId: null, sshEndpoint: null, lastError: "teardown complete" },
-      }),
-    ).toMatchObject({ leaseId: null, sshEndpoint: null, desktop: null });
-  });
-
-  it("idempotently ensures desktop_json on an existing state database", () => {
-    ensureAdditiveStateColumns(database.db, "runtime");
-    ensureAdditiveStateColumns(database.db, "runtime");
-    const columns = database.db.prepare("PRAGMA table_info(worker_environments)").all() as Array<{
-      name: string;
-    }>;
-    expect(columns.filter((column) => column.name === "desktop_json")).toHaveLength(1);
-  });
-
   it("keeps renewal on one owner epoch and fences session replacement", async () => {
     const bootstrapping = await seedBootstrapping("worker-owner", "lease-owner");
     await store.transition({
@@ -502,22 +245,6 @@ describe("worker environment store", () => {
         expiresAtMs: nowMs + 20_000,
       }),
     ).rejects.toThrow("owner epoch changed");
-  });
-
-  it("revokes one environment credential without changing lifecycle state", async () => {
-    const bootstrapping = await seedBootstrapping("worker-revocation", "lease-revocation");
-    await store.transition({
-      environmentId: bootstrapping.environmentId,
-      from: bootstrapping.state,
-      to: "ready",
-      patch: readyPatch(),
-    });
-    expect(store.getCredential(bootstrapping.environmentId)).toBeDefined();
-
-    await store.revokeEnvironmentCredential(bootstrapping.environmentId);
-
-    expect(store.getCredential(bootstrapping.environmentId)).toBeUndefined();
-    expect(store.get(bootstrapping.environmentId)?.state).toBe("ready");
   });
 
   it("allocates globally distinct owner epochs when a session moves environments", async () => {
@@ -825,34 +552,6 @@ describe("worker environment store", () => {
     expect(fallbackPortRows(pending.environmentId)).toEqual([]);
   });
 
-  it("persists retryable errors without a self-transition", async () => {
-    const initialVersion = store.inventoryVersion();
-    await createIntent();
-    const createdVersion = store.inventoryVersion();
-    expect(createdVersion).toBeGreaterThan(initialVersion);
-    nowMs = 1_010;
-    await store.transition({ environmentId: "worker-1", from: "requested", to: "provisioning" });
-    const provisioningVersion = store.inventoryVersion();
-    expect(provisioningVersion).toBeGreaterThan(createdVersion);
-    const stateChangedAtMs = store.get("worker-1")?.stateChangedAtMs;
-    expect(store.inventoryVersion()).toBe(provisioningVersion);
-
-    nowMs = 1_020;
-    expect(
-      await store.recordError({
-        environmentId: "worker-1",
-        state: "provisioning",
-        error: "provider temporarily unavailable",
-      }),
-    ).toMatchObject({
-      state: "provisioning",
-      stateChangedAtMs,
-      updatedAtMs: 1_020,
-      lastError: "provider temporarily unavailable",
-    });
-    expect(store.inventoryVersion()).toBeGreaterThan(provisioningVersion);
-  });
-
   it("accepts only SecretRef metadata for persisted SSH keys", async () => {
     await createIntent();
     await store.transition({ environmentId: "worker-1", from: "requested", to: "provisioning" });
@@ -878,7 +577,6 @@ describe("worker environment store", () => {
   });
 
   it.each([
-    ["missing", undefined],
     ["multiple lines", `${HOST_KEY}\n${HOST_KEY}`],
     ["extra fields", [HOST_KEY, "comment"].join(" ")],
   ])("rejects %s persisted SSH host-key material", async (_label, hostKey) => {

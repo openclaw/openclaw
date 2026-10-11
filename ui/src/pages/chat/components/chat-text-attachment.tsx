@@ -255,7 +255,7 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
           {text() !== null && !failed() && (
             <CopyButton text={text()!} idleLabel={t("common.copy")} />
           )}
-          <LitContent value={props.actions} />
+          <LitContent render={() => props.actions} />
           {failed() && (
             <button
               class="btn btn--sm"

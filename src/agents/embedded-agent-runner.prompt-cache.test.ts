@@ -6,7 +6,7 @@ import path from "node:path";
 import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assertStableProviderPrefix,
   snapshotProviderPrefix,
@@ -25,6 +25,7 @@ import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { bindSessionMcpRuntimeTestScheduler } from "./agent-bundle-mcp-manager.test-support.js";
 import { disposeAllSessionMcpRuntimes, peekSessionMcpRuntime } from "./agent-bundle-mcp-tools.js";
 import { runEmbeddedAgent } from "./embedded-agent-runner.js";
+import * as promptCacheRequestObserver from "./embedded-agent-runner/prompt-cache-request-observer.js";
 import { queueEmbeddedAgentMessageWithOutcomeAsync } from "./embedded-agent-runner/runs.js";
 import { clearEmbeddedSessionPromptStates } from "./embedded-agent-runner/session-prompt-state.js";
 import type { AgentInternalEvent } from "./internal-events.js";
@@ -282,10 +283,52 @@ describe("provider prefix across admitted Gateway agent turns", () => {
             turn: number;
             payload: unknown;
             prefix: ReturnType<typeof snapshotProviderPrefix>;
+            userEnvelopes: Map<string, string>;
           }> = [];
+          let userEnvelopes = new Map<string, string>();
           let turn = 0;
           let requestsThisTurn = 0;
           let providerFailure: Error | undefined;
+          const createObserver = promptCacheRequestObserver.createPromptCacheRequestObserver;
+          const observerSpy = vi
+            .spyOn(promptCacheRequestObserver, "createPromptCacheRequestObserver")
+            .mockImplementation((...args) => {
+              const observer = createObserver(...args);
+              return {
+                ...observer,
+                onModelRequest: (runtimeModel, context) => {
+                  userEnvelopes = new Map(
+                    context.messages.flatMap<readonly [string, string]>((message) => {
+                      // Custom system/runtime carriers have a separate owner and may
+                      // repeat their text; the wire-prefix oracle covers those entries.
+                      if (
+                        message.role !== "user" ||
+                        message.runtimeContext ||
+                        message.operatorMessage
+                      ) {
+                        return [];
+                      }
+                      const { content, ...envelope } = message;
+                      // Text identifies retained turns across the permitted image cleanup;
+                      // the wire-prefix oracle below separately protects their content.
+                      const text =
+                        typeof content === "string"
+                          ? content
+                          : content
+                              .flatMap((block) => (block.type === "text" ? [block.text] : []))
+                              .join("\n");
+                      return [
+                        [
+                          createHash("sha256").update(text).digest("hex"),
+                          createHash("sha256").update(JSON.stringify(envelope)).digest("hex"),
+                        ],
+                      ];
+                    }),
+                  );
+                  return observer.onModelRequest(runtimeModel, context);
+                },
+              };
+            });
           configureAiTransportHost({
             ...host,
             buildModelFetch: () => async (input, init) => {
@@ -316,7 +359,7 @@ describe("provider prefix across admitted Gateway agent turns", () => {
                   prefix.tools.includes('"name":"cache_probe"'),
                   "synthetic provider only calls an advertised tool",
                 ).toBe(true);
-                requests.push({ turn, payload, prefix });
+                requests.push({ turn, payload, prefix, userEnvelopes });
                 requestsThisTurn++;
                 if (turn === 6 && requestsThisTurn === 1) {
                   const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
@@ -486,6 +529,10 @@ describe("provider prefix across admitted Gateway agent turns", () => {
               }
             }
             expect(requests.length).toBe(12);
+            expect(
+              requests[0]!.userEnvelopes.size,
+              "raw user envelope capture reached the request observer",
+            ).toBeGreaterThan(0);
             const firstPrefix = requests[0]!.prefix.history.join("");
             expect(
               firstPrefix.includes("hook before"),
@@ -529,6 +576,14 @@ describe("provider prefix across admitted Gateway agent turns", () => {
             for (let index = 1; index < requests.length; index++) {
               const previous = requests[index - 1]!;
               const current = requests[index]!;
+              for (const [textDigest, envelopeDigest] of previous.userEnvelopes) {
+                if (current.userEnvelopes.has(textDigest)) {
+                  expect(
+                    current.userEnvelopes.get(textDigest),
+                    `${route} request ${index + 1}, turn ${current.turn}: retained user envelope ${textDigest}`,
+                  ).toBe(envelopeDigest);
+                }
+              }
               // The documented image batch retires the first image on turn five.
               const cleanup = current.turn === 5 && previous.turn === 4;
               const firstImageIndex = previous.prefix.history.findIndex((item) =>
@@ -614,6 +669,7 @@ describe("provider prefix across admitted Gateway agent turns", () => {
               });
             }
           } finally {
+            observerSpy.mockRestore();
             cleanupSessionResources(sessionId);
             configureAiTransportHost(host);
             clearEmbeddedSessionPromptStates([sessionId]);

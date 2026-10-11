@@ -727,7 +727,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
     destroyFileEditor();
     releaseChatMediaResourceSubscriber(invalidate);
   });
-  return <LitContent value={lifecycle.snapshot()} />;
+  return <LitContent render={() => lifecycle.snapshot()} />;
 }
 
 export const ChatDetailPanel = defineSolidBridge("openclaw-chat-detail-panel", DetailPanel, {

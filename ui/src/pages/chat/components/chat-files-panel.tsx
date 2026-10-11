@@ -138,31 +138,33 @@ export const ChatFilesPanel = defineSolidBridge<Props, Methods>(
           <header class="rail-header side-panel__header">
             <div class="side-panel__header-tabs">
               <LitContent
-                value={renderPanelTabStrip({
-                  tabs: hostedTabs().map((tab) => ({
-                    id: tab.id,
-                    label: tab.label,
-                    title: tab.title,
-                    icon: tab.icon,
-                    className: tab.className,
-                    domId: `${contentId}-tab-${tab.id}`,
-                    closeLabel: `${t("browser.closeTab")}: ${tab.label}`,
-                  })),
-                  activeId: activeHostedTabId(),
-                  ariaControls: contentId,
-                  onSelect: (id) => host.selectHostedTab(id),
-                  onClose: (id) => host.closeHostedTab(id),
-                  onNew: () => props.onSelect(null),
-                  newLabel: t("chat.sidePanel.files"),
-                  newControl: hostedActions(),
-                })}
+                render={() =>
+                  renderPanelTabStrip({
+                    tabs: hostedTabs().map((tab) => ({
+                      id: tab.id,
+                      label: tab.label,
+                      title: tab.title,
+                      icon: tab.icon,
+                      className: tab.className,
+                      domId: `${contentId}-tab-${tab.id}`,
+                      closeLabel: `${t("browser.closeTab")}: ${tab.label}`,
+                    })),
+                    activeId: activeHostedTabId(),
+                    ariaControls: contentId,
+                    onSelect: (id) => host.selectHostedTab(id),
+                    onClose: (id) => host.closeHostedTab(id),
+                    onNew: () => props.onSelect(null),
+                    newLabel: t("chat.sidePanel.files"),
+                    newControl: hostedActions(),
+                  })
+                }
               />
             </div>
           </header>
         </Show>
         <div id={contentId} class="chat-files-panel__content">
           <div class="chat-files-panel__page" hidden={rendered().activeId !== null}>
-            <LitContent value={rendered().browser} />
+            <LitContent render={() => rendered().browser} />
           </div>
           <For each={rendered().previews} keyed={(preview) => preview.id}>
             {(preview) => {
@@ -170,28 +172,30 @@ export const ChatFilesPanel = defineSolidBridge<Props, Methods>(
                 rendered();
                 return preview();
               };
+              const renderDetail = () => {
+                const content = entry().content;
+                return content.kind === "loading" || content.kind === "unavailable"
+                  ? undefined
+                  : rendered().renderDetail?.(content);
+              };
               return (
                 <div
                   class="chat-files-panel__page"
                   data-app-tab-id={entry().content.kind === "mcp-app" ? entry().id : undefined}
                   hidden={rendered().activeId !== entry().id}
                 >
-                  {(() => {
-                    const content = entry().content;
-                    return (
-                      <>
-                        {content.kind === "loading" ? (
-                          <PanelLoadingSkeleton variant="files" label={t("common.loading")} />
-                        ) : content.kind === "unavailable" ? (
-                          <div class="callout danger" role="alert">
-                            {content.message}
-                          </div>
-                        ) : (
-                          <LitContent value={rendered().renderDetail?.(content)} />
-                        )}
-                      </>
-                    );
-                  })()}
+                  {entry().content.kind === "loading" ? (
+                    <PanelLoadingSkeleton variant="files" label={t("common.loading")} />
+                  ) : entry().content.kind === "unavailable" ? (
+                    <div class="callout danger" role="alert">
+                      {(() => {
+                        const content = entry().content;
+                        return content.kind === "unavailable" ? content.message : "";
+                      })()}
+                    </div>
+                  ) : (
+                    <LitContent render={renderDetail} />
+                  )}
                 </div>
               );
             }}

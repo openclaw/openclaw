@@ -176,8 +176,8 @@ Reserved characters (`?`, `&`, `%`) outside quoted, predicate, or union
 segments are rejected. Control characters (U+0000-U+001F, U+007F) are
 rejected anywhere, including the `session` query value.
 
-`formatOcPath(parseOcPath(path)) === path` is guaranteed for canonical paths.
-Non-canonical query parameters are ignored except for the first non-empty
+`formatOcPath(parseOcPath(path)) === path` is guaranteed for normalized paths.
+Other query parameters are ignored except for the first non-empty
 `session=` value.
 
 Hard limits: a path caps at 4096 bytes, at most 4 slots (file/section/item/
@@ -208,7 +208,7 @@ depending on the per-kind AST shape.
 - Markdown frontmatter values and `- key: value` item fields are string
   leaves. Values are literal, including `$1`, `$&`, and `$$`. Markdown
   insertions append sections, frontmatter keys, or section items and render a
-  canonical Markdown shape for the changed file. Section bodies are not
+  standard Markdown format for the changed file. Section bodies are not
   writable as a whole through `set`.
 - JSONC leaf writes coerce the string value to the existing leaf type
   (`string`, finite `number`, `true`/`false`, or `null`). Use `--value-json`
@@ -393,7 +393,7 @@ leaf @ L2: "2" (number)
 ```
 
 Each line is a record. Address by predicate (`[event=action]`) when you do
-not know the line number, or by the canonical `LN` segment when you do.
+not know the line number, or by the standard `LN` segment when you do.
 `.ndjson` files use the same adapter as `.jsonl`.
 
 ### YAML

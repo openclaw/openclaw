@@ -110,7 +110,7 @@ export const ChatDetailsProgress = defineSolidBridge<Props>(
           )
         }
       >
-        <LitContent value={card()} />
+        <LitContent render={() => card()} />
       </Show>
     );
   },

@@ -169,14 +169,16 @@ function ChatVideoPlayerContent(
         onClick={(event) => openAttachmentCardFromClick(event, onExpand())}
       >
         <LitContent
-          value={renderAttachmentCardHeader({
-            ...card(),
-            downloadPending: props.preview && !downloadHref(),
-            loading: loading(),
-            expandLabel: t("chat.mediaPlayer.openVideo", { filename: props.label }),
-            onExpand: onExpand(),
-            visualMode: "preview-with-favicon",
-          })}
+          render={() =>
+            renderAttachmentCardHeader({
+              ...card(),
+              downloadPending: props.preview && !downloadHref(),
+              loading: loading(),
+              expandLabel: t("chat.mediaPlayer.openVideo", { filename: props.label }),
+              onExpand: onExpand(),
+              visualMode: "preview-with-favicon",
+            })
+          }
         />
         <Show when={preparing()}>
           <div class="chat-assistant-attachment-card__reason chat-media-preparing">
@@ -240,7 +242,9 @@ function ChatVideoPlayerContent(
       when={sourceState().readiness !== "unavailable"}
       fallback={
         <LitContent
-          value={renderCompactAttachmentCard({ ...card(), onExpand: props.onFallbackExpand })}
+          render={() =>
+            renderCompactAttachmentCard({ ...card(), onExpand: props.onFallbackExpand })
+          }
         />
       }
     >

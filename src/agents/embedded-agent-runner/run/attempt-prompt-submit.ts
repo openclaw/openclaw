@@ -2,6 +2,7 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ImageContent } from "../../../llm/types.js";
 import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import type { Agent, AgentMessage } from "../../runtime/index.js";
+import type { NextUserMessagePersistence } from "../../session-tool-result-guard.js";
 import { buildSessionsYieldContextMessage } from "../../sessions-yield-context.js";
 import { agentSessionQueuePromptContext } from "../../sessions/agent-session-prompting.js";
 import {
@@ -100,6 +101,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
   promptActiveSession: PromptActiveSession;
   runtimeContextMessage?: RuntimeContextCustomMessage;
   runtimeOnly: boolean;
+  setNextUserMessagePersistence?: (mode: NextUserMessagePersistence) => void;
   systemPrompt: string;
   toolResultAggregateMaxChars: number;
   toolResultMaxChars: number;
@@ -306,6 +308,10 @@ export async function submitEmbeddedAttemptPrompt(input: {
   };
   attachPromptCompactionRequestBudget(promptOptions, input.compactionRequestBudget);
   const cleanupProviderPromptHistoryTransform = installProviderPromptHistoryTransform();
+  // Retain the model prefix without attributing its synthetic continuation to a human.
+  if (input.runtimeOnly) {
+    input.setNextUserMessagePersistence?.("runtime");
+  }
   try {
     // Persist after the user (or synthetic runtime prompt), retiring unconsumed
     // context when preflight handles or rejects the prompt before the loop starts.
@@ -327,6 +333,10 @@ export async function submitEmbeddedAttemptPrompt(input: {
       input.onSteeringAcknowledged();
     }
   } finally {
+    if (input.runtimeOnly) {
+      // Preflight can fail before consuming the one-shot persistence mode.
+      input.setNextUserMessagePersistence?.("normal");
+    }
     cleanupProviderPromptHistoryTransform();
     cleanupModelPromptTransform();
   }

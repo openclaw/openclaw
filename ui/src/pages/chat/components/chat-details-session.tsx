@@ -123,12 +123,14 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                       {(person) => (
                         <div class="chat-details__person">
                           <LitContent
-                            value={renderChatAuthorAvatar({
-                              id: person.identity.id,
-                              name: person.label || person.identity.id,
-                              identity: person.identity,
-                              profileAvatarUrl: person.avatarUrl,
-                            })}
+                            render={() =>
+                              renderChatAuthorAvatar({
+                                id: person.identity.id,
+                                name: person.label || person.identity.id,
+                                identity: person.identity,
+                                profileAvatarUrl: person.avatarUrl,
+                              })
+                            }
                           />
                           <span title={person.label || person.identity.id}>
                             {person.label || person.identity.id}
@@ -214,7 +216,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                       </div>
                     }
                   >
-                    <LitContent value={pullRequests()} />
+                    <LitContent render={() => pullRequests()} />
                   </Show>
                 </details>
                 <details

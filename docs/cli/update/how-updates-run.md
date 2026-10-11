@@ -15,7 +15,7 @@ Channel switching, update validation, the restart handoff, and the Git checkout 
 Switching channels explicitly (`--channel ...`) also keeps the install method
 aligned:
 
-- `dev` -> ensures a git checkout (default `~/openclaw`, or
+- `dev` -> creates or reuses a git checkout (default `~/openclaw`, or
   `$OPENCLAW_HOME/openclaw` when `OPENCLAW_HOME` is set; override with
   `OPENCLAW_GIT_DIR`), updates it, and installs the global CLI from that
   checkout.
