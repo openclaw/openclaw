@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { prependShellPath } from "../infra/node-shell.js";
+import { prependShellPath } from "../infra/login-shell-path-carrier.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RunResult } from "./invoke-types.js";
 

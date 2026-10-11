@@ -1,5 +1,5 @@
 import path from "node:path";
-import { prependShellPath } from "../infra/node-shell.js";
+import { prependShellPath } from "../infra/login-shell-path-carrier.js";
 import { findPathKey, removePathPrepend } from "../infra/path-prepend.js";
 
 /**
