@@ -199,7 +199,6 @@ describe("destination-owned completion", () => {
           delivery: normalizeSessionDeliveryState({
             context: { channel: "telegram", to: "67890", accountId: "default", threadId: "12" },
           }),
-          origin: { provider: "telegram", from: "telegram:67890", to: "telegram:67890" },
         });
         const original = loadSessionEntryReadOnly({
           ...destination,
