@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { hasErrnoCode } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { withUserPathBaseDirectory } from "./home-dir.js";
@@ -86,8 +86,11 @@ async function runWithRetainedUpdateRuntime<T>(
           }
           const sourceRoot = await fs.realpath(root);
           assertCurrent();
+          // Boundaries use the same native spelling as sourceRoot. Windows 8.3
+          // names and case-insensitive volumes otherwise hide that the update
+          // replaces this runtime, and its workers load from the new package.
           const mutations = mutationRoots.map((entry) =>
-            resolvePathViaExistingAncestorSync(path.resolve(entry)),
+            resolveIdentityPathViaExistingAncestorSync(path.resolve(entry)),
           );
           const packageOwner = installTarget
             ? (resolveNativePackageProjectRoot(installTarget, env) ?? installTarget.globalRoot)
@@ -95,12 +98,12 @@ async function runWithRetainedUpdateRuntime<T>(
           const mutationBoundaries = [
             ...mutations,
             ...(packageOwner
-              ? [resolvePathViaExistingAncestorSync(path.resolve(packageOwner))]
+              ? [resolveIdentityPathViaExistingAncestorSync(path.resolve(packageOwner))]
               : []),
           ];
           const cwd = tryProcessCwd();
           if (!parkedCwd && cwd) {
-            const physicalCwd = resolvePathViaExistingAncestorSync(cwd);
+            const physicalCwd = resolveIdentityPathViaExistingAncestorSync(cwd);
             if (mutationBoundaries.some((entry) => isPathInside(entry, physicalCwd))) {
               const parked = path.parse(process.execPath).root;
               assertCurrent();
@@ -161,7 +164,7 @@ async function runWithRetainedUpdateRuntime<T>(
             }
           }
           if (!directory) {
-            const temporary = resolvePathViaExistingAncestorSync(path.resolve(os.tmpdir()));
+            const temporary = resolveIdentityPathViaExistingAncestorSync(path.resolve(os.tmpdir()));
             if (!outsideMutation(temporary)) {
               throw new Error(
                 "Updater temporary directory is inside an installation being replaced",

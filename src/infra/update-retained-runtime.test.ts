@@ -710,6 +710,51 @@ it.each(["git", "alias", "ancestor", "npm", "pnpm10", "pnpm11", "bun", "bun-no-e
   },
 );
 
+it("retains and reclaims the runtime when the install is spelled unlike its native realpath", async ({
+  skip,
+}) => {
+  // Windows 8.3 names (C:\Users\RUNNER~1) and case-insensitive volumes give one
+  // directory several spellings; native realpath returns only the on-disk one.
+  const base = await fs.realpath(tempDirs.make("openclaw-retained-spelling-"));
+  const root = await fixture(path.join(base, "Profile"), "npm");
+  const aliasRoot = path.join(base, "profile", path.relative(path.join(base, "Profile"), root));
+  if (!fsSync.existsSync(aliasRoot) || fsSync.realpathSync.native(aliasRoot) !== root) {
+    skip("the temporary volume is case-sensitive");
+  }
+  vi.spyOn(os, "tmpdir").mockReturnValue(base);
+  vi.spyOn(processCensus, "inspectOtherOpenClawProcesses").mockReturnValue({ pids: [] });
+  const maintain = () =>
+    temporaryArtifacts.maintainRetainedUpdateRuntimes({
+      packageRoots: [aliasRoot],
+      repair: true,
+      assertCurrent() {},
+    });
+  const moduleUrl = pathToFileURL(path.join(aliasRoot, "dist/updater.mjs")).href;
+  const directory = await withRetainedUpdateRuntime(moduleUrl, async (retain) => {
+    expect(
+      await retain({ mutationRoots: [aliasRoot], timeoutMs: 30_000, assertCurrent() {} }),
+    ).toMatchObject({ entries: expect.any(Number) });
+    const retained = fileURLToPath(
+      captureRuntimeWorkerSource(
+        resolveRuntimeWorkerUrl({
+          currentModuleUrl: moduleUrl,
+          sourceWorkerName: "store",
+          distWorkerPath: "state/store.js",
+        }),
+      ).moduleUrl,
+    );
+    const [name = ""] = path.relative(path.join(base, "Profile"), retained).split(path.sep);
+    expect(name).toMatch(/^openclaw-update-runtime-/u);
+    expect(await readFile(retained, "utf8")).toBe(backend);
+    expect(await maintain()).toContainEqual(
+      expect.stringContaining("the creating update still owns this runtime"),
+    );
+    return path.join(base, "Profile", name);
+  });
+  expect(await maintain()).toContain(`Removed abandoned updater runtime: ${directory}`);
+  await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
 it("falls back when the runtime sibling is read-only", async () => {
   const base = await fs.realpath(tempDirs.make("openclaw-retained-fallback-"));
   const root = await fixture(base, "npm");
