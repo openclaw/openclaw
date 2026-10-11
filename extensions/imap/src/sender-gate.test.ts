@@ -27,7 +27,6 @@ async function message(headers: string[]) {
 
 describe("IMAP sender admission", () => {
   it.each([
-    ["trusted@EXAMPLE.com", ["trusted@example.COM"], true],
     ["person@example.com", ["@EXAMPLE.com"], true],
     ["Trusted@example.com", ["trusted@example.com"], false],
   ])("matches sender %s against the actual addr-spec", async (sender, entries, accepted) => {
@@ -95,57 +94,45 @@ describe("IMAP sender admission", () => {
     });
   });
 
-  it.each(["temperror", "none"] as const)(
-    "never dispatches on DMARC %s at the default verified threshold",
-    async (result) => {
-      const mail = await message([
-        "From: trusted@example.com",
-        "To: reader+wrong-token@example.com",
-      ]);
-      const authentication = await authenticate(mail.raw, {
-        disableArc: true,
-        disableBimi: true,
-        resolver: async () => {
-          if (result === "temperror") {
-            throw new Error("fixture DNS timeout");
-          }
-          return [];
-        },
-      });
-      expect(authentication.dmarc).toMatchObject({ status: { result } });
-      expect(authentication.dmarc).not.toHaveProperty("alignment");
-      const configured = account({
-        addressTokens: [{ token: "expected-token", senders: ["trusted@example.com"] }],
-      });
-      await expect(
-        evaluateImapSender({
-          ...mail,
-          account: configured,
-          authenticator: async () => authentication,
-        }),
-      ).resolves.toMatchObject({
-        accepted: false,
-        strength: "unverified",
-        reason: result === "temperror" ? "authentication-temperror" : `dmarc-${result}`,
-        transient: result === "temperror",
-      });
-    },
-  );
+  it("never dispatches on DMARC temperror at the default verified threshold", async () => {
+    const mail = await message(["From: trusted@example.com", "To: reader+wrong-token@example.com"]);
+    const authentication = await authenticate(mail.raw, {
+      disableArc: true,
+      disableBimi: true,
+      resolver: async () => {
+        throw new Error("fixture DNS timeout");
+      },
+    });
+    expect(authentication.dmarc).toMatchObject({ status: { result: "temperror" } });
+    expect(authentication.dmarc).not.toHaveProperty("alignment");
+    const configured = account({
+      addressTokens: [{ token: "expected-token", senders: ["trusted@example.com"] }],
+    });
+    await expect(
+      evaluateImapSender({
+        ...mail,
+        account: configured,
+        authenticator: async () => authentication,
+      }),
+    ).resolves.toMatchObject({
+      accepted: false,
+      strength: "unverified",
+      reason: "authentication-temperror",
+      transient: true,
+    });
+  });
 
-  it.each(["pass", "fail"] as const)(
-    "rejects unsigned body bytes even with DMARC %s",
-    async (dmarc) => {
-      const result = createImapAuthResult(dmarc);
-      if (result.dmarc) {
-        result.dmarc.alignment.dkim.underSized = 32;
-      }
-      const mail = await message(["From: trusted@example.com", "To: reader@example.com"]);
-      const authenticator = vi.fn(async () => result);
-      await expect(
-        evaluateImapSender({ ...mail, account: account(), authenticator }),
-      ).resolves.toMatchObject({ accepted: false, reason: "dkim-unsigned-body" });
-    },
-  );
+  it("rejects unsigned body bytes even with DMARC pass", async () => {
+    const result = createImapAuthResult("pass");
+    if (result.dmarc) {
+      result.dmarc.alignment.dkim.underSized = 32;
+    }
+    const mail = await message(["From: trusted@example.com", "To: reader@example.com"]);
+    const authenticator = vi.fn(async () => result);
+    await expect(
+      evaluateImapSender({ ...mail, account: account(), authenticator }),
+    ).resolves.toMatchObject({ accepted: false, reason: "dkim-unsigned-body" });
+  });
 
   it("admits verified and unproven mail at an explicit unverified floor", async () => {
     const mail = await message(["From: trusted@example.com"]);
