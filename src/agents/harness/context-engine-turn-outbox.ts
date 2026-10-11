@@ -4,7 +4,7 @@ import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import {
   readClosedTranscriptTurnInDatabase,
   type ClosedTranscriptTurnReadResult,
-} from "../../config/sessions/session-accessor.transcript-range.js";
+} from "../../config/sessions/session-accessor.transcript-range.worker.js";
 import type {
   TranscriptTurnAdmission,
   TranscriptTurnBoundary,

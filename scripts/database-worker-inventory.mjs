@@ -174,6 +174,27 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/agents/harness/context-engine-turn-outbox.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "writeContextEngineTurnOutboxPayload",
+          "discardContextEngineTurnIntent",
+          "publishClosedContextEngineTurn",
+          "recoverContextEngineTurnOutbox",
+          "listPendingContextEngineTurnSessions",
+          "readNextPendingContextEngineTurn",
+          "completeContextEngineTurn",
+          "recordContextEngineTurnFailure",
+          "hasPendingContextEngineTurn",
+        ],
+        evidence:
+          "Only context-engine-turn-outbox.worker.ts and session-incognito-outbox.worker.ts dispatch outbox SQL. The host store routes incognito commands through the captured actor and refuses a missing actor; the host drain consumes async store methods only.",
+      },
+    ],
+  ],
+  [
     "src/plugin-state/plugin-state-store.reads.ts",
     [
       {

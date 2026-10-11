@@ -166,6 +166,30 @@ describe("outbox", () => {
     };
   }
 
+  it("refuses unbound incognito outbox reads and writes without opening a host database", async () => {
+    const turn = await createTurn("unbound-outbox");
+    const store = openContextEngineTurnOutboxWorkerStore({
+      agentId: actor.agentId,
+      path: actor.path,
+      sessionKey: turn.sessionKey,
+      sessionId: turn.sessionId,
+    });
+    const sql = observeHostDataSql();
+    try {
+      await expect(store.hasPending({ engineId })).rejects.toThrow("No incognito session owner");
+      await expect(
+        store.enqueueIntent({
+          admission: turn.boundary.admission,
+          engineId,
+          isHeartbeat: false,
+        }),
+      ).rejects.toThrow("No incognito session owner");
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
+    }
+  });
+
   it("composes run admission and accepted outbox finalization from the shared binding without caller SQL", async () => {
     const turn = await createTurn("entry-composition");
     const commitTurn = vi.fn<NonNullable<ContextEngine["commitTurn"]>>(async () => ({
