@@ -126,7 +126,7 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
     const { context, manager } = await transcriptCase("ambiguous-controlled-final");
     installHook((event) => {
       if (event.kind !== "final") {
-        return;
+        return undefined;
       }
       const channelData = event.payload.channelData;
       const telegram = channelData?.telegram;
