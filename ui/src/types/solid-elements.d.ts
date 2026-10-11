@@ -4,28 +4,22 @@ import type WaPopover from "@awesome.me/webawesome/dist/components/popover/popov
 import type WaTabGroup from "@awesome.me/webawesome/dist/components/tab-group/tab-group.js";
 import type WaTab from "@awesome.me/webawesome/dist/components/tab/tab.js";
 import type { JSX } from "@solidjs/web";
-import "../components/agent-row-chip.ts";
 import type { MascotMood } from "../components/mascot-pose.ts";
-import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
-import type { SelectPicker } from "../components/select-picker.ts";
 export type { JSX } from "@solidjs/web";
 
-// These hosts keep their existing renderer until their owning migration lane lands.
+// Keep ambient tag contracts independent of renderer modules: SDK declarations include this file.
 type LegacyAttributes<T extends HTMLElement> = JSX.HTMLAttributes<T> & JSX.Properties<T>;
 
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
       "openclaw-tooltip": HTMLAttributes<HTMLElement> & { "prop:content": string };
-      "openclaw-modal-dialog": LegacyAttributes<OpenClawModalDialog> &
-        Partial<Pick<OpenClawModalDialog, "label" | "description" | "open" | "manual">> & {
-          "onModal-cancel"?: (event: Event) => void;
-        };
-      "openclaw-select-picker": LegacyAttributes<SelectPicker>;
-      "openclaw-agent-row-chip": LegacyAttributes<
-        HTMLElementTagNameMap["openclaw-agent-row-chip"]
-      > & {
-        "prop:agentId"?: HTMLElementTagNameMap["openclaw-agent-row-chip"]["agentId"];
+      "openclaw-modal-dialog": HTMLAttributes<HTMLElement> & {
+        label: string;
+        "onModal-cancel"?: (event: Event) => void;
+      };
+      "openclaw-agent-row-chip": HTMLAttributes<HTMLElement> & {
+        "prop:agentId"?: string;
       };
       "openclaw-mascot": LegacyAttributes<HTMLElement> & {
         mood?: MascotMood;
