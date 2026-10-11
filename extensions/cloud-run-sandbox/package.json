@@ -1,0 +1,24 @@
+{
+  "name": "@openclaw/cloud-run-sandbox",
+  "version": "2026.9.8",
+  "private": true,
+  "description": "Experimental Google Cloud Run sandbox backend",
+  "type": "module",
+  "dependencies": {
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.9.8"
+    },
+    "build": {
+      "bundledDist": false
+    }
+  }
+}

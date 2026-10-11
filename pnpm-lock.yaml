@@ -908,6 +908,16 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/cloud-run-sandbox:
+    dependencies:
+      zod:
+        specifier: 4.6.5
+        version: 4.6.5
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/cloudflare:
     dependencies:
       '@aws-sdk/client-s3':
