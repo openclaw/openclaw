@@ -111,7 +111,7 @@ export async function installHistoryPaginationProbe(
         }
       });
       observer.observe({ type: "longtask" });
-      const originalRequest = client.request;
+      const originalRequest = client.request.bind(client);
       client.request = function <T>(...args: Parameters<typeof originalRequest>) {
         const params = args[1] as { sessionKey?: string; offset?: number } | undefined;
         const selected =
@@ -121,8 +121,7 @@ export async function installHistoryPaginationProbe(
         if (selected) {
           sample.marks.request ??= performance.now();
         }
-        const request = originalRequest.bind(this);
-        const promise = request<T>(...args);
+        const promise = originalRequest<T>(...args);
         if (selected) {
           void promise.then(
             () => {
@@ -222,5 +221,9 @@ export async function installHistoryPaginationProbe(
     },
     { application: applicationHandle, count: messageCount, sessionKey: targetSessionKey },
   );
-  await installation.finally(() => applicationHandle.dispose());
+  try {
+    await installation;
+  } finally {
+    await applicationHandle.dispose();
+  }
 }

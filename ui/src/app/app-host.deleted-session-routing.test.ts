@@ -26,21 +26,20 @@ it("recovers a deleted Chat through the shell's router subscription without recu
     },
     listen: () => () => {},
   };
-  const router: ApplicationRouter = createRouter({
-    routes: [
-      {
-        id: "chat",
-        path: "/chat/main",
-        aliases: ["/chat/main/deleted-thread"],
-        loaderDeps: chatPages[0].loaderDeps,
-        component: () => ({ render: () => null }),
-        loader: (_context, options) => ({
-          kind: "session",
-          sessionKey: options.location.pathname === "/chat/main" ? mainKey : deletedKey,
-        }),
-      },
-    ],
-  });
+  const routes: ApplicationRouter["routes"] = [
+    {
+      id: "chat",
+      path: "/chat/main",
+      aliases: ["/chat/main/deleted-thread"],
+      loaderDeps: chatPages[0].loaderDeps,
+      component: () => ({ render: () => null }),
+      loader: (_context, options) => ({
+        kind: "session",
+        sessionKey: options.location.pathname === "/chat/main" ? mainKey : deletedKey,
+      }),
+    },
+  ];
+  const router = createRouter({ routes });
   let recovery: Promise<void> | undefined;
   const errors: unknown[] = [];
   const replace = vi.spyOn(context, "replace").mockImplementation((routeId, options) => {
@@ -53,7 +52,7 @@ it("recovers a deleted Chat through the shell's router subscription without recu
         ...options,
       },
     );
-    void recovery.catch((error) => errors.push(error));
+    void recovery.catch((error: unknown) => errors.push(error));
   });
   const deletion = vi.spyOn(context.sessions, "deletionState");
   const shell = createShellOwner();

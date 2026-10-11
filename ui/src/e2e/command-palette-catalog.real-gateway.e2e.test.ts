@@ -503,8 +503,8 @@ suite.define(() => {
     let rejectCatalogReplies = false;
     const publish = async (page: Page, id: string) => {
       const applicationHandle = await getControlUiContextHandle(page);
-      const publication = await applicationHandle
-        .evaluateHandle((application) => {
+      try {
+        const publication = await applicationHandle.evaluateHandle((application) => {
           const observed = { committed: false };
           const stop = application.gateway.subscribeEvents((event) => {
             if (event.event === "config.changed") {
@@ -512,27 +512,29 @@ suite.define(() => {
             }
           });
           return { observed, stop };
-        })
-        .finally(() => applicationHandle.dispose());
-      const args = [
-        "config",
-        "set",
-        "models.providers.fixture.models",
-        JSON.stringify(models(id)),
-        "--strict-json",
-        "--replace",
-      ];
-      try {
-        const result = await instance.cli(args);
-        commands.push({ args, ...result });
-        expect(result.code, result.stderr).toBe(0);
-        // Runtime rows can arrive before this accepted-config event retires them.
-        await expect
-          .poll(() => publication.evaluate(({ observed }) => observed.committed))
-          .toBe(true);
+        });
+        const args = [
+          "config",
+          "set",
+          "models.providers.fixture.models",
+          JSON.stringify(models(id)),
+          "--strict-json",
+          "--replace",
+        ];
+        try {
+          const result = await instance.cli(args);
+          commands.push({ args, ...result });
+          expect(result.code, result.stderr).toBe(0);
+          // Runtime rows can arrive before this accepted-config event retires them.
+          await expect
+            .poll(() => publication.evaluate(({ observed }) => observed.committed))
+            .toBe(true);
+        } finally {
+          await publication.evaluate(({ stop }) => stop());
+          await publication.dispose();
+        }
       } finally {
-        await publication.evaluate(({ stop }) => stop());
-        await publication.dispose();
+        await applicationHandle.dispose();
       }
     };
     try {

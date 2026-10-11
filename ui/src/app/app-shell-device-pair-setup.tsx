@@ -1,21 +1,12 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createEffect, createMemo, Show } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
-import type { ShellElementAttributes } from "./app-shell-lazy-view.tsx";
 import type { LazyRenderer } from "./lazy-renderer.ts";
 import { LitRouteHost } from "./lit-route-host.tsx";
 
 type DevicePairSetupModule = typeof import("../pages/devices/view-pairing.runtime.ts");
 type DevicePairSetupProps = Parameters<DevicePairSetupModule["renderDevicePairSetup"]>[0];
 export type DevicePairSetupLoader = LazyRenderer<DevicePairSetupModule["renderDevicePairSetup"]>;
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-modal-dialog": ShellElementAttributes;
-    }
-  }
-}
 
 // Keep the pairing runtime lazy so opening the shell never fetches this chunk.
 export function DevicePairSetup(props: {
@@ -44,8 +35,8 @@ export function DevicePairSetup(props: {
         when={state().renderer}
         fallback={
           <openclaw-modal-dialog
-            prop:label={t("devices.pairing.title")}
-            prop:description={t(state().failed ? "devices.pairing.loadFailed" : "common.loading")}
+            label={t("devices.pairing.title")}
+            description={t(state().failed ? "devices.pairing.loadFailed" : "common.loading")}
             onModal-cancel={() => props.props.onClose()}
           >
             <section class="device-pair-setup" aria-busy={state().failed ? undefined : "true"}>
