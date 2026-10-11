@@ -195,9 +195,13 @@ describe("composer run status", () => {
     expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();
     props.runActive = true;
     draw();
-    expect(container.querySelector(".agent-chat__composer-run-status")?.textContent).toContain(
-      "Working…",
-    );
+    expect(
+      container.querySelector(".agent-chat__composer-footer .agent-chat__composer-run-status")
+        ?.textContent,
+    ).toContain("Working…");
+    expect(
+      container.querySelector(".agent-chat__composer-notices .agent-chat__composer-run-status"),
+    ).toBeNull();
     props.waitingApproval = true;
     draw();
     expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();

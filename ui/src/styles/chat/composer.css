@@ -3288,6 +3288,11 @@ html[dir="rtl"] .chat-attachment-loading > span {
     color: inherit;
   }
 
+  .agent-chat__input--mobile-toolbar .agent-chat__composer-context .context-ring {
+    width: auto;
+    gap: 5px;
+  }
+
   .agent-chat__input--mobile-toolbar
     :is(.chat-controls__permission-icon, .chat-controls__permission-lock) {
     width: var(--chat-mobile-row-muted-icon-size);

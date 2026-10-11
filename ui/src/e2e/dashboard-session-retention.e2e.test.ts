@@ -170,7 +170,7 @@ suite.define(() => {
       );
       expect(await betaPane.locator('[data-region-header="side"]').isVisible()).toBe(false);
       expect(await betaPane.locator("openclaw-board-view").count()).toBe(0);
-      await betaPane.getByRole("button", { name: "Side panel", exact: true }).click();
+      await selectChatLayoutAction(betaPane, "Side panel");
       await betaPane.locator('[data-board-tab-id="beta-main"]').waitFor();
     });
   });

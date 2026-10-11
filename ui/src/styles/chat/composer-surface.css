@@ -41,6 +41,11 @@
   flex-shrink: 0;
 }
 
+.agent-chat__composer-run-status--working {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .agent-chat__composer-run-spinner svg {
   width: 14px;
   height: 14px;
@@ -1278,6 +1283,43 @@
     color: var(--muted);
     opacity: var(--chat-mobile-row-mic-opacity);
     stroke-width: var(--chat-mobile-row-mic-stroke);
+  }
+}
+
+/* Context and Working share a stable row without borrowing the picker targets. */
+@container chat-composer (max-width: 480px) {
+  .agent-chat__input--mobile-toolbar .agent-chat__composer-footer {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-rows: auto minmax(44px, auto);
+    column-gap: 8px;
+  }
+
+  .agent-chat__input--mobile-toolbar .agent-chat__composer-lead {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .agent-chat__input--mobile-toolbar .agent-chat__composer-context {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    min-height: var(--chat-composer-control-size);
+    justify-content: flex-end;
+  }
+
+  .agent-chat__composer-context .agent-chat__composer-run-status--working {
+    margin-inline-end: auto;
+  }
+
+  .agent-chat__input--mobile-toolbar .agent-chat__composer-controls {
+    grid-column: 2;
+    grid-row: 2;
+    margin-inline-start: 0;
+  }
+
+  .agent-chat__input--mobile-toolbar .agent-chat__composer-actions {
+    grid-column: 3;
+    grid-row: 2;
   }
 }
 

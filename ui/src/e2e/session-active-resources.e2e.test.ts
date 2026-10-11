@@ -381,6 +381,13 @@ suite.define(() => {
           });
           const observationCount = (await gateway.getRequests("desktop.observe")).length;
           await page.getByRole("link", { name: "Notes", exact: true }).click();
+          await expect
+            .poll(() =>
+              pane(page).evaluate(
+                (element) => (element as HTMLElement & { sessionKey: string }).sessionKey,
+              ),
+            )
+            .toBe(otherKey);
           await ready(page);
           expect(await desktopTab(page).count()).toBe(0);
           await gateway.emitGatewayEvent("node.runnerInventory.changed", {

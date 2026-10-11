@@ -29,7 +29,7 @@ export function renderComposerRunStatus(options: {
     : t("common.working");
   const startedAt = wait?.child?.startedAt ?? wait?.startedAt;
   return html`<div
-    class="agent-chat__composer-run-status ${wait ? "agent-chat__composer-run-status--waiting" : ""}"
+    class="agent-chat__composer-run-status ${wait ? "agent-chat__composer-run-status--waiting" : "agent-chat__composer-run-status--working"}"
     role="status"
     aria-live="off"
   >

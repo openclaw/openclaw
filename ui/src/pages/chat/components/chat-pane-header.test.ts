@@ -115,7 +115,7 @@ describe("chat pane header", () => {
     expect(container.querySelector(".chat-pane__palette-open")).toBeNull();
   });
 
-  it("keeps only Share, Layout, and overflow at rest and moves layout actions into the menu", () => {
+  it("keeps only Share, Layout, and overflow at rest and moves layout actions into the menu", async () => {
     const onClosePane = vi.fn();
     const onSplitDown = vi.fn();
     const onSplitRight = vi.fn();
@@ -143,6 +143,7 @@ describe("chat pane header", () => {
       ["close-pane", onClosePane, ["pane-1"]],
     ] as const) {
       menu.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value } } }));
+      await Promise.resolve();
       expect(callback).toHaveBeenCalledExactlyOnceWith(...args);
     }
     render(renderChatPaneHeader({ ...props, onClosePane: undefined }), container);

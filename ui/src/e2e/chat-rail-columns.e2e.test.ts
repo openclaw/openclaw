@@ -1,7 +1,11 @@
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
-import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import {
+  closeChatLayoutMenu,
+  openChatLayoutMenu,
+  selectChatLayoutAction,
+} from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -908,10 +912,10 @@ suite.define(() => {
         await companion
           .getByText("The mobile side chat stayed inside its panel.", { exact: true })
           .waitFor();
-        await sidePanel(page)
-          .getByRole("button", { name: "Clear side chat", exact: true })
-          .waitFor();
+        const layoutMenu = await openChatLayoutMenu(page);
+        await layoutMenu.getByRole("button", { name: "Clear side chat", exact: true }).waitFor();
         await captureRichPanel(page, "rails-side-chat-mobile-light");
+        await closeChatLayoutMenu(page);
 
         await focusChatSidePanel(page);
         await expect

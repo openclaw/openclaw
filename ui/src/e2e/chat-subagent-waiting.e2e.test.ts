@@ -187,6 +187,7 @@ suite.define(() => {
             .first()
             .evaluate((element) => element.matches(":focus"));
         const countHasFocus = () => runningCount.evaluate((element) => element.matches(":focus"));
+        await closePanel();
         // Measure the phone layout itself, not the frame before the shell collapses.
         await page.setViewportSize({ width: 390, height: 900 });
         await page.locator(".shell--mobile-nav").waitFor();
@@ -206,11 +207,17 @@ suite.define(() => {
         const backToList = panel.getByRole("button", { name: "Back to Subagents", exact: true });
         await backToList.click();
         await panelRow.waitFor();
-        // Closing returns to the conversation and focus to the count, whether the
-        // side panel is closed or its last tab is.
+        // Layout restores focus to its trigger; closing the last tab returns to
+        // the count that opened the panel.
         await selectChatLayoutAction(activePane, "Minimize side panel");
         await indicator.waitFor();
-        await expect.poll(countHasFocus).toBe(true);
+        await expect
+          .poll(() =>
+            activePane
+              .getByRole("button", { name: "Layout", exact: true })
+              .evaluate((element) => element.matches(":focus")),
+          )
+          .toBe(true);
         await runningCount.click();
         await expect.poll(panelTabHasFocus).toBe(true);
         await closePanel();

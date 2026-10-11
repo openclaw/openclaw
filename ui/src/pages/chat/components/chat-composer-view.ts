@@ -364,10 +364,10 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
         <div class="agent-chat__composer-notices">
           ${props.notices ?? nothing} ${composerStatus} ${composerAlerts} ${fallbackStatus}
           ${
-            showComposerInput
+            showComposerInput && props.waitingSubagents
               ? renderComposerRunStatus({
                   waitingSubagents: props.waitingSubagents,
-                  working: isChatRunWorking(props) && !props.waitingApproval,
+                  working: false,
                   onOpenSubagents: props.onOpenSubagents,
                 })
               : nothing
@@ -640,6 +640,12 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 </div>
                 <div class="agent-chat__composer-trail">
                   <div class="agent-chat__composer-meta agent-chat__composer-context">
+                    ${renderComposerRunStatus({
+                      working:
+                        isChatRunWorking(props) &&
+                        !props.waitingApproval &&
+                        !props.waitingSubagents,
+                    })}
                     ${contextNotice}
                   </div>
                   ${

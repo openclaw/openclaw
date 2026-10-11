@@ -2,7 +2,11 @@ import { Buffer } from "node:buffer";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import {
+  closeChatLayoutMenu,
+  openChatLayoutMenu,
+  selectChatLayoutAction,
+} from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
@@ -256,7 +260,7 @@ async function openColdSidebar(page: Page, scenario = coldOpenScenario()) {
   await gateway.waitForRequest("session.discussion.info");
   await gateway.waitForRequest("sessions.companion.state");
   expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
-  await page.getByRole("button", { name: "Side panel", exact: true }).first().click();
+  await selectChatLayoutAction(page, "Side panel");
   const choices = page.locator(".side-panel-empty__type");
   await choices.first().waitFor();
   expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
@@ -815,6 +819,7 @@ suite.define(() => {
         expect(await rfb.events()).not.toContain("closed:1");
 
         const firstCanvas = panes.first().locator("openclaw-desktop-panel canvas");
+        await panes.first().locator(".chat-pane__header").click();
         await selectChatLayoutAction(panes.first(), "Minimize side panel");
         await firstCanvas.waitFor({ state: "hidden" });
         expect(await firstCanvas.count()).toBe(1);
@@ -897,7 +902,7 @@ suite.define(() => {
     const choices = await openColdSidebar(page, populatedColdOpenScenario());
 
     await choices.filter({ hasText: "Side chat" }).click();
-    const contentActions = page.locator(".side-panel__action-group--content");
+    const contentActions = await openChatLayoutMenu(page);
     const clearAction = contentActions.getByRole("button", {
       name: "Clear side chat",
       exact: true,
@@ -915,6 +920,7 @@ suite.define(() => {
     expect(await clearTooltip.locator("wa-tooltip .tooltip-content").textContent()).toContain(
       "Clear side chat",
     );
+    await closeChatLayoutMenu(page);
 
     const tab = page.locator(".side-panel__header .tabstrip-tab[active]");
     for (const direction of ["ltr", "rtl"] as const) {
@@ -994,6 +1000,7 @@ suite.define(() => {
     });
 
     await selectChatLayoutAction(page, "Show discussion");
+    await openChatLayoutMenu(page);
     const discussionAction = contentActions.locator(
       ':scope > a.rail-header__action[target="_blank"]',
     );

@@ -888,18 +888,9 @@ suite.define(() => {
       expect(mobileModelSettingsBox.width).toBeGreaterThanOrEqual(44);
       expect(mobileModelSettingsBox.height).toBeGreaterThanOrEqual(44);
       await expect.poll(permissionIconCenterError).toBeLessThanOrEqual(1);
-      expect(mobileModelSettingsBox.x).toBeGreaterThanOrEqual(
-        mobileContextBox.x + mobileContextBox.width - 1,
+      expect(mobileContextBox.y + mobileContextBox.height).toBeLessThanOrEqual(
+        mobileModelSettingsBox.y + 1,
       );
-      for (const control of [mobileModelSettingsBox, mobileContextBox]) {
-        expect(
-          Math.abs(
-            control.y +
-              control.height / 2 -
-              (mobileModelSettingsBox.y + mobileModelSettingsBox.height / 2),
-          ),
-        ).toBeLessThanOrEqual(2);
-      }
       expect(mobileSettingsBox.x).toBeGreaterThanOrEqual(0);
       expect(mobileSettingsBox.x + mobileSettingsBox.width).toBeLessThanOrEqual(393);
       expect(mobileAttachBox.x + mobileAttachBox.width).toBeLessThanOrEqual(mobileVoiceBox.x + 1);

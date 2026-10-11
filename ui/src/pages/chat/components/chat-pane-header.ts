@@ -639,7 +639,12 @@ function renderChatPaneLayoutMenu(props: ChatPaneHeaderProps) {
     @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
       const action = allActions.find((candidate) => candidate.id === event.detail.item.value);
       if (action && action.kind !== "status" && !action.disabled) {
-        action.onActivate();
+        if (["open-split-view", "split-down", "split-right", "close-pane"].includes(action.id)) {
+          // Web Awesome restores trigger focus after dispatching selection.
+          queueMicrotask(() => action.onActivate());
+        } else {
+          action.onActivate();
+        }
       }
     }}
   >
