@@ -2336,8 +2336,6 @@
 ["src/agents/embedded-agent-runner/cli-backend-dispatch.test.ts","../model-runtime-aliases.js","cacc0b24646791735e2f441c3e252d1e4a1e02b98531a209c931bba6f866290b",1]
 ["src/agents/embedded-agent-runner/cli-backend-dispatch.test.ts","./cli-backend-dispatch-transcript.js","4ea5201ab2b8cca417dabbc80933f9f0baaabbc5836fc2b84da7221009e62f9b",1]
 ["src/agents/embedded-agent-runner/compact.hooks.harness.ts","../../config/channel-capabilities.js","665a6f1309b96def0ca060f57c95d9a2f3b647d4e345f15d372767a4d6ed4333",1]
-["src/agents/embedded-agent-runner/compact.hooks.harness.ts","../../context-engine/init.js","0d98d81f6592bdfb4a016b68fda22ad246d52beda28d6c4627e36e010d048407",1]
-["src/agents/embedded-agent-runner/compact.hooks.harness.ts","../../context-engine/registry.js","75bf123caa65a8edeec650ad7d6644381842de87e85861f36bc104d0d39a5bb5",1]
 ["src/agents/embedded-agent-runner/compact.hooks.harness.ts","../../infra/machine-name.js","391af7ecdbe2395349a484f7beab8d98ee415e8329fbb69717a35a973d50b036",1]
 ["src/agents/embedded-agent-runner/compact.hooks.harness.ts","../../plugins/command-registry-state.js","bcee686f2a594171ea00544d4970dfae5b881c79b39b228dfbafaa86a3ec04c1",1]
 ["src/agents/embedded-agent-runner/compact.hooks.harness.ts","../../plugins/hook-runner-global.js","ab9cd9cdb947fd9f5fd57706d76eaba79685128e07cf48c58b17be50a8bf9a92",1]
