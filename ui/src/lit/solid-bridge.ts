@@ -2,7 +2,6 @@ import { render, spread, type JSX } from "@solidjs/web";
 import { nothing, render as renderLit } from "lit";
 import {
   createComponent,
-  createEffect,
   createRenderEffect,
   createSignal,
   flush,
@@ -323,7 +322,8 @@ export function LitContent(props: { render: () => unknown }) {
   const host = document.createElement("span");
   host.style.display = "contents";
   let part: ReturnType<typeof renderLit> | undefined;
-  createEffect(
+  // Commit Lit descendants before post-render observers inspect the host.
+  createRenderEffect(
     () => props.render(),
     (template) => {
       part = renderLit(template, host, { host });

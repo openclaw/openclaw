@@ -348,7 +348,7 @@ describe("chat pane approval requester identity", () => {
     });
     Object.freeze(approval.request);
     Object.freeze(approval);
-    const container = document.body.appendChild(document.createElement("div"));
+    const container = document.body.appendChild(createApplicationContextProvider(pane.context));
     const redraw = vi.fn(() => {
       pane.render();
       render(renderChat(pane.chatProps!), container);
