@@ -1,7 +1,6 @@
 // Owns the published index state and the isolated lifetime of shadow reindex work.
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
-import { setTimeout as delay } from "node:timers/promises";
 import {
   createSubsystemLogger,
   resolveStateDir,
@@ -30,10 +29,7 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import { runMemorySourceState } from "./manager-cpu-worker-runtime.js";
-import {
-  memoryDatabaseTableExists,
-  MemoryIndexRevisionConflictError,
-} from "./manager-db-kernel.js";
+import { memoryDatabaseTableExists } from "./manager-db-kernel.js";
 import {
   closeMemoryDatabase,
   openMemoryDatabaseAtPath,
@@ -48,11 +44,16 @@ import type {
   MemoryPublicationState,
 } from "./manager-publication-task.js";
 import { memoryEmbeddingCacheFitsInline } from "./manager-publication-transfer.js";
-import { publishMemoryEmbeddingCache, publishMemorySource } from "./manager-publication.js";
+import {
+  publishMemoryEmbeddingCache,
+  publishMemorySource,
+  retryMemoryPublication,
+} from "./manager-publication.js";
 import { readMemoryDatabaseFacts, type MemoryDatabaseFacts } from "./manager-retrieval-read.js";
 import {
   assertMemoryShadowIdentity,
   readMemoryShadowIdentity,
+  readMemoryConnectionPragmas,
   type MemoryShadowConnection,
 } from "./manager-shadow-task.js";
 import type { MemorySourceIndexReplacement } from "./manager-source-index-kernel.js";
@@ -67,24 +68,6 @@ type PublicationWorker = {
   >;
   busyTimeoutMs: number;
 };
-
-function readConnectionPragmas(db: DatabaseSync, errorMessage: string) {
-  const read = (name: keyof MemoryPublicationConnection["pragmas"]): number => {
-    const row = db.prepare(`PRAGMA ${name}`).get();
-    const value = row?.[name] ?? row?.timeout;
-    if (typeof value !== "number" || !Number.isSafeInteger(value)) {
-      throw new Error(errorMessage);
-    }
-    return value;
-  };
-  return {
-    busy_timeout: read("busy_timeout"),
-    synchronous: read("synchronous"),
-    foreign_keys: read("foreign_keys"),
-    journal_size_limit: read("journal_size_limit"),
-    checkpoint_fullfsync: read("checkpoint_fullfsync"),
-  };
-}
 
 export class MemoryIndexDatabase {
   private readonly privateQueues = new Map<string, StoreWriterQueue>();
@@ -171,7 +154,7 @@ export class MemoryIndexDatabase {
       database.shadow = {
         path: filename,
         identity: readMemoryShadowIdentity(filename),
-        pragmas: readConnectionPragmas(db, "Invalid memory shadow connection policy"),
+        pragmas: readMemoryConnectionPragmas(db, "Invalid memory shadow connection policy"),
       };
       database.connectionPragmas = database.shadow.pragmas;
       return database;
@@ -347,7 +330,7 @@ export class MemoryIndexDatabase {
       if (!filename || this.readOnly || this.closed) {
         throw new Error("Memory publication requires its live file owner");
       }
-      const pragmas = (this.connectionPragmas ??= readConnectionPragmas(
+      const pragmas = (this.connectionPragmas ??= readMemoryConnectionPragmas(
         this.db,
         "Invalid memory connection policy",
       ));
@@ -458,31 +441,15 @@ export class MemoryIndexDatabase {
     prepare: () => Promise<boolean> = async () => true,
   ): Promise<T | undefined> {
     const worker = await this.getPublicationWorker();
-    const deadline = performance.now() + worker.busyTimeoutMs;
-    while (await prepare()) {
-      const result = await run();
-      if (result.ok) {
-        if (result.facts) {
-          this.installFacts(result.facts, result.writeToken);
-        }
-        return result.value;
-      }
-      const code = result.error.errcode === undefined ? undefined : result.error.errcode & 0xff;
-      if (result.entered || (code !== 5 && code !== 6) || performance.now() >= deadline) {
-        throw Object.assign(
-          result.error.name === "MemoryIndexRevisionConflictError"
-            ? new MemoryIndexRevisionConflictError(result.error.message)
-            : new Error(result.error.message),
-          result.error,
-          {
-            entered: result.entered,
-            committed: result.committed,
-          },
-        );
-      }
-      await delay(Math.min(25, Math.max(0, deadline - performance.now())));
+    const result = await retryMemoryPublication({
+      run,
+      prepare,
+      busyTimeoutMs: worker.busyTimeoutMs,
+    });
+    if (result?.facts) {
+      this.installFacts(result.facts, result.writeToken);
     }
-    return undefined;
+    return result?.value;
   }
 
   read<Key extends "source.hash" | "source.chunks" | "cache.read" | "session.current">(
