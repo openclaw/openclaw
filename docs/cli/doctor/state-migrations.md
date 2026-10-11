@@ -384,3 +384,27 @@ If the installed plugin still has not reported migration completion, run
 remaining warning to the plugin maintainer. Repeating a package update alone
 does not prove that the plugin migrated its retained state. Keep the retained
 state and config inputs until the migration owner reports completion.
+
+## Plugin migration recovery coverage
+
+A warning that a plugin's migration recovery coverage is unknown means the plugin
+has not declared its recovery inventory. It does not mean data was lost or that
+its core-captured SQLite state is missing from the recovery copy.
+
+Before relying on automatic rollback for that plugin's migration, ask its
+maintainer to declare `collectBackupResources`, or update to a plugin version
+that does. The declaration must include external files and databases that the
+migration changes; an explicit empty list is appropriate for migrations that
+only change core-captured state or do not change data. See the
+[plugin migration contract](/plugins/sdk-migration/compatibility-policy).
+
+Keep the recovery copy. Deleting it does not repair the declaration or improve
+coverage. Bundled Canvas and Memory Core migrations declare their legacy data
+sources; Crabbox's shared SQLite records are core-captured, and the retired
+Workboard check leaves its legacy rows unchanged.
+
+These declarations apply when the installed Doctor or updater creates a new
+recovery copy. A candidate Doctor cannot add resources to an original capture
+already created by an older installed updater; it preserves that original copy
+as evidence. Keep those retained copies, and do not assume an older capture
+includes the newly declared external resources.

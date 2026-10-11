@@ -46,42 +46,32 @@ function params(): PluginDoctorMigrationResourceCollectionParams {
   };
 }
 
-it("warns once per undeclared owner without running the bundled Canvas migration", async () => {
+it("does not warn about Canvas recovery when no legacy documents need migration", async () => {
   const migration = canvasMigrations.find(
     (entry) => entry.id === "canvas-custom-root-documents-to-core",
   );
   if (!migration) {
     throw new Error("Missing shipped Canvas migration");
   }
-  expect(migration.collectBackupResources).toBeUndefined();
-  const detect = vi.spyOn(migration, "detectLegacyState");
-  const migrate = vi.spyOn(migration, "migrateLegacyState");
   const input = params();
+  const legacyRoot = path.join(stateDir, "custom-host");
+  input.config = { plugins: { entries: { canvas: { config: { host: { root: legacyRoot } } } } } };
+  const empty = await preparePluginDoctorMigrationResources(
+    [{ pluginId: "canvas", migration }],
+    input,
+  );
+  expect(empty.resources).toEqual([]);
+  expect(input.warnings).toEqual([]);
+  const documents = path.join(legacyRoot, "documents");
+  fs.mkdirSync(documents, { recursive: true });
+  fs.writeFileSync(path.join(documents, "unrelated.txt"), "retained file");
   const result = await preparePluginDoctorMigrationResources(
-    [
-      { pluginId: "canvas", migration },
-      { pluginId: "canvas", migration: { ...migration, id: "second-action" } },
-      { pluginId: "other-owner", migration },
-    ],
+    [{ pluginId: "canvas", migration }],
     input,
   );
   expect(result.resources).toEqual([]);
-  expect(input.warnings).toEqual([
-    {
-      kind: "undeclared-migration-resources",
-      pluginId: "canvas",
-      message:
-        "canvas migration declares no data resources; its private state is not in the recovery set",
-    },
-    {
-      kind: "undeclared-migration-resources",
-      pluginId: "other-owner",
-      message:
-        "other-owner migration declares no data resources; its private state is not in the recovery set",
-    },
-  ]);
-  expect(detect).not.toHaveBeenCalled();
-  expect(migrate).not.toHaveBeenCalled();
+  expect(input.warnings).toEqual([]);
+  expect(fs.readFileSync(path.join(documents, "unrelated.txt"), "utf8")).toBe("retained file");
 });
 
 it.each(["declared", "malformed"] as const)(

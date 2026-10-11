@@ -594,7 +594,9 @@ reporting an incomplete inventory as complete.
 
 The recovery inventory collector reports one typed
 `undeclared-migration-resources` warning per plugin without a callback; its
-private state is not included in the recovery set. Malformed declarations and
+additional migration resources cannot be verified. Core-captured database state
+is still covered. Declare an explicit empty list when a migration changes only
+core-captured state or has no data resources. Malformed declarations and
 invalid inventories still fail. Collection does not capture or restore data,
 authorize a migration, or replace an updater's required capture checks.
 
