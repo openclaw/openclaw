@@ -6985,7 +6985,6 @@
 ["src/gateway/dashboard-session-title.test.ts","../agents/utility-model.js","703e20accb66687723cfe6518f4a5772b01d108ccee03e2f5d2a59faefcde78a",1]
 ["src/gateway/dashboard-session-title.test.ts","../auto-reply/reply/conversation-label-generator.js","a35bfa59b34a78f8ecebb4b2e7337c6adbd8366f29a2abacfa626813299bcb57",1]
 ["src/gateway/dashboard-session-title.test.ts","../config/sessions/session-accessor.js","2c85db47cead9db0b13fd4b89ef8e472c71506ace722316bbf42481e49f67466",1]
-["src/gateway/dashboard-session-title.test.ts","./session-transcript-title-reader.js","16cf8d500ffe1e60fd27e8d111943df96a70e008fed586491c89599ed548bdb6",1]
 ["src/gateway/desktop/attachment.test.ts","../../logging/subsystem.js","f8d78bf0d992907873041831858c6c280654480aae31e8977c6174d4c7f4deec",1]
 ["src/gateway/desktop/audio-bridge.test.ts","../../../packages/gateway-client/src/websocket.js","54a2178b380a014c06ebc73f8d589d2e855817775005f1e783876284e0c2a999",1]
 ["src/gateway/desktop/audio-bridge.test.ts","../websocket-keepalive.js","5395b5fd6dc7ac903b9ee1e4d95de52678cd81f200fca7a40082f4c13cd6b8e2",1]
