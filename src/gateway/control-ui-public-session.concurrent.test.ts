@@ -3,9 +3,9 @@ import { buildControlUiPublicSessionSharePath } from "@openclaw/session-url-cont
 import { expect, it } from "vitest";
 import {
   patchSessionEntryCore,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { loadPublicSessionShareTokenCodec } from "./control-ui-public-session-token.js";
 import { AUTH_TOKEN, createTestGatewayServer } from "./server-http.test-harness.js";
@@ -55,6 +55,7 @@ it("serves twenty concurrent HTTP readers through real publication, history, and
         controlUiBasePath: "",
         getRuntimeConfig: () => cfg,
         getGatewayRequestContext: () => context,
+        httpRequestLifetime: context,
       },
     });
     try {
@@ -66,7 +67,7 @@ it("serves twenty concurrent HTTP readers through real publication, history, and
         throw new Error("HTTP fixture has no address");
       }
       const path = buildControlUiPublicSessionSharePath({
-        token: loadPublicSessionShareTokenCodec().mint(locator),
+        token: (await loadPublicSessionShareTokenCodec()).mint(locator),
       });
       const origin = `http://127.0.0.1:${address.port}`;
       const paths = [path, "/chat/main/public-concurrency-bbbbbbbbaaaa40008000000000000001"];

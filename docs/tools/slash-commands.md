@@ -78,7 +78,7 @@ command handling is enabled for the surface.
     plugins: false,
     debug: false,
     restart: true, // enables /restart and /update
-    ownerAllowFrom: ["discord:123456789012345678"],
+    ownerAllowFrom: ["discord:user:123456789012345678"],
     allowFrom: {
       "*": ["user1"],
       discord: ["user:123"],
@@ -142,9 +142,13 @@ command handling is enabled for the surface.
   first owner. Control UI pairing has an explicit owner checkbox. Authorized
   non-owners receive a refusal with the exact configuration command for their
   sender ID when using an owner-only command such as `/restart` or `/update`.
-  Use `channel:id` (for example, `discord:123456789012345678`). If an upgrade
-  leaves a legacy `channel:user:id` owner entry, run `openclaw doctor --fix`.
-  Doctor rewrites recognized channel entries and reports their list positions.
+  Use the channel's direct-user target, for example `discord:user:123456789012345678`
+  or `telegram:123456789`. Doctor preserves `user:` when the channel requires it
+  to distinguish users from shared conversations. This keeps the same owner usable
+  for both command authorization and heartbeat delivery.
+  If an older update removed that kind, run `openclaw doctor --fix`. Doctor restores
+  it only from matching config backup history; otherwise it reports the exact
+  owner entry to correct after you confirm the user ID.
 </ParamField>
 
 Channel plugins can enforce owner-only command access through their
@@ -272,7 +276,7 @@ plugins, and installed skills.
 
         **Scope in one line:** `-s` changes only this session, `-a` also updates the agent default, and `-g` also updates the shared global default. Without a flag, `agents.defaults.modelSelectionScope` applies when set. Omission changes only this session.
 
-        Configured `/<alias>` shorthands accept the same trailing scope and `--runtime` options as `/model <alias>`.
+        Configured `/<alias>` shorthands recognize aliases from `agents.defaults.models` and the current agent's `agents.entries.<id>.models`. They accept the same trailing scope and `--runtime` options as `/model <alias>`; another agent's aliases do not apply.
 
         | Goal | Command | Effect |
         | --- | --- | --- |
@@ -318,6 +322,7 @@ user skill directly.
     | --- | --- |
     | `/skill <name> [input]` | Run a skill by name |
     | `/learn [request]` | Draft one reviewable skill from the current conversation or named sources through [Skill Workshop](/tools/skill-workshop) |
+    | `/learn undo <id>` | Owner-only. Revert every skill change one background review made, as the notice's **Undo** button does |
     | `/loop [interval] <prompt>` | Owner-only. Repeat a prompt in this conversation; omit the interval for self-paced checks |
     | `/loop status` | Owner-only. List loops bound to this conversation |
     | `/loop stop [name]` | Owner-only. Stop matching loops bound to this conversation |
@@ -394,7 +399,7 @@ User-invocable skills are exposed as slash commands:
     By default, skill commands route to the model as a normal request.
 
     Skills can declare `command-dispatch: tool` to route directly to a tool
-    (deterministic, no model involvement).
+    (fixed rules, no model involvement).
 
   </Accordion>
   <Accordion title="Native command arguments">
@@ -610,7 +615,7 @@ See [BTW side questions](/tools/btw) for the full behavior.
     - **`/login openrouter`** sends a browser sign-in action through the Gateway's managed HTTPS address. Approve access in your browser, then return to chat for the saved result. See [OpenRouter](/providers/openrouter#getting-started) for address requirements. Use `/login cancel` to cancel a pending sign-in.
     - After login, model restrictions can prompt **Show all provider models** or **Keep current restrictions**. Credentials stay saved either way, and the question does not block another sign-in. An expired question or changed restrictions opens a fresh choice without signing in again. `/login cancel` can cancel the pending question without removing saved credentials.
     - Chat login applies saved credentials directly to the running Gateway. If sign-in status cannot be confirmed, use `/login refresh`, then `/models`; you do not need to repeat authentication.
-    - **`/stop`** targets the active chat session to abort the current run.
+    - **`/stop`** targets the active chat session to abort the selected run and stop its ordinary Gateway or sandbox commands, including commands that already yielded a process handle. Later model runs, commands, and queued input remain untouched while Stop prepares cancellation. It waits for command cleanup and reports an error if cleanup cannot be confirmed. Services started with `background: true` keep running; stop those separately with their process handle.
 
   </Accordion>
   <Accordion title="Slack specifics">

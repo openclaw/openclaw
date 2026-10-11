@@ -5,6 +5,7 @@ import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import * as proxyCapture from "openclaw/plugin-sdk/proxy-capture";
 import type { AsyncDebugProxyCaptureReader } from "openclaw/plugin-sdk/proxy-capture";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
+import { releaseQaCredentialLease } from "../shared/credential-lease-cleanup.js";
 import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
@@ -153,11 +154,7 @@ export async function createSlackQaTransportAdapter(
       throw new Error("Slack QA requires two distinct bots for driver and SUT.");
     }
   } catch (error) {
-    try {
-      await heartbeat.stop();
-    } finally {
-      await lease.release();
-    }
+    await releaseQaCredentialLease(lease, heartbeat);
     throw error;
   }
   let stopped = false;
@@ -213,6 +210,16 @@ export async function createSlackQaTransportAdapter(
   const activeThreadRoots = new Set<string>();
   let polling: Promise<void> | undefined;
   const e2eSessions: SlackChannelE2eSession[] = [];
+  const recordMessage = (message: SlackMessage) =>
+    recordSlackObservedMessage({
+      accountId,
+      busMessageIds,
+      logicalConversationId,
+      message,
+      messages: context.messages,
+      observedText,
+      sutUserId: sutIdentity.userId,
+    });
   const startPolling = () => {
     polling ??= (async () => {
       while (!pollingAbort.signal.aborted) {
@@ -223,15 +230,7 @@ export async function createSlackQaTransportAdapter(
             oldestTs,
           });
           for (const message of messages.toReversed()) {
-            const observedTs = await recordSlackObservedMessage({
-              accountId,
-              busMessageIds,
-              logicalConversationId,
-              message,
-              messages: context.messages,
-              observedText,
-              sutUserId: sutIdentity.userId,
-            });
+            const observedTs = await recordMessage(message);
             if (observedTs) {
               oldestTs = observedTs;
             }
@@ -243,15 +242,7 @@ export async function createSlackQaTransportAdapter(
               threadTs,
             });
             for (const message of threadMessages) {
-              await recordSlackObservedMessage({
-                accountId,
-                busMessageIds,
-                logicalConversationId,
-                message,
-                messages: context.messages,
-                observedText,
-                sutUserId: sutIdentity.userId,
-              });
+              await recordMessage(message);
             }
           }
         } catch (error) {
@@ -360,9 +351,19 @@ export async function createSlackQaTransportAdapter(
       OPENCLAW_DEBUG_PROXY_SESSION_ID: captureSessionId,
     }),
     prepareFlow: async (input) => {
-      captureReader ??= createDebugProxyCaptureReaderAsync({
-        env: (input.gateway as { runtimeEnv: NodeJS.ProcessEnv }).runtimeEnv,
-      });
+      // The Gateway exposes its process environment on the runtime handle.
+      const gateway = input.gateway as typeof input.gateway & { runtimeEnv: NodeJS.ProcessEnv };
+      const captureEnv = gateway.runtimeEnv;
+      // Each read acquires admission for the current Gateway lifetime, including after restart.
+      captureReader = {
+        getSessionEvents: (sessionId, limit) =>
+          createDebugProxyCaptureReaderAsync({ env: captureEnv }).getSessionEvents(
+            sessionId,
+            limit,
+          ),
+        readBlob: (blobId) =>
+          createDebugProxyCaptureReaderAsync({ env: captureEnv }).readBlob(blobId),
+      };
       if (options.agentE2e) {
         flowSignal = input.signal;
         assertNativeActive();
@@ -410,7 +411,10 @@ export async function createSlackQaTransportAdapter(
         });
         e2eSessions.push(e2e);
         await e2e.driver.doctor();
-        return { ...(await scenarioEnvironment.prepareFlow(input)), channelE2e: e2e.driver };
+        return {
+          ...(await scenarioEnvironment.prepareFlow(input, e2e.driver, e2e.recordScenarioMessages)),
+          channelE2e: e2e.driver,
+        };
       }
       return await scenarioEnvironment.prepareFlow(input);
     },
@@ -467,11 +471,7 @@ export async function createSlackQaTransportAdapter(
           );
         }
       } finally {
-        try {
-          await heartbeat.stop();
-        } finally {
-          await lease.release();
-        }
+        await releaseQaCredentialLease(lease, heartbeat);
       }
     },
   };

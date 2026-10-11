@@ -200,7 +200,11 @@ describe("registered setup routing", () => {
     const message = "--baseline cannot be combined with: --mode.";
     expect(runtime.error).toHaveBeenCalledWith(message);
     expect(runtime.log).toHaveBeenCalledWith(
-      JSON.stringify({ ok: false, phase: "options", message }, null, 2),
+      JSON.stringify(
+        { ok: false, error: { type: "cli_error", message }, phase: "options", message },
+        null,
+        2,
+      ),
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(setupCommandMock).not.toHaveBeenCalled();

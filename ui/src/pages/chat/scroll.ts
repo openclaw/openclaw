@@ -18,10 +18,8 @@ export type ChatSessionScrollPosition = {
 const transcriptScrollTopByPane = new Map<string, Map<string, ChatSessionScrollPosition>>();
 
 function getPaneScrollTops(paneId: string): Map<string, ChatSessionScrollPosition> {
-  const existing = transcriptScrollTopByPane.get(paneId);
+  const existing = getSessionCacheValue(transcriptScrollTopByPane, paneId);
   if (existing) {
-    transcriptScrollTopByPane.delete(paneId);
-    transcriptScrollTopByPane.set(paneId, existing);
     return existing;
   }
   const created = new Map<string, ChatSessionScrollPosition>();

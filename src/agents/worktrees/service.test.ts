@@ -17,13 +17,12 @@ import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.j
 import * as worktreeGit from "./git.js";
 import * as worktreeRegistry from "./registry.js";
 import {
-  getRegistryWorktree,
   getRegistryWorktreeProvisionedPaths,
   getRegistryWorktreeProvisionedState,
-  listRegistryWorktrees,
   updateRegistryWorktree,
   WorktreeRemovalContentionError,
 } from "./registry.js";
+import { getRegistryWorktree, listRegistryWorktrees } from "./registry.test-support.js";
 import { acquireWorktreeRunLease, claimWorktreeRemoval } from "./run-lease.js";
 import { testing as runLeaseTesting } from "./run-lease.test-support.js";
 import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
@@ -48,6 +47,7 @@ function isWorktreeAdd(argv: readonly string[]): boolean {
 function expectCheckoutTimeouts(
   commandSpy: MockInstance<typeof commandRunner.runCommandWithTimeout>,
   checkoutBases: string[],
+  networkTimeouts: number[] = [],
 ) {
   const gitCommands = commandSpy.mock.calls
     .filter(([argv]) => argv[0] === "git")
@@ -61,7 +61,7 @@ function expectCheckoutTimeouts(
   );
   expect(
     new Set(gitCommands.filter((command) => !command.checkout).map((command) => command.timeoutMs)),
-  ).toEqual(new Set([120_000]));
+  ).toEqual(new Set([120_000, ...networkTimeouts]));
 }
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
@@ -309,11 +309,13 @@ describe("ManagedWorktreeService", () => {
     expect(reused.ownerId).toBe("agent:main:dashboard:one");
   });
 
-  it("falls back to local HEAD when fetch fails", async () => {
+  it("refuses an unavailable remote default instead of silently using local HEAD", async () => {
     await git(repo, "remote", "set-url", "origin", path.join(root, "missing.git"));
-    const created = await service.create({ repoRoot: repo, name: "offline" });
-    expect(created.baseRef).toBe("HEAD");
-    expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+    await git(repo, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD").catch(() => undefined);
+    await expect(service.create({ repoRoot: repo, name: "offline" })).rejects.toThrow(
+      "Remote default branch is unavailable",
+    );
+    expect(await git(repo, "branch", "--list", "openclaw/offline")).toBe("");
   });
 
   it.each(["aborted", "closed"] as const)(
@@ -360,7 +362,11 @@ describe("ManagedWorktreeService", () => {
         admission === "aborted" ? { code: "OPENCLAW_STATE_LEASE_ABORTED" } : closed,
       );
       expect(checkoutFailed).toBe(true);
-      expectCheckoutTimeouts(commandSpy, ["origin/main", remoteCommit]);
+      expectCheckoutTimeouts(
+        commandSpy,
+        ["refs/remotes/origin/main", remoteCommit],
+        [30_000, 60_000],
+      );
       expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("stale-remote");
       expect(await git(repo, "branch", "--list", "openclaw/stale-remote")).toBe("");
     },
@@ -986,7 +992,7 @@ describe("ManagedWorktreeService", () => {
       expect(await fs.readFile(path.join(created.path, "draft.txt"), "utf8")).toBe(
         "preserve this task\n",
       );
-      expect(service.findLiveById(created.id)?.path).toBe(created.path);
+      expect(getRegistryWorktree(env, created.id)?.path).toBe(created.path);
     });
   });
 });

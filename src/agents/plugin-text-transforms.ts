@@ -38,15 +38,27 @@ export function applyPluginTextReplacements(
   return next;
 }
 
-function transformContentText(content: unknown, replacements?: PluginTextReplacement[]): unknown {
+function transformContentText(
+  content: unknown,
+  replacements?: PluginTextReplacement[],
+  mode: "content" | "arguments" = "content",
+): unknown {
   if (typeof content === "string") {
     return applyPluginTextReplacements(content, replacements);
   }
   if (Array.isArray(content)) {
-    return content.map((entry) => transformContentText(entry, replacements));
+    return content.map((entry) => transformContentText(entry, replacements, mode));
   }
   if (!isRecord(content)) {
     return content;
+  }
+  if (mode === "arguments") {
+    return Object.fromEntries(
+      Object.entries(content).map(([key, entry]) => [
+        key,
+        transformContentText(entry, replacements, mode),
+      ]),
+    );
   }
   const next = { ...content };
   if (typeof next.text === "string") {
@@ -56,7 +68,7 @@ function transformContentText(content: unknown, replacements?: PluginTextReplace
     next.content = transformContentText(next.content, replacements);
   }
   if (next.type === "toolCall" && Object.hasOwn(next, "arguments")) {
-    next.arguments = transformToolCallArgumentText(next.arguments, replacements);
+    next.arguments = transformContentText(next.arguments, replacements, "arguments");
   }
   return next;
 }
@@ -73,27 +85,6 @@ function transformMessageText(message: unknown, replacements?: PluginTextReplace
     next.errorMessage = applyPluginTextReplacements(next.errorMessage, replacements);
   }
   return next;
-}
-
-function transformToolCallArgumentText(
-  value: unknown,
-  replacements?: PluginTextReplacement[],
-): unknown {
-  if (typeof value === "string") {
-    return applyPluginTextReplacements(value, replacements);
-  }
-  if (Array.isArray(value)) {
-    return value.map((entry) => transformToolCallArgumentText(entry, replacements));
-  }
-  if (!isRecord(value)) {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [
-      key,
-      transformToolCallArgumentText(entry, replacements),
-    ]),
-  );
 }
 
 function transformAssistantEventText(
@@ -118,7 +109,7 @@ function transformAssistantEventText(
     // Tool names are routing identifiers; only argument values are text.
     next.toolCall = {
       ...next.toolCall,
-      arguments: transformToolCallArgumentText(next.toolCall.arguments, replacements),
+      arguments: transformContentText(next.toolCall.arguments, replacements, "arguments"),
     };
   }
   for (const field of ["partial", "message", "error"]) {

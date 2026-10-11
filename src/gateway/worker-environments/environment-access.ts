@@ -1,6 +1,7 @@
 import { normalizeCloudRepo } from "../../config/cloud-worker-project-profiles.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import type { WorkerProvider } from "../../plugins/types.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
@@ -228,14 +229,13 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       ) {
         throw new Error("Prepared workspace lost its exact attached environment owner");
       }
+      return { record, preparation };
     };
-    assertCurrent();
+    const { record, preparation } = assertCurrent();
     if (!bind) {
       throw new Error("Prepared workspace node transport is unavailable");
     }
-    const projectSnapshot = readWorkerProjectSnapshot(
-      store.get(request.environmentId)!.profileSnapshot.project,
-    );
+    const projectSnapshot = readWorkerProjectSnapshot(record.profileSnapshot.project);
     let repository: Awaited<ReturnType<typeof prepareRepositoryWorkerProjectSource>> | undefined;
     if (projectSnapshot && "source" in projectSnapshot) {
       if (!options.projectNamespace) {
@@ -243,18 +243,13 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       }
       // A ready hit and resumed initial binding must prove current source access too;
       // a snapshot is reusable content, never a substitute for repository authority.
-      const preparedIdentity = readWorkerProjectPreparation(
-        store.get(request.environmentId)!.profileSnapshot.project,
-      );
       repository = await prepareRepositoryWorkerProjectSource({
         expected: projectSnapshot,
         namespace: options.projectNamespace,
         getConfig: options.getConfig,
         assertCurrent,
         signal: request.signal,
-        knownRecipe: preparedIdentity
-          ? () => ({ project: projectSnapshot, setupRecipe: preparedIdentity.setupRecipe })
-          : undefined,
+        knownRecipe: () => ({ project: projectSnapshot, setupRecipe: preparation.setupRecipe }),
       });
     }
     const assertBindingCurrent = () => {
@@ -300,11 +295,8 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
           "Worker lease isolation is not reconciled; retry after provider inspection",
         );
       }
-      if (
-        record.ownerEpoch === request.ownerEpoch &&
-        record.lastError &&
-        !sameWorkerBuild(record.bootstrapReceipt, currentBundle)
-      ) {
+      const currentBuild = sameWorkerBuild(record.bootstrapReceipt, currentBundle);
+      if (record.ownerEpoch === request.ownerEpoch && record.lastError && !currentBuild) {
         throw new WorkerRuntimeRefreshPendingError(boundedError(record.lastError));
       }
       const credential = store.getCredential(request.environmentId);
@@ -315,7 +307,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       ) {
         throw serviceError("invalid_state", "Worker tunnel owner credential is not current");
       }
-      if (!sameWorkerBuild(record.bootstrapReceipt, currentBundle)) {
+      if (!currentBuild) {
         throw new StaleWorkerBuildError();
       }
       request.authorize?.();
@@ -584,11 +576,13 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       desktopEnabled = enabled;
       if (enabled) {
         desktopPolicy.abort();
+        materializeErrorStack(desktopPolicy.signal.reason);
         desktopPolicy = new AbortController();
       }
     }
     if (!enabled) {
       desktopPolicy.abort();
+      materializeErrorStack(desktopPolicy.signal.reason);
       // The registry also owns host and paired-node desktops; stop only worker sources.
       await joinWorkerTunnelStops([
         ...store.list().map((record) => tunnels?.desktop.stop(record.environmentId)),

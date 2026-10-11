@@ -521,7 +521,7 @@ describe("config cli roster integration", () => {
         await reject(set(modelPath, "missing-roster-provider/missing-model"));
         expect(read(configPath)).toBe(raw);
         expect(errors.join("\n")).toContain(
-          'Cannot set model reference "<configured model reference>" at agents.entries.main.model',
+          'Cannot set model reference "missing-roster-provider/missing-model" at agents.entries.main.model: Unknown model: missing-roster-provider/missing-model.',
         );
         expect(errors.join("\n")).toContain(formatCliCommand("openclaw models list"));
       });

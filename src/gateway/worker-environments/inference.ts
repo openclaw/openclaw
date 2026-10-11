@@ -502,7 +502,7 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
     if (
       existing &&
       existing.request.turnId === params.request.turnId &&
-      existing.requestHash === hash &&
+      existing.storeInput.requestHash === hash &&
       !existing.settled
     ) {
       existing.identity = params.identity;
@@ -537,7 +537,6 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
       identity: params.identity,
       request: structuredClone(params.request),
       sessionTarget: params.sessionTarget,
-      requestHash: hash,
       storeInput: {
         environmentId: params.identity.environmentId,
         sessionId: params.request.sessionId,
@@ -629,8 +628,9 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
     request: WorkerInferenceCancelParams;
     revalidate?: RevalidateInference;
   }): Promise<WorkerInferenceCancelApplicationResult> => {
-    if (unknownSettlements.has(inferenceTurnKey(params.request))) {
-      await joinInferenceOperations([], unknownSettlements.get(inferenceTurnKey(params.request)));
+    const unknownFailures = unknownSettlements.get(inferenceTurnKey(params.request));
+    if (unknownFailures) {
+      await joinInferenceOperations([], unknownFailures);
     }
     const claimKey = serializeWorkerSessionTurnClaim(params.identity.turnClaim!);
     const failed = active.get(claimKey);

@@ -1,11 +1,12 @@
+import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-read.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import * as skillSelection from "../../skills/library/selection.js";
-import * as skillService from "../../skills/library/service.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
@@ -65,14 +66,9 @@ it("acknowledges durable chat input while unrelated history cannot dispatch", as
   }
 });
 
-it.for([
-  { preparation: "selection", outcome: "dispatch" },
-  { preparation: "authoring", outcome: "dispatch" },
-  { preparation: "authoring", outcome: "failure" },
-  { preparation: "authoring", outcome: "cancel" },
-] as const)(
-  "acknowledges durable input before skill $preparation preparation ($outcome)",
-  async ({ preparation, outcome }, { signal }) => {
+it.for(["dispatch", "failure", "cancel"] as const)(
+  "acknowledges durable input before skill session preparation (%s)",
+  async (outcome, { signal }) => {
     const fixture = await createFixture({ active: false });
     const profile = ensureProfileForEmail("preparation-ack@example.test");
     fixture.client.authenticatedUserProfile = {
@@ -90,23 +86,43 @@ it.for([
         throw new Error("Skill authoring preparation failed");
       }
     };
-    const seed = skillSelection.seedSkillLibrarySelection;
-    const presentation = skillService.resolveSkillLibraryPresentation;
-    const preparationSpy =
-      preparation === "selection"
-        ? vi
-            .spyOn(skillSelection, "seedSkillLibrarySelection")
-            .mockImplementation(async (...args) => {
-              await waitForPreparation();
-              return seed(...args);
-            })
-        : vi
-            .spyOn(skillService, "resolveSkillLibraryPresentation")
-            .mockImplementation(async (...args) => {
-              await waitForPreparation();
-              return presentation(...args);
-            });
-    const respond = vi.fn<RespondFn>();
+    const prepare = skillSelection.prepareSkillLibrarySession;
+    const preparationSpy = vi
+      .spyOn(skillSelection, "prepareSkillLibrarySession")
+      .mockImplementation(async (...args) => {
+        await waitForPreparation();
+        return prepare(...args);
+      });
+    const observer = new DatabaseSync(
+      resolveSqliteTargetFromSessionStorePath(fixture.scope.storePath, { agentId: "main" }).path,
+      { readOnly: true },
+    );
+    const readClaim = observer.prepare(
+      `SELECT current_session_id AS sessionId, status,
+        json_extract(entry_json, '$.lifecycleRunId') AS lifecycleRunId,
+        json_extract(entry_json, '$.restartRecoveryDeliveryRunId') AS runId,
+        json_extract(entry_json, '$.restartRecoveryDeliverySourceRunId') AS sourceRunId
+       FROM session_nodes WHERE session_key = ?`,
+    );
+    const readUserTurn = observer.prepare(
+      `SELECT json_extract(event_json, '$.message.content') AS content,
+        json_extract(event_json, '$.message.idempotencyKey') AS idempotencyKey
+       FROM transcript_events WHERE session_id = ?
+       AND json_extract(event_json, '$.type') = 'message'
+       AND json_extract(event_json, '$.message.role') = 'user'
+       AND json_extract(event_json, '$.message.idempotencyKey') = ?`,
+    );
+    let acknowledged: { claim: unknown; userTurns: unknown[] } | undefined;
+    const respond = vi.fn<RespondFn>(() => {
+      // Observe committed state at ACK emission, before any response-delivery await.
+      acknowledged = {
+        claim: readClaim.get(fixture.scope.sessionKey),
+        userTurns: readUserTurn.all(
+          fixture.scope.sessionId,
+          `${fixture.params.idempotencyKey}:user`,
+        ),
+      };
+    });
     const sending = fixture.send(respond);
     try {
       await withinTest(entered.promise, signal);
@@ -120,6 +136,22 @@ it.for([
         undefined,
         expect.anything(),
       );
+      expect(acknowledged).toEqual({
+        claim: {
+          sessionId: fixture.scope.sessionId,
+          // #165733: admission clears the prior outcome; the run registry owns liveness.
+          status: null,
+          lifecycleRunId: fixture.params.idempotencyKey,
+          runId: fixture.params.idempotencyKey,
+          sourceRunId: fixture.params.idempotencyKey,
+        },
+        userTurns: [
+          {
+            content: fixture.params.message,
+            idempotencyKey: `${fixture.params.idempotencyKey}:user`,
+          },
+        ],
+      });
       const admittedTranscript = loadTranscriptEventsSync(fixture.scope);
       expect(admittedTranscript).toHaveLength(fixture.activeTranscript.length + 1);
       expect(admittedTranscript.at(-1)).toMatchObject({
@@ -187,9 +219,13 @@ it.for([
       }
     } finally {
       release.resolve();
-      await sending;
-      await fixture.cleanup();
-      preparationSpy.mockRestore();
+      try {
+        await sending;
+      } finally {
+        observer.close();
+        preparationSpy.mockRestore();
+        await fixture.cleanup();
+      }
     }
   },
 );

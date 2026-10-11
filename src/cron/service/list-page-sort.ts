@@ -14,7 +14,6 @@ export function sortCronJobs(
     if (sortBy === "name") {
       const aName = typeof a.name === "string" ? a.name : "";
       const bName = typeof b.name === "string" ? b.name : "";
-      // oxlint-disable-next-line typescript/unbound-method -- Intl.Collator.compare returns a bound function.
       compareNames ??= new Intl.Collator(undefined, { sensitivity: "base" }).compare;
       cmp = compareNames(aName, bName);
     } else if (sortBy === "updatedAtMs") {

@@ -31,6 +31,16 @@ or database migrations. Once state has migrated beyond the older release's
 supported format, the supported recovery is to restore a verified pre-update
 backup with its matching OpenClaw release.
 
+<Warning>
+Fresh shared-state databases created after tenant-container management was retired
+omit `fleet_cells`. Older revisions that require this table can reject them even
+when the numeric schema version matches. Existing databases retain the old table
+and rows, but that alone does not establish downgrade compatibility. Do not
+reconstruct the retired table or alter schema markers to bypass validation.
+Continue with the current release, or restore a complete verified backup with its
+matching older release using the recovery procedure below.
+</Warning>
+
 Prefer `openclaw update` for upgrades and recovery. It validates the target,
 runs required Doctor migrations, and verifies the activated Gateway. A raw
 `npm i -g` replacement does not retain the previous package or run this recovery
@@ -38,7 +48,8 @@ workflow; use `openclaw update` or [create a backup first](#before-updating-crea
 
 The updater retains the previous package during activation and keeps it when
 failed recovery cannot prove a working installation. Migration recovery originals
-remain until explicit [update cleanup](/cli/update#update-cleanup). These are
+and original-state update captures remain until explicit
+[update cleanup](/cli/update#update-cleanup). These are
 separate recovery mechanisms: cleanup does not manage package or Git runtime
 backups, and retained migration originals are not a full pre-update backup.
 Preserve every recovery location named in the update report until you have

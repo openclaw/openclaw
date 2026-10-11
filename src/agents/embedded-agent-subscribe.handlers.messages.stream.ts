@@ -1,6 +1,9 @@
 import { OPENAI_RESPONSES_APIS } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
-import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  asOptionalObjectRecord,
+  asOptionalRecord as asRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   parseReplyDirectives,
@@ -8,7 +11,11 @@ import {
 } from "../auto-reply/reply/reply-directives.js";
 import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
 import type { AssistantMessage } from "../llm/types.js";
-import { parseAssistantTextSignature } from "../shared/chat-message-content.js";
+import {
+  parseAssistantTextSignature,
+  readAssistantTextBlocksForPhase,
+} from "../shared/chat-message-content.js";
+import { toolCallXmlTextFilter } from "../shared/text/assistant-visible-text.js";
 import { trimTextPreservingCode } from "../shared/text/text-projection.js";
 import {
   findDirectiveCodePrefix,
@@ -37,27 +44,29 @@ export function isSubscribeTranscriptOnlyOpenClawAssistantMessage(
   return provider === "openclaw" && (model === "delivery-mirror" || model === "gateway-injected");
 }
 
-export function isResponsesApiAssistantMessage(message: AgentMessage | undefined): boolean {
-  if (!message || message.role !== "assistant") {
-    return false;
-  }
-  return OPENAI_RESPONSES_APIS.has(normalizeOptionalString(message.api) ?? "");
+function readAssistantMessageApi(message: AgentMessage | undefined) {
+  return message?.role === "assistant" ? normalizeOptionalString(message.api) : undefined;
 }
 
-export function isAnthropicAssistantMessage(message: AgentMessage | undefined): boolean {
-  if (!message || message.role !== "assistant") {
-    return false;
-  }
-  const api = normalizeOptionalString(message.api) ?? "";
-  return api === "anthropic-messages";
+export function isResponsesApiAssistantMessage(message: AgentMessage | undefined): boolean {
+  return OPENAI_RESPONSES_APIS.has(readAssistantMessageApi(message) ?? "");
 }
 
 export function isOpenAiCompletionsAssistantMessage(message: AgentMessage | undefined): boolean {
-  if (!message || message.role !== "assistant") {
-    return false;
-  }
-  const api = normalizeOptionalString(message.api) ?? "";
+  const api = readAssistantMessageApi(message);
   return api === "openai-completions" || api === "openclaw-openai-completions-transport";
+}
+
+export function isAssistantTextPhasePending(
+  message: AgentMessage | undefined,
+  eventType: string,
+): boolean {
+  const api = readAssistantMessageApi(message);
+  return (
+    api === "ollama" ||
+    isOpenAiCompletionsAssistantMessage(message) ||
+    (api === "anthropic-messages" && eventType !== "text_end")
+  );
 }
 
 export function extractStandaloneMessageToolText(
@@ -86,6 +95,10 @@ export function extractStandaloneMessageToolText(
   return normalizeOptionalString(args?.message);
 }
 
+function isAssistantTextBlock(value: unknown): value is { type: "text"; textSignature?: unknown } {
+  return asOptionalObjectRecord(value)?.type === "text";
+}
+
 export function resolveAssistantStreamItemId(params: {
   contentIndex?: unknown;
   message: AgentMessage | undefined;
@@ -96,24 +109,16 @@ export function resolveAssistantStreamItemId(params: {
   }
   const contentIndex = resolveAssistantStreamContentIndex(params.contentIndex);
   const indexedBlock = contentIndex !== undefined ? content[contentIndex] : undefined;
-  const indexedRecord =
-    indexedBlock && typeof indexedBlock === "object"
-      ? (indexedBlock as { type?: unknown })
-      : undefined;
-  const hasIndexedTextBlock = indexedRecord?.type === "text";
+  const hasIndexedTextBlock = isAssistantTextBlock(indexedBlock);
   const candidateStart =
     hasIndexedTextBlock && contentIndex !== undefined ? contentIndex : content.length - 1;
   const candidateEnd = hasIndexedTextBlock ? candidateStart : 0;
   for (let index = candidateStart; index >= candidateEnd; index -= 1) {
     const block = content[index];
-    if (!block || typeof block !== "object") {
+    if (!isAssistantTextBlock(block)) {
       continue;
     }
-    const record = block as { type?: unknown; textSignature?: unknown };
-    if (record.type !== "text") {
-      continue;
-    }
-    const signature = parseAssistantTextSignature(record);
+    const signature = parseAssistantTextSignature(block);
     if (signature?.id) {
       return signature.id;
     }
@@ -134,23 +139,16 @@ export function resolveAssistantStreamBlockIndex(
     return undefined;
   }
   const indexedBlock = contentIndex === undefined ? undefined : message.content[contentIndex];
-  if (indexedBlock && typeof indexedBlock === "object" && indexedBlock.type === "text") {
+  if (isAssistantTextBlock(indexedBlock)) {
     return contentIndex;
   }
-  if (itemId) {
-    for (let index = message.content.length - 1; index >= 0; index -= 1) {
-      const candidate = message.content[index];
-      if (
-        candidate &&
-        typeof candidate === "object" &&
-        candidate.type === "text" &&
-        parseAssistantTextSignature(candidate)?.id === itemId
-      ) {
-        return index;
-      }
-    }
-  }
-  return undefined;
+  const index = itemId
+    ? message.content.findLastIndex(
+        (candidate) =>
+          isAssistantTextBlock(candidate) && parseAssistantTextSignature(candidate)?.id === itemId,
+      )
+    : -1;
+  return index >= 0 ? index : undefined;
 }
 
 export function scopeAssistantMessageToStreamBlock(
@@ -176,25 +174,36 @@ export function emitAssistantCommentaryStreamData(
   ctx: EmbeddedAgentSubscribeContext,
   message: AssistantMessage,
   finalMessage = false,
-  preparedText?: string,
 ) {
   const isResponsesCommentary = isResponsesApiAssistantMessage(message);
   const { lastAssistantStreamContentIndex: index, lastAssistantStreamItemId: itemId } = ctx.state;
   // Non-text updates carry prior Responses items too; publish only the active item.
-  const commentaryMessage = isResponsesCommentary
-    ? scopeAssistantMessageToStreamBlock(message, index, itemId)
-    : message;
-  const text =
-    !isResponsesCommentary && preparedText !== undefined
-      ? preparedText
-      : extractAssistantCommentaryText(commentaryMessage);
-  if (text && (finalMessage || !isResponsesCommentary || ctx.state.deltaBuffer !== text)) {
-    // Generic commentary must carry the identity the phase tagger generated so
-    // the Control UI can key the live row to the persisted fallback row; without
-    // it every generic segment is unkeyed and survives as a duplicate.
+  let commentaryMessages = [scopeAssistantMessageToStreamBlock(message, index, itemId)];
+  if (!isResponsesCommentary) {
+    const blocks = readAssistantTextBlocksForPhase(message, "commentary");
+    // Generic partials retain earlier items; keep each snapshot under its original identity.
+    commentaryMessages = [message];
+    if (Array.isArray(message.content)) {
+      commentaryMessages = [];
+      for (const id of new Set(blocks.map((block) => parseAssistantTextSignature(block)?.id))) {
+        const content = message.content.filter(
+          (block) =>
+            block.type === "text" &&
+            blocks.some((selected) => selected === block) &&
+            parseAssistantTextSignature(block)?.id === id,
+        );
+        commentaryMessages.push({ ...message, content });
+      }
+    }
+  }
+  for (const commentaryMessage of commentaryMessages) {
+    const text = extractAssistantCommentaryText(commentaryMessage);
+    if (!text || (!finalMessage && isResponsesCommentary && ctx.state.deltaBuffer === text)) {
+      continue;
+    }
     const commentaryItemId = isResponsesCommentary
       ? itemId
-      : resolveAssistantStreamItemId({ message });
+      : resolveAssistantStreamItemId({ message: commentaryMessage });
     ctx.emitAssistantStreamData(
       { text, delta: "", replace: true, phase: "commentary", itemId: commentaryItemId },
       { finalMessage },
@@ -213,6 +222,28 @@ export function emitReasoningEnd(ctx: EmbeddedAgentSubscribeContext) {
     log: ctx.log,
     callback: () => ctx.params.onReasoningEnd?.(),
   });
+}
+
+export function emitPersistentReasoning(ctx: EmbeddedAgentSubscribeContext, text: string) {
+  if (
+    !ctx.state.includeReasoning ||
+    !text ||
+    !ctx.params.onBlockReply ||
+    ctx.params.silentExpected ||
+    shouldSuppressDeterministicApprovalOutput(ctx.state) ||
+    hasMessageToolOnlySourceDelivery(ctx) ||
+    text === ctx.state.lastReasoningSent
+  ) {
+    return;
+  }
+  const previous = ctx.state.lastReasoningSent;
+  const pending =
+    previous && text.startsWith(previous) ? text.slice(previous.length).trimStart() : text;
+  ctx.state.lastReasoningSent = text;
+  // Keep reasoning separate from answer/tool payloads, in provider order.
+  if (pending) {
+    ctx.emitBlockReply({ text: pending, isReasoning: true });
+  }
 }
 
 export function emitAssistantMessageStart(ctx: EmbeddedAgentSubscribeContext) {
@@ -269,13 +300,7 @@ export function resolveAssistantTextChunk(params: {
   if (content.startsWith(accumulatedText)) {
     return content.slice(accumulatedText.length);
   }
-  if (accumulatedText.startsWith(content)) {
-    return "";
-  }
-  if (!accumulatedText.includes(content)) {
-    return content;
-  }
-  return "";
+  return accumulatedText.includes(content) ? "" : content;
 }
 
 export function resolveStreamingReply(params: {
@@ -356,7 +381,10 @@ export function resolveStreamingReply(params: {
     const source =
       params.rawDirectiveSource === undefined
         ? params.next
-        : stripDowngradedToolCallText(params.rawDirectiveSource);
+        : toolCallXmlTextFilter(
+            { stripFunctionCallsXmlPayloads: true },
+            params.evtType !== "text_end",
+          ).transform(stripDowngradedToolCallText(params.rawDirectiveSource));
     const parsed = parseReplyDirectives(
       params.evtType === "text_end" ? source : splitTrailingDirective(source).text,
       {

@@ -1,34 +1,27 @@
-import { consume } from "@lit/context";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
-import { repeat } from "lit/directives/repeat.js";
 import type { ChatInputRegion } from "../../../app/chat-input-owner.ts";
-import { applicationContext, type ApplicationContext } from "../../../app/context.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import { isSessionRunActive } from "../../../lib/session-run-state.ts";
 import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
-import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import type { PaneSessionChangeOptions } from "../chat-pane-shared.ts";
 import { isUnfinishedSubagent } from "../chat-spawned-subagent.ts";
 import { SubagentsPanelData, type SubagentsPanelRow } from "../subagents-panel-data.ts";
+import { ChatSessionPanel } from "./chat-session-panel.ts";
 import "../../../components/elapsed-time.ts";
+import "./chat-session-panels.css";
 import "./chat-subagents-panel.css";
 
 let panelSequence = 0;
 
-class ChatSubagentsPanel extends OpenClawLightDomElement {
-  @consume({ context: applicationContext, subscribe: true })
-  protected context!: ApplicationContext;
-  @property({ attribute: false }) sessionKey = "";
-  @property({ attribute: false }) agentId = "main";
+class ChatSubagentsPanel extends ChatSessionPanel<SubagentsPanelData> {
   @property({ attribute: false }) paneId = "single";
   @property({ attribute: false }) presentationId = "single";
   @property({ attribute: false }) inputRegion: ChatInputRegion = "page";
-  @property({ type: Boolean }) presented = true;
   /** The pane's request to show one subagent, or the list for null; taken once. */
   @property({ attribute: false }) showRequest?: () => string | null | undefined;
   @property({ attribute: false }) onSessionSelect?: (
@@ -37,10 +30,9 @@ class ChatSubagentsPanel extends OpenClawLightDomElement {
   ) => boolean | void;
 
   @state() private selected: { key: string; agentId: string } | null = null;
-  @state() private finishedOpen = true;
+  @state() protected finishedOpen = true;
   private readonly finishedId: string;
-  private data: SubagentsPanelData | null = null;
-  private dataContext: ApplicationContext | null = null;
+  protected readonly dataType = SubagentsPanelData;
 
   constructor() {
     super();
@@ -48,34 +40,17 @@ class ChatSubagentsPanel extends OpenClawLightDomElement {
     this.finishedId = `chat-subagents-finished-${panelSequence}`;
   }
 
+  protected override clearSelection(): void {
+    this.selected = null;
+  }
+
   override connectedCallback(): void {
     super.connectedCallback();
     this.requestUpdate();
   }
 
-  override disconnectedCallback(): void {
-    this.data?.dispose();
-    this.data = null;
-    super.disconnectedCallback();
-  }
-
   protected override willUpdate(changed: PropertyValues<this>): void {
-    const contextChanged = this.dataContext !== this.context;
-    const parentChanged = changed.has("sessionKey") || changed.has("agentId");
-    if (contextChanged || parentChanged) {
-      this.selected = null;
-    }
-    if (contextChanged) {
-      this.data?.dispose();
-      this.data = null;
-      this.dataContext = this.context;
-    }
-    if (this.context && !this.data) {
-      this.data = new SubagentsPanelData(this.context, () => this.requestUpdate());
-      this.syncData();
-    } else if (parentChanged || changed.has("presented")) {
-      this.syncData();
-    }
+    super.willUpdate(changed);
     const requested = changed.has("showRequest") ? this.showRequest?.() : undefined;
     if (requested !== undefined) {
       this.selected = requested
@@ -84,28 +59,14 @@ class ChatSubagentsPanel extends OpenClawLightDomElement {
     }
     if (this.selected && this.data && !this.data.loading) {
       const denied = this.data.error && this.data.rows.length === 0;
-      // An incomplete page cannot establish that a previously selected child was removed.
       const removed =
         this.data.hasResult &&
         !this.data.error &&
-        !this.data.hasMore &&
         !this.data.rows.some((row) => row.session.key === this.selected?.key);
       if (denied || removed) {
         this.selected = null;
       }
     }
-  }
-
-  private syncData(): void {
-    this.data?.sync({
-      sessionKey: this.sessionKey,
-      agentId: this.agentId,
-      presented: this.presented,
-    });
-  }
-
-  async refresh(): Promise<void> {
-    await this.data?.refresh();
   }
 
   private subagentAgentId(key: string): string {
@@ -238,7 +199,7 @@ class ChatSubagentsPanel extends OpenClawLightDomElement {
     const running = rows.filter(unfinished);
     const finished = rows.filter((row) => !unfinished(row));
     const loading = this.data?.loading ?? false;
-    const empty = this.data?.hasResult && !this.data.hasMore && !this.data.error;
+    const empty = this.data?.hasResult && !this.data.error;
     return html`<div class="chat-subagents__list" aria-busy=${loading}>
       ${
         this.data?.error
@@ -257,60 +218,14 @@ class ChatSubagentsPanel extends OpenClawLightDomElement {
                 ${loading ? t("common.loading") : t("chat.subagentsPanel.empty")}
               </div>`
             : nothing
-          : html`
-              <section class="chat-subagents__running">
-                <h3 class="chat-subagents__section-title">
-                  ${t("chat.subagentsPanel.running", { count: String(running.length) })}
-                </h3>
-                <div role="list">
-                  ${repeat(
-                    running,
-                    (row) => row.session.key,
-                    (row) => this.renderRow(row),
-                  )}
-                </div>
-                ${running.length ? nothing : html`<div class="chat-subagents__empty">${t("chat.subagentsPanel.noRunning")}</div>`}
-              </section>
-              <section class="chat-subagents__finished">
-                <button
-                  class="chat-subagents__finished-toggle"
-                  type="button"
-                  aria-expanded=${this.finishedOpen}
-                  aria-controls=${this.finishedId}
-                  @click=${() => {
-                    this.finishedOpen = !this.finishedOpen;
-                  }}
-                >
-                  <span
-                    >${t("chat.subagentsPanel.finished", { count: String(finished.length) })}</span
-                  >
-                  ${this.finishedOpen ? icons.chevronDown : icons.chevronRight}
-                </button>
-                <div id=${this.finishedId} role="list" ?hidden=${!this.finishedOpen}>
-                  ${
-                    this.finishedOpen
-                      ? repeat(
-                          finished,
-                          (row) => row.session.key,
-                          (row) => this.renderRow(row),
-                        )
-                      : nothing
-                  }
-                </div>
-              </section>
-            `
-      }
-      ${
-        this.data?.hasMore
-          ? html`<button
-              class="chat-subagents__load-more btn btn--sm"
-              type="button"
-              ?disabled=${loading}
-              @click=${() => this.data?.loadMore()}
-            >
-              ${loading ? t("common.loading") : t("chat.subagentsPanel.loadMore")}
-            </button>`
-          : nothing
+          : this.renderGroups(
+              "subagents",
+              running,
+              finished,
+              (row) => row.session.key,
+              (row) => this.renderRow(row),
+              this.finishedId,
+            )
       }
     </div>`;
   }

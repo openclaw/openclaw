@@ -4,15 +4,13 @@ import {
   normalizeOptionalString,
   truncateUtf16Safe,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { replaceCard, workboardCardRunId, workboardCardSessionKey } from "./card-state.ts";
-import { formatError } from "./normalization-utils.ts";
+import { runWorkboardCardMutation } from "./mutations.ts";
 import { normalizeCardPayload } from "./normalization.ts";
 import {
   getWorkboardState,
-  invalidateWorkboardLoads,
   workboardMutationsReady,
-  type WorkboardHost,
+  type WorkboardClientContext,
 } from "./runtime.ts";
 import { workboardCardSessionTarget } from "./session-resolution.ts";
 import type {
@@ -58,20 +56,19 @@ function workboardRunWasAborted(result: unknown): boolean {
   );
 }
 
-export async function startWorkboardCard(params: {
-  host: WorkboardHost;
-  client: GatewayBrowserClient | null;
-  card: WorkboardCard;
-  engine?: WorkboardExecutionEngine;
-  mode?: WorkboardExecutionMode;
-  requestUpdate?: () => void;
-}): Promise<string | null> {
-  const state = getWorkboardState(params.host);
+export async function startWorkboardCard(
+  params: WorkboardClientContext & {
+    card: WorkboardCard;
+    engine?: WorkboardExecutionEngine;
+    mode?: WorkboardExecutionMode;
+  },
+): Promise<string | null> {
+  const initialState = getWorkboardState(params.host);
   if (
     !params.client ||
-    !workboardMutationsReady(state) ||
-    state.dispatching ||
-    state.busyCardIds.has(params.card.id)
+    !workboardMutationsReady(initialState) ||
+    initialState.dispatching ||
+    initialState.busyCardIds.has(params.card.id)
   ) {
     return null;
   }
@@ -80,163 +77,144 @@ export async function startWorkboardCard(params: {
   const model =
     engine === "codex" || engine === "claude" ? WORKBOARD_ENGINE_MODELS[engine] : undefined;
   const scheduledAt = params.card.metadata?.automation?.scheduledAt;
-  state.error = null;
+  initialState.error = null;
   if (
     mode === "autonomous" &&
     (typeof scheduledAt === "number"
       ? scheduledAt > Date.now()
       : params.card.status === "scheduled")
   ) {
-    state.error = "Scheduled cards cannot start before their scheduled time.";
+    initialState.error = "Scheduled cards cannot start before their scheduled time.";
     params.requestUpdate?.();
     return null;
   }
-  invalidateWorkboardLoads(params.host);
-  state.busyCardIds.add(params.card.id);
-  params.requestUpdate?.();
-  try {
-    assertCurrentCard(state, params.card);
-    if (!canStartWorkboardCard(params.card)) {
-      throw new Error(
-        "This card already has an execution. Refresh its details or use Edit to clear its session link before starting another.",
-      );
-    }
-    if (mode === "autonomous") {
-      const separator = model?.indexOf("/") ?? -1;
-      const payload = await params.client.request("workboard.cards.start", {
-        id: params.card.id,
-        ...(separator > 0
-          ? { provider: model?.slice(0, separator), model: model?.slice(separator + 1) }
-          : {}),
-      });
+  const mutationResult = await runWorkboardCardMutation(
+    { ...params, cardId: params.card.id, reconcileConflict: false },
+    async (state, client) => {
       assertCurrentCard(state, params.card);
-      const card = normalizeCardPayload(payload);
-      replaceCard(state, card);
-      const sessionKey = workboardCardSessionKey(card);
-      return sessionKey ?? null;
-    }
-    const shouldClearManualSchedule = params.card.metadata?.automation?.scheduledAt !== undefined;
-    const shouldUnscheduleManual = params.card.status === "scheduled";
-    const nextCardStatus = shouldUnscheduleManual ? "todo" : params.card.status;
-    const result = await params.client.request<SessionsCreateResult>("sessions.create", {
-      ...(params.card.agentId ? { agentId: params.card.agentId } : {}),
-      label: buildCardSessionLabel(params.card),
-      ...(model ? { model } : {}),
-    });
-    const sessionKey = normalizeOptionalString(result?.key);
-    if (!sessionKey) {
-      throw new Error("sessions.create returned no key");
-    }
-    assertCurrentCard(state, params.card);
-    const now = Date.now();
-    const payload = await params.client.request("workboard.cards.update", {
-      id: params.card.id,
-      expectedUpdatedAt: params.card.updatedAt,
-      patch: {
-        status: nextCardStatus,
-        ...(shouldClearManualSchedule ? { scheduledAt: null } : {}),
-        sessionKey,
-        runId: null,
-        ...(engine
-          ? {
-              execution: {
-                id: params.card.execution?.id ?? `${params.card.id}:agent-session`,
-                kind: "agent-session",
-                engine,
-                mode: "manual",
-                status: "idle",
-                startedAt: now,
-                updatedAt: now,
-                ...(model ? { model } : {}),
-                sessionKey,
-              },
-            }
-          : { execution: null }),
-      },
-    });
-    assertCurrentCard(state, params.card);
-    replaceCard(state, normalizeCardPayload(payload));
-    return sessionKey;
-  } catch (error) {
-    state.error = formatError(error);
-    return null;
-  } finally {
-    state.busyCardIds.delete(params.card.id);
-    params.requestUpdate?.();
-  }
-}
-
-export async function stopWorkboardCard(params: {
-  host: WorkboardHost;
-  client: GatewayBrowserClient | null;
-  card: WorkboardCard;
-  session?: BoardGetParams;
-  requestUpdate?: () => void;
-}) {
-  const state = getWorkboardState(params.host);
-  const linkedSessionKey = workboardCardSessionKey(params.card);
-  const session = workboardCardSessionTarget(params.card, params.session);
-  if (
-    !params.client ||
-    !workboardMutationsReady(state) ||
-    state.dispatching ||
-    state.busyCardIds.has(params.card.id) ||
-    !linkedSessionKey
-  ) {
-    return;
-  }
-  invalidateWorkboardLoads(params.host);
-  state.busyCardIds.add(params.card.id);
-  state.error = null;
-  params.requestUpdate?.();
-  const assertCurrent = () => assertCurrentCard(state, params.card);
-  try {
-    assertCurrent();
-    let sessionAborted = false;
-    if (session) {
-      const runId = workboardCardRunId(params.card);
-      const targetedAbort = await params.client.request("chat.abort", {
-        ...session,
-        ...(runId ? { runId } : {}),
-      });
-      assertCurrent();
-      sessionAborted = workboardRunWasAborted(targetedAbort);
-      // A stale card run id aborts nothing; retry session-wide before giving up.
-      if (!sessionAborted && runId) {
-        sessionAborted = workboardRunWasAborted(await params.client.request("chat.abort", session));
-      }
-    }
-    assertCurrent();
-    if (!sessionAborted) {
-      if (!session) {
+      if (!canStartWorkboardCard(params.card)) {
         throw new Error(
-          "Refresh this card's session details before stopping it, or use Edit to choose its session.",
+          "This card already has an execution. Refresh its details or use Edit to clear its session link before starting another.",
         );
       }
-      return;
-    }
-    const payload = await params.client.request("workboard.cards.update", {
-      id: params.card.id,
-      expectedUpdatedAt: params.card.updatedAt,
-      patch: {
-        status: "blocked",
-        ...(params.card.execution
-          ? {
-              execution: {
-                ...params.card.execution,
-                status: "blocked",
-                updatedAt: Date.now(),
-              },
-            }
-          : {}),
-      },
-    });
-    assertCurrent();
-    replaceCard(state, normalizeCardPayload(payload));
-  } catch (error) {
-    state.error = formatError(error);
-  } finally {
-    state.busyCardIds.delete(params.card.id);
-    params.requestUpdate?.();
+      if (mode === "autonomous") {
+        const separator = model?.indexOf("/") ?? -1;
+        const payload = await client.request("workboard.cards.start", {
+          id: params.card.id,
+          ...(separator > 0
+            ? { provider: model?.slice(0, separator), model: model?.slice(separator + 1) }
+            : {}),
+        });
+        assertCurrentCard(state, params.card);
+        const card = normalizeCardPayload(payload);
+        replaceCard(state, card);
+        const sessionKey = workboardCardSessionKey(card);
+        return sessionKey ?? null;
+      }
+      const shouldClearManualSchedule = params.card.metadata?.automation?.scheduledAt !== undefined;
+      const shouldUnscheduleManual = params.card.status === "scheduled";
+      const nextCardStatus = shouldUnscheduleManual ? "todo" : params.card.status;
+      const result = await client.request<SessionsCreateResult>("sessions.create", {
+        ...(params.card.agentId ? { agentId: params.card.agentId } : {}),
+        label: buildCardSessionLabel(params.card),
+        ...(model ? { model } : {}),
+      });
+      const sessionKey = normalizeOptionalString(result?.key);
+      if (!sessionKey) {
+        throw new Error("sessions.create returned no key");
+      }
+      assertCurrentCard(state, params.card);
+      const now = Date.now();
+      const payload = await client.request("workboard.cards.update", {
+        id: params.card.id,
+        expectedUpdatedAt: params.card.updatedAt,
+        patch: {
+          status: nextCardStatus,
+          ...(shouldClearManualSchedule ? { scheduledAt: null } : {}),
+          sessionKey,
+          runId: null,
+          ...(engine
+            ? {
+                execution: {
+                  id: params.card.execution?.id ?? `${params.card.id}:agent-session`,
+                  kind: "agent-session",
+                  engine,
+                  mode: "manual",
+                  status: "idle",
+                  startedAt: now,
+                  updatedAt: now,
+                  ...(model ? { model } : {}),
+                  sessionKey,
+                },
+              }
+            : { execution: null }),
+        },
+      });
+      assertCurrentCard(state, params.card);
+      replaceCard(state, normalizeCardPayload(payload));
+      return sessionKey;
+    },
+  );
+  return mutationResult === false ? null : mutationResult;
+}
+
+export async function stopWorkboardCard(
+  params: WorkboardClientContext & {
+    card: WorkboardCard;
+    session?: BoardGetParams;
+  },
+) {
+  const linkedSessionKey = workboardCardSessionKey(params.card);
+  const session = workboardCardSessionTarget(params.card, params.session);
+  if (!linkedSessionKey) {
+    return;
   }
+  await runWorkboardCardMutation(
+    { ...params, cardId: params.card.id, reconcileConflict: false },
+    async (state, client) => {
+      const assertCurrent = () => assertCurrentCard(state, params.card);
+      assertCurrent();
+      let sessionAborted = false;
+      if (session) {
+        const runId = workboardCardRunId(params.card);
+        const targetedAbort = await client.request("chat.abort", {
+          ...session,
+          ...(runId ? { runId } : {}),
+        });
+        assertCurrent();
+        sessionAborted = workboardRunWasAborted(targetedAbort);
+        // A stale card run id aborts nothing; retry session-wide before giving up.
+        if (!sessionAborted && runId) {
+          sessionAborted = workboardRunWasAborted(await client.request("chat.abort", session));
+        }
+      }
+      assertCurrent();
+      if (!sessionAborted) {
+        if (!session) {
+          throw new Error(
+            "Refresh this card's session details before stopping it, or use Edit to choose its session.",
+          );
+        }
+        return;
+      }
+      const payload = await client.request("workboard.cards.update", {
+        id: params.card.id,
+        expectedUpdatedAt: params.card.updatedAt,
+        patch: {
+          status: "blocked",
+          ...(params.card.execution
+            ? {
+                execution: {
+                  ...params.card.execution,
+                  status: "blocked",
+                  updatedAt: Date.now(),
+                },
+              }
+            : {}),
+        },
+      });
+      assertCurrent();
+      replaceCard(state, normalizeCardPayload(payload));
+    },
+  );
 }

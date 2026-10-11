@@ -195,6 +195,10 @@ describe("legacy media persistence doctor migration", () => {
     });
     const { DatabaseSync } = requireNodeSqlite();
     const trajectoryDatabase = new DatabaseSync(databasePath);
+    // Individually safe timestamps must not overflow an aggregate migration fingerprint.
+    trajectoryDatabase
+      .prepare("UPDATE transcript_events SET created_at = ?")
+      .run(Math.floor(Number.MAX_SAFE_INTEGER / 2) + 100);
     trajectoryDatabase
       .prepare(
         "INSERT INTO trajectory_runtime_events(session_id,seq,run_id,event_json,created_at) VALUES(?,?,?,?,?)",
@@ -374,50 +378,13 @@ describe("legacy media persistence doctor migration", () => {
 
     expect(openOpenClawAgentDatabase({ agentId: "main", env }).db.isOpen).toBe(true);
     closeOpenClawAgentDatabasesForTest();
-    expect(await migrateLegacyMediaPersistence({ env })).toEqual({ changes: [], warnings: [] });
-  });
-
-  it("migrates when valid transcript created_at rows have an unsafe aggregate", async () => {
-    const stateDir = makeTempDir(tempDirs, "media-persistence-large-created-at-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const legacyMediaPaths = ["/media/a.png", "/media/b.png"];
-    const databasePath = createLegacyDatabaseFixture({
-      env,
-      eventsBySession: {
-        unsafe: legacyMediaPaths.map((mediaPath, index) =>
-          createEvent({
-            id: `event-${index + 1}`,
-            parentId: index === 0 ? null : "event-1",
-            timestamp: (index + 1) * 1000,
-            message: { role: "user", content: `message ${index + 1}`, MediaPath: mediaPath },
-          }),
-        ),
-      },
-    });
-    const largeCreatedAt = Math.floor(Number.MAX_SAFE_INTEGER / 2) + 100;
-    expect(largeCreatedAt * 2).toBeGreaterThan(Number.MAX_SAFE_INTEGER);
-    const { DatabaseSync } = requireNodeSqlite();
-    const database = new DatabaseSync(databasePath);
-    database
-      .prepare("UPDATE transcript_events SET created_at = ? WHERE session_id = ?")
-      .run(largeCreatedAt, "unsafe");
-    database.close();
-
-    expect((await migrateLegacyMediaPersistence({ env })).warnings).toEqual([]);
-
-    const snapshot = readDatabaseSnapshot(databasePath);
-    expect(snapshot.version.user_version).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
-    expect(snapshot.rows.map((row) => row.created_at)).toEqual([largeCreatedAt, largeCreatedAt]);
-    const messages = snapshot.rows.map(
-      (row) => (JSON.parse(row.event_json) as FixtureEvent).message,
-    );
-    expect(messages).toEqual(
-      legacyMediaPaths.map((mediaPath) =>
-        expect.objectContaining({
-          __openclaw: { media: [expect.objectContaining({ path: mediaPath })] },
-        }),
-      ),
-    );
+    const checks = vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker");
+    try {
+      expect(await migrateLegacyMediaPersistence({ env })).toEqual({ changes: [], warnings: [] });
+      expect(checks.mock.calls.filter(([pathname]) => pathname === databasePath)).toHaveLength(1);
+    } finally {
+      checks.mockRestore();
+    }
   });
 
   it.each([OPENCLAW_AGENT_SCHEMA_VERSION])(

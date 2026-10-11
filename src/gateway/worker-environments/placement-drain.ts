@@ -2,14 +2,13 @@ import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
-  assertRecordShape,
   isCurrentPlacementTurnClaim,
   normalizeEpoch,
   required,
   type WorkerSessionPlacementRecord,
   type WorkerSessionTurnClaim,
 } from "./placement-record.js";
-import { getRequired, query, transitionValues } from "./placement-row-codec.js";
+import { getRequired, query, transitionValues, turnClaimValues } from "./placement-row-codec.js";
 import { publishPlacementTurnClaimState } from "./placement-turn-authority.js";
 import { clearWorkerWorkspaceReconciliation } from "./placement-workspace-journal.js";
 import { hasWorkerWorkspacePendingResult } from "./placement-workspace-result.js";
@@ -66,19 +65,7 @@ export function drainWorkerSessionPlacement(
       : { workspaceBaseManifestRef: input.workspaceBaseManifestRef },
     nowMs,
   );
-  const turnClaim = current.turnClaim;
-  if (turnClaim) {
-    values.turn_claim_owner = turnClaim.owner;
-    values.turn_claim_id = turnClaim.claimId;
-    values.turn_claim_run_id = turnClaim.runId;
-    values.turn_claim_generation = turnClaim.generation;
-    values.turn_claim_owner_epoch = turnClaim.ownerEpoch;
-  }
-  assertRecordShape({
-    ...current,
-    state: "draining",
-    workspaceBaseManifestRef: values.workspace_base_manifest_ref,
-  });
+  Object.assign(values, turnClaimValues(current.turnClaim));
   const result = executeSqliteQuerySync(
     db,
     query(db)

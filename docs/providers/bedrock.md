@@ -17,6 +17,14 @@ not an API key.
 | Auth     | AWS credentials (env vars, shared config, or instance role) |
 | Region   | `AWS_REGION` or `AWS_DEFAULT_REGION` (default: `us-east-1`) |
 
+Custom provider IDs (for example, `amazon-bedrock-east1`) can use
+`api: "bedrock-converse-stream"` and `auth: "aws-sdk"`. They activate the same
+Bedrock plugin. The region comes from the selected provider's standard
+`bedrock-runtime.<region>.amazonaws.com` URL, then the resolved model URL,
+then the plugin discovery region. Without one of these, the AWS SDK region
+environment and profile settings apply. A custom route does not inherit the
+stock `amazon-bedrock` provider's region.
+
 ## Getting started
 
 Choose your preferred auth method and follow the setup steps.

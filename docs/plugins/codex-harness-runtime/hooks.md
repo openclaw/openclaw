@@ -73,7 +73,7 @@ and `Stop`.
 
 Before starting or resuming a thread, OpenClaw prepares the native relay's
 stored MCP approval snapshot and direct publication attempt, then rechecks the
-current run's authority. If the listener or SQLite locator is unavailable, hook
+current run's authority. For local app-servers, if the listener or SQLite locator is unavailable, hook
 commands can use the existing Gateway fallback. Policy preparation must still
 succeed; Gateway invocation waits for that snapshot independently of publication.
 Registration returns a synchronous handle whose optional `deferMcpToolApprovals`
@@ -98,6 +98,33 @@ retired, listener closure. Existing grace windows for late hooks and direct
 children retained after a successful yield are preserved; draining pending
 storage work does not close those children.
 
+## Remote native hook callbacks
+
+A dedicated Codex app-server cannot read the Gateway's SQLite locator or reach
+its loopback listener. Set `plugins.entries.codex.config.appServer.nativeHookRelay`
+with `url` and `credentialDirectory` to use a restricted HTTPS callback instead.
+`url` is the externally routed base for `/__openclaw__/native-hook`; the adapter
+appends the relay ID. OCE generates this configuration for dedicated Codex Agents.
+
+The deployment must supply a private directory outside the model workspace and
+file-transfer roots, and trusted CA certificates for hook processes. Before
+starting a turn, the adapter writes a credential through the authenticated Codex
+app-server filesystem API. Hook commands contain only that file's path. The
+callback accepts the current relay token and exact generation, then applies the
+same event policy and live-owner checks as the local bridge. It grants no Gateway
+operator access. Invalid explicit remote configuration or delivery failure stops
+the turn; callbacks never fall back to operator RPC or local SQLite.
+
+The credential path stays stable for a relay generation so warm and incognito
+threads can reuse their hook commands. Each registration writes a new token;
+ordered writes and owner-checked cleanup prevent an old task from deleting its
+replacement's credential. Retained native children can use the credential until
+their existing relay lifetime ends; disposal removes the file.
+Replacement and Gateway restart invalidate old tokens even if a remote file
+cannot be removed. The directory is not a security boundary against compromised
+Harness code running as the same OS user: the callback's restricted authority is
+still required. TLS verification remains enabled and redirects are refused.
+
 When Codex app-server approvals are enabled (`approvalPolicy` is not
 `"never"`), the default injected native hook config omits `PermissionRequest`
 so Codex's app-server reviewer and OpenClaw's approval bridge handle real
@@ -111,7 +138,7 @@ the call, so plugin and middleware behavior runs in the harness adapter. Codex
 Code Mode receives generic dynamic results as text and serializes nested
 dynamic calls; callers must parse JSON-looking results and cannot rely on
 `Promise.all` for concurrent submission. For Codex-native tools, Codex owns the
-canonical tool record; OpenClaw can mirror selected events but cannot rewrite
+native tool record; OpenClaw can mirror selected events but cannot rewrite
 the native thread unless Codex exposes that through app-server or native hook
 callbacks.
 

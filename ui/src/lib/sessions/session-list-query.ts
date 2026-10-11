@@ -188,8 +188,10 @@ export function canApplySessionListSnapshot(
       existing.spawnedBy !== next.spawnedBy ||
       existing.controlOwnerSessionKey !== next.controlOwnerSessionKey ||
       existing.parentSessionKey !== next.parentSessionKey ||
+      existing.sidebarRoot !== next.sidebarRoot ||
       (countsOnly &&
         (existing.hasActiveRun !== next.hasActiveRun ||
+          existing.hasActiveSubagentRun !== next.hasActiveSubagentRun ||
           existing.status !== next.status ||
           existing.visibility !== next.visibility ||
           existing.sharingRole !== next.sharingRole ||
@@ -402,6 +404,8 @@ export type ManagedSessionList = ObservedSessionList & {
   key: string;
   query: ReturnType<typeof normalizeManagedSessionListQuery>;
   retainedLimit: number;
+  /** Raw page identities, scoped to this window, for completeness despite hidden rows. */
+  receivedKeys: Set<string>;
   startupRetryAttempt: number;
   /** Invalidation retires remaining pages without cancelling the correlated RPC. */
   readGeneration: number;

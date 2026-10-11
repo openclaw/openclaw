@@ -38,6 +38,14 @@ import type { RetainedWorkerTask } from "./worker-task-pool.types.js";
 
 type SuccessfulReply = Exclude<SqliteSnapshotStagingReply, { type: "failed" }>;
 
+function requestDirectoryRetirement(directory: string): void {
+  try {
+    sealRetainedSnapshotTempDirectory(directory);
+  } catch {
+    // Canonical removal rechecks held readers and reports refusal; custody remains recorded.
+  }
+}
+
 /** The existing staging owner retains its child; this transport only moves its event loop. */
 function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSource) {
   const nativeDirectories = new Map<
@@ -53,7 +61,7 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
   const pool = createOwnedWorkerTaskPool<SqliteSnapshotStagingCommand, SqliteSnapshotStagingReply>(
     {
       workerUrl,
-      maxWorkers: 1,
+      workerClass: "writer",
       idleTimeoutMs: 0,
       maxPendingTasks: DEFAULT_WORKER_PENDING_TASKS,
       maxPendingBytes: DEFAULT_WORKER_PENDING_BYTES,
@@ -118,11 +126,7 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
           preparation.directories.add(directory);
           retainDirectory(directory);
           if (preparation.closeRequested) {
-            try {
-              sealRetainedSnapshotTempDirectory(directory);
-            } catch {
-              // The request's actual removal reports a held reader; allocation still records custody.
-            }
+            requestDirectoryRetirement(directory);
           }
         } else {
           if (existing?.owner !== owner) {
@@ -171,42 +175,33 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
     if (idleClose?.read().status === "pending") {
       return idleClose;
     }
-    let close: RetainedOperation<void> | undefined;
-    let rotate: RetainedOperation<void> | undefined;
+    const phases = [() => pool.startCloseResources(), () => pool.startRotate()];
+    const operations: RetainedOperation<void>[] = [];
     const retained = createRetainedOperation<void>(() => {
       if (retained.operation.read().status !== "pending") {
         return;
       }
-      if (!close) {
-        if (requests > 0 || directories.size > 0) {
-          return retained.resolve(undefined);
+      for (const [phase, startPhase] of phases.entries()) {
+        let pending = operations[phase];
+        if (!pending) {
+          if (requests > 0 || directories.size > 0) {
+            return retained.resolve(undefined);
+          }
+          pending = startPhase();
+          operations[phase] = pending;
+          void pending.result.then(serviceIdleClose, serviceIdleClose);
         }
-        close = pool.startCloseResources();
-        void close.result.then(serviceIdleClose, serviceIdleClose);
-      }
-      close.service();
-      const closed = close.read();
-      if (closed.status === "pending") {
-        return;
-      }
-      if (closed.status === "rejected") {
-        return retained.reject(closed.error);
-      }
-      if (!rotate) {
-        if (requests > 0 || directories.size > 0) {
-          return retained.resolve(undefined);
+        pending.service();
+        const outcome = pending.read();
+        if (outcome.status === "pending") {
+          return;
         }
-        rotate = pool.startRotate();
-        void rotate.result.then(serviceIdleClose, serviceIdleClose);
+        if (outcome.status === "rejected") {
+          return retained.reject(outcome.error);
+        }
       }
-      rotate.service();
-      const rotated = rotate.read();
-      if (rotated.status === "fulfilled") {
-        unavailable = undefined;
-        retained.resolve(undefined);
-      } else if (rotated.status === "rejected") {
-        retained.reject(rotated.error);
-      }
+      unavailable = undefined;
+      retained.resolve(undefined);
     });
     const serviceIdleClose = retained.operation.service.bind(retained.operation);
     idleClose = retained.operation;
@@ -535,11 +530,7 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
             for (;;) {
               // Intent is per request. A lost VM may ask before its late allocation reply arrives.
               for (const directory of preparation.directories) {
-                try {
-                  sealRetainedSnapshotTempDirectory(directory);
-                } catch {
-                  // Canonical removal below rechecks and reports reader refusal.
-                }
+                requestDirectoryRetirement(directory);
               }
               serviceRequests();
               task.service();
@@ -657,11 +648,7 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
     await Promise.allSettled([...activeRequests].map((request) => request.result));
     // A lost Worker shares native cleanup across roots; admit eligible siblings first.
     for (const directory of directories.keys()) {
-      try {
-        sealRetainedSnapshotTempDirectory(directory);
-      } catch {
-        // Removal below rechecks and reports refusal, including readers released meanwhile.
-      }
+      requestDirectoryRetirement(directory);
     }
     const closures = Array.from(preparations.values()).map((preparation) =>
       preparation.startClose(),

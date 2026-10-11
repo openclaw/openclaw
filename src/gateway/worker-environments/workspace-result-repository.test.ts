@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -446,9 +447,13 @@ describe("repository workspace result ownership", () => {
       expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
       const checkpoint = await readArtifact(f.repository.workspaceId, "uncertain.txt");
-      expect(checkpoint.preview).toEqual(
-        new Uint8Array(Buffer.from("write completed before transport loss\n")),
+      assert.ok(checkpoint.preview);
+      assert.deepStrictEqual(
+        Buffer.from(checkpoint.preview),
+        Buffer.from("write completed before transport loss\n"),
       );
+      expect(checkpoint.preview.byteOffset).toBe(0);
+      expect(checkpoint.preview.buffer.byteLength).toBe(checkpoint.preview.byteLength);
     },
   );
 
@@ -677,7 +682,7 @@ describe("repository workspace result ownership", () => {
       const owned = await f.beginTurn("interrupted", !materialized);
       const destination = path.join(root, "materialized-worktree");
       if (materialized) {
-        placements.beginPlacementMove({
+        await placements.beginPlacementMove({
           sessionId: SESSION_ID,
           source: {
             generation: owned.placement.generation,
@@ -770,7 +775,8 @@ describe("repository workspace result ownership", () => {
       });
       expect(environments.startTunnel).not.toHaveBeenCalled();
       const saved = await readArtifact(f.repository.workspaceId, "survives.txt");
-      expect(saved.preview).toEqual(new Uint8Array(Buffer.from("durable before restart\n")));
+      assert.ok(saved.preview);
+      assert.deepStrictEqual(Buffer.from(saved.preview), Buffer.from("durable before restart\n"));
     },
   );
 });

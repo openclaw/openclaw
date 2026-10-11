@@ -42,20 +42,16 @@ export async function prepareAcpDispatchStart(params: {
   };
 }
 
-function isStaleSessionInitError(params: { code: string; message: string }): boolean {
-  if (params.code !== "ACP_SESSION_INIT_FAILED") {
-    return false;
-  }
-  return /(ACP (session )?metadata is missing|missing ACP metadata|Session is not ACP-enabled|Resource not found)/i.test(
-    params.message,
-  );
-}
-
 export async function maybeUnbindStaleBoundConversations(params: {
   targetSessionKey: string;
   error: { code: string; message: string };
 }): Promise<void> {
-  if (!isStaleSessionInitError(params.error)) {
+  if (
+    params.error.code !== "ACP_SESSION_INIT_FAILED" ||
+    !/(ACP (session )?metadata is missing|missing ACP metadata|Session is not ACP-enabled|Resource not found)/i.test(
+      params.error.message,
+    )
+  ) {
     return;
   }
   try {

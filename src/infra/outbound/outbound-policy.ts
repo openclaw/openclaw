@@ -79,6 +79,10 @@ function isCrossContextTarget(params: {
   );
 }
 
+function mergeMessagePolicy<T extends object>(global: T | undefined, agent: T | undefined) {
+  return global || agent ? { ...global, ...agent } : undefined;
+}
+
 export function resolveEffectiveMessageToolsConfig(params: {
   cfg: OpenClawConfig;
   agentId?: string | null;
@@ -93,38 +97,22 @@ export function resolveEffectiveMessageToolsConfig(params: {
   if (!agentConfig) {
     return globalConfig;
   }
+  const crossContext = mergeMessagePolicy(globalConfig?.crossContext, agentConfig.crossContext);
   // Agent message-tool policy is an override layer; nested policy groups must merge independently.
   return {
     ...globalConfig,
     ...agentConfig,
-    crossContext:
-      globalConfig?.crossContext || agentConfig.crossContext
-        ? {
-            ...globalConfig?.crossContext,
-            ...agentConfig.crossContext,
-            marker:
-              globalConfig?.crossContext?.marker || agentConfig.crossContext?.marker
-                ? {
-                    ...globalConfig?.crossContext?.marker,
-                    ...agentConfig.crossContext?.marker,
-                  }
-                : undefined,
-          }
-        : undefined,
-    broadcast:
-      globalConfig?.broadcast || agentConfig.broadcast
-        ? {
-            ...globalConfig?.broadcast,
-            ...agentConfig.broadcast,
-          }
-        : undefined,
-    actions:
-      globalConfig?.actions || agentConfig.actions
-        ? {
-            ...globalConfig?.actions,
-            ...agentConfig.actions,
-          }
-        : undefined,
+    crossContext: crossContext
+      ? {
+          ...crossContext,
+          marker: mergeMessagePolicy(
+            globalConfig?.crossContext?.marker,
+            agentConfig.crossContext?.marker,
+          ),
+        }
+      : undefined,
+    broadcast: mergeMessagePolicy(globalConfig?.broadcast, agentConfig.broadcast),
+    actions: mergeMessagePolicy(globalConfig?.actions, agentConfig.actions),
   };
 }
 
@@ -218,11 +206,10 @@ export function enforceCrossContextPolicy(params: {
       break;
     }
   }
-  if (!target) {
-    return;
-  }
-
-  if (!isCrossContextTarget({ channel: params.channel, target, toolContext: params.toolContext })) {
+  if (
+    !target ||
+    !isCrossContextTarget({ channel: params.channel, target, toolContext: params.toolContext })
+  ) {
     return;
   }
 
@@ -243,14 +230,12 @@ export async function buildCrossContextDecoration(params: {
 }): Promise<CrossContextDecoration | null> {
   const currentTarget =
     params.toolContext?.currentChannelId ?? params.toolContext?.currentMessagingTarget;
-  if (!currentTarget) {
-    return null;
-  }
   // Direct tool sends are authored for their destination, not forwarded from a bound context.
-  if (params.toolContext?.skipCrossContextDecoration) {
-    return null;
-  }
-  if (!isCrossContextTarget(params)) {
+  if (
+    !currentTarget ||
+    params.toolContext?.skipCrossContextDecoration ||
+    !isCrossContextTarget(params)
+  ) {
     return null;
   }
 
@@ -314,6 +299,5 @@ export function applyCrossContextDecoration(params: {
       presentation: buildPresentation(params.message),
     };
   }
-  const message = `${params.decoration.prefix}${params.message}${params.decoration.suffix}`;
-  return { message };
+  return { message: `${params.decoration.prefix}${params.message}${params.decoration.suffix}` };
 }

@@ -15,16 +15,12 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { lmstudioMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
-import {
-  LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
-  LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
-  LMSTUDIO_PROVIDER_LABEL,
-} from "./src/defaults.js";
+import lmstudioProviderDiscovery from "./provider-discovery.js";
+import { LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER, LMSTUDIO_PROVIDER_LABEL } from "./src/defaults.js";
 import {
   normalizeLmstudioConfiguredCatalogEntries,
   normalizeLmstudioProviderConfig,
 } from "./src/models.js";
-import { shouldUseLmstudioSyntheticAuth } from "./src/provider-auth.js";
 import { wrapLmstudioInferencePreload } from "./src/stream.js";
 
 const PROVIDER_ID = "lmstudio";
@@ -49,10 +45,7 @@ export default definePluginEntry({
   register(api: OpenClawPluginApi) {
     api.registerEmbeddingProvider(lmstudioMemoryEmbeddingProviderAdapter);
     api.registerProvider({
-      id: PROVIDER_ID,
-      label: "LM Studio",
-      docsPath: "/providers/lmstudio",
-      envVars: [LMSTUDIO_DEFAULT_API_KEY_ENV_VAR],
+      ...lmstudioProviderDiscovery,
       auth: [
         {
           id: "custom",
@@ -102,24 +95,6 @@ export default definePluginEntry({
           runNonInteractive: setupMethod((setup) => setup.configureLmstudioNonInteractive),
         },
       ],
-      catalog: {
-        // Run after early providers so local LM Studio detection does not dominate resolution.
-        order: "late",
-        run: async (ctx) => {
-          const providerSetup = await loadSetup();
-          return await providerSetup.discoverLmstudioProvider(ctx, { discoveryMode: "strict" });
-        },
-      },
-      resolveSyntheticAuth: ({ providerConfig }) => {
-        if (!shouldUseLmstudioSyntheticAuth(providerConfig)) {
-          return undefined;
-        }
-        return {
-          apiKey: CUSTOM_LOCAL_AUTH_MARKER,
-          source: "models.providers.lmstudio (synthetic local key)",
-          mode: "api-key" as const,
-        };
-      },
       shouldDeferSyntheticProfileAuth: ({ resolvedApiKey }) =>
         resolvedApiKey?.trim() === LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER ||
         resolvedApiKey?.trim() === CUSTOM_LOCAL_AUTH_MARKER,

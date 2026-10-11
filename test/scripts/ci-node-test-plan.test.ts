@@ -101,6 +101,7 @@ describe("Control UI release-only inventories", () => {
   const sidebar = "ui/src/components/app-sidebar.stress.browser.test.ts";
   const embed = "ui/src/e2e/native-embed-settings.e2e.test.ts";
   const entry = "ui/src/e2e/chat-session-entry.e2e.test.ts";
+  const staleBuild = "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts";
   const automationManagement =
     "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts";
   const releaseOnlyRealGateway = new Set([
@@ -152,6 +153,7 @@ describe("Control UI release-only inventories", () => {
     expect(groups.ui[0]?.includePatterns).not.toContain(sidebar);
     expect(groups.e2e[0]?.includePatterns).toContain(embed);
     expect(groups.e2e[0]?.includePatterns).toContain(entry);
+    expect(groups.e2e[0]?.includePatterns).not.toContain(staleBuild);
     expect(
       uiE2eRealGatewayTestFiles.filter((file) => groups.e2e[0]?.includePatterns?.includes(file)),
     ).toEqual(uiE2eRealGatewayTestFiles.filter((file) => !releaseOnlyRealGateway.has(file)));
@@ -172,6 +174,7 @@ describe("Control UI release-only inventories", () => {
       includeReleaseOnlyTests: false,
       changedPaths: [
         entry,
+        staleBuild,
         ...releaseOnlyRealGateway,
         "ui/src/components/app-sidebar.ts",
         "ui/src/e2e",
@@ -179,6 +182,7 @@ describe("Control UI release-only inventories", () => {
     };
     const groups = createUiTestShardGroups(options);
     expect(groups.e2e[0]?.includePatterns).toContain(entry);
+    expect(groups.e2e[0]?.includePatterns).toContain(staleBuild);
     expect(
       groups.e2e[0]?.includePatterns?.filter((file) => releaseOnlyRealGateway.has(file)).toSorted(),
     ).toEqual(
@@ -2000,6 +2004,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "src/auto-reply/reply/new.test.tsx",
       "src/infra/outbound/new.test.ts",
       "test/tsconfig/tsconfig.core.test.messaging.json",
+      "test/tsconfig/tsconfig.core.test.ui-e2e-chat.json",
     ]) {
       expect(resolvePolicyTestTargets([changedPath]), changedPath).toContain(guard);
       expect(isPolicyTestOwnedPath(changedPath), changedPath).toBe(false);
@@ -3080,6 +3085,25 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       );
     },
   );
+
+  it("retains indivisible-file costs when canonical measurements are stale-low", () => {
+    const target = "src/cli/local-state-owner.process.test.ts";
+    vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue(
+      Object.fromEntries(defaultShards.map((shard) => [shard.shardName, 1])),
+    );
+    vi.spyOn(shardMetadata, "estimateVitestTestFileSeconds").mockImplementation((file) =>
+      file === target ? 200 : 3,
+    );
+    const plan = expectDefined(
+      createSelectedNodeTestShardBundles([target], { runnerBackend: "hybrid" }),
+      "selected process plan",
+    );
+    expect(
+      plan.flatMap((job) => job.groups.flatMap((group) => group.includePatterns ?? [])),
+    ).toEqual([target]);
+    expect(plan).toHaveLength(1);
+    expect(plan[0]!.predictedTestSeconds).toBeGreaterThanOrEqual(200);
+  });
 
   it("allocates sparse selections without reserving their full-suite rows", async () => {
     const heavyCli = "src/cli/gateway-backed-exit-health.process.test.ts";

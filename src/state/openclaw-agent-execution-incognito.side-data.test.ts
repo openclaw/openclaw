@@ -538,7 +538,7 @@ it("keeps readers usable after refusing a foreign sharing key", async () => {
       type: "session.members.read",
       input: { sessionKey },
     }),
-  ).toEqual([]);
+  ).toMatchObject({ entry: { sessionId: expect.any(String) }, members: [] });
   expect(
     await actor.sessions.sideData(authority, {
       type: "session.progressCard.get",
@@ -547,10 +547,14 @@ it("keeps readers usable after refusing a foreign sharing key", async () => {
   ).toBeNull();
 });
 
-it("fences every category target during grants and rolls the whole batch back before commit", async () => {
+it("keeps category preimages grant-local and rolls the whole batch back before commit", async () => {
   const names = ["batch-a", "batch-b"];
   const keys = names.map(key);
   await Promise.all(names.map((name) => create(name, "batch-category")));
+  const preimages = new Map(
+    keys.map((sessionKey) => [sessionKey, actor.sessions.readSharing(sessionKey)]),
+  );
+  const outsideGrantChecks: Promise<unknown>[] = [];
   let allowed = true;
   const admitted: string[] = [];
   const source: IncognitoSessionAuthority = {
@@ -561,8 +565,26 @@ it("fences every category target during grants and rolls the whole batch back be
     },
     authorize(stage, facts) {
       for (const sessionKey of keys) {
-        expect(() => actor.sessions.readSharing(sessionKey)).toThrow("pending or unavailable");
+        const sharing = actor.sessions.readSharing(sessionKey);
+        expect(sharing).toEqual(preimages.get(sessionKey));
+        assert(sharing?.entry);
+        sharing.entry.sessionId = "detached grant read";
+        expect(actor.sessions.readSharing(sessionKey)).toEqual(preimages.get(sessionKey));
       }
+      outsideGrantChecks.push(
+        Promise.resolve().then(() => {
+          try {
+            for (const sessionKey of keys) {
+              expect(() => actor.sessions.readSharing(sessionKey)).toThrow(
+                "pending or unavailable",
+              );
+            }
+          } catch (error) {
+            return error;
+          }
+          return undefined;
+        }),
+      );
       if (stage === "transaction") {
         admitted.push(facts.sessionKey);
       } else {
@@ -577,6 +599,7 @@ it("fences every category target during grants and rolls the whole batch back be
     }),
   ).rejects.toThrow("category authority revoked");
   expect(admitted).toEqual(keys);
+  expect(await Promise.all(outsideGrantChecks)).toEqual(outsideGrantChecks.map(() => undefined));
   expect(
     await actor.sessions.sideData(authority, {
       type: "session.category.keys",

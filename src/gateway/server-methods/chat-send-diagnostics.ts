@@ -19,6 +19,7 @@ const PHASES = [
 ] as const;
 type ChatSendPhase = (typeof PHASES)[number];
 type PhaseScope = { mark: (phase?: ChatSendPhase) => void; finish: () => void };
+type PostAckStage = "startup" | "steer" | "queued";
 
 export type ChatSendDiagnostics = ReturnType<typeof startChatSendDiagnostics>;
 
@@ -43,7 +44,7 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
   const emit = createQueuedDiagnosticPhaseEmitter();
   const totals = new Map<ChatSendPhase, number>();
   const active = new Set<(now: number) => void>();
-  let stage: "request" | "startup" = "request";
+  let stage: "request" | PostAckStage = "request";
   let startedAt = performance.now();
   let acknowledgedMs: number | undefined;
   let finished = false;
@@ -85,8 +86,17 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
     return elapsedMs;
   };
 
-  const finish = () => {
+  const finish = (disposition?: {
+    isSteered(): boolean;
+    isEnqueued(): boolean;
+    isTerminal(): boolean;
+  }) => {
     if (!finished) {
+      if (disposition?.isSteered()) {
+        stage = "steer";
+      } else if (disposition?.isEnqueued() || disposition?.isTerminal()) {
+        stage = "queued";
+      }
       report();
       finished = true;
       active.clear();
@@ -99,7 +109,6 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
       }
       let phase: ChatSendPhase | undefined = initialPhase;
       let phaseStartedAt = performance.now();
-      let closed = false;
       const flush = (now: number) => {
         if (phase) {
           totals.set(phase, (totals.get(phase) ?? 0) + now - phaseStartedAt);
@@ -109,23 +118,22 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
       active.add(flush);
       const scope: PhaseScope = {
         mark(nextPhase) {
-          if (!closed && !finished) {
+          if (active.has(flush)) {
             flush(performance.now());
             phase = nextPhase;
           }
         },
         finish() {
           scope.mark();
-          closed = true;
           active.delete(flush);
         },
       };
       return scope;
     },
-    acknowledge() {
+    acknowledge(disposition: PostAckStage = "startup") {
       if (!finished && stage === "request") {
         acknowledgedMs = report();
-        stage = "startup";
+        stage = disposition;
       }
     },
     finish,

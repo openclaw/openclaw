@@ -1,31 +1,17 @@
-// Make per-Worker V8 heap budgets effective when the main process carries a heap flag.
-//
-// V8 applies --max-old-space-size process-wide, so a flag from NODE_OPTIONS or argv
-// overrides every Worker's resourceLimits.maxOldGenerationSizeMb (openclaw#157575).
-// The main isolate keeps the limit it was created with; clearing the flag here only
-// affects isolates created later. Set OPENCLAW_WORKER_HEAP_FLAG_RESET=0 to opt out.
 import { setFlagsFromString } from "node:v8";
 import { isMainThread } from "node:worker_threads";
 
-const HEAP_FLAG = /(^|\s)--max[-_]old[-_]space[-_]size(=|\s|$)/;
+const startupFlags = `${process.execArgv.join(" ")} ${process.env.NODE_OPTIONS ?? ""}`;
+const heapFlag = /--max[-_](?:old[-_]space[-_]size(?:[-_]percentage)?|heap[-_]size)(?:=|\s)/u;
+const immutableFlags =
+  /--(?:freeze[-_]flags[-_]after[-_]init|abort[-_]on[-_]contradictory[-_]flags)(?:=(?:true|1))?(?:\s|$)/u;
 
-export function hasProcessHeapFlag(env = process.env, execArgv = process.execArgv) {
-  return HEAP_FLAG.test(env.NODE_OPTIONS ?? "") || execArgv.some((arg) => HEAP_FLAG.test(arg));
-}
-
-export function resetWorkerHeapFlag(env = process.env, execArgv = process.execArgv) {
-  if (!isMainThread || env.OPENCLAW_WORKER_HEAP_FLAG_RESET === "0") {
-    return false;
-  }
-  if (!hasProcessHeapFlag(env, execArgv)) {
-    return false;
-  }
-  try {
-    setFlagsFromString("--max-old-space-size=0"); // 0 = unset for isolates created later
-    return true;
-  } catch {
-    return false; // never block startup on this
+if (isMainThread && !process.versions.bun && heapFlag.test(startupFlags)) {
+  if (immutableFlags.test(startupFlags)) {
+    // These V8 modes abort natively on a flag change; JavaScript cannot catch it.
+    process.emitWarning("V8 startup flags prevent enforcing per-worker heap limits.");
+  } else {
+    // Existing isolates retain their limits. Only future isolates read these overrides.
+    setFlagsFromString("--max-old-space-size=0 --max-heap-size=0");
   }
 }
-
-resetWorkerHeapFlag();

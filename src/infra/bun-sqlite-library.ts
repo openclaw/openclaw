@@ -5,6 +5,7 @@ import { getEnvironmentData, isMainThread, setEnvironmentData } from "node:worke
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { probeSqliteNativeClose } from "./bun-sqlite-close-probe.js";
 import { parseDiagnosticEnvFlags } from "./diagnostic-flags-env.js";
+import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
 
 export type SqliteLibrarySelection =
@@ -20,6 +21,10 @@ type SelectionOptions = { explicitPath?: string };
 type LibraryProbe = { version: string; extensionLoadingSupported: boolean };
 const WORKER_SELECTION_KEY = "openclaw.bunSqliteLibrarySelection";
 const WORKER_CAPABILITIES_KEY = "openclaw.sqliteRuntimeCapabilities";
+export const SQLITE_NATIVE_RUNTIME_ADMISSION_KEY = "openclaw.sqliteNativeRuntimeAdmission";
+export const SQLITE_CANONICAL_DEFINITIONS_KEY =
+  "openclaw.agentCanonicalValidationSchemaDefinitions";
+export const SQLITE_EXPECTED_SCHEMA_CONTRACTS_KEY = "openclaw.sqliteExpectedSchemaContracts.v1";
 
 type SqliteCloseProbeResult = Awaited<ReturnType<typeof probeSqliteNativeClose>>;
 export type SqliteRuntimeCapabilities = SqliteCloseProbeResult & Readonly<{ decided: boolean }>;
@@ -186,15 +191,18 @@ function createSelector() {
               "/opt/local/lib/libsqlite3.dylib",
             ]),
           ];
+    const unusable: string[] = [];
     for (const path of candidates) {
       let probe: LibraryProbe;
+      let present = true;
       try {
         // dlopen decides loadability: Apple's SQLite lives in the dyld shared cache with no
         // file on disk, so a stat-first check would hide its real defect (OMIT_LOAD_EXTENSION).
         try {
           probe = probeLibrary(path);
         } catch (error) {
-          throw existsSync(path) ? error : new Error("missing file", { cause: error });
+          present = existsSync(path);
+          throw present ? error : new Error("missing file", { cause: error });
         }
         if (!isSqliteWalResetSafeVersion(probe.version)) {
           throw new Error(`SQLite version ${probe.version} below the WAL safety floor`);
@@ -204,6 +212,10 @@ function createSelector() {
         }
       } catch (error) {
         if (override === undefined) {
+          // Absent candidates are ordinary; present ones explain the refusal below.
+          if (present) {
+            unusable.push(`${path} (${error instanceof Error ? error.message : String(error)})`);
+          }
           continue;
         }
         failure = selectionError(path, error);
@@ -226,8 +238,15 @@ function createSelector() {
       };
       return selection;
     }
-    selection = { source: "runtime" };
-    return selection;
+    // Bun's macOS runtime library is Apple's patched system SQLite. Its read-only
+    // connections fail same-process RESERVED locks and sidecar-less WAL opens.
+    failure = new Error(
+      `No supported SQLite library for Bun on macOS (${process.arch})` +
+        (unusable.length > 0 ? `; unusable: ${unusable.join(", ")}` : "") +
+        ". Apple's system SQLite fails OpenClaw's read-only database connections. " +
+        `Install one with brew install sqlite, or set OPENCLAW_SQLITE_LIBRARY to a libsqlite3.dylib built for ${process.arch}.`,
+    );
+    throw failure;
   };
 }
 
@@ -313,11 +332,19 @@ export function captureSqliteWorkerClosePolicy(): boolean {
 
 /** Retained supervisors forward the caller's current facts when creating each descendant. */
 export function captureSqliteWorkerEnvironmentData(): ReadonlyArray<
-  readonly [string, SqliteLibrarySelection | SqliteRuntimeCapabilities]
+  readonly [string, Parameters<typeof setEnvironmentData>[1]]
 > {
   return [
     [WORKER_SELECTION_KEY, ensureSqliteLibrarySelected()],
     [WORKER_CAPABILITIES_KEY, getSqliteRuntimeCapabilities()],
+    // Opaque owner facts include absence, which clears a retained carrier's previous snapshot.
+    [SQLITE_NATIVE_RUNTIME_ADMISSION_KEY, getEnvironmentData(SQLITE_NATIVE_RUNTIME_ADMISSION_KEY)],
+    [SQLITE_CANONICAL_DEFINITIONS_KEY, getEnvironmentData(SQLITE_CANONICAL_DEFINITIONS_KEY)],
+    [
+      SQLITE_EXPECTED_SCHEMA_CONTRACTS_KEY,
+      getEnvironmentData(SQLITE_EXPECTED_SCHEMA_CONTRACTS_KEY),
+    ],
+    [SQLITE_DATABASE_ADMISSIONS_KEY, getEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY)],
   ];
 }
 

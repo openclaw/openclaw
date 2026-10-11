@@ -210,9 +210,12 @@ vi.mock("../infra/update-startup.js", () => ({
   createGatewayUpdateCheck: hoisted.createGatewayUpdateCheck,
 }));
 
+// mock-isolation: Sidecar scheduling does not own catalog or native-runtime preparation.
 vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  readPreparedModelCatalog: hoisted.loadModelCatalog,
+  loadPreparedModelCatalogOwnerSnapshot: async (options: unknown) => ({
+    modelCatalog: { entries: await hoisted.loadModelCatalog(options) },
+  }),
 }));
 
 vi.mock("../agents/model-selection.js", () => ({
@@ -1372,7 +1375,7 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(log.info).toHaveBeenCalledWith("http server listening (1 plugin: replacement)");
     expect(log.warn.mock.calls).toEqual([
       [
-        "Older local CLI/SDK versions can bypass Gateway state mutation routing. Use matching CLI/SDK and Gateway versions; legacy direct writers remain supported.",
+        "Older local CLI/SDK versions can bypass Gateway state mutation routing. Use matching CLI/SDK and Gateway versions; direct state writes from another process while this Gateway owns state are unsupported.",
       ],
     ]);
   });

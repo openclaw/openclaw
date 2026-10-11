@@ -99,7 +99,40 @@ it.each(["tool", "item"] as const)(
       );
     const before = rows();
     expect(before).toEqual(["Original prompt", "tool", "Already visible answer."]);
-    // Input preparation predates tool output that is already visible at delivery.
+    // Durable sequence, not skewed event time, anchors output on either side of acceptance.
+    const persistTool = (toolCallId: string, seq: number, timestamp: number) => {
+      const message = {
+        role: "assistant",
+        timestamp,
+        content: [
+          { type: "toolcall", id: toolCallId, name: "read", arguments: { path: "README.md" } },
+        ],
+        __openclaw: { id: toolCallId, seq, runId: "active-run" },
+      };
+      applySessionMessagePayload(state, { runId: "active-run", message }, true, {
+        kind: "history-delta",
+      });
+      return message;
+    };
+    const beforeTool = persistTool("read-before-steer", 2, 5_000);
+    const savedAnswer = {
+      role: "assistant",
+      content: "Already visible answer.",
+      timestamp: 1_000,
+      __openclaw: { id: "saved-answer", seq: 3, runId: "active-run" },
+    };
+    handleChatGatewayEvent(state, {
+      sessionKey: state.sessionKey,
+      runId: "active-run",
+      state: "delta",
+      replace: true,
+      message: { role: "assistant", content: "" },
+    });
+    applySessionMessagePayload(state, { runId: "active-run", message: savedAnswer }, true, {
+      kind: "live",
+      activeRunId: "active-run",
+    });
+    expect(rows()).toEqual(before);
     const steer = {
       role: "user",
       content: "Take over the other work too",
@@ -107,7 +140,7 @@ it.each(["tool", "item"] as const)(
       __openclaw: {
         id: "steer",
         idempotencyKey: "steer-run:user",
-        seq: 2,
+        seq: 4,
         steerTargetRunId: "active-run",
       },
     };
@@ -116,21 +149,31 @@ it.each(["tool", "item"] as const)(
       activeRunId: "active-run",
     });
     expect(rows()).toEqual([...before, steer.content]);
-    history.messages = [original, steer];
+    history.messages = [original, beforeTool, savedAnswer, steer];
+    history.inFlightRun!.text = "";
     await loadChatHistory(state);
     expect(rows()).toEqual([...before, steer.content]);
-    // Producer clocks cannot pull newly received activity above its user boundary.
+    // First-observed live activity stays after acceptance despite its earlier timestamp.
     emitTool("read-after-steer", 2, 500);
     await vi.runOnlyPendingTimersAsync();
+    expect(rows()).toEqual([...before, steer.content, "tool"]);
+    const afterTool = persistTool("read-after-steer", 5, 500);
     handleChatGatewayEvent(state, {
       sessionKey: state.sessionKey,
       runId: "active-run",
       state: "delta",
-      message: { role: "assistant", content: "Already visible answer. Continued." },
+      message: { role: "assistant", content: "Continued." },
     });
-    const continued = [...before, steer.content, "tool", "Continued."];
+    const continued = [
+      "Original prompt",
+      "tool",
+      "Already visible answer.",
+      steer.content,
+      "tool",
+      "Continued.",
+    ];
     expect(rows()).toEqual(continued);
-    // Completion updates the original card in place, retaining its first boundary.
+    // Completion updates the original card in place.
     emitTool("read-before-steer", 3, 30_000, true);
     await vi.runOnlyPendingTimersAsync();
     expect(rows()).toEqual(continued);
@@ -141,7 +184,7 @@ it.each(["tool", "item"] as const)(
       __openclaw: {
         ...steer["__openclaw"],
         id: "steer-2",
-        seq: 3,
+        seq: 6,
         idempotencyKey: "steer-run-2:user",
       },
     };
@@ -149,27 +192,48 @@ it.each(["tool", "item"] as const)(
       kind: "live",
       activeRunId: "active-run",
     });
-    expect(rows()).toEqual([...continued, secondSteer.content]);
-    history.messages = [original, steer, secondSteer];
+    const accepted = [...continued.slice(0, -1), secondSteer.content, "Continued."];
+    expect(rows()).toEqual(accepted);
+    history.messages = [original, beforeTool, savedAnswer, steer, afterTool, secondSteer];
+    history.inFlightRun!.text = "Continued.";
     await loadChatHistory(state);
-    expect(rows()).toEqual([...continued, secondSteer.content]);
+    expect(rows()).toEqual(accepted);
     handleChatGatewayEvent(state, {
       sessionKey: state.sessionKey,
       runId: "active-run",
       state: "delta",
       message: {
         role: "assistant",
-        content: "Already visible answer. Continued. Finishing.",
+        content: "Continued. Finishing.",
       },
     });
-    expect(rows()).toEqual([...continued, secondSteer.content, "Finishing."]);
-    // The producer's terminal contains only the suffix after its saved cutoffs.
+    expect(rows()).toEqual([
+      "Original prompt",
+      "tool",
+      "Already visible answer.",
+      steer.content,
+      "tool",
+      secondSteer.content,
+      "Continued. Finishing.",
+    ]);
+    // The terminal owns the complete unsaved tail, without splitting it at a steer.
     handleChatGatewayEvent(state, {
       sessionKey: state.sessionKey,
       runId: "active-run",
       state: "final",
-      message: { role: "assistant", content: "Finishing. Done." },
+      message: {
+        role: "assistant",
+        content: "Continued. Finishing. Done.",
+      },
     });
-    expect(rows()).toEqual([...continued, secondSteer.content, "Finishing. Done."]);
+    expect(rows()).toEqual([
+      "Original prompt",
+      "tool",
+      "Already visible answer.",
+      steer.content,
+      "tool",
+      secondSteer.content,
+      "Continued. Finishing. Done.",
+    ]);
   },
 );

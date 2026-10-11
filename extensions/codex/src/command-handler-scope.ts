@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
+import { composeSessionEntryCommitGuards } from "openclaw/plugin-sdk/session-binding-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-profile.js";
 import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
@@ -10,7 +11,7 @@ import {
   sessionBindingIdentity,
   type CodexAppServerBindingIdentity,
 } from "./app-server/session-binding.js";
-import { assertCodexHostOwnerCurrent } from "./command-authorization.js";
+import { assertCodexHostOwnerCurrent, type CodexCommandContext } from "./command-authorization.js";
 import type { CodexCommandDeps } from "./command-handler-deps.js";
 import type { CodexControlRequestOptions } from "./command-rpc.js";
 import { readCodexConversationBindingData } from "./conversation-binding-data.js";
@@ -48,9 +49,8 @@ type CommandAppServerScope = Pick<
 
 export async function resolvePreparedCodexCommandAuthority(
   deps: CodexCommandDeps,
-  ctx: PluginCommandContext,
+  ctx: CodexCommandContext,
 ) {
-  const target = await resolveControlTarget(ctx);
   const fallback = resolveCodexConversationControlScope(ctx);
   const sessionId = ctx.sessionId;
   const sessionKey = ctx.sessionKey;
@@ -60,6 +60,7 @@ export async function resolvePreparedCodexCommandAuthority(
     (sessionKey
       ? resolveStorePath(ctx.config.session?.store, { agentId: sessionAgentId })
       : undefined);
+  const target = await resolveControlTarget(ctx);
   const sessionIdentity = sessionId
     ? sessionBindingIdentity({
         sessionId,
@@ -77,9 +78,9 @@ export async function resolvePreparedCodexCommandAuthority(
         storePath,
       })
     : undefined;
-  // Manual control commands retain the existing synchronous authority contract.
-  // Native turn execution uses the worker-backed authority separately.
-  const assertHostCurrent = currentSession?.authority.assertLegacyCurrent ?? (() => {});
+  // Direct checks stay synchronous; entry writes retain the authority's prepared predicates.
+  const assertHostCurrent =
+    currentSession?.authority.assertLegacyCurrent ?? composeSessionEntryCommitGuards([]);
   const resolvedTarget =
     target && (!sessionIdentity || !isDeepStrictEqual(target.identity, sessionIdentity))
       ? await resolveCodexSessionBinding({
@@ -91,13 +92,16 @@ export async function resolvePreparedCodexCommandAuthority(
         })
       : currentSession;
   const binding = resolvedTarget?.binding;
-  const assertCurrent = () => {
-    assertHostCurrent();
-    if (target && !isDeepStrictEqual(deps.bindingStore.read(target.identity), binding)) {
-      throw new Error("Codex command binding changed before dispatch");
-    }
-    assertHostCurrent();
-  };
+  const assertCurrent = composeSessionEntryCommitGuards(
+    [assertHostCurrent, ctx.assertNativePolicyCurrent],
+    (assertSource) => {
+      assertSource();
+      if (target && !isDeepStrictEqual(deps.bindingStore.read(target.identity), binding)) {
+        throw new Error("Codex command binding changed before dispatch");
+      }
+      assertSource();
+    },
+  );
   assertCurrent();
   return {
     target,
@@ -108,14 +112,17 @@ export async function resolvePreparedCodexCommandAuthority(
     storePath,
     assertHostCurrent,
     assertCurrent,
-    assertMutationCurrent: () => {
+    assertMutationCurrent: composeSessionEntryCommitGuards([assertCurrent], (assertSource) => {
       assertCodexHostOwnerCurrent(ctx);
-      assertCurrent();
-    },
-    assertHostMutationCurrent: () => {
-      assertCodexHostOwnerCurrent(ctx);
-      assertHostCurrent();
-    },
+      assertSource();
+    }),
+    assertHostMutationCurrent: composeSessionEntryCommitGuards(
+      [assertHostCurrent],
+      (assertSource) => {
+        assertCodexHostOwnerCurrent(ctx);
+        assertSource();
+      },
+    ),
   };
 }
 

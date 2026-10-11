@@ -1,10 +1,12 @@
 import { createServer } from "node:http";
-import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIProvider } from "../extensions/openai/api.js";
 import { loadSelectedProviderAccountCatalog } from "../src/agents/models-config.providers.catalog-context.js";
 import { createPreparedAccountCatalogAccess } from "../src/agents/prepared-model-runtime.catalog-auth.js";
-import { upsertSessionEntryCore } from "../src/config/sessions/session-accessor.js";
+import {
+  replaceSessionEntry,
+  upsertSessionEntryCore,
+} from "../src/config/sessions/session-accessor.sqlite-entry.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { createModelAccountConnectService } from "../src/gateway/model-account-connect.js";
 import { broadcastChatMetadataChanged } from "../src/gateway/server-chat-metadata-lifecycle.js";
@@ -26,7 +28,6 @@ import {
 import { fetchWithSsrFGuard } from "../src/infra/net/fetch-guard.js";
 import { clearLiveCatalogCacheForTests } from "../src/plugin-sdk/provider-catalog-shared.js";
 import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
-import { resolveOpenClawAgentSqlitePath } from "../src/state/openclaw-agent-db.paths.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../src/state/openclaw-state-db-readonly.js";
 import {
   connectUserModelAccount,
@@ -252,7 +253,7 @@ describe("Gateway automatic account dispatch authority", () => {
           };
           await state.writeConfig(cfg);
           if (saved) {
-            await upsertSessionEntryCore(
+            await replaceSessionEntry(
               { agentId: "main", sessionKey },
               {
                 sessionId: "catalog-authority-saved",
@@ -379,6 +380,7 @@ describe("Gateway automatic account dispatch authority", () => {
             request("models.list", {
               agentId: "main",
               view: "configured",
+              refresh: true,
               ...(saved ? { sessionKey } : {}),
             });
           const pending =
@@ -394,27 +396,12 @@ describe("Gateway automatic account dispatch authority", () => {
                 }),
               ]);
               if (saved) {
-                // Foreign writes bypass the host's publication predicate while DNS is awaited.
-                const writer = new DatabaseSync(
-                  resolveOpenClawAgentSqlitePath({ agentId: "main" }),
+                await upsertSessionEntryCore(
+                  { agentId: "main", sessionKey },
+                  scenario === "saved-visibility-during-dns"
+                    ? { visibility: "draft" }
+                    : { authProfileOverride: "openai:changed-account" },
                 );
-                try {
-                  writer
-                    .prepare(
-                      "UPDATE session_nodes SET entry_json = json_set(entry_json, ?, ?) WHERE session_key = ?",
-                    )
-                    .run(
-                      scenario === "saved-visibility-during-dns"
-                        ? "$.visibility"
-                        : "$.authProfileOverride",
-                      scenario === "saved-visibility-during-dns"
-                        ? "draft"
-                        : "openai:changed-account",
-                      sessionKey,
-                    );
-                } finally {
-                  writer.close();
-                }
               } else {
                 const unlinked = await request("users.unlinkAuthProfile", {
                   profileId: person.id,
@@ -455,6 +442,7 @@ describe("Gateway automatic account dispatch authority", () => {
                 agentId: "main",
                 authProfileId: selected,
                 view: "configured",
+                refresh: true,
               });
               expect(pinned.mock.calls[0]?.[0]).toBe(true);
               expect(requests).toHaveLength(1);

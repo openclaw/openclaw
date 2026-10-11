@@ -1,16 +1,16 @@
+import { UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV } from "../../commands/doctor/shared/update-phase.js";
 import type { TriageFailureContext } from "../../commands/triage-prompt.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
+import { isTruthyEnvValue } from "../../infra/env.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  buildControlPlaneUpdateRestartHealthPendingResult,
-  resolveManagedServiceUpdateFailureExitCode,
-} from "../../infra/update-control-plane-sentinel.js";
+import { buildControlPlaneUpdateRestartHealthPendingResult } from "../../infra/update-control-plane-sentinel.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome, isVerifiedUpdateRollback } from "../../shared/update-outcome.js";
+import { CLI_NAME } from "../cli-name.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import {
   shouldWaitForRecovery,
@@ -19,6 +19,7 @@ import {
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { parkForegroundUpdateForActivation } from "./update-command-handoff.js";
 import { appendPluginUpdateWarnings } from "./update-command-plugins-internals.js";
+import { runPostActivationInspections } from "./update-command-post-activation-inspections.js";
 import {
   completePostUpdateMaintenance,
   parkPostUpdateService,
@@ -193,26 +194,16 @@ async function finishSettledUpdate(
       const rollback = await compensate(() =>
         withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, () =>
           rollbackFailedUpdate({
+            ...params,
             result,
             previousRoot: params.root,
-            packageTransaction: params.packageTransaction,
             databaseBackup:
               beganSuccessfully && !gatewayStartAttempted ? params.databaseBackup : undefined,
-            rollbackBlockedReason: params.rollbackBlockedReason,
-            schemaVersions: params.schemaVersions,
-            candidateSchemaVersions: params.candidateSchemaVersions,
-            previousSchemaVersions: params.previousSchemaVersions,
-            previousVerified: params.previousVerified,
-            originalManagedServiceRuntime: params.originalManagedServiceRuntime,
             allowGatewayRestart: params.shouldRestart,
             onGatewayStartAttempted,
-            configSnapshot: params.configSnapshot,
-            activationConfig: params.activationConfig,
-            opts: params.opts,
             preManagedServiceStop: currentServiceStop(),
             timeoutMs: params.updateStepTimeoutMs,
             nodeRunner: params.packageUpdateNodeRunner,
-            invocationCwd: params.invocationCwd,
             definitionRecovery,
           }),
         ),
@@ -420,12 +411,7 @@ async function finishSettledUpdate(
             cause: restoreFailure.cause,
           })
         : restoreFailure.cause;
-      throw createFailure(
-        reportedResult,
-        resolveManagedServiceUpdateFailureExitCode(reportedResult),
-        detail,
-        { cause },
-      );
+      throw createFailure(reportedResult, detail, { cause });
     }
     return reportedResult;
   };
@@ -449,12 +435,7 @@ async function finishSettledUpdate(
           { ...params.result, status: "error" },
           params.result.recovery?.serviceRestartSafe === true,
         );
-        throw createFailure(
-          reported,
-          resolveManagedServiceUpdateFailureExitCode(reported),
-          params.failure?.detail,
-          params.failure,
-        );
+        throw createFailure(reported, params.failure?.detail, params.failure);
       }
 
       if (params.result.status === "skipped" && !params.coreAlreadyCurrent) {
@@ -464,33 +445,13 @@ async function finishSettledUpdate(
         );
         throw createFailure(
           reported,
-          classifyUpdateOutcome(reported) === "failed"
-            ? resolveManagedServiceUpdateFailureExitCode(reported)
-            : 0,
+          undefined,
+          undefined,
+          classifyUpdateOutcome(reported) === "failed" ? undefined : 0,
         );
       }
 
       const postUpdateRoot = params.result.root ?? params.root;
-      const convergePlugins = async (beforeDoctor?: () => Promise<void>) => {
-        const pluginParams = {
-          ...params,
-          beforeDoctor: beforeDoctor ?? parkForegroundOrigin,
-          beforeRuntimePublication: parkForegroundOrigin,
-          assertCurrent,
-          candidateRuntime,
-        };
-        const convergence = await forward(() => convergeUpdatePlugins(pluginParams));
-        if (convergence.resultWithPostUpdate.status === "error") {
-          triageAllowed = !convergence.cancelled;
-          const reported = await reportResult(convergence.resultWithPostUpdate);
-          throw createFailure(
-            reported,
-            resolveManagedServiceUpdateFailureExitCode(reported),
-            convergence.detail,
-          );
-        }
-        return convergence;
-      };
       // A current core may converge plugins online, parking before fresh Doctor.
       // A replaced core keeps convergence in its original stopped interval.
       const deferPluginConvergence =
@@ -498,6 +459,32 @@ async function finishSettledUpdate(
         params.preManagedServiceStop?.serviceMutationAllowed !== false &&
         params.coreAlreadyCurrent === true &&
         params.preManagedServiceStop?.serviceUpdateVerdict?.kind === "owned";
+      const runsPostActivationInspections =
+        shouldRestart &&
+        (!params.coreAlreadyCurrent || deferPluginConvergence) &&
+        (!candidateRuntime ||
+          isTruthyEnvValue(process.env[UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV]));
+      let postPluginDoctorRan = false;
+      const convergePlugins = async (beforeDoctor?: () => Promise<void>) => {
+        const pluginParams = {
+          ...params,
+          beforeDoctor: async () => {
+            await (beforeDoctor ?? parkForegroundOrigin)();
+            postPluginDoctorRan = true;
+          },
+          beforeRuntimePublication: parkForegroundOrigin,
+          assertCurrent,
+          candidateRuntime,
+          deferPostActivationInspections: runsPostActivationInspections,
+        };
+        const convergence = await forward(() => convergeUpdatePlugins(pluginParams));
+        if (convergence.resultWithPostUpdate.status === "error") {
+          triageAllowed = !convergence.cancelled;
+          const reported = await reportResult(convergence.resultWithPostUpdate);
+          throw createFailure(reported, convergence.detail);
+        }
+        return convergence;
+      };
       let resultWithPostUpdate = params.result;
       let postUpdateConfigSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | undefined;
       if (!deferPluginConvergence) {
@@ -546,14 +533,7 @@ async function finishSettledUpdate(
           status: "error",
           reason: "service-revalidation-failed",
         });
-        throw createFailure(
-          reported,
-          resolveManagedServiceUpdateFailureExitCode(reported),
-          message,
-          {
-            cause: error,
-          },
-        );
+        throw createFailure(reported, message, { cause: error });
       }
       const notifyRestart = () =>
         writeRestartSentinel(
@@ -564,6 +544,7 @@ async function finishSettledUpdate(
         await restoreWindowsAutoStart(resultWithPostUpdate);
       }
       let verificationFailure = "restart-unhealthy";
+      let activationVerified = false;
       const restart = async () => {
         const restarted = await forward(() =>
           maybeRestartService({
@@ -592,7 +573,10 @@ async function finishSettledUpdate(
             onPluginWarnings: (warnings) => {
               resultWithPostUpdate = appendPluginUpdateWarnings(resultWithPostUpdate, warnings);
             },
-            onVerified: recordVerifiedDowntime,
+            onVerified: (verifiedAtMs) => {
+              activationVerified = true;
+              recordVerifiedDowntime(verifiedAtMs);
+            },
           }),
         );
         if (restarted !== "failed" && restarted !== "restart-health-failed") {
@@ -624,7 +608,7 @@ async function finishSettledUpdate(
             reason: recovered.result.reason ?? verificationFailure,
           });
           const reported = await reportResult(recovered.result, false, undefined, false);
-          throw createFailure(reported, resolveManagedServiceUpdateFailureExitCode(reported));
+          throw createFailure(reported);
         }
         resultWithPostUpdate = recovered.result;
         return true;
@@ -689,6 +673,28 @@ async function finishSettledUpdate(
             delete resultWithPostUpdate.reason;
           }
         }
+      }
+      // The activation Doctor deferred optional inspections for this owner: the
+      // original updater, or a migrated worker it handed the marker to.
+      if (
+        resultWithPostUpdate.status === "ok" &&
+        runsPostActivationInspections &&
+        (postPluginDoctorRan ||
+          resultWithPostUpdate.steps.some((step) => step.name === `${CLI_NAME} doctor`))
+      ) {
+        assertCurrent();
+        resultWithPostUpdate = await forward(() =>
+          runPostActivationInspections({
+            root: postUpdateRoot,
+            result: resultWithPostUpdate,
+            gatewayReady: activationVerified,
+            timeoutMs: params.updateStepTimeoutMs,
+            nodeRunner: params.packageUpdateNodeRunner,
+            ownedManagedUpdateEnv: params.ownedManagedUpdateEnv,
+          }),
+        );
+      }
+      if (deferPluginConvergence) {
         return resultWithPostUpdate;
       }
       const maintenanceFailure = await completePostUpdateMaintenance(
@@ -699,7 +705,7 @@ async function finishSettledUpdate(
       );
       if (maintenanceFailure) {
         const reported = await reportResult(maintenanceFailure.result, false, undefined, false);
-        throw createFailure(reported, 1, maintenanceFailure.detail);
+        throw createFailure(reported, maintenanceFailure.detail, undefined, 1);
       }
 
       return resultWithPostUpdate;
@@ -719,9 +725,7 @@ async function finishSettledUpdate(
       const { result, message } = createPostUpdateFailureResult(params, error);
       defaultRuntime.error(`Post-update verification failed: ${message}`);
       const reported = await reportResult(result);
-      throw createFailure(reported, resolveManagedServiceUpdateFailureExitCode(reported), message, {
-        cause: error,
-      });
+      throw createFailure(reported, message, { cause: error });
     }
   };
   // Reporting cannot revoke verified activation or authorize another native rollback.

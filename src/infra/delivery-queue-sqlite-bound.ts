@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { RawBuilder, Selectable } from "kysely";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import { emptyOutboundDeliveryQueueAdmission } from "./delivery-queue-cache.js";
 import type { DeliveryQueueEntryState } from "./delivery-queue-sqlite.types.js";
 import {
   createSqliteQueryCache,
@@ -11,6 +12,7 @@ import {
   prepareSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { publishSqliteDatabaseAdmission } from "./sqlite-database-admission.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "./sqlite-number.js";
 
 type QueueStatus = "pending" | "failed" | "completed";
@@ -183,6 +185,10 @@ export function inflateDeliveryQueueRow(
   };
 }
 
+export function inflateDeliveryQueueRows(rows: readonly DeliveryQueueSqliteRow[]) {
+  return rows.flatMap((row) => inflateDeliveryQueueRow(row) ?? []);
+}
+
 function deliveryQueueMetadata(
   queueName: string,
   entry: DeliveryQueueEntryState | Record<string, unknown>,
@@ -298,7 +304,12 @@ export function upsertBoundDeliveryQueueEntryInDatabase(
 ): boolean {
   const queries = deliveryQueueUpserts(database.db);
   const query = (queries[bound.mode] ??= createDeliveryQueueUpsert(database.db, bound.mode));
-  return query(bound.row).numAffectedRows === 1n;
+  const changed = query(bound.row).numAffectedRows === 1n;
+  if (changed) {
+    // Every queue insertion/replacement passes here; deletion cannot make an empty queue nonempty.
+    publishSqliteDatabaseAdmission(database.db, emptyOutboundDeliveryQueueAdmission, undefined);
+  }
+  return changed;
 }
 
 /** Recovery and media custody share the same inventory of unfinished work. */

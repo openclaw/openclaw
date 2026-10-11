@@ -1,5 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
+import { parseSqliteTableDefinition } from "../infra/sqlite-schema-contract-assembly.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import {
+  getAdmittedSqliteSchemaFacts,
+  type SqliteSchemaFacts,
+} from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import {
   ORDERED_STARTUP_ADDITIVE_STATE_COLUMNS as columns,
@@ -26,29 +31,13 @@ function ensureTable(
   database.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, table, options)); // sqlite-allow-raw -- Canonical feature-owned additive DDL only.
 }
 
-const repositoryWorkspacePendingSchemas = new WeakSet<DatabaseSync>();
-
-function hasRepositoryWorkspacePendingResultSchema(database: DatabaseSync): boolean {
-  if (repositoryWorkspacePendingSchemas.has(database)) {
-    return true;
-  }
-  const exists = tableHasColumn(
-    database,
-    "worker_workspace_pending_results",
-    "repository_workspace_id",
-  );
-  // Another process can create the column; cache only committed presence.
-  // First-use DDL inside an outer transaction may still roll back.
-  if (exists && !database.isTransaction) {
-    repositoryWorkspacePendingSchemas.add(database);
-  }
-  return exists;
-}
-
 export function ensureRepositoryWorkspacePendingResultSchema(database: DatabaseSync): void {
-  if (!hasRepositoryWorkspacePendingResultSchema(database)) {
-    ensureColumn(database, "worker_workspace_pending_results", "repository_workspace_id TEXT");
+  const table = "worker_workspace_pending_results";
+  const sql = getAdmittedSqliteSchemaFacts(database)?.tableSql.get(table);
+  if (sql && parseSqliteTableDefinition(sql, table).columns.has("repository_workspace_id")) {
+    return;
   }
+  ensureColumn(database, table, "repository_workspace_id TEXT");
 }
 
 export function ensureSessionRepositoryWorkspaceSchema(database: DatabaseSync): void {
@@ -101,8 +90,22 @@ export function ensureConfigRevisionKeySchema(database: DatabaseSync): void {
   });
 }
 
+const journalAvailability = new WeakMap<SqliteSchemaFacts, boolean>();
+
 export function assertAgentDeletionJournalAvailable(database: DatabaseSync): void {
-  if (!tableHasColumn(database, "agent_deletion_journal", "agent_id")) {
+  const schema = getAdmittedSqliteSchemaFacts(database);
+  let available = schema && journalAvailability.get(schema);
+  if (available === undefined) {
+    const sql = schema?.tableSql.get("agent_deletion_journal");
+    available = schema
+      ? sql !== undefined &&
+        parseSqliteTableDefinition(sql, "agent_deletion_journal").columns.has("agent_id")
+      : tableHasColumn(database, "agent_deletion_journal", "agent_id");
+    if (schema) {
+      journalAvailability.set(schema, available);
+    }
+  }
+  if (!available) {
     throw new Error(
       "Agent deletion journal missing; run openclaw doctor --fix to reconstruct it before restoring or deleting agents.",
     );
@@ -124,6 +127,10 @@ export function reconstructAgentDeletionJournalSchema(
 }
 
 export function ensureAgentDatabaseLeaseSchema(database: DatabaseSync): void {
+  const sql = getAdmittedSqliteSchemaFacts(database)?.tableSql.get("agent_database_leases");
+  if (sql && parseSqliteTableDefinition(sql, "agent_database_leases").columns.has("provenance")) {
+    return;
+  }
   ensureTable(database, "agent_database_leases");
   ensureColumn(database, "agent_database_leases", "provenance TEXT");
 }

@@ -23,34 +23,27 @@ export type OutboundReplyPayload = Pick<
 export function normalizeOutboundReplyPayloadCore(
   payload: Record<string, unknown>,
 ): OutboundReplyPayload {
-  const text = readStringValue(payload.text);
-  const mediaUrls = Array.isArray(payload.mediaUrls)
-    ? payload.mediaUrls.filter(
-        (entry): entry is string => typeof entry === "string" && entry.length > 0,
-      )
-    : undefined;
-  const mediaUrl = readStringValue(payload.mediaUrl);
-  const presentation = asOptionalRecord(
-    payload.presentation,
-  ) as OutboundReplyPayload["presentation"];
-  const presentationTextMode = payload.presentationTextMode === "fallback" ? "fallback" : undefined;
-  const interactive = asOptionalRecord(payload.interactive) as OutboundReplyPayload["interactive"];
-  const channelData = asOptionalRecord(payload.channelData) as OutboundReplyPayload["channelData"];
-  const sensitiveMedia = payload.sensitiveMedia === true ? true : undefined;
-  const replyToId = readStringValue(payload.replyToId);
-  const location = normalizeOutboundLocation(payload.location);
-  const videoAsNote = payload.videoAsNote === true ? true : undefined;
-  return {
-    text,
-    mediaUrls,
-    mediaUrl,
-    presentation,
-    ...(presentationTextMode ? { presentationTextMode } : {}),
-    interactive,
-    channelData,
-    sensitiveMedia,
-    replyToId,
-    ...(location ? { location } : {}),
-    ...(videoAsNote ? { videoAsNote: true } : {}),
+  const result: OutboundReplyPayload = {
+    text: readStringValue(payload.text),
+    mediaUrls: Array.isArray(payload.mediaUrls)
+      ? payload.mediaUrls.filter(
+          (entry): entry is string => typeof entry === "string" && entry.length > 0,
+        )
+      : undefined,
+    mediaUrl: readStringValue(payload.mediaUrl),
+    presentation: asOptionalRecord(payload.presentation) as OutboundReplyPayload["presentation"],
+    ...(payload.presentationTextMode === "fallback" ? { presentationTextMode: "fallback" } : {}),
+    interactive: asOptionalRecord(payload.interactive) as OutboundReplyPayload["interactive"],
+    channelData: asOptionalRecord(payload.channelData) as OutboundReplyPayload["channelData"],
+    sensitiveMedia: payload.sensitiveMedia === true ? true : undefined,
+    replyToId: readStringValue(payload.replyToId),
   };
+  const location = normalizeOutboundLocation(payload.location);
+  if (location) {
+    result.location = location;
+  }
+  if (payload.videoAsNote === true) {
+    result.videoAsNote = true;
+  }
+  return result;
 }

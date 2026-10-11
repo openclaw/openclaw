@@ -1,6 +1,7 @@
 import { StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
@@ -15,7 +16,9 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { sessionTitleRequests } from "../session-title-state.js";
 import { scheduleChatDashboardSessionTitle } from "./chat-send-background.js";
+import { sessionCompactHandlers } from "./sessions-compact.js";
 
 const generate = vi.hoisted(() =>
   vi.fn<
@@ -64,7 +67,7 @@ it.each([
       const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
       context.logGateway.warn = (message) => failed.reject(new Error(message));
       const reads = observeSqliteReadSql(StatementSync.prototype);
-      let released: Promise<void> | undefined;
+      let title: Promise<boolean> | undefined;
       try {
         scheduleChatDashboardSessionTitle(
           {
@@ -77,11 +80,8 @@ it.each([
           settledTurn(),
         );
         await Promise.race([started.promise, failed.promise]);
-        released = getSessionWorkAdmissionRelease({
-          scope: scope.storePath,
-          identities: [scope.sessionKey, scope.sessionId],
-        });
-        expect(released).toBeDefined();
+        title = sessionTitleRequests.get(scope);
+        expect(title).toBeDefined();
         expect(
           reads.queries.filter((sql) => /\b(?:from|join)\s+"?session_nodes\b/u.test(sql)).length,
         ).toBeLessThanOrEqual(1);
@@ -90,7 +90,7 @@ it.each([
       } finally {
         reads.restore();
         generation.resolve("Original release plan");
-        await released;
+        await title;
       }
       expect(loadSessionEntry(scope)?.displayName).toBe("Original release plan");
     });
@@ -126,15 +126,87 @@ it("falls back after one label attempt when naming starts after its turn settled
       settledTurn(),
     );
     await started.promise;
-    const released = getSessionWorkAdmissionRelease({
-      scope: scope.storePath,
-      identities: [scope.sessionKey, scope.sessionId],
-    });
-    expect(released).toBeDefined();
+    const title = sessionTitleRequests.get(scope);
+    expect(title).toBeDefined();
     label.reject(new Error("conversation label generation failed (primary fallback)"));
-    await released;
+    await title;
     expect(generate).toHaveBeenCalledOnce();
     expect(loadSessionEntry(scope)?.displayName).toMatch(/^[a-z]+-[a-z]+$/);
+  });
+});
+
+it("compacts after the reply releases its admission while its title is still generating", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfg = { agents: { entries: { main: {} } } };
+    await state.writeConfig(cfg);
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:dashboard:compact-after-reply",
+      sessionId: "compact-after-reply",
+      storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+    };
+    await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    for (const content of ["First question", "Follow-up question", "Final answer"]) {
+      await appendTranscriptMessage(scope, {
+        cwd: state.workspaceDir,
+        message: { role: "user", content, timestamp: 1 },
+      });
+    }
+    const admission = await beginSessionWorkAdmission({
+      scope: scope.storePath,
+      identities: [scope.sessionKey, scope.sessionId],
+      assertAllowed: () => {},
+    });
+    const titleStarted = createDeferredCore();
+    const generation = createDeferredCore<string>();
+    generate.mockReset().mockImplementation(async () => {
+      titleStarted.resolve();
+      return await generation.promise;
+    });
+    const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+    const compact = async () => {
+      const respond = vi.fn();
+      await sessionCompactHandlers["sessions.compact"]!({
+        req: { type: "req", id: "compact", method: "sessions.compact" },
+        params: { key: scope.sessionKey, maxLines: 2 },
+        client: null,
+        isWebchatConnect: () => false,
+        respond,
+        context,
+      });
+      return respond;
+    };
+    let title: Promise<boolean> | undefined;
+    try {
+      scheduleChatDashboardSessionTitle(
+        {
+          ...scope,
+          admittedSessionId: scope.sessionId,
+          cfg,
+          context,
+          request: { rawMessage: "First question", normalizedAttachments: [] },
+        },
+        { released: Promise.resolve(true), settled: admission.released },
+      );
+      await titleStarted.promise;
+      title = sessionTitleRequests.get(scope);
+      expect(await compact()).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ message: expect.stringContaining("has an active run") }),
+      );
+      admission.release();
+      expect(await compact()).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ compacted: true }),
+        undefined,
+      );
+    } finally {
+      admission.release();
+      generation.resolve("First question");
+      await title;
+    }
+    expect(loadSessionEntry(scope)?.displayName).toBe("First question");
   });
 });
 
@@ -172,7 +244,7 @@ it("does not hold session admission across an unresolved dashboard title gate", 
       scope: scope.storePath,
       identities: [scope.sessionKey, scope.sessionId],
     };
-    let released: Promise<void> | undefined;
+    let title: Promise<boolean> | undefined;
     let competing: { release: () => void } | undefined;
     try {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -186,9 +258,8 @@ it("does not hold session admission across an unresolved dashboard title gate", 
         },
         { released: ready.promise, settled: Promise.resolve() },
       );
-      for (let step = 0; step < 8; step += 1) {
-        await vi.advanceTimersByTimeAsync(0);
-      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(generate).not.toHaveBeenCalled();
       expect(getSessionWorkAdmissionRelease(admissionQuery)).toBeUndefined();
       const titleDrain = interruptSessionWorkAdmissions({ ...admissionQuery, timeoutMs: 0 });
       await vi.advanceTimersByTimeAsync(0);
@@ -210,14 +281,15 @@ it("does not hold session admission across an unresolved dashboard title gate", 
       ready.resolve(true);
       await vi.advanceTimersByTimeAsync(0);
       await Promise.race([started.promise, failed.promise]);
-      released = getSessionWorkAdmissionRelease(admissionQuery);
-      expect(released).toBeDefined();
+      expect(getSessionWorkAdmissionRelease(admissionQuery)).toBeUndefined();
+      title = sessionTitleRequests.get(scope);
+      expect(title).toBeDefined();
       expect(generate).toHaveBeenCalledOnce();
     } finally {
       competing?.release();
       ready.resolve(true);
       generation.resolve("Original release plan");
-      await released;
+      await title;
       vi.useRealTimers();
     }
     expect(loadSessionEntry(scope)?.displayName).toBe("Original release plan");

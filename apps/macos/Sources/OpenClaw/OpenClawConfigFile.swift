@@ -298,9 +298,6 @@ extension OpenClawConfigFile {
 
     static func gatewayPort(root: [String: Any] = OpenClawConfigFile.loadDict()) -> Int? {
         guard let gateway = root["gateway"] as? [String: Any] else { return nil }
-        if let port = gateway["port"] as? Int, port > 0 {
-            return port
-        }
         if let number = gateway["port"] as? NSNumber, number.intValue > 0 {
             return number.intValue
         }

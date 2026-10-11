@@ -1,9 +1,5 @@
 import type { Result } from "@openclaw/normalization-core/result";
-import {
-  ErrorCodes,
-  errorShape,
-  type ErrorShape,
-} from "../../packages/gateway-protocol/src/index.js";
+import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
 import { deleteSessionEntryLifecycle, type SessionEntry } from "../config/sessions.js";
 import {
   captureIncognitoSessionOperation,
@@ -12,6 +8,7 @@ import {
 import { withTimeout } from "../infra/fs-safe.js";
 import { getInProcessGatewayRequestContext } from "../plugins/runtime/gateway-request-scope.js";
 import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../sessions/session-lifecycle-admission.js";
+import { unavailableSessionRequest } from "./session-request-error.js";
 
 /** The caller retains the reset lifecycle fence through deletion and its notifications. */
 type IncognitoResetParams = {
@@ -58,13 +55,9 @@ async function deleteIncognitoSessionForResetInScope(
           "agent terminal lifecycle drain",
         );
       } catch {
-        return {
-          ok: false,
-          error: errorShape(
-            ErrorCodes.UNAVAILABLE,
-            `Session ${params.key} terminals are still active; try again in a moment.`,
-          ),
-        };
+        return unavailableSessionRequest(
+          `Session ${params.key} terminals are still active; try again in a moment.`,
+        );
       }
     }
     await params.beforeDelete();
@@ -81,13 +74,7 @@ async function deleteIncognitoSessionForResetInScope(
       target: params.target,
     });
     if (!deleted.deleted) {
-      return {
-        ok: false,
-        error: errorShape(
-          ErrorCodes.UNAVAILABLE,
-          `Session ${params.key} changed before reset. Retry.`,
-        ),
-      };
+      return unavailableSessionRequest(`Session ${params.key} changed before reset. Retry.`);
     }
     return { ok: true, value: { deletedSessionId: deleted.deletedSessionId } };
   } finally {

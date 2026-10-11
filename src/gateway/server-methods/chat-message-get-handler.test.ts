@@ -1,3 +1,4 @@
+import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
@@ -7,7 +8,6 @@ import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   loadTranscriptEvents,
-  replaceTranscriptEvents,
   stageSessionPendingInput,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
@@ -15,6 +15,7 @@ import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import * as historyWorker from "../../config/sessions/session-history-worker-runtime.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -452,7 +453,20 @@ describe("durable tool output inspection", () => {
       const databasePath = resolveOpenClawAgentSqlitePath(
         toDatabaseOptions(resolveSqliteTranscriptReadScope(scope)),
       );
-      expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
+      const claimSoleCustody = () => {
+        const database = new DatabaseSync(databasePath);
+        try {
+          // A retained WAL connection prevents exclusive custody even between reads.
+          database.exec(
+            "PRAGMA busy_timeout=0; PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; COMMIT",
+          );
+        } finally {
+          database.close();
+        }
+      };
+      expect(claimSoleCustody).toThrow(/database is locked/);
+      await closeOpenClawAgentDatabaseByPathAsync(databasePath);
+      expect(claimSoleCustody).not.toThrow();
       clearSessionStoreCacheForTest();
       expect(await loadTranscriptEvents(scope)).toEqual(persisted);
       for (const fixture of fixtures) {

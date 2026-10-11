@@ -32,9 +32,9 @@ const {
 const resolved = { profiles: {}, controlPort: 18_791 } as never;
 const onWarn = vi.fn();
 
-function start(owner: "server" | "service", server: Server | null = null) {
+function start(server: Server | null = null) {
   return withBrowserControlStart(() =>
-    ensureBrowserControlRuntime({ server, port: 18_791, resolved, owner }),
+    ensureBrowserControlRuntime({ server, port: 18_791, resolved }),
   );
 }
 
@@ -49,37 +49,33 @@ beforeEach(() => {
 });
 
 describe("browser control lifecycle", () => {
-  it("allows a start queued after a no-state stop", async () => {
-    const stopping = stop("service");
-    const starting = start("service");
-
-    await expect(stopping).resolves.toBeNull();
-    await expect(starting).resolves.toBeTruthy();
+  it("allows a start after a no-state stop settles", async () => {
+    await expect(stop("service")).resolves.toBeNull();
+    await expect(start()).resolves.toBeTruthy();
     await stop("service");
   });
 
-  it("rejects a start requested after stop intent but before stop drains", async () => {
-    await start("service");
-    let releaseStop!: () => void;
-    const stopGate = new Promise<void>((resolve) => {
-      releaseStop = resolve;
-    });
+  it("rejects new starts while ordinary shutdown is pending", async () => {
+    await start();
+    const gate = Promise.withResolvers<void>();
     runtimeMocks.stopBrowserRuntime.mockImplementationOnce(async (params) => {
-      await stopGate;
+      await gate.promise;
       params.clearState();
     });
-
     const stopping = stop("service");
-    const starting = start("service");
-    releaseStop();
-
-    await stopping;
-    await expect(starting).rejects.toThrow("stopping");
+    try {
+      await expect(start()).rejects.toThrow("Browser runtime is stopping.");
+    } finally {
+      gate.resolve();
+      await stopping;
+    }
     expect(getBrowserControlState()).toBeNull();
+    await expect(start()).resolves.toBeTruthy();
+    await stop("service");
   });
 
   it("retains a failed stop owner for an exact retry", async () => {
-    await start("service");
+    await start();
     expect(hasBrowserControlWork()).toBe(true);
     runtimeMocks.stopBrowserRuntime.mockImplementationOnce(async (params) => {
       markBrowserRuntimeStopping(params.current);
@@ -92,14 +88,14 @@ describe("browser control lifecycle", () => {
 
     await expect(stop("service")).resolves.toBeTruthy();
     expect(hasBrowserControlWork()).toBe(false);
-    await expect(start("service")).resolves.toBeTruthy();
+    await expect(start()).resolves.toBeTruthy();
     await stop("service");
   });
 
   it("lets a foreground server adopt service state without a second runtime", async () => {
-    const serviceState = await start("service");
+    const serviceState = await start();
     const server = {} as Server;
-    const serverState = await start("server", server);
+    const serverState = await start(server);
 
     expect(serverState).toBe(serviceState);
     expect(serverState.server).toBe(server);
@@ -110,14 +106,11 @@ describe("browser control lifecycle", () => {
     expect(runtimeMocks.stopBrowserRuntime).toHaveBeenCalledOnce();
   });
 
-  it("allows a start queued after a foreground-owned service stop", async () => {
-    await start("service");
-    await start("server", {} as Server);
-    const stopping = stop("service");
-    const starting = start("service");
-
-    await expect(stopping).resolves.toBeNull();
-    await expect(starting).resolves.toBeTruthy();
+  it("allows a start after a foreground-owned service stop settles", async () => {
+    await start();
+    await start({} as Server);
+    await expect(stop("service")).resolves.toBeNull();
+    await expect(start()).resolves.toBeTruthy();
     await stop("server");
   });
 
@@ -133,7 +126,6 @@ describe("browser control lifecycle", () => {
         server: null,
         port: 18_791,
         resolved,
-        owner: "service",
       });
     });
     expect(getBrowserControlState()).toBeNull();

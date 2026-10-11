@@ -153,6 +153,7 @@ const runtimeConsumers = [
     "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
     "src/agents/prepared-model-catalog-worker.integration.test.ts",
     "src/agents/prepared-model-catalog-worker.native-renewal.integration.test.ts",
+    "src/agents/prepared-model-catalog-worker.oauth-peers.integration.test.ts",
   ].map((file) => ({
     file,
     configs: ["test/vitest/vitest.infra.config.ts"],
@@ -270,7 +271,7 @@ const runtimeConsumers = [
   ...[
     "src/infra/update-candidate-canary.integration.test.ts",
     "src/infra/update-managed-service-handoff-lifecycle.test.ts",
-    "src/plugin-state/plugin-state-store.authority.test.ts",
+    "src/plugin-state/plugin-state-store.runtime.test.ts",
   ].map((file) => ({
     file,
     configs: ["test/vitest/vitest.infra.config.ts"],

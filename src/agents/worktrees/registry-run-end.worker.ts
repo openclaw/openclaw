@@ -1,14 +1,12 @@
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
-import {
-  deferSqliteWorkerCommitReceipt,
-  requestSqliteWorkerOperationAdmission,
-} from "../../infra/sqlite-worker-operation-admission.js";
+import { requestSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { assertOpenClawStateLeasesWorkerOwnedInTransaction } from "../../state/openclaw-state-lease-worker.js";
@@ -18,15 +16,20 @@ import {
   SessionWorktreeLifecycleError,
   SessionWorktreeSourceChangedError,
   WorktreeRemovalContentionError,
-  WorktreeRemovalLockError,
+  registryAuthorityChanged,
 } from "./errors.js";
 import {
   publishPendingWorktreeInDatabase,
   recoverPendingWorktreesInDatabase,
 } from "./pending-slots.worker.js";
 import {
+  worktreeRegistryPublication,
+  withWorktreeRegistryWorkerReceipt,
+} from "./registry-publication.js";
+import {
   findLiveRegistryWorktreeByOwnerInDatabase,
   getRegistryWorktreeInDatabase,
+  rowToRecord,
 } from "./registry-read.kernel.js";
 import {
   assertRegistryMutationCustody,
@@ -66,7 +69,7 @@ export function insertRegistryWorktreeInDatabase(
   if (pendingId !== undefined) {
     publishPendingWorktreeInDatabase(db, pendingId, record, leases);
   }
-  executeSqliteQuerySync(
+  const inserted = executeSqliteQuerySync(
     db,
     query(db)
       .insertInto("worktrees")
@@ -88,8 +91,10 @@ export function insertRegistryWorktreeInDatabase(
           provisionedPaths === undefined ? null : JSON.stringify(provisionedPaths),
         run_end_cleanup_json:
           record.runEndCleanup === undefined ? null : JSON.stringify(record.runEndCleanup),
-      }),
-  );
+      })
+      .returningAll(),
+  ).rows;
+  worktreeRegistryPublication.rows(db, inserted);
 }
 
 export function updateRegistryWorktreeInDatabase(
@@ -135,7 +140,7 @@ export function updateRegistryWorktreeInDatabase(
   if (input.onlyIfActiveAt !== undefined) {
     update = update.where("last_active_at", "=", input.onlyIfActiveAt);
   }
-  executeSqliteQuerySync(db, update);
+  worktreeRegistryPublication.rows(db, executeSqliteQuerySync(db, update.returningAll()).rows);
 }
 
 export type WorktreeRunEndInput<T> = {
@@ -163,6 +168,9 @@ function assertRemovalToken(db: DatabaseSync, id: string, token: string) {
 }
 
 function assertPredicate(db: DatabaseSync, predicate: WorktreeRegistryPredicate) {
+  if (predicate.kind === "snapshot-retirement") {
+    return assertSnapshotRetirementInDatabase(db, predicate.record);
+  }
   if (predicate.kind === "removal-claim") {
     return assertRemovalToken(db, predicate.id, predicate.token);
   }
@@ -194,15 +202,32 @@ function assertPredicate(db: DatabaseSync, predicate: WorktreeRegistryPredicate)
       ? findLiveRegistryWorktreeByOwnerInDatabase(db, "session", predicate.ownerId)
       : getRegistryWorktreeInDatabase(db, observed.id);
   switch (predicate.kind) {
+    case "live-binding":
+      if (
+        !current ||
+        current.removedAt !== undefined ||
+        (["ownerKind", "ownerId", "branch", "repoRoot"] as const).some(
+          (key) => current[key] !== predicate.record[key],
+        )
+      ) {
+        throw new SessionWorktreeLifecycleError(
+          "Managed worktree binding authority changed.",
+          "owner-mismatch",
+        );
+      }
+      if (
+        current.path !== predicate.record.path ||
+        current.repoFingerprint !== predicate.record.repoFingerprint
+      ) {
+        throw new SessionWorktreeSourceChangedError("Managed worktree binding source changed.");
+      }
+      return;
     case "session-owner":
       if (
         current &&
         (current.ownerKind !== "session" || current.ownerId !== predicate.sessionKey)
       ) {
-        throw new SessionWorktreeLifecycleError(
-          "Session worktree ownership changed; retry cleanup.",
-          "owner-mismatch",
-        );
+        throw registryAuthorityChanged(predicate.kind);
       }
       return;
     case "binding":
@@ -223,22 +248,17 @@ function assertPredicate(db: DatabaseSync, predicate: WorktreeRegistryPredicate)
           ] as const
         ).some((key) => current[key] !== predicate.record[key])
       ) {
-        throw new WorktreeRemovalContentionError(
-          "busy",
-          "Worktree owner or binding changed; checkout preserved",
-        );
+        throw registryAuthorityChanged(predicate.kind);
       }
       return;
     case "activity":
       if (current?.lastActiveAt !== predicate.lastActiveAt) {
-        throw new WorktreeRemovalLockError("busy", "worktree activity changed during cleanup");
+        throw registryAuthorityChanged(predicate.kind);
       }
       return;
     case "record":
       if (JSON.stringify(current) !== JSON.stringify(predicate.record)) {
-        throw new Error(
-          "Worktree registry changed during recovery; remaining source and original snapshot preserved",
-        );
+        throw registryAuthorityChanged(predicate.kind);
       }
       return;
     case "exact-snapshot": {
@@ -256,9 +276,7 @@ function assertPredicate(db: DatabaseSync, predicate: WorktreeRegistryPredicate)
         current.branch !== record.branch ||
         current.snapshotRef !== record.snapshotRef
       ) {
-        throw new Error(
-          "Exact-state recovery owner or lifecycle changed; source and snapshot preserved",
-        );
+        throw registryAuthorityChanged(predicate.kind);
       }
       return;
     }
@@ -272,7 +290,7 @@ function assertPredicate(db: DatabaseSync, predicate: WorktreeRegistryPredicate)
         current.createdAt !== record.createdAt ||
         current.lastActiveAt !== record.lastActiveAt
       ) {
-        throw new Error("Worktree exact-state owner or lifecycle changed; checkout preserved");
+        throw registryAuthorityChanged(predicate.kind);
       }
       if (
         current.path !== record.path ||
@@ -291,7 +309,7 @@ function assertPredicate(db: DatabaseSync, predicate: WorktreeRegistryPredicate)
         current.path !== predicate.path ||
         current.repoRoot !== predicate.repoRoot
       ) {
-        throw new Error("Managed projection owner changed during settlement");
+        throw registryAuthorityChanged(predicate.kind);
       }
       return;
     case "source-owner":
@@ -300,9 +318,7 @@ function assertPredicate(db: DatabaseSync, predicate: WorktreeRegistryPredicate)
         current.repoRoot !== predicate.repoRoot ||
         current.path !== predicate.path
       ) {
-        throw new SessionWorktreeSourceChangedError(
-          "Spawn parent managed worktree changed; retry from its current session",
-        );
+        throw registryAuthorityChanged(predicate.kind);
       }
       return;
     case "source-record":
@@ -311,9 +327,7 @@ function assertPredicate(db: DatabaseSync, predicate: WorktreeRegistryPredicate)
         current?.repoRoot !== predicate.repoRoot ||
         current?.repoFingerprint !== predicate.repoFingerprint
       ) {
-        throw new SessionWorktreeSourceChangedError(
-          "Accepted managed source changed during preparation",
-        );
+        throw registryAuthorityChanged(predicate.kind);
       }
   }
 }
@@ -325,6 +339,76 @@ export function assertWorktreeRegistryPredicates(
   for (const predicate of predicates) {
     assertPredicate(db, predicate);
   }
+}
+
+/** Git equality cannot release provisioned bytes or a live lifecycle's recovery custody. */
+function assertSnapshotRetirementInDatabase(
+  db: DatabaseSync,
+  observed: ManagedWorktreeRecord,
+  reapStaleLeases = false,
+): void {
+  const k =
+    getNodeSqliteKysely<
+      Pick<DB, "worktrees" | "worktree_provisioned_file_chunks" | "state_leases">
+    >(db);
+  const row = executeSqliteQuerySync(
+    db,
+    k
+      .selectFrom("worktrees")
+      .selectAll("worktrees")
+      .select((eb) =>
+        eb
+          .exists(
+            eb
+              .selectFrom("worktree_provisioned_file_chunks")
+              .select("worktree_id")
+              .whereRef("worktree_id", "=", "worktrees.id"),
+          )
+          .as("has_chunks"),
+      )
+      .where("id", "=", observed.id),
+  ).rows[0];
+  if (
+    observed.removedAt === undefined ||
+    !row ||
+    JSON.stringify(rowToRecord(row)) !== JSON.stringify(observed)
+  ) {
+    throw registryAuthorityChanged("snapshot-retirement");
+  }
+  const provisioned = safeParseJson(row.provisioned_paths_json ?? "");
+  if (!Array.isArray(provisioned) || provisioned.length !== 0 || row.has_chunks) {
+    throw new Error("Worktree snapshot retains provisioned data; retain its custody");
+  }
+  const leases = collectLiveRunLeases(db, k, worktreeRunLeaseScope(observed.id), reapStaleLeases);
+  if (leases.liveCount !== 0 || leases.removingToken !== undefined) {
+    throw new Error("Worktree snapshot has an active or unresolved run/removal consumer");
+  }
+}
+
+export function deleteRegistryWorktreeInDatabase(
+  db: DatabaseSync,
+  input: { id: string; removalToken?: string; expectedRetired?: ManagedWorktreeRecord },
+): void {
+  if (input.expectedRetired) {
+    if (input.expectedRetired.id !== input.id) {
+      throw new Error("Worktree snapshot retirement ID changed");
+    }
+    assertSnapshotRetirementInDatabase(db, input.expectedRetired, true);
+  }
+  const k =
+    getNodeSqliteKysely<
+      Pick<DB, "worktrees" | "worktree_provisioned_file_chunks" | "state_leases">
+    >(db);
+  assertRegistryMutationCustody(db, k, input.id, input.removalToken);
+  executeSqliteQuerySync(
+    db,
+    k.deleteFrom("worktree_provisioned_file_chunks").where("worktree_id", "=", input.id),
+  );
+  worktreeRegistryPublication.deleted(
+    db,
+    executeSqliteQuerySync(db, k.deleteFrom("worktrees").where("id", "=", input.id).returningAll())
+      .rows,
+  );
 }
 
 export function worktreeRunEndMutation<Input>(
@@ -344,9 +428,14 @@ export function worktreeRunEndMutation<Input>(
         };
         admit("transaction");
         assertWorktreeRegistryPredicates(db, input.predicates);
-        mutate(db, input.value, input.leases);
-        admit("commit");
-        deferSqliteWorkerCommitReceipt(db, input.receipt);
+        withWorktreeRegistryWorkerReceipt(
+          db,
+          () => {
+            mutate(db, input.value, input.leases);
+            admit("commit");
+          },
+          input.receipt,
+        );
       },
       { ...context.stateOptions(), database },
       { operationLabel },
@@ -408,7 +497,7 @@ export function claimWorktreeRemovalInDatabase(
     throw new WorktreeRemovalContentionError("busy", "worktree removal is already in progress");
   }
   const payloadJson = JSON.stringify({ pid: params.pid, starttime: params.startTime ?? undefined });
-  executeSqliteQuerySync(
+  const inserted = executeSqliteQuerySync(
     db,
     k
       .insertInto("state_leases")
@@ -426,8 +515,10 @@ export function claimWorktreeRemovalInDatabase(
         conflict
           .columns(["scope", "lease_key"])
           .doUpdateSet({ owner: params.token, payload_json: payloadJson, updated_at: params.now }),
-      ),
-  );
+      )
+      .returningAll(),
+  ).rows;
+  worktreeRegistryPublication.rows(db, inserted);
 }
 
 export type WorktreeRemovalFinalization = {
@@ -451,24 +542,28 @@ export function finalizeWorktreeRemovalInDatabase(
   if (input.token) {
     assertRemovalToken(db, input.worktreeId, input.token);
   }
-  executeSqliteQuerySync(
+  const removed = executeSqliteQuerySync(
     db,
     query(db)
       .deleteFrom("state_leases")
-      .where("scope", "=", worktreeRunLeaseScope(input.worktreeId)),
-  );
+      .where("scope", "=", worktreeRunLeaseScope(input.worktreeId))
+      .returning(["scope", "lease_key"]),
+  ).rows;
+  worktreeRegistryPublication.deleted(db, removed);
 }
 
 export function abortWorktreeRemovalInDatabase(
   db: DatabaseSync,
   input: { worktreeId: string; token: string },
 ): void {
-  executeSqliteQuerySync(
+  const removed = executeSqliteQuerySync(
     db,
     query(db)
       .deleteFrom("state_leases")
       .where("scope", "=", worktreeRunLeaseScope(input.worktreeId))
       .where("lease_key", "=", WORKTREE_REMOVING_LEASE_KEY)
-      .where("owner", "=", input.token),
-  );
+      .where("owner", "=", input.token)
+      .returning(["scope", "lease_key"]),
+  ).rows;
+  worktreeRegistryPublication.deleted(db, removed);
 }

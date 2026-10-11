@@ -262,10 +262,10 @@ describe("requester settle wake product flow", () => {
     );
     vi.useFakeTimers();
     settleRootWork = observeRootWork();
-    const settle = completionStore.settleRequesterCompletionBatch;
-    vi.spyOn(completionStore, "settleRequesterCompletionBatch").mockImplementation(
+    const settle = completionStore.mutateRequesterCompletionBatch;
+    vi.spyOn(completionStore, "mutateRequesterCompletionBatch").mockImplementation(
       async (params) => {
-        if (rejectNextRequesterWakePersistence) {
+        if (params.operation.kind === "settle" && rejectNextRequesterWakePersistence) {
           rejectNextRequesterWakePersistence = false;
           throw new Error("database is locked");
         }

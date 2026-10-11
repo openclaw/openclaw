@@ -74,18 +74,21 @@ function resolveTelegramQuoteContext(params: {
     replyQuoteText && !context.ctxPayload.ReplyToIsExternal
       ? resolveTelegramReplyId(context.ctxPayload.ReplyToId)
       : undefined;
+  const replyQuotePosition =
+    typeof context.ctxPayload.ReplyToQuotePosition === "number"
+      ? context.ctxPayload.ReplyToQuotePosition
+      : undefined;
+  const replyQuoteEntities = Array.isArray(context.ctxPayload.ReplyToQuoteEntities)
+    ? context.ctxPayload.ReplyToQuoteEntities
+    : undefined;
   const replyQuoteTargetsBotMessage = context.msg.reply_to_message?.from?.is_bot === true;
   const replyQuoteByMessageId: TelegramNativeQuoteCandidateByMessageId = {};
   if (replyToMode !== "off") {
     if (replyQuoteText && replyQuoteMessageId != null) {
       addTelegramNativeQuoteCandidate(replyQuoteByMessageId, replyQuoteMessageId, {
         text: replyQuoteText,
-        ...(typeof context.ctxPayload.ReplyToQuotePosition === "number"
-          ? { position: context.ctxPayload.ReplyToQuotePosition }
-          : {}),
-        ...(Array.isArray(context.ctxPayload.ReplyToQuoteEntities)
-          ? { entities: context.ctxPayload.ReplyToQuoteEntities }
-          : {}),
+        ...(replyQuotePosition !== undefined ? { position: replyQuotePosition } : {}),
+        ...(replyQuoteEntities ? { entities: replyQuoteEntities } : {}),
       });
     }
     addTelegramNativeQuoteCandidate(
@@ -118,14 +121,9 @@ function resolveTelegramQuoteContext(params: {
   return {
     draftReplyToMessageId,
     replyQuoteByMessageId,
-    replyQuoteEntities: Array.isArray(context.ctxPayload.ReplyToQuoteEntities)
-      ? context.ctxPayload.ReplyToQuoteEntities
-      : undefined,
+    replyQuoteEntities,
     replyQuoteMessageId,
-    replyQuotePosition:
-      typeof context.ctxPayload.ReplyToQuotePosition === "number"
-        ? context.ctxPayload.ReplyToQuotePosition
-        : undefined,
+    replyQuotePosition,
     replyQuoteText,
   };
 }
@@ -348,7 +346,7 @@ export const dispatchTelegramMessage = async (
   // ingress watchdog. Never enter the reply pipeline after that owner has
   // already fenced this attempt; the canonical spool row will retry it.
   if (isDispatchSuperseded()) {
-    status.finalizeInBackground({ outcome: "cancelled" }, "cancelled finalize");
+    status.finalizeInBackground("cancelled", "cancelled finalize");
     return { kind: "completed" };
   }
   if (status.controller && !isRoomEvent) {
@@ -383,7 +381,7 @@ export const dispatchTelegramMessage = async (
   }
   if (dispatchWasSuperseded) {
     if (status.controller) {
-      status.finalizeInBackground({ outcome: "done" }, "finalize");
+      status.finalizeInBackground("done", "finalize");
     }
     return { kind: "completed" };
   }
@@ -465,7 +463,7 @@ export const dispatchTelegramMessage = async (
       : null);
 
   if (status.controller && !hasVisibleResponse && !intentionalNoResponse) {
-    status.finalizeInBackground({ outcome: "error" }, "error finalize");
+    status.finalizeInBackground("error", "error finalize");
   }
   const shouldReturnRetryableDispatchFailure =
     retryDispatchErrors &&
@@ -488,16 +486,13 @@ export const dispatchTelegramMessage = async (
   });
   if (status.controller) {
     status.finalizeInBackground(
-      {
-        outcome:
-          turn.agentRunFailed ||
-          turn.dispatchError != null ||
-          turn.previewLifecycle.finalFailed ||
-          (turn.previewLifecycle.finalDelivered && !turn.previewLifecycle.finalSucceeded) ||
-          sentFallback
-            ? "error"
-            : "done",
-      },
+      turn.agentRunFailed ||
+        turn.dispatchError != null ||
+        turn.previewLifecycle.finalFailed ||
+        (turn.previewLifecycle.finalDelivered && !turn.previewLifecycle.finalSucceeded) ||
+        sentFallback
+        ? "error"
+        : "done",
       "finalize",
     );
   }

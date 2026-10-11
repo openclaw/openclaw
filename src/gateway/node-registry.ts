@@ -1,9 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import {
-  addTimerTimeoutGraceMs,
-  isFutureDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "@openclaw/normalization-core/number-coercion";
+import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 // NodeSession is plugin-SDK-reachable; importing these types from the
 // gateway-protocol index would retain the whole ProtocolSchemas registry in
 // the public plugin-sdk dts (check-plugin-sdk-exports guards this).
@@ -77,6 +73,10 @@ import {
   selectActiveNodesByProfile,
   type NodePresenceActivityUpdate,
 } from "./node-registry.presence.js";
+import {
+  authorizedSystemRunEventExpiresAt,
+  authorizedSystemRunEventKey,
+} from "./node-registry.system-run.js";
 import { isNodeWorkerHostClientId } from "./node-runner-inventory-runtime.js";
 import type { NodeSession } from "./node-session.types.js";
 import { normalizeNodeSkillDescriptors } from "./node-skill-descriptors.js";
@@ -138,7 +138,6 @@ export type NodeConnectivityResult =
   | { ok: true }
   | { ok: false; error: { code: string; message: string } };
 
-const AUTHORIZED_SYSTEM_RUN_EVENT_GRACE_MS = 5 * 60 * 1000;
 const FAILED_EVENT_LOG_INTERVAL_MS = 30_000;
 const log = createSubsystemLogger("gateway/nodes");
 const failedEventLogAtByNode = new WeakMap<NodeSession, number>();
@@ -591,12 +590,7 @@ export class NodeRegistry {
         this.publishActiveNodeContext();
       }
     }
-    this.invokeStreams.handleDisconnect(connId);
-    for (const [key, event] of this.authorizedSystemRunEvents) {
-      if (event.connId === connId) {
-        this.authorizedSystemRunEvents.delete(key);
-      }
-    }
+    this.disconnectSessionInvokes(connId);
     reconcileNodeRunnerAvailability(this, nodeId);
     return unregistersCurrentNode ? nodeId : null;
   }
@@ -660,8 +654,8 @@ export class NodeRegistry {
 
   private projectNodePairingLeaseResolutions(
     resolved: readonly NodePairingLeaseResolution[],
-  ): NodeSession[] {
-    const connected: NodeSession[] = [];
+  ): PairingBoundNodeSession[] {
+    const connected: PairingBoundNodeSession[] = [];
     let invalidatedPresence = false;
     for (const result of resolved) {
       if (result.status === "current") {
@@ -690,12 +684,7 @@ export class NodeRegistry {
     forgetNodeRunnerInventory(this, node.connId);
     removeConnectedNodePluginTools(node.nodeId);
     removeRemoteNodeSkills(node.nodeId);
-    this.invokeStreams.handleDisconnect(node.connId);
-    for (const [key, event] of this.authorizedSystemRunEvents) {
-      if (event.connId === node.connId) {
-        this.authorizedSystemRunEvents.delete(key);
-      }
-    }
+    this.disconnectSessionInvokes(node.connId);
     reconcileNodeRunnerAvailability(this, node.nodeId);
     this.options.onPairingInvalidated?.({ nodeId: node.nodeId, connId: node.connId });
     return node.lastActiveAtMs !== undefined;
@@ -755,10 +744,7 @@ export class NodeRegistry {
     const resolution = await this.resolvePairingLease(this.capturePairingLease(initial), {
       invalidateStale: true,
     });
-    if (resolution.status === "stale" && resolution.presenceInvalidated) {
-      this.publishActiveNodeContext();
-    }
-    return resolution.status === "current";
+    return this.projectNodePairingLeaseResolutions([resolution]).length > 0;
   }
 
   private clearDesktopAvailability(node: NodeSession): void {
@@ -920,28 +906,15 @@ export class NodeRegistry {
         resolve(currentConnectionResult(result));
       };
       const onPong = () => finish({ ok: true });
-      const onClose = () =>
-        finish({
-          ok: false,
-          error: { code: "NOT_CONNECTED", message: "node socket closed during connectivity check" },
-        });
+      const fail = (code: string, message: string) =>
+        finish({ ok: false, error: { code, message } });
+      const onClose = () => fail("NOT_CONNECTED", "node socket closed during connectivity check");
       const onError = (err: unknown) =>
-        finish({
-          ok: false,
-          error: {
-            code: "UNAVAILABLE",
-            message:
-              err instanceof Error ? err.message : "node socket error during connectivity check",
-          },
-        });
-      const timer = setTimeout(
-        () =>
-          finish({
-            ok: false,
-            error: { code: "TIMEOUT", message: "node connectivity check timed out" },
-          }),
-        timeout,
-      );
+        fail(
+          "UNAVAILABLE",
+          err instanceof Error ? err.message : "node socket error during connectivity check",
+        );
+      const timer = setTimeout(() => fail("TIMEOUT", "node connectivity check timed out"), timeout);
 
       socket.once("pong", onPong);
       socket.once("close", onClose);
@@ -949,20 +922,11 @@ export class NodeRegistry {
       try {
         socket.ping(undefined, false, (err?: Error) => {
           if (err) {
-            finish({
-              ok: false,
-              error: { code: "UNAVAILABLE", message: err.message },
-            });
+            fail("UNAVAILABLE", err.message);
           }
         });
       } catch (err) {
-        finish({
-          ok: false,
-          error: {
-            code: "UNAVAILABLE",
-            message: err instanceof Error ? err.message : "node ping failed",
-          },
-        });
+        fail("UNAVAILABLE", err instanceof Error ? err.message : "node ping failed");
       }
     });
   }
@@ -1126,8 +1090,18 @@ export class NodeRegistry {
     sessionKey: string;
     terminal: boolean;
   }): boolean {
+    return this.authorizeSystemRunEventWithState(params) !== null;
+  }
+
+  authorizeSystemRunEventWithState(params: {
+    nodeId: string;
+    connId?: string;
+    runId?: string;
+    sessionKey: string;
+    terminal: boolean;
+  }): Pick<PendingSystemRunEvent, "invocationDeliveryContext"> | null {
     if (!params.connId || !params.sessionKey) {
-      return false;
+      return null;
     }
     const connId = params.connId;
     this.pruneAuthorizedSystemRunEvents();
@@ -1147,12 +1121,13 @@ export class NodeRegistry {
       });
     }
     if (match === null) {
-      return false;
+      return null;
     }
+    const source = this.authorizedSystemRunEvents.get(match)?.invocationDeliveryContext;
     if (params.terminal) {
       this.authorizedSystemRunEvents.delete(match);
     }
-    return true;
+    return source ? { invocationDeliveryContext: { ...source } } : {};
   }
 
   private rememberAuthorizedSystemRunEvent(
@@ -1161,23 +1136,24 @@ export class NodeRegistry {
     this.pruneAuthorizedSystemRunEvents();
     const authorized: AuthorizedSystemRunEvent = {
       ...event,
-      expiresAtMs: this.authorizedSystemRunEventExpiresAt(event.timeoutMs),
+      expiresAtMs: authorizedSystemRunEventExpiresAt(event.timeoutMs),
     };
-    this.authorizedSystemRunEvents.set(this.authorizedSystemRunEventKey(authorized), authorized);
+    this.authorizedSystemRunEvents.set(authorizedSystemRunEventKey(authorized), authorized);
   }
 
   private forgetAuthorizedSystemRunEvent(
     event: Omit<AuthorizedSystemRunEvent, "expiresAtMs">,
   ): void {
-    this.authorizedSystemRunEvents.delete(this.authorizedSystemRunEventKey(event));
+    this.authorizedSystemRunEvents.delete(authorizedSystemRunEventKey(event));
   }
 
-  private authorizedSystemRunEventExpiresAt(timeoutMs: number | null | undefined): number | null {
-    if (typeof timeoutMs !== "number") {
-      return null;
+  private disconnectSessionInvokes(connId: string): void {
+    this.invokeStreams.handleDisconnect(connId);
+    for (const [key, event] of this.authorizedSystemRunEvents) {
+      if (event.connId === connId) {
+        this.authorizedSystemRunEvents.delete(key);
+      }
     }
-    const durationMs = addTimerTimeoutGraceMs(timeoutMs, AUTHORIZED_SYSTEM_RUN_EVENT_GRACE_MS);
-    return resolveExpiresAtMsFromDurationMs(durationMs) ?? 0;
   }
 
   private matchAuthorizedSystemRunEvent(params: {
@@ -1228,15 +1204,6 @@ export class NodeRegistry {
     }
   }
 
-  private authorizedSystemRunEventKey(params: {
-    nodeId: string;
-    connId: string;
-    runId: string;
-    sessionKey?: string;
-  }): string {
-    return `${params.nodeId}\0${params.connId}\0${params.sessionKey ?? ""}\0${params.runId}`;
-  }
-
   handleInvokeResult(params: NodeInvokeResultParams): boolean {
     return this.invokeStreams.handleResult(params);
   }
@@ -1282,13 +1249,8 @@ export class NodeRegistry {
     const resolution = await this.resolvePairingLease(this.capturePairingLease(initial), {
       invalidateStale: true,
     });
-    if (resolution.status !== "current") {
-      if (resolution.status === "stale" && resolution.presenceInvalidated) {
-        this.publishActiveNodeContext();
-      }
-      return false;
-    }
-    return this.sendEventToSession(resolution.session, params.event, params.payload);
+    const [node] = this.projectNodePairingLeaseResolutions([resolution]);
+    return node ? this.sendEventToSession(node, params.event, params.payload) : false;
   }
 
   /** Sends only to a session that still owns the requested persistent pairing generation. */
@@ -1311,13 +1273,10 @@ export class NodeRegistry {
           const resolution = await this.resolvePairingLease(this.capturePairingLease(node), {
             invalidateStale: true,
           });
-          if (resolution.status !== "current") {
-            if (resolution.status === "stale" && resolution.presenceInvalidated) {
-              this.publishActiveNodeContext();
-            }
+          node = this.projectNodePairingLeaseResolutions([resolution])[0];
+          if (!node) {
             return false;
           }
-          node = resolution.session;
         }
         // Select stream baselines after queued sends and pairing verification settle.
         const prepared = preparePayload?.(node.connId);

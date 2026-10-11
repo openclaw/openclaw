@@ -13,7 +13,7 @@ export function isColdArchivedSessionRow(row: records.Row) {
 export function createSessionRowProjectionArchive(params: {
   rows: ReadonlyMap<string, records.Row>;
   dirty: Set<string>;
-  enqueue: (id: string, change?: SessionRowChange) => void;
+  invalidateTranscript: (id: string) => void;
   put: (row: records.Row) => void;
   release: (id: string) => void;
   invalidateFacts: (row: records.Row) => void;
@@ -104,15 +104,7 @@ export function createSessionRowProjectionArchive(params: {
       const id = records.identity(row);
       params.put(row);
       params.dirty.add(id);
-      params.enqueue(id);
       return undefined;
-    },
-    isCurrentMaterialization(row: records.Row) {
-      const current = params.rows.get(records.identity(row));
-      return (
-        records.ready(current) &&
-        (current.entry.archivedAt === undefined || current.materialized === row.materialized)
-      );
     },
     invalidateRows(
       change: Extract<SessionRowChange, { all: true }>,
@@ -146,7 +138,13 @@ export function createSessionRowProjectionArchive(params: {
           continue;
         }
         params.dirty.add(records.identity(row));
-        params.enqueue(records.identity(row), change);
+        if (
+          typeof change.scope !== "string" ||
+          change.factsInvalidated ||
+          ((change.scope === "config" || change.scope === "catalog") && row.entry?.fallbackNotice)
+        ) {
+          params.invalidateTranscript(records.identity(row));
+        }
       }
     },
     setPageSize: (size: number) => {

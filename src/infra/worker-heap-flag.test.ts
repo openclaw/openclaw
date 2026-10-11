@@ -1,58 +1,60 @@
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { expect, it } from "vitest";
-import { hasProcessHeapFlag } from "../../worker-heap-flag.mjs";
-import { resolveCatalogWorkerHeapLimitMb } from "../agents/prepared-model-catalog-worker.pool.js";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
 
-const moduleUrl = new URL("../../worker-heap-flag.mjs", import.meta.url).href;
+const factoryUrl = new URL("./worker-cpu.ts", import.meta.url).href;
+const preload = fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url));
+const probe = `
+  import { getHeapStatistics } from "node:v8";
+  import { once } from "node:events";
+  const before = getHeapStatistics().heap_size_limit;
+  const { createCpuTrackedWorker } = await import(${JSON.stringify(factoryUrl)});
+  const worker = createCpuTrackedWorker(
+    'require("node:worker_threads").parentPort.postMessage(require("node:v8").getHeapStatistics().heap_size_limit)',
+    { eval: true, execArgv: [], env: {}, resourceLimits: { maxOldGenerationSizeMb: 128 } },
+  );
+  const [limit] = await once(worker, "message");
+  await worker.terminate();
+  console.log([before, getHeapStatistics().heap_size_limit, limit].join(","));
+`;
 
-function workerHeapLimitMb(env: NodeJS.ProcessEnv): number {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-heap-flag-"));
-  try {
-    const worker = path.join(dir, "worker.cjs");
-    fs.writeFileSync(
-      worker,
-      "require('node:worker_threads').parentPort.postMessage(require('node:v8').getHeapStatistics().heap_size_limit);",
-    );
-    const main = path.join(dir, "main.mjs");
-    fs.writeFileSync(
-      main,
-      [
-        `await import(${JSON.stringify(moduleUrl)});`,
-        `const { Worker } = await import("node:worker_threads");`,
-        `const w = new Worker(${JSON.stringify(worker)}, { resourceLimits: { maxOldGenerationSizeMb: 512 } });`,
-        `w.once("message", (m) => { console.log(Math.round(m / 1048576)); void w.terminate(); });`,
-      ].join("\n"),
-    );
-    const result = spawnSync(process.execPath, [main], {
-      env: { ...process.env, NODE_OPTIONS: "--max-old-space-size=4096", ...env },
+function measure(flags: string[], nodeOptions = "") {
+  return execFileSync(
+    process.execPath,
+    [...flags, "--import", preload, "--input-type=module", "-e", probe],
+    {
+      env: { ...process.env, NODE_OPTIONS: nodeOptions },
       encoding: "utf8",
-    });
-    expect(result.status).toBe(0);
-    return Number(result.stdout.trim());
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+    },
+  )
+    .trim()
+    .split(",")
+    .map(Number);
 }
 
-it("detects heap flags in NODE_OPTIONS and execArgv", () => {
-  expect(hasProcessHeapFlag({ NODE_OPTIONS: "--max-old-space-size=4096" }, [])).toBe(true);
-  expect(hasProcessHeapFlag({}, ["--max_old_space_size=4096"])).toBe(true);
-  expect(hasProcessHeapFlag({ NODE_OPTIONS: "--dns-result-order=ipv4first" }, [])).toBe(false);
-});
+describe.skipIf(Boolean(process.versions.bun))("worker heap limits", () => {
+  it.each([
+    ["argv", ["--max-old-space-size=1024"], ""],
+    ["environment", [], "--max-old-space-size=1024"],
+    ["total heap", ["--max-heap-size=1024"], ""],
+    ["percentage", ["--max-old-space-size-percentage=50"], ""],
+    ["underscore spelling", ["--max_old_space_size=1024"], ""],
+  ])(
+    "enforces worker limits with %s while preserving the main heap",
+    (_name, flags, nodeOptions) => {
+      const [before, after, worker] = measure(flags, nodeOptions);
+      expect(after).toBe(before);
+      expect(worker).toBeGreaterThanOrEqual(128 * 1024 * 1024);
+      expect(worker).toBeLessThan(512 * 1024 * 1024);
+    },
+  );
 
-it("lets worker resourceLimits apply under a process-wide heap flag", () => {
-  expect(workerHeapLimitMb({})).toBeLessThan(1024);
-});
-
-it("keeps the old behaviour when opted out", () => {
-  expect(workerHeapLimitMb({ OPENCLAW_WORKER_HEAP_FLAG_RESET: "0" })).toBeGreaterThan(4000);
-});
-
-it("bounds the catalog worker heap override", () => {
-  expect(resolveCatalogWorkerHeapLimitMb({})).toBe(512);
-  expect(resolveCatalogWorkerHeapLimitMb({ OPENCLAW_CATALOG_WORKER_HEAP_MB: "2048" })).toBe(2048);
-  expect(resolveCatalogWorkerHeapLimitMb({ OPENCLAW_CATALOG_WORKER_HEAP_MB: "64" })).toBe(512);
+  it.each(["--freeze-flags-after-init", "--abort-on-contradictory-flags"])(
+    "keeps the process alive with %s",
+    (flag) => {
+      const [before, after, worker] = measure(["--max-old-space-size=1024", flag]);
+      expect(after).toBe(before);
+      expect(worker).toBe(before);
+    },
+  );
 });

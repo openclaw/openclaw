@@ -221,7 +221,7 @@ describe("worker session placement store", () => {
         claimId: workerClaim.claimId,
         runId: workerClaim.runId,
       }),
-    ).rejects.toThrow("already has an active turn claim");
+    ).resolves.toEqual(workerClaim);
     await expect(
       store.fail({
         sessionId: SESSION.sessionId,
@@ -283,7 +283,7 @@ describe("worker session placement store", () => {
     expect(store.get(localIdentity.sessionId)?.turnClaim).toBeNull();
     expect(store.validateTurnClaim(workerClaim)).toBe(true);
     expect(
-      store.adoptActive({
+      await store.adoptActive({
         sessionId: SESSION.sessionId,
         environmentId: active.environmentId,
         ownerEpoch: active.activeOwnerEpoch,

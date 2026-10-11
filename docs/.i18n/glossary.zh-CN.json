@@ -4012,6 +4012,10 @@
     "target": "标准场景覆盖"
   },
   {
+    "source": "Scenario coverage",
+    "target": "场景覆盖"
+  },
+  {
     "source": "Channel QA reference",
     "target": "通道 QA 参考"
   },
@@ -5030,5 +5034,9 @@
   {
     "source": "Worker-local inference",
     "target": "工作器本地推理"
+  },
+  {
+    "source": "Recommended models",
+    "target": "推荐模型"
   }
 ]

@@ -1,10 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
+import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/types.js";
 import { resolveSessionParentSessionKey } from "../channels/plugins/session-conversation.js";
 import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-model-sources.js";
 import type { SessionEntryPublicationSource } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import type { SessionTitleFields } from "../config/sessions/session-history-read.types.js";
 import type { SessionRowDatabaseFacts } from "../config/sessions/session-row-facts.types.js";
+import type { SessionTranscriptAuthority } from "../config/sessions/session-transcript-authority.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import type {
   InternalSessionEntry as SessionEntry,
@@ -12,7 +14,9 @@ import type {
 } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
+import type { PluginStateReadDependency } from "../plugin-state/plugin-state-publication.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import { resolveSessionPinnedHarnessId } from "../sessions/agent-harness-session-key.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import type { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { compareSessionEntryPairs } from "./session-list-order.js";
@@ -34,18 +38,37 @@ export type ProjectionOptions = {
 
 export type PreparedSessionRowDatabaseFacts = SessionRowDatabaseFacts & {
   acpMeta: SessionAcpMeta | null;
+  runtimeOwnership: AgentHarnessSessionRuntimeOwnership | null;
+  runtimeOwnershipDependencies: readonly PluginStateReadDependency[];
   repositoryWorkspace: SessionRepositoryWorkspaceRecord | null;
 };
 
 /** Undefined shared facets await their owner; null is acknowledged absence. */
 export type RetainedSessionRowDatabaseFacts = SessionRowDatabaseFacts &
-  Partial<Pick<PreparedSessionRowDatabaseFacts, "acpMeta" | "repositoryWorkspace">>;
+  Partial<
+    Pick<
+      PreparedSessionRowDatabaseFacts,
+      "acpMeta" | "runtimeOwnership" | "runtimeOwnershipDependencies" | "repositoryWorkspace"
+    >
+  >;
 
 export function isPreparedSessionRowDatabaseFacts(
   facts: RetainedSessionRowDatabaseFacts | undefined,
 ): facts is PreparedSessionRowDatabaseFacts {
   return (
-    facts !== undefined && facts.acpMeta !== undefined && facts.repositoryWorkspace !== undefined
+    facts !== undefined &&
+    facts.acpMeta !== undefined &&
+    facts.runtimeOwnership !== undefined &&
+    facts.runtimeOwnershipDependencies !== undefined &&
+    facts.repositoryWorkspace !== undefined
+  );
+}
+
+/** Opaque legacy/external ownership must be prepared again whenever its row becomes dirty. */
+export function canRetainSessionRowRuntimeOwnership(facts: PreparedSessionRowDatabaseFacts) {
+  return (
+    facts.runtimeOwnershipDependencies.length > 0 ||
+    resolveSessionPinnedHarnessId(facts.entry) === undefined
   );
 }
 
@@ -68,8 +91,12 @@ export type Row = {
   pendingDatabaseFacts?: PreparedSessionRowDatabaseFacts;
   /** Presentation retains certified facets until their owner publishes or the row is demoted. */
   retainedDatabaseFacts?: RetainedSessionRowDatabaseFacts;
+  /** Exact committed transcript receipt; notifications cannot advance its watermark. */
+  transcriptAuthority?: SessionTranscriptAuthority;
   /** Durable search metadata survives archive demotion, until its owner invalidates it. */
   preparedAcpMeta?: SessionAcpMeta | null;
+  preparedRuntimeOwnership?: AgentHarnessSessionRuntimeOwnership | null;
+  runtimeOwnershipDependencies?: readonly PluginStateReadDependency[];
   databaseFactsRevision: number;
   publishedSource?: SessionEntryPublicationSource;
   /** Category uncertainty keeps identity resident; earlier structural uncertainty dominates. */
@@ -155,14 +182,10 @@ export const identity = (row: RowTarget) =>
 export const physical = (storePath: string, key: string) => `physical:${storePath}\0${key}`;
 const logical = (agentId: string, key: string) => `logical:${agentId}\0${key}`;
 export function dependents(row: Row, byParent: ReadonlyMap<string, Set<string>>) {
-  const children = new Set(byParent.get(logical(row.agentId, row.key)));
-  const physicalChildren = byParent.get(physical(row.storeTarget.storePath, row.key));
-  if (physicalChildren) {
-    for (const id of physicalChildren) {
-      children.add(id);
-    }
-  }
-  return children;
+  return new Set([
+    ...(byParent.get(logical(row.agentId, row.key)) ?? []),
+    ...(byParent.get(physical(row.storeTarget.storePath, row.key)) ?? []),
+  ]);
 }
 export function markRelated(
   row: Row,
@@ -216,18 +239,26 @@ export function markAutomation(
 ) {
   for (const row of rows) {
     if (!agentId || row.agentId === agentId) {
-      invalidateDatabaseFacts(row);
       dirty.add(identity(row));
     }
   }
 }
 
-/** Expire both accepted facts and worker replies still waiting to enter this row. */
-export function invalidateDatabaseFacts(row: Row) {
+/** Expire accepted facts and pending replies, retaining only independently certified facets. */
+export function invalidateDatabaseFacts(row: Row, retained?: RetainedSessionRowDatabaseFacts) {
   row.databaseFactsRevision++;
   row.pendingDatabaseFacts = undefined;
-  row.retainedDatabaseFacts = undefined;
-  row.preparedAcpMeta = undefined;
+  row.retainedDatabaseFacts = retained;
+  row.preparedAcpMeta = retained?.acpMeta;
+  if (
+    !retained ||
+    retained.activitySummaryWatermark?.generation !== row.transcriptAuthority?.generation ||
+    retained.activitySummaryWatermark?.maxSeq !== row.transcriptAuthority?.rawSeq
+  ) {
+    row.transcriptAuthority = undefined;
+  }
+  row.preparedRuntimeOwnership = retained?.runtimeOwnership;
+  row.runtimeOwnershipDependencies = retained?.runtimeOwnershipDependencies;
 }
 
 export function create(target: RowTarget, entry?: SessionEntry): Row {
@@ -337,7 +368,10 @@ export function renewGeneration(row: Row): Row {
     storedEntry: undefined,
     pendingDatabaseFacts: undefined,
     retainedDatabaseFacts: undefined,
+    transcriptAuthority: undefined,
     preparedAcpMeta: undefined,
+    preparedRuntimeOwnership: undefined,
+    runtimeOwnershipDependencies: undefined,
     unresolvedDatabaseFacts: undefined,
     publishedSource: undefined,
     sharingEntry: undefined,
@@ -413,10 +447,9 @@ export function first(candidates: Row[], storePaths: Iterable<string>) {
     return candidates[0];
   }
   for (const sourcePath of storePaths) {
-    for (const row of candidates) {
-      if (row.storeTarget.storePath === sourcePath) {
-        return row;
-      }
+    const row = candidates.find((candidate) => candidate.storeTarget.storePath === sourcePath);
+    if (row) {
+      return row;
     }
   }
   return undefined;
@@ -578,6 +611,7 @@ export function dematerialize(row: Row): Row {
     facts: undefined,
     pendingDatabaseFacts: undefined,
     retainedDatabaseFacts: undefined,
+    transcriptAuthority: undefined,
     databaseFactsRevision: row.databaseFactsRevision + 1,
     membership: new Set<string>(),
     lastMessagePreview: undefined,
@@ -600,11 +634,8 @@ export function readSessionRowParents(
   };
   addParent(storedEntry.parentSessionKey ?? resolveSessionParentSessionKey(row.key));
   addParent(storedEntry.spawnedBy);
-  const runs = context.subagentRunsByChildSessionKey.get(row.key);
-  if (runs) {
-    for (const run of runs) {
-      addParent(run.controllerSessionKey || run.requesterSessionKey);
-    }
+  for (const run of context.subagentRunsByChildSessionKey.get(row.key) ?? []) {
+    addParent(run.controllerSessionKey || run.requesterSessionKey);
   }
   return parents;
 }
@@ -667,13 +698,14 @@ export function acquireSessionRowEntry(params: {
       row.entry.lifecycleRevision === entry.lifecycleRevision)
       ? row.generation
       : Symbol("row");
+  const retainedDatabaseFacts =
+    row.retainedDatabaseFacts?.entry === storedEntry ? row.retainedDatabaseFacts : undefined;
   let next: Row = {
     ...row,
     storedEntry,
     pendingDatabaseFacts: undefined,
-    retainedDatabaseFacts:
-      row.retainedDatabaseFacts?.entry === storedEntry ? row.retainedDatabaseFacts : undefined,
-    databaseFactsRevision: row.databaseFactsRevision + 1,
+    retainedDatabaseFacts,
+    databaseFactsRevision: row.databaseFactsRevision + (retainedDatabaseFacts ? 0 : 1),
     ...lineage,
     sharingEntry: storedEntry,
     generation,
@@ -684,10 +716,13 @@ export function acquireSessionRowEntry(params: {
         : undefined,
     ...(generation !== row.generation
       ? {
+          transcriptAuthority: undefined,
           lastMessagePreview: undefined,
           fallbackModel: undefined,
           materialized: undefined,
           preparedAcpMeta: undefined,
+          preparedRuntimeOwnership: undefined,
+          runtimeOwnershipDependencies: undefined,
         }
       : {}),
   };

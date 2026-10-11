@@ -37,6 +37,9 @@ describe("command-startup-policy", () => {
       ["config", "file"],
       ["config", "validate"],
       ["config", "schema"],
+      ["config", "set"],
+      ["config", "patch"],
+      ["config", "unset"],
       ["docs"],
       ["reset"],
       ["uninstall"],
@@ -44,6 +47,8 @@ describe("command-startup-policy", () => {
       ["status"],
       ["triage"],
       ["agents", "bindings"],
+      ["agents", "add"],
+      ["agents", "team", "create"],
       ["approvals", "pending"],
       ["skills"],
       ["skills", "list"],
@@ -65,6 +70,7 @@ describe("command-startup-policy", () => {
       ["gateway", "diagnostics", "export"],
       ["gateway", "stability"],
       ["gateway", "usage-cost"],
+      ["gateway", "call"],
     ]) {
       expect(resolvePolicy({ commandPath }).skipConfigGuard, commandPath.join(" ")).toBe(true);
     }
@@ -80,7 +86,6 @@ describe("command-startup-policy", () => {
         commandPath: ["agent"],
       }).skipConfigGuard,
     ).toBe(false);
-    expect(resolvePolicy({ commandPath: ["config", "set"] }).skipConfigGuard).toBe(false);
     for (const flag of ["--index", "--fix"]) {
       expect(
         resolvePolicy({
@@ -97,7 +102,6 @@ describe("command-startup-policy", () => {
       ["nodes", "remove"],
       ["devices", "approve"],
       ["devices", "remove"],
-      ["gateway", "call"],
       ["gateway", "suspend"],
       ["gateway", "resume"],
     ]) {
@@ -157,12 +161,11 @@ describe("command-startup-policy", () => {
       expect(entry.policy?.configGuard, entry.commandPath.join(" ")).toBeDefined();
       for (const jsonOutputMode of [false, true]) {
         const argv = ["node", "openclaw", ...entry.commandPath];
-        const expectedSkip = entry.commandPath.join(" ") !== "config unset";
         expect(
           resolveCliStartupPolicy({ argv, commandPath: [...entry.commandPath], jsonOutputMode })
             .skipConfigGuard,
           entry.commandPath.join(" "),
-        ).toBe(expectedSkip);
+        ).toBe(true);
       }
     }
   });
@@ -201,6 +204,8 @@ describe("command-startup-policy", () => {
       { commandPath: ["agents", "list"] },
       { commandPath: ["agents", "list"], jsonOutputMode: true },
       { commandPath: ["agents", "bind"] },
+      { commandPath: ["agents", "add"] },
+      { commandPath: ["agents", "team", "create"] },
       { commandPath: ["agents", "bindings"], jsonOutputMode: true },
       { commandPath: ["agents", "unbind"] },
       { commandPath: ["agents", "set-identity"] },

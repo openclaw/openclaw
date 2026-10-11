@@ -26,6 +26,10 @@ import { normalizeBoardId, normalizeBoardIdRequired } from "./store-normalizers.
 import { freezeCardList, readCards } from "./store-read.js";
 import { WorkboardStoreRuntime } from "./store-runtime.js";
 
+function emptyBoardSummary(id: string): WorkboardBoardSummary {
+  return { id, total: 0, active: 0, archived: 0, byStatus: {} };
+}
+
 export class WorkboardBoardStore extends WorkboardStoreRuntime {
   protected readonly store: WorkboardCardStore;
   protected readonly boardStore: WorkboardKeyedStore<PersistedWorkboardBoard>;
@@ -40,13 +44,13 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
       sessionsBoard: WorkboardSessionsBoardStore;
       subscriptions: WorkboardSubscriptionStore;
       attachments: WorkboardKeyedStore<PersistedWorkboardAttachment>;
-      ready?: Promise<number>;
-      dataVersion?: () => number | Promise<number>;
+      ready?: Promise<void>;
       close?: () => void | Promise<void>;
       runWithWriteAuthority?: WorkboardWriteAuthority;
+      readWriteToken?: () => string | undefined;
     },
   ) {
-    super(stores.dataVersion, stores.close, stores.ready, stores.runWithWriteAuthority);
+    super(stores.close, stores.ready, stores.runWithWriteAuthority, stores.readWriteToken);
     this.store = this.trackCardStore(store);
     this.boardStore = this.track(stores.boards, { sessions: true });
     this.sessionsBoardStore = stores.sessionsBoard;
@@ -74,37 +78,35 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
   > {
     return this.runOperation(() => {
       const boardId = normalizeBoardId(board);
+      const writeToken = this.refreshWriteReceipt();
+      const revision = this.cardsRevision;
       const cached = this.cardLists.get(boardId);
       if (cached) {
         return cached;
       }
-      const pending = Promise.all([this.list({ boardId }), this.listBoards()])
+      const pending: ReturnType<WorkboardBoardStore["listCards"]> = Promise.all([
+        this.list({ boardId }),
+        this.listBoards(),
+      ])
         .then(([cards, { boards }]) => {
-          // A write or external-change publication during the read retires this
-          // snapshot; readers join the replacement instead of publishing stale data.
-          if (this.cardLists.get(boardId) !== pending) {
-            return this.listCards(boardId);
-          }
           const result = {
             cards: cards.map(redactClaimToken),
             boards,
             statuses: WORKBOARD_STATUSES,
-            revision: { ...this.cardsRevision, ...(boardId === undefined ? {} : { boardId }) },
+            revision: { ...revision, ...(boardId === undefined ? {} : { boardId }) },
           };
           freezeCardList(result);
-          // Arbitrary missing-board queries must not grow the retained cache.
-          if (boardId !== undefined && !boards.some((entry) => entry.id === boardId)) {
-            this.cardLists.delete(boardId);
-          }
+          // A concurrent update may finish this read with older facts; the writer
+          // receipt invalidates them on the next request.
           return result;
         })
         .catch((error: unknown) => {
-          if (this.cardLists.get(boardId) === pending) {
-            this.cardLists.delete(boardId);
-          }
+          this.cardLists.delete(boardId);
           throw error;
         });
-      this.cardLists.set(boardId, pending);
+      if (writeToken !== undefined) {
+        this.cardLists.set(boardId, pending);
+      }
       return pending;
     });
   }
@@ -136,26 +138,12 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
       });
     }
     if (!boards.has("default")) {
-      boards.set("default", {
-        id: "default",
-        total: 0,
-        active: 0,
-        archived: 0,
-        byStatus: {},
-      });
+      boards.set("default", emptyBoardSummary("default"));
     }
     const cardAggregates = await this.store.listBoardAggregates();
     for (const aggregate of cardAggregates) {
       const boardId = aggregate.boardId;
-      const summary =
-        boards.get(boardId) ??
-        ({
-          id: boardId,
-          total: 0,
-          active: 0,
-          archived: 0,
-          byStatus: {},
-        } satisfies WorkboardBoardSummary);
+      const summary = boards.get(boardId) ?? emptyBoardSummary(boardId);
       summary.total += aggregate.total;
       summary.archived += aggregate.archived;
       summary.active += aggregate.total - aggregate.archived;

@@ -39,14 +39,14 @@ base, dependency inputs, and Testbox preparation fingerprint under
 dependencies, preparation, and workflow inputs, including immediately before
 delegation. Source-only edits and commits can reuse that prepared box. The
 allocation receipt remains unchanged, while each command records its current
-source revision and syncs the checkout. A HEAD change during that command's
-preparation still stops delegation; rerun from the current candidate.
+source revision and syncs the checkout. Source edits during preparation are best
+effort; finish editing before starting proof, or rerun from the intended candidate.
 This source-refresh contract belongs to the OpenClaw wrapper's trusted task
 path; it does not permit raw native callers or untrusted proof to reuse a
 lease across revisions.
 Older or missing receipts require stopping the owned lease and allocating a
 fresh one through the wrapper. `OPENCLAW_TESTBOX_ALLOW_STALE` cannot bypass
-these checks. All providers require Crabbox 0.69.0 or newer.
+these checks. All providers require Crabbox 0.73.0 or newer.
 
 The Testbox workflow registers a separate disposable checkout for native sync.
 The hydrated execution workspace stays at its original absolute path, so native
@@ -255,14 +255,15 @@ tracking and the final raw transport tree use separate indexes, preserving the
 same ignored-file and untracked-file selection rules. The wrapper reports copied
 and reused file counts and preparation time.
 Commits on the same retained source ref keep the mirror reusable; each command
-still records its full current witness and rechecks the source revision before sealing.
+records its captured source witness.
 
 The mirror remains exclusively locked for the entire command, including artifact
 preservation and lease-claim restoration. An overlapping run from the same worktree
 prints a message and builds an independent fresh capsule. Only completed cleanup
 records an idle mirror for reuse; a missing witness, unsupported staging location,
-or unresolved owner uses fresh staging. Changed source during freezing fails the
-run. Cache metadata, payload, witness repository or ref, or Git-version mismatches
+or unresolved owner uses fresh staging. Avoid editing source during freezing;
+the capsule uses its captured selection and bytes without a final source rescan.
+Cache metadata, payload, witness repository or ref, or Git-version mismatches
 rebuild cold before upload. Source enumeration and metadata checks still scale with the repository;
 source-byte copying and hashing scale with changed files on warm runs.
 Private mirrors disable Git hooks and fsmonitor; source enumeration also disables
@@ -389,16 +390,61 @@ missing or unconnected objects.
 Recovery does not create backup repositories, archives, or permanent refs. A stage's
 own Git objects or bundle do not count as another copy. Live or uncertain owners,
 unrecorded writer settlement, interrupted recovery ownership, substituted metadata,
-other boot/process namespaces, and historical unmarked directories remain protected.
-Recovery is limited to the same boot and a known PID namespace; even a reboot of
-the same computer leaves earlier copies protected. Full worktrees also remain
+other hosts or PID namespaces, and historical unmarked directories remain protected.
+New receipts record platform, stable host identity, boot ID, and PID namespace.
+A different boot on the same host and PID namespace proves the old producer is
+absent; recovery does not probe its potentially recycled PID. Same-boot recovery
+still checks PID absence. Missing host provenance and legacy domain mismatches
+remain protected unless explicitly qualified below.
+Idle mirrors retain their separate exclusive-lock recovery contract. Directory
+ownership records include the canonical path, inode, birthtime, and macOS volume
+UUID, so APFS device-number changes across reboots do not invalidate that identity.
+Legacy device/inode records accept a macOS device-only change only when the
+directory predates its receipt and the existing path and ownership checks pass.
+Inspection never rewrites receipts; successful owner updates persist the stronger
+identity and retain the original timestamp bound for remaining legacy evidence.
+Changed identities, unknown siblings, and incomplete metadata remain protected.
+If a recorded volume UUID cannot currently be verified, recovery also remains
+protected until the OS volume lookup succeeds.
+Full worktrees also remain
 protected because hooks, filters, and raw source require separate proof. Their
 ordinary cleanup retains the remaining staging if exact Git registration removal
 fails, including its receipt when registration was eligible. Repo-local copies
-remain unmarked. There is no global worktree prune or force-recovery option.
+remain unmarked. There is no global worktree prune or blanket force-recovery option.
+
+For one legacy capsule from an earlier boot of this host, inspect eligibility first:
+
+```bash
+node scripts/crabbox-wrapper.mjs staging inspect <id> --same-host-prior-boot
+```
+
+This is read-only: it does not create locks, update receipts, preserve outputs, or
+delete staging. It returns `eligible`, the exact `receiptSha256`, and any refusal.
+Only after reviewing that specific copy, confirm the same host and prior boot:
+
+```bash
+node scripts/crabbox-wrapper.mjs staging recover <id> \
+  --confirm-same-host-prior-boot --receipt-sha256 <digest-from-inspection>
+```
+
+Confirmation requires a pre-boot receipt mtime, a different legacy domain when
+recorded, current host/boot evidence, and matching UUID-backed sync-root and
+directory identities. UUID-unavailable filesystems cannot use this legacy path.
+The original timestamp is retained across confirmed retries; each retry still
+requires a new explicit confirmation bound to the current receipt bytes.
+The confirmation is recorded in the receipt and command result, never reused as
+automatic authorization. It does not replace metadata completeness, settlement,
+native-claim, independent-source, or diagnostic-preservation checks.
+
+Recovery checks local users with bounded `lsof` scans and refuses live users,
+incomplete output, or unavailable inspection. Only the recovery process's exact
+held mirror-lock file is exempt. Recovery reacquires its exclusive locks and
+revalidates receipt, identities, and producer-absence evidence after awaited work.
+Per-ID `staging inspect <id>` also previews ordinary recovery; idle mirrors and
+completed disposal records retain their separate slot-locked workflow.
 
 Source-transfer commands inspect at most 64 bounded headers with a 250-ms soft
-discovery budget. This scan does not hash payloads, search Git history, or query a
+discovery budget after the initial volume lookup. This scan does not hash payloads, search Git history, or query a
 provider. A temporary cursor advances subsequent scans past protected entries;
 `staging inspect --after <nextCursor>` also pages the local report. After successful
 normal completion the wrapper attempts at most one discovered candidate. Help,

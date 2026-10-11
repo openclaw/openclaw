@@ -69,7 +69,7 @@ run:
 4. Add eligible client tools supplied for the current run.
 5. Keep core coding primitives and direct-only tools model-visible and index
    compact descriptors for the remaining catalog-eligible tools.
-6. Add a deterministic, bounded, policy-filtered capability directory to the
+6. Add a size-limited capability directory selected by fixed rules and filtered by policy to the
    cache-stable system-prompt prefix.
 7. Expose the structured search, describe, and call tools or the compact
    directory surface alongside those stable, directly callable tools.
@@ -478,7 +478,7 @@ benchmark.
 
 ## Failure behavior
 
-Tool Search should fail closed:
+Tool Search should reject unavailable or disallowed tools:
 
 - if a tool is not in the effective policy, search should not return it
 - if a selected tool becomes unavailable, `tool_call` should fail
