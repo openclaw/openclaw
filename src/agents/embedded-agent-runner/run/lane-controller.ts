@@ -1,4 +1,5 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import { createAbortError } from "../../../infra/abort-signal.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
@@ -49,6 +50,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
   sessionLane: string;
   setLifecycleGeneration: (generation: string) => void;
   setParams: (params: TParams) => void;
+  onSessionWriterClaimed?: (entry: InternalSessionEntry) => void;
 }) {
   const initialParams = options.getParams();
   const taskIdentity: CommandQueueEnqueueOptions["taskIdentity"] = {
@@ -361,6 +363,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
           },
         };
         options.setParams(params);
+        options.onSessionWriterClaimed?.(writerClaim.entry);
       }
       return await withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
         withSessionPlacementTurnAdmission(

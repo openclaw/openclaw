@@ -1,34 +1,18 @@
 // Talk provider resolver tests cover provider selection from config.
 import { describe, expect, it, vi } from "vitest";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
+import type { InternalRealtimeVoiceProviderApi } from "./provider-internal.js";
 import {
   resolveConfiguredRealtimeVoiceProvider,
-  resolveRealtimeVoiceProviderCapabilities,
+  resolveConfiguredRealtimeVoiceProviderAsync,
+  resolveRealtimeVoiceProviderCapabilitiesAsync,
 } from "./provider-resolver.js";
 
 const INTERNAL_REALTIME_VOICE_PROVIDER = Symbol.for("openclaw.internal.realtime-voice-provider.v1");
 
 function attachInternalRealtimeVoiceProviderApi(
   provider: RealtimeVoiceProviderPlugin,
-  api: {
-    isBrowserSessionConfigured: (ctx: {
-      providerConfig: Record<string, unknown>;
-      agentId?: string;
-    }) => boolean;
-    resolveBrowserSessionCapabilities?: (ctx: {
-      providerConfig: Record<string, unknown>;
-      agentId?: string;
-      model?: string;
-    }) => object;
-    isGatewayRelayConfigured?: (ctx: {
-      providerConfig: Record<string, unknown>;
-      agentId?: string;
-    }) => boolean | undefined;
-    resolveGatewayRelayCapabilities?: (ctx: {
-      providerConfig: Record<string, unknown>;
-      model?: string;
-    }) => object;
-  },
+  api: InternalRealtimeVoiceProviderApi,
 ): void {
   Object.defineProperty(provider, INTERNAL_REALTIME_VOICE_PROVIDER, {
     configurable: true,
@@ -77,6 +61,100 @@ describe("realtime voice provider resolver", () => {
       },
     });
   });
+
+  it("awaits async provider hooks in priority order and applies session overrides", async () => {
+    const legacyHook = vi.fn(() => {
+      throw new Error("synchronous credential lookup must not run");
+    });
+    const attempted: string[] = [];
+    const asyncProviders: RealtimeVoiceProviderPlugin[] = providers.map((provider) => ({
+      ...provider,
+      resolveConfig: legacyHook,
+      isConfigured: legacyHook,
+      resolveConfigAsync: async ({ rawConfig }) => ({ ...rawConfig, resolved: true }),
+      isConfiguredAsync: async ({ providerConfig }) => {
+        attempted.push(provider.id);
+        return providerConfig.enabled === true;
+      },
+    }));
+
+    const resolution = await resolveConfiguredRealtimeVoiceProviderAsync({
+      cfg: {},
+      providers: asyncProviders.toReversed(),
+      defaultModel: "default-model",
+      providerConfigs: { second: { enabled: true, model: "configured-model" } },
+      providerConfigOverrides: { model: "session-model" },
+    });
+
+    expect(attempted).toEqual(["first", "second"]);
+    expect(resolution.provider.id).toBe("second");
+    expect(resolution.providerConfig).toEqual({
+      enabled: true,
+      model: "session-model",
+      resolved: true,
+    });
+    expect(legacyHook).not.toHaveBeenCalled();
+  });
+
+  it("awaits browser readiness and capabilities without reading legacy credentials", async () => {
+    const legacyHook = vi.fn(() => {
+      throw new Error("synchronous browser credential lookup must not run");
+    });
+    const provider: RealtimeVoiceProviderPlugin = {
+      ...providers[0]!,
+      isConfigured: legacyHook,
+    };
+    attachInternalRealtimeVoiceProviderApi(provider, {
+      isBrowserSessionConfigured: legacyHook,
+      resolveBrowserSessionCapabilities: legacyHook,
+      isBrowserSessionConfiguredAsync: async ({ agentId }) => agentId === "voice-agent",
+      resolveBrowserSessionCapabilitiesAsync: async ({ agentId }) => ({
+        transports: ["webrtc"],
+        inputAudioFormats: [],
+        outputAudioFormats: [],
+        supportsGatewayControl: agentId === "voice-agent",
+      }),
+    });
+
+    const resolution = await resolveConfiguredRealtimeVoiceProviderAsync({
+      configuredProviderId: provider.id,
+      providers: [provider],
+      agentId: "voice-agent",
+      surface: "browser-session",
+    });
+
+    expect(resolution.provider).toBe(provider);
+    expect(resolution.capabilities?.supportsGatewayControl).toBe(true);
+    expect(legacyHook).not.toHaveBeenCalled();
+  });
+
+  it.each(["resolveConfigAsync", "isConfiguredAsync"] as const)(
+    "propagates %s rejection without synchronous fallback",
+    async (hook) => {
+      const failure = new Error("credential owner unavailable");
+      const legacyHook = vi.fn(() => true);
+      const legacyResolveConfig = vi.fn(() => ({}));
+      const provider: RealtimeVoiceProviderPlugin = {
+        ...providers[0]!,
+        resolveConfig: legacyResolveConfig,
+        isConfigured: legacyHook,
+        [hook]: async () => {
+          throw failure;
+        },
+      };
+
+      await expect(
+        resolveConfiguredRealtimeVoiceProviderAsync({
+          configuredProviderId: provider.id,
+          providers: [provider],
+        }),
+      ).rejects.toBe(failure);
+      expect(legacyHook).not.toHaveBeenCalled();
+      if (hook === "resolveConfigAsync") {
+        expect(legacyResolveConfig).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("skips unavailable providers before resolving auto-selected config", () => {
     const unavailableResolveConfig = vi.fn(() => {
@@ -384,7 +462,7 @@ describe("realtime voice provider resolver", () => {
     ).toThrow("No configured realtime voice provider registered");
   });
 
-  it("resolves config-specific provider capabilities", () => {
+  it("resolves config-specific provider capabilities", async () => {
     const provider: RealtimeVoiceProviderPlugin = {
       id: "dynamic",
       label: "Dynamic",
@@ -411,14 +489,16 @@ describe("realtime voice provider resolver", () => {
     });
 
     expect(
-      resolveRealtimeVoiceProviderCapabilities({
-        provider,
-        providerConfig: { authMode: "native" },
-        model: "gpt-live-1",
-        surface: "browser-session",
-      })?.supportsVideoFrames,
+      (
+        await resolveRealtimeVoiceProviderCapabilitiesAsync({
+          provider,
+          providerConfig: { authMode: "native" },
+          model: "gpt-live-1",
+          surface: "browser-session",
+        })
+      )?.supportsVideoFrames,
     ).toBe(false);
-    const scopedCapabilities = resolveRealtimeVoiceProviderCapabilities({
+    const scopedCapabilities = await resolveRealtimeVoiceProviderCapabilitiesAsync({
       provider,
       providerConfig: { authMode: "oauth" },
       agentId: "molty",
@@ -428,12 +508,14 @@ describe("realtime voice provider resolver", () => {
     expect(scopedCapabilities?.supportsVideoFrames).toBe(true);
     expect(scopedCapabilities?.supportsGatewayControl).toBe(true);
     expect(
-      resolveRealtimeVoiceProviderCapabilities({
-        provider,
-        providerConfig: { authMode: "oauth" },
-        model: "gpt-live-1",
-        surface: "browser-session",
-      })?.supportsGatewayControl,
+      (
+        await resolveRealtimeVoiceProviderCapabilitiesAsync({
+          provider,
+          providerConfig: { authMode: "oauth" },
+          model: "gpt-live-1",
+          surface: "browser-session",
+        })
+      )?.supportsGatewayControl,
     ).toBe(false);
   });
 });

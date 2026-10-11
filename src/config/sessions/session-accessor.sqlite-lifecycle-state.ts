@@ -139,13 +139,7 @@ export function readReferencedSessionIds(
               /* kysely-allow-raw: substring narrowing retains trimmed current IDs. */ sql<boolean>`instr(current_session_id, ${candidate}) > 0`,
           ),
         ),
-        /* kysely-allow-raw: malformed TEXT and optional fields retain their original reference semantics. */ sql<boolean>`CASE
-          WHEN NOT json_valid(entry_json) THEN 1
-          WHEN length(CAST(entry_json AS BLOB)) != length(CAST(printf('%s', entry_json) AS BLOB)) THEN 1
-          ELSE json_type(entry_json, '$.previousSessionId') IS NOT NULL
-            OR json_type(entry_json, '$.usageFamilySessionIds') IS NOT NULL
-            OR json_type(entry_json, '$.compactionCheckpoints') IS NOT NULL
-        END`,
+        eb("has_optional_references", "=", 1),
       ]),
     );
   }

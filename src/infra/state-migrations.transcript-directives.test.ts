@@ -13,6 +13,7 @@ import { readSessionArchiveContentSync } from "../config/sessions/archive-compre
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "../config/sessions/session-transcript-index.js";
 import { prepareTranscriptPayload } from "../config/sessions/transcript-payload.js";
+import { deriveTranscriptPredicateFields } from "../config/sessions/transcript-predicate-fields.js";
 import {
   AGENT_DATABASE_MAINTENANCE_LEASE,
   assertAgentDatabaseMaintenanceAuthority,
@@ -78,7 +79,13 @@ function messageEvent(params: {
 
 function insertSession(
   database: import("node:sqlite").DatabaseSync,
-  params: { events: FixtureEvent[]; generation: string; sessionId: string; reconcile?: boolean },
+  params: {
+    events: FixtureEvent[];
+    generation: string;
+    sessionId: string;
+    reconcile?: boolean;
+    legacy?: boolean;
+  },
 ): void {
   const sessionKey = `agent:main:${params.sessionId}`;
   database
@@ -100,12 +107,29 @@ function insertSession(
     )
     .run(params.sessionId, params.generation, 1);
   for (const [seq, event] of params.events.entries()) {
-    database
-      .prepare(
-        `INSERT INTO transcript_events(session_id,seq,event_json,created_at)
+    const eventJson = JSON.stringify(event);
+    if (params.legacy) {
+      database
+        .prepare(
+          `INSERT INTO transcript_events(session_id,seq,event_json,created_at)
          VALUES(?,?,?,?)`,
-      )
-      .run(params.sessionId, seq, JSON.stringify(event), Number(event.timestamp ?? 1));
+        )
+        .run(params.sessionId, seq, eventJson, Number(event.timestamp ?? 1));
+    } else {
+      database
+        .prepare(`INSERT INTO transcript_events
+        (session_id,seq,event_json,created_at,navigation_type,navigation_custom_type,
+         navigation_display,message_role,navigation_last_type,navigation_last_custom_type,navigation_valid)
+        VALUES ($sessionId,$seq,$eventJson,$createdAt,$navigation_type,$navigation_custom_type,
+          $navigation_display,$message_role,$navigation_last_type,$navigation_last_custom_type,$navigation_valid)`)
+        .run({
+          sessionId: params.sessionId,
+          seq,
+          eventJson,
+          createdAt: Number(event.timestamp ?? 1),
+          ...deriveTranscriptPredicateFields(eventJson),
+        });
+    }
   }
   if (params.reconcile !== false) {
     reconcileSessionTranscriptIndexInTransaction(database, params.sessionId);
@@ -849,6 +873,7 @@ describe("historical transcript directive migration", () => {
         generation: "before",
         sessionId: sessionIdAt(index),
         reconcile: false,
+        legacy: true,
       });
     }
     opened.db.close();

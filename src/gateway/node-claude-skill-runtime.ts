@@ -12,6 +12,7 @@ import {
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import { registerAgentRunDelegatedAuthorityClosedHandler } from "../infra/agent-run-registry.js";
 import {
@@ -110,7 +111,7 @@ export async function prepareNodeClaudeSkillRuntime(
         void lifetime.catch(ready.reject);
         return ready.promise;
       })()
-    : loadSessionEntryReadOnly(sessionScope);
+    : await readSessionEntryReadOnlyInWorker(sessionScope);
   const placements = gateway.workerSessionPlacementService;
   const readPlacement = () => placements?.getMany([run.sessionId]).get(run.sessionId);
   const placement = await readSessionWorkerPlacementAsync({

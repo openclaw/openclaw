@@ -153,7 +153,7 @@ export function createTelegramInboundPipeline({
       const promptContextMinTimestampMs = asFiniteNumber(
         sessionState.sessionEntry?.sessionStartedAt,
       );
-      const promptContextAmbientWatermark = resolvePromptContextAmbientWatermark({
+      const promptContextAmbientWatermark = await resolvePromptContextAmbientWatermark({
         chatId,
         isGroup,
         resolvedThreadId,

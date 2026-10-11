@@ -103,30 +103,11 @@ const {
       sentAt: 0,
     },
   })),
-  resolveDeliveryTargetMock: vi.fn<typeof deliveryTarget.resolveDeliveryTarget>(
-    async (_cfg, agentId, target) => {
-      const channel = !target.channel || target.channel === "last" ? "telegram" : target.channel;
-      const to = target.to ?? "123";
-      const sessionKey = `agent:${agentId}:${channel}:direct:${to}`;
-      return {
-        ok: true,
-        channel,
-        to,
-        accountId: target.accountId,
-        threadId: target.threadId,
-        mode: "explicit",
-        sessionRoute: {
-          sessionKey,
-          baseSessionKey: sessionKey,
-          peer: { kind: "direct", id: to },
-          chatType: "direct",
-          from: `${channel}:${to}`,
-          to,
-          recipientSessionExact: false,
-        },
-      };
-    },
-  ),
+  resolveDeliveryTargetMock: vi.fn<typeof deliveryTarget.resolveDeliveryTarget>(async (...args) => {
+    const { resolveCronTestDeliveryTarget } =
+      await import("./server-cron.delivery.test-support.js");
+    return resolveCronTestDeliveryTarget(...args);
+  }),
   runCronIsolatedAgentTurnMock: vi.fn<RunCronIsolatedAgentTurnMock>(async () => ({
     status: "ok",
     summary: "ok",
@@ -1978,13 +1959,24 @@ describe("buildGatewayCronService", () => {
   it("does not retry cancelled command output while still notifying terminal failure", async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     let deliverySignal: AbortSignal | undefined;
-    sendCronAnnouncePayloadStrictMock.mockImplementationOnce(async (request) => {
-      deliverySignal = request.abortSignal;
-      expect(abortActiveCronTaskRuns("Cancelled by operator.")).toBe(1);
-      throw new PlatformMessageNotDispatchedError("platform unavailable before dispatch", {
-        cause: new Error("connect ECONNREFUSED"),
+    const failureDelivered = createDeferred();
+    const send = expectDefined(
+      sendCronAnnouncePayloadStrictMock.getMockImplementation(),
+      "cron delivery mock",
+    );
+    sendCronAnnouncePayloadStrictMock
+      .mockImplementationOnce(async (request) => {
+        deliverySignal = request.abortSignal;
+        expect(abortActiveCronTaskRuns("Cancelled by operator.")).toBe(1);
+        throw new PlatformMessageNotDispatchedError("platform unavailable before dispatch", {
+          cause: new Error("connect ECONNREFUSED"),
+        });
+      })
+      .mockImplementationOnce(async (...args) => {
+        const result = await send(...args);
+        failureDelivered.resolve();
+        return result;
       });
-    });
 
     try {
       await withCronService(createCronConfig("cron-cancelled-retry"), async (state) => {
@@ -1993,6 +1985,7 @@ describe("buildGatewayCronService", () => {
           delivery: { mode: "announce", channel: "telegram", to: "123" },
         });
         await state.cron.run(job.id, "force");
+        await failureDelivered.promise;
 
         expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledTimes(2);
         const completion = sendCronAnnouncePayloadStrictMock.mock.calls[0]?.[0];
@@ -2749,7 +2742,7 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("threads cron wake sessionKey through the CronService adapter", () => {
+  it("threads cron wake sessionKey through the CronService adapter", async () => {
     const cfg = {
       session: { mainKey: "main" },
       cron: {
@@ -2765,13 +2758,9 @@ describe("buildGatewayCronService", () => {
     const state = loadCronService(cfg);
     try {
       const sessionKey = "agent:ops:cron:nightly:run:abc-123";
-      expect(
-        state.cron.wake({
-          mode: "now",
-          text: "hello",
-          sessionKey,
-        }),
-      ).toEqual({ ok: true });
+      await expect(state.cron.wake({ mode: "now", text: "hello", sessionKey })).resolves.toEqual({
+        ok: true,
+      });
 
       const enqueueCall = lastMockCall(enqueueSystemEventMock, "enqueue system event");
       const wakeCall = lastMockCall(requestHeartbeatMock, "request heartbeat");
@@ -2798,7 +2787,7 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("routes a targetless cron wake through the configured system agent", () => {
+  it("routes a targetless cron wake through the configured system agent", async () => {
     const cfg = {
       ...createCronConfig("server-cron-system-owner-wake"),
       agents: {
@@ -2808,7 +2797,7 @@ describe("buildGatewayCronService", () => {
     } as OpenClawConfig;
     const state = loadCronService(cfg);
     try {
-      expect(state.cron.wake({ mode: "now", text: "system wake" })).toEqual({ ok: true });
+      expect(await state.cron.wake({ mode: "now", text: "system wake" })).toEqual({ ok: true });
 
       const enqueueCall = lastMockCall(enqueueSystemEventMock, "enqueue system event");
       const wakeCall = lastMockCall(requestHeartbeatMock, "request heartbeat");

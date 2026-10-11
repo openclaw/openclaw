@@ -14,6 +14,7 @@ import type {
   SessionTranscriptWriteScope,
 } from "./session-accessor.sqlite-contract.js";
 import type { SessionActor } from "./session-actor-contract.js";
+import { readSessionActorEntryFacts } from "./session-actor-replica.js";
 import {
   assertSessionEntryCohortScope,
   matchSessionEntryCohortScope,
@@ -25,6 +26,7 @@ import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
 } from "./session-source-authority.js";
+import type { SessionTranscriptAnchorEntry } from "./session-transcript-anchor-read.types.js";
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
 import type {
   InitialSessionTranscriptWriter,
@@ -179,8 +181,7 @@ export function getOwnedSessionTranscriptReader(scope: SessionTranscriptWriteTar
   return reader;
 }
 
-/** Borrow only the actor retained for this exact admitted transcript. */
-export function getOwnedSessionTranscriptActor(
+function findOwnedSessionTranscriptActor(
   scope: SessionTranscriptWriteTarget,
 ): OwnedSessionTranscriptWriteContext["sessionActor"] {
   const context = ownedTranscriptWriteContext.getStore();
@@ -193,11 +194,48 @@ export function getOwnedSessionTranscriptActor(
     context.sessionTarget?.sessionId !== scope.sessionId ||
     context.sessionTarget?.agentId !== scope.agentId
   ) {
-    throw new SessionTranscriptWriterClaimReboundError();
+    return undefined;
   }
   context.assertCommitAllowed?.();
   actor.actor.assertCurrent();
   return actor;
+}
+
+/** Borrow only the actor retained for this exact admitted transcript. */
+export function getOwnedSessionTranscriptActor(
+  scope: SessionTranscriptWriteTarget,
+): OwnedSessionTranscriptWriteContext["sessionActor"] {
+  const actor = findOwnedSessionTranscriptActor(scope);
+  if (!actor && ownedTranscriptWriteContext.getStore()?.sessionActor) {
+    throw new SessionTranscriptWriterClaimReboundError();
+  }
+  return actor;
+}
+
+/** Borrow committed entry facts only while the caller holds the transcript writer FIFO. */
+export function readOwnedSessionTranscriptEntry(
+  scope: SessionTranscriptWriteTarget,
+): SessionTranscriptAnchorEntry | undefined {
+  // Reads of another session do not inherit the ambient writer's actor.
+  const binding = findOwnedSessionTranscriptActor(scope);
+  if (!binding) {
+    return undefined;
+  }
+  const assertCurrent = captureOwnedTranscriptWriteAssertion(scope);
+  const target = binding.actor.target;
+  const entry =
+    target.database.kind === "file"
+      ? readSessionActorEntryFacts({ ...target, database: target.database })?.entry
+      : binding.actor.snapshot({ assertCurrent, authorize: assertCurrent })?.entry;
+  return (
+    entry && {
+      sessionId: entry.sessionId,
+      lifecycleRevision: entry.lifecycleRevision,
+      activeWriterRunId: entry.activeWriterRunId,
+      cliHistoryBoundary: entry.cliHistoryBoundary,
+      permissionMode: entry.permissionMode,
+    }
+  );
 }
 
 function captureWriteTarget(target: SessionTranscriptWriteTarget): SessionTranscriptWriteTarget {
