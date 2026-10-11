@@ -9,6 +9,7 @@ import type WebSocket from "ws";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { resetConfigRuntimeState } from "../config/config.js";
+import type * as CronDelivery from "../cron/delivery.js";
 import { readCronRunRecordsForTests } from "../cron/run-history.test-support.js";
 import { loadCronStore, saveCronStore } from "../cron/store.js";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
@@ -45,15 +46,9 @@ const fetchWithSsrFGuardMock = vi.hoisted(() =>
 );
 
 const sendCronAnnouncePayloadStrictMock = vi.hoisted(() =>
-  vi.fn<typeof import("../cron/delivery.js").sendCronAnnouncePayloadStrict>(async () => ({
+  vi.fn<typeof CronDelivery.sendCronAnnouncePayloadStrict>(async ({ payload }) => ({
     status: "sent",
-    results: [{ channel: "telegram", messageId: "cron-message" }],
-    receipt: {
-      primaryPlatformMessageId: "cron-message",
-      platformMessageIds: ["cron-message"],
-      parts: [{ platformMessageId: "cron-message", kind: "text", index: 0 }],
-      sentAt: 0,
-    },
+    payloads: Array.isArray(payload) ? payload : [payload],
   })),
 );
 
@@ -62,7 +57,7 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
 }));
 
 vi.mock("../cron/delivery.js", async () => {
-  const actual = await vi.importActual<typeof import("../cron/delivery.js")>("../cron/delivery.js");
+  const actual = await vi.importActual<typeof CronDelivery>("../cron/delivery.js");
   return {
     ...actual,
     sendCronAnnouncePayloadStrict: sendCronAnnouncePayloadStrictMock,
@@ -1051,13 +1046,6 @@ describe("gateway server cron", () => {
       params.onDeliveryAttempt?.(false);
       return {
         status: "suppressed",
-        results: [],
-        receipt: {
-          primaryPlatformMessageId: undefined,
-          platformMessageIds: [],
-          parts: [],
-          sentAt: 0,
-        },
         reason: "adapter_returned_no_send",
       };
     });
@@ -1067,7 +1055,7 @@ describe("gateway server cron", () => {
       name: "unreached failure alert",
       sessionTarget: "isolated",
       delivery: { mode: "none" },
-      failureAlert: { after: 1, mode: "announce", channel: "last" },
+      failureAlert: { after: 1, mode: "announce", channel: "telegram", to: "123" },
     });
     await runCronJobAndWaitForFinished(ws, unreachedJobId);
     await expectOutcome(unreachedJobId, {

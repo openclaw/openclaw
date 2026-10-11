@@ -523,7 +523,7 @@ extensions/memory-core/src/memory/manager-db.ts	2
 extensions/memory-core/src/memory/manager-embedding-errors.ts	2
 extensions/memory-core/src/memory/manager-search.ts	4
 extensions/memory-core/src/memory/manager-vector-rebuild-state.ts	1
-extensions/memory-core/src/memory/manager.ts	2
+extensions/memory-core/src/memory/manager.ts	1
 extensions/memory-core/src/memory/search-deadline.ts	1
 extensions/memory-core/src/migration/doctor-host-event-sources.ts	1
 extensions/memory-core/src/migration/doctor-memory-sidecar-import.ts	6
@@ -1078,7 +1078,6 @@ packages/ai/src/transports/provider-transport-stream.ts	2
 packages/ai/src/transports/simple-completion-transport.ts	1
 packages/ai/src/transports/transport-stream-shared.ts	1
 packages/ai/src/transports/transport-utils.ts	2
-packages/ai/src/utils/assistant-text-phase.ts	1
 packages/ai/src/utils/credential-redaction.ts	1
 packages/ai/src/utils/oauth/openai-chatgpt-jwt.ts	1
 packages/ai/src/utils/stream-first-event-timeout.ts	2
@@ -1845,7 +1844,6 @@ src/config/sessions/session-accessor.entry.ts	1
 src/config/sessions/session-accessor.sqlite-archive-store.ts	1
 src/config/sessions/session-accessor.sqlite-canonical-inventory.ts	1
 src/config/sessions/session-accessor.sqlite-entry-availability.ts	1
-src/config/sessions/session-accessor.sqlite-message-cut.ts	1
 src/config/sessions/session-accessor.sqlite-read.ts	2
 src/config/sessions/session-accessor.sqlite-reset-window.ts	2
 src/config/sessions/session-accessor.sqlite-transcript-message-append.ts	1
@@ -1879,7 +1877,6 @@ src/context-engine/registry.ts	4
 src/cron/delivery-channel-validation.ts	2
 src/cron/delivery-context.ts	1
 src/cron/delivery-target-validation.ts	3
-src/cron/delivery.ts	1
 src/cron/isolated-agent/delivery-target.ts	1
 src/cron/isolated-agent/helpers.ts	1
 src/cron/isolated-agent/job-fixtures.ts	3
@@ -2578,7 +2575,7 @@ src/talk/provider-internal.ts	2
 src/talk/turn-context-tracker.ts	2
 src/trajectory/export.ts	8
 src/trajectory/runtime-store.sqlite.ts	1
-src/trajectory/runtime.ts	3
+src/trajectory/runtime.ts	2
 src/transcripts/config.ts	2
 src/transcripts/store-export-ownership.ts	2
 src/transcripts/store-sqlite.ts	2
@@ -2658,7 +2655,6 @@ ui/src/app/user-profile.ts	2
 ui/src/app/web-push.runtime.ts	1
 ui/src/components/agent-select.ts	2
 ui/src/components/app-sidebar-agent-menu.ts	2
-ui/src/components/app-sidebar-nav-menus.ts	1
 ui/src/components/app-sidebar-render.ts	3
 ui/src/components/app-sidebar-session-catalog-render.ts	4
 ui/src/components/app-sidebar-session-list-render.ts	1
@@ -2680,17 +2676,14 @@ ui/src/components/connect-command.ts	2
 ui/src/components/desktop/desktop-client.ts	2
 ui/src/components/desktop/desktop-mobile-keyboard.ts	1
 ui/src/components/dock-panel-layout.ts	3
-ui/src/components/exec-approval.ts	1
 ui/src/components/input-dialog.ts	1
 ui/src/components/lobster-dex.ts	2
-ui/src/components/login-gate.ts	2
 ui/src/components/markdown-assistant-transcript.ts	1
 ui/src/components/markdown-code-blocks.ts	1
 ui/src/components/markdown-parser.ts	1
 ui/src/components/mcp-app-theme.ts	1
 ui/src/components/mcp-server-form.ts	1
 ui/src/components/model-picker.ts	1
-ui/src/components/onboarding-memory-import.ts	1
 ui/src/components/select-picker.ts	2
 ui/src/components/sensitive-input.ts	2
 ui/src/components/session-data-controller.ts	1
@@ -2729,7 +2722,6 @@ ui/src/lit/stream-auto-follow-controller.ts	1
 ui/src/lit/subscriptions-controller.ts	1
 ui/src/local-storage.ts	2
 ui/src/main.ts	1
-ui/src/pages/activity/view.ts	2
 ui/src/pages/agents/model-config.ts	2
 ui/src/pages/chat/chat-gateway.ts	1
 ui/src/pages/chat/chat-history-retry.ts	1
@@ -2749,9 +2741,6 @@ ui/src/pages/chat/components/chat-composer.ts	4
 ui/src/pages/chat/components/chat-effort-picker.ts	6
 ui/src/pages/chat/components/chat-header-session-menu.ts	1
 ui/src/pages/chat/components/chat-message-attachment-availability.ts	1
-ui/src/pages/chat/components/chat-message-bubble.ts	1
-ui/src/pages/chat/components/chat-message-confirmation.ts	1
-ui/src/pages/chat/components/chat-message-timestamp.ts	4
 ui/src/pages/chat/components/chat-model-picker.ts	4
 ui/src/pages/chat/components/chat-pane-header.ts	2
 ui/src/pages/chat/components/chat-selection-popup.ts	1
@@ -2792,6 +2781,3 @@ ui/src/pages/plugin/logbook-view.ts	1
 ui/src/pages/plugin/route.ts	1
 ui/src/pages/portals/portal-reachability.ts	1
 ui/src/pages/profile/identity-section.ts	2
-ui/src/pages/usage/view-details.ts	4
-ui/src/pages/usage/view-overview.ts	2
-ui/src/pages/usage/view.ts	5

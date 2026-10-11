@@ -7,6 +7,28 @@ import { getConfigValueAtPath, parseConfigPath, setConfigValueAtPath } from "../
 import { REDACTED_SENTINEL } from "../redact-sentinel.js";
 import { appendAssistantMessageToSessionTranscript } from "./transcript.js";
 
+export function scopeCommandTranscriptId(
+  messageId: string,
+  context: { channelId?: string; accountId?: string; conversationId?: string },
+): string;
+export function scopeCommandTranscriptId(
+  messageId: string | undefined,
+  context: { channelId?: string; accountId?: string; conversationId?: string },
+): string | undefined;
+export function scopeCommandTranscriptId(
+  messageId: string | undefined,
+  context: { channelId?: string; accountId?: string; conversationId?: string },
+): string | undefined {
+  return messageId
+    ? JSON.stringify([
+        context.channelId ?? "",
+        context.accountId ?? "",
+        context.conversationId ?? "",
+        messageId,
+      ])
+    : undefined;
+}
+
 async function redactConfigCommandInput(text: string): Promise<string> {
   const name = parseSlashCommandOrNull(text, "/config") ? "/config" : "/debug";
   const action = parseSlashCommandOrNull(text, name);

@@ -3009,6 +3009,7 @@ describe("gateway restart deferral preflight", () => {
       routeHandoff: true,
     });
     expect(startChannel).toHaveBeenCalledWith("telegram", undefined, {
+      reason: "config-reload",
       preserveManualStop: true,
       skipUnavailableAccounts: true,
     });
@@ -5234,6 +5235,7 @@ describe("gateway plugin hot reload handlers", () => {
       routeHandoff: true,
     });
     expect(channels.start).toHaveBeenCalledExactlyOnceWith("slack", undefined, {
+      reason: "config-reload",
       preserveManualStop: true,
       skipUnavailableAccounts: true,
     });
@@ -5313,6 +5315,7 @@ describe("deferred channel reload abort generation", () => {
         routeHandoff: true,
       });
       expect(nextChannels.start).toHaveBeenCalledExactlyOnceWith("whatsapp", undefined, {
+        reason: "config-reload",
         preserveManualStop: true,
         skipUnavailableAccounts: true,
       });
