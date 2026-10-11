@@ -90,10 +90,14 @@ async function mountModal(host = container, variant = "", autofocus = true) {
 
 describe.runIf(browserMode)("modal native focus ownership", () => {
   it.each(
-    [false, true].flatMap((moved) => ["light", "shadow", "slot"].map((tree) => ({ moved, tree }))),
+    [false, true].flatMap((moved) =>
+      ["light", "shadow", "slot"]
+        .map((tree) => ({ moved, tree, blocked: "inert" }))
+        .concat({ moved, tree: "light", blocked: "disabled" }),
+    ),
   )(
-    "returns focus after background inertness clears without replacing new focus ($tree, moved=$moved)",
-    async ({ moved, tree }) => {
+    "returns focus after background controls become focusable without replacing new focus ($tree, $blocked, moved=$moved)",
+    async ({ moved, tree, blocked }) => {
       const background = document.createElement("div");
       const trigger = document.createElement("button");
       const nextTarget = document.createElement("button");
@@ -114,10 +118,12 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
       const { modal } = await mountModal();
       modal.setReturnFocusTarget(trigger);
 
-      background.inert = true;
+      background.inert = blocked === "inert";
+      trigger.disabled = blocked === "disabled";
       modal.remove();
       expect(trigger.matches(":focus")).toBe(false);
       background.inert = false;
+      trigger.disabled = false;
       if (moved) {
         nextTarget.focus();
       }
@@ -126,7 +132,7 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
     },
   );
 
-  it.each(["inert", "reconnected", "removed"])(
+  it.each(["inert", "disabled", "reconnected", "removed"])(
     "drops deferred focus restoration after cancellation (%s)",
     async (state) => {
       const background = document.createElement("div");
@@ -140,7 +146,8 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
         restored = true;
       });
 
-      background.inert = true;
+      background.inert = state !== "disabled";
+      trigger.disabled = state === "disabled";
       modal.remove();
       if (state === "reconnected") {
         background.inert = false;

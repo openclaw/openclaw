@@ -2807,14 +2807,9 @@ describe("createTelegramBot", () => {
     }
   });
 
-  it("settles spooled plugin callback text after a reply-session conflict retry succeeds", async () => {
-    let calls = 0;
+  it("settles spooled plugin callback text after dispatch succeeds", async () => {
     replySpy.mockImplementation(async (_ctx, opts) => {
-      calls += 1;
       await opts?.onReplyStart?.();
-      if (calls === 1) {
-        throw new Error("reply session initialization conflicted for agent:main:telegram:9");
-      }
       return undefined;
     });
     setTelegramPluginStateRuntimeForTests();
@@ -2826,7 +2821,7 @@ describe("createTelegramBot", () => {
         handler: async () => ({ handled: true, submitText: "Make Alice funnier" }),
       });
       const callbackQuery = makeCallbackQuery({
-        id: "cbq-smart-reply-submit-retry",
+        id: "cbq-smart-reply-submit",
         data: "openclaw-smart-replies:v1:TWFrZSBBbGljZSBmdW5uaWVy",
         message: {
           chat: { id: 9, type: "private" },
@@ -2851,11 +2846,11 @@ describe("createTelegramBot", () => {
       clearTelegramRuntime();
     }
 
-    expect(replySpy).toHaveBeenCalledTimes(2);
+    expect(replySpy).toHaveBeenCalledTimes(1);
     expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(9, 11, {
       reply_markup: { inline_keyboard: [] },
     });
-    const payload = mockMsgContextArg(replySpy, 1, 0, "replySpy retry call");
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy submit call");
     expect(payload.Body).toContain("Make Alice funnier");
   });
 

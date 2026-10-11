@@ -41,12 +41,12 @@ import {
   createUpdateFailureFact,
   type UpdateFailureFact,
 } from "../../infra/update-failure-facts.js";
-import {
-  createFreeBsdPkgOwnershipInspection,
-  type FreeBsdPkgOwnershipInspection,
-} from "../../infra/update-freebsd-pkg-ownership.js";
 import type { UPDATE_PREFLIGHT_DETAILS } from "../../infra/update-preflight-details.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
+import {
+  createSystemPackageOwnershipInspection,
+  type SystemPackageOwnershipInspection,
+} from "../../infra/update-system-package-ownership.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { resolveNodeRunner } from "./shared.js";
@@ -403,11 +403,11 @@ export async function tryRealpathOrResolve(value: string): Promise<string> {
 
 export async function resolveManagedServicePackageUpdatePlan(params: {
   root: string;
-  pkgOwnership?: FreeBsdPkgOwnershipInspection;
+  pkgOwnership?: SystemPackageOwnershipInspection;
   rebind?: boolean;
 }): Promise<ManagedServicePackageUpdatePlan> {
   const pkgOwnership =
-    params.pkgOwnership ?? createFreeBsdPkgOwnershipInspection(UPDATE_RUNNER_TIMEOUT_MS);
+    params.pkgOwnership ?? createSystemPackageOwnershipInspection(UPDATE_RUNNER_TIMEOUT_MS);
   await pkgOwnership.assertUnowned(params.root);
   const plan: ManagedServicePackageUpdatePlan = {
     rootRedirect: null,

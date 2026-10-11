@@ -106,6 +106,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
       (changed.has("snapshot") &&
         changed.get("snapshot")?.sessionKey !== this.snapshot?.sessionKey);
     if (ownerChanged) {
+      this.actionError = "";
       this.initialLoading = true;
       this.scrollTop = 0;
       this.visitedTabs.clear();
@@ -114,8 +115,11 @@ class OpenClawBoardView extends OpenClawLightDomElement {
       this.contentHeights.clear();
     }
     if (changed.has("snapshot")) {
-      this.actionError = "";
       const previousSnapshot = changed.get("snapshot");
+      // Recovery reads can publish unchanged state after a failed mutation.
+      if (previousSnapshot?.revision !== this.snapshot?.revision) {
+        this.actionError = "";
+      }
       if (previousSnapshot?.sessionKey !== this.snapshot?.sessionKey) {
         this.mutationRequestId += 1;
         this.mutationPending = false;
@@ -560,15 +564,6 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     }
   };
 
-  private readonly handleOverflowSelect = (
-    event: CustomEvent<{ item: { value?: string } }>,
-  ): void => {
-    const tabId = event.detail.item.value;
-    if (tabId && this.snapshot?.tabs.some((tab) => tab.tabId === tabId)) {
-      this.callbacks?.selectTab(tabId);
-    }
-  };
-
   private renderGrid(
     widgets: readonly BoardWidget[],
     tabs: readonly BoardTab[],
@@ -628,6 +623,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
                 ?hidden=${!activeNames.has(widget.name)}
                 ?inert=${!activeNames.has(widget.name)}
                 .widget=${widget}
+                .boardRevision=${this.snapshot?.revision ?? 0}
                 .rect=${rect}
                 .contentHeightPx=${this.contentHeights.get(widget.name)}
                 .fitAutoContent=${this.fitAutoContent}
@@ -705,7 +701,12 @@ class OpenClawBoardView extends OpenClawLightDomElement {
           activeTabId,
           hoverTabId: this.hoverTabId,
           onTabShow: this.handleTabShow,
-          onOverflowSelect: this.handleOverflowSelect,
+          onOverflowSelect: (event) => {
+            const tabId = event.detail.item.value;
+            if (tabId && snapshot?.tabs.some((tab) => tab.tabId === tabId)) {
+              this.callbacks?.selectTab(tabId);
+            }
+          },
         })}
         ${snapshot ? this.renderGrid(retainedWidgets, tabs, snapshot.sessionKey, activeTabId) : nothing}
         ${

@@ -1,3 +1,11 @@
+// Register shared transport mocks before publication owners load.
+// oxfmt-ignore
+import {
+  SESSION_ID,
+  SESSION_KEY,
+  githubPublicationTestMocks,
+  installGitHubPublicationTestHarness,
+} from "./github-publication.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -8,12 +16,6 @@ import {
   createRequesterPublicationFixture,
   guestScopes,
 } from "./github-publication-requester.test-support.js";
-import {
-  SESSION_ID,
-  SESSION_KEY,
-  githubPublicationTestMocks,
-  installGitHubPublicationTestHarness,
-} from "./github-publication.test-support.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -103,7 +105,7 @@ describe("registered session GitHub publication access", () => {
       const { loadGatewaySessionEntryReadOnly } =
         await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
       mocks.loadSession.mockImplementation(loadGatewaySessionEntryReadOnly);
-      const request = vi.spyOn(f.coordinator, "requestForSession");
+      const request = vi.spyOn(f.coordinator, "requestForSessionV2");
       const head = await workspace.git("rev-parse", "HEAD");
       const index = await fs.readFile(path.join(workspace.cwd, ".git/index"));
       const before = await workspace.git("diff", "HEAD");

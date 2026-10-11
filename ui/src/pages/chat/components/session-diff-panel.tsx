@@ -46,7 +46,7 @@ import { SessionSplitDiff } from "./session-diff-render.tsx";
 export type SessionDiffLoader = (params: SessionDiffScope) => Promise<SessionsDiffResult>;
 export type SessionDiffFileTextLoader = (path: string) => Promise<string | null>;
 export type SessionDiffOwner = { agentId: string; sessionKey: string };
-export type SessionDiffProps = {
+type SessionDiffProps = {
   owner: SessionDiffOwner | null;
   execNode: string | null;
   loader: SessionDiffLoader | null;
