@@ -14,51 +14,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   prepareTestboxLeaseFreshness,
   recordTestboxLeaseFreshness,
-  testboxLeaseStaleReasons,
 } from "../../scripts/testbox-lease-freshness.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const fingerprint = {
-  version: 2,
-  caller: "codex",
-  taskKey: "e".repeat(64),
-  checkoutKey: "f".repeat(64),
-  baseSha: "a".repeat(40),
-  headSha: "d".repeat(40),
-  dependencyDigest: "b".repeat(64),
-  environmentDigest: "c".repeat(64),
-  workflow: ".github/workflows/ci-check-testbox.yml",
-  job: "check",
-  ref: "main",
-};
-
 describe("Testbox lease freshness", () => {
-  it.each([undefined, 1, 3])("rejects provenance schema %s", (version) => {
-    expect(testboxLeaseStaleReasons({ ...fingerprint, version }, fingerprint)).toEqual([
-      "state schema",
-    ]);
-  });
-
-  it("rejects reuse without an allocation receipt and does not adopt the lease", () => {
-    const fixture = createLeaseFixture();
-    expect(() => fixture.reuse()).toThrow("has no allocation receipt");
-    expect(existsSync(fixture.statePath)).toBe(false);
-  });
-
-  it.each([undefined, "invalid-sha"])("rejects incomplete allocation HEAD %s", (headSha) => {
-    const fixture = createLeaseFixture();
-    fixture.allocate();
-    const prepared = fixture.reuse();
-    const receipt = JSON.parse(readFileSync(fixture.statePath, "utf8"));
-    const invalid = JSON.stringify({ ...receipt, headSha });
-    writeFileSync(fixture.statePath, invalid);
-    expect(() => fixture.reuse()).toThrow("headSha");
-    expect(() => prepared?.assertCurrent()).toThrow("headSha");
-    expect(readFileSync(fixture.statePath, "utf8")).toBe(invalid);
-  });
-
   it("records and reuses a lease with more than a buffer of source deletions", () => {
     const fixture = createLeaseFixture();
     const blob = fixture.git(["hash-object", "-w", "--stdin"], "");
@@ -85,38 +46,40 @@ describe("Testbox lease freshness", () => {
     expect(fixture.reuse()?.current).toEqual(prepared?.current);
   });
 
-  it("invalidates saved proof when source-sync or workspace preparation owners change", () => {
-    const fixture = createLeaseFixture();
-    const workflow = ".github/workflows/custom-testbox.yml";
-    const owners = [
-      "scripts/crabbox-wrapper.mjs",
-      "scripts/crabbox-wrapper.mts",
-      "scripts/crabbox-source-capsule.mts",
-      "scripts/crabbox-source-receiver.mts",
-      "scripts/testbox-lease-freshness.mts",
-      ".github/actions/prepare-testbox-shell/action.yml",
-      ".github/actions/prepare-testbox-shell/preserve-command-cwd.py",
-      workflow,
-    ];
-    for (const owner of owners) {
-      const file = join(fixture.root, owner);
-      mkdirSync(dirname(file), { recursive: true });
-      writeFileSync(file, "original\n");
-    }
-    fixture.git(["add", "."]);
-    fixture.advanceBase();
-    const args = ["--blacksmith-workflow", workflow];
-    fixture.allocate(args);
-    const prepare = () => fixture.reuse(args);
-    writeFileSync(join(fixture.root, "unrelated-source.ts"), "source change\n");
-    expect(() => prepare()).not.toThrow();
-    for (const owner of owners) {
-      const file = join(fixture.root, owner);
-      writeFileSync(file, "changed executable owner\n");
-      expect(() => prepare(), owner).toThrow("environmentDigest");
-      writeFileSync(file, "original\n");
-    }
-  });
+  it.each([".github/workflows/custom-testbox.yml", ""])(
+    "tracks preparation owners with workflow %j",
+    (workflow) => {
+      const fixture = createLeaseFixture();
+      const owners = [
+        "scripts/crabbox-wrapper.mjs",
+        "scripts/crabbox-wrapper.mts",
+        "scripts/crabbox-source-capsule.mts",
+        "scripts/crabbox-source-receiver.mts",
+        "scripts/testbox-lease-freshness.mts",
+        ".github/actions/prepare-testbox-shell/action.yml",
+        ".github/actions/prepare-testbox-shell/preserve-command-cwd.py",
+        ...(workflow ? [workflow] : []),
+      ];
+      for (const owner of owners) {
+        const file = join(fixture.root, owner);
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(file, "original\n");
+      }
+      fixture.git(["add", "."]);
+      fixture.advanceBase();
+      const args = workflow ? ["--blacksmith-workflow", workflow] : ["--blacksmith-workflow="];
+      fixture.allocate(args);
+      const prepare = () => fixture.reuse(args);
+      writeFileSync(join(fixture.root, "unrelated-source.ts"), "source change\n");
+      expect(() => prepare()).not.toThrow();
+      for (const owner of owners) {
+        const file = join(fixture.root, owner);
+        writeFileSync(file, "changed executable owner\n");
+        expect(() => prepare(), owner).toThrow("environmentDigest");
+        writeFileSync(file, "original\n");
+      }
+    },
+  );
 
   it.each(["baseSha", "dependencyDigest", "environmentDigest", "workflow", "job", "ref"])(
     "rejects recorded leases after %s changes",
@@ -135,28 +98,34 @@ describe("Testbox lease freshness", () => {
       } else {
         args = [`--blacksmith-${field}`, "changed"];
       }
-      expect(() => fixture.reuse(args)).toThrow(field);
+      expect(() => fixture.reuse(args, { OPENCLAW_TESTBOX_ALLOW_STALE: "1" })).toThrow(field);
       expect(readFileSync(fixture.statePath, "utf8")).toBe(saved);
     },
   );
 
-  it("reuses prepared leases across source commits without rewriting allocation provenance", () => {
+  it("preserves failed-command allocation provenance across unchanged and changed source", () => {
     const fixture = createLeaseFixture();
-    const allocation = fixture.allocate();
+    const allocation = fixture.prepare(["run", "--keep", "--", "false"]);
+    recordTestboxLeaseFreshness(allocation, "tbx_fixture");
     const saved = readFileSync(fixture.statePath, "utf8");
-    for (const changedSource of [false, true]) {
-      if (changedSource) {
+    const originalStat = statSync(fixture.statePath);
+    for (const change of ["unchanged", "empty commit", "source commit"]) {
+      if (change === "source commit") {
         writeFileSync(join(fixture.root, "source.ts"), "export const value = 2;\n");
         fixture.git(["add", "source.ts"]);
       }
-      const head = fixture.advanceHead();
-      const reused = fixture.reuse();
-      expect(reused?.current.headSha).toBe(head);
+      const head = change === "unchanged" ? allocation?.current.headSha : fixture.advanceHead();
+      const reused = fixture.reuse(["--", "pnpm", "test"]);
+      expect(reused?.current).toEqual({ ...allocation?.current, headSha: head });
       expect(reused?.current.baseSha).toBe(allocation?.current.baseSha);
       expect(reused?.attribution.headSha).toBe(head);
+      expect(reused?.attribution.commandKey).not.toBe(allocation?.attribution.commandKey);
       expect(() => reused?.assertCurrent()).not.toThrow();
       recordTestboxLeaseFreshness(reused);
       expect(readFileSync(fixture.statePath, "utf8")).toBe(saved);
+      const reusedStat = statSync(fixture.statePath);
+      expect(reusedStat.ino).toBe(originalStat.ino);
+      expect(reusedStat.mtimeMs).toBe(originalStat.mtimeMs);
     }
   });
 
@@ -241,42 +210,51 @@ describe("Testbox lease freshness", () => {
     expect(prepared?.attribution.requestedTtl).toBe("1h");
   });
 
-  it.each(["withdrawn", "reassigned", "old schema", "changed HEAD"])(
-    "rejects %s after preparation without refreshing allocation provenance",
-    (change) => {
-      const fixture = createLeaseFixture();
-      fixture.allocate();
-      const admitted = fixture.reuse();
-      const original = readFileSync(fixture.statePath, "utf8");
-      expect(() => admitted?.assertCurrent()).not.toThrow();
-      if (change === "withdrawn") {
-        rmSync(fixture.statePath);
-      } else if (change === "changed HEAD") {
-        fixture.advanceHead();
+  it.each([
+    ["withdrawn", "no allocation receipt"],
+    ["reassigned", "taskKey"],
+    ["old schema", "state schema"],
+    ["missing HEAD", "headSha"],
+    ["invalid HEAD", "headSha"],
+    ["changed HEAD", "headSha"],
+  ])("rejects %s after preparation without refreshing allocation provenance", (change, message) => {
+    const fixture = createLeaseFixture();
+    fixture.allocate();
+    const admitted = fixture.reuse();
+    const original = readFileSync(fixture.statePath, "utf8");
+    expect(() => admitted?.assertCurrent()).not.toThrow();
+    if (change === "withdrawn") {
+      rmSync(fixture.statePath);
+    } else if (change === "changed HEAD") {
+      fixture.advanceHead();
+    } else {
+      const receipt = JSON.parse(original);
+      if (change === "reassigned") {
+        receipt.taskKey = "another-task";
+      } else if (change === "old schema") {
+        receipt.version = 1;
       } else {
-        const receipt = JSON.parse(original);
-        if (change === "reassigned") {
-          receipt.taskKey = "another-task";
-        } else {
-          receipt.version = 1;
-        }
-        writeFileSync(fixture.statePath, JSON.stringify(receipt));
+        receipt.headSha = change === "missing HEAD" ? undefined : "invalid-sha";
       }
-      expect(() => admitted?.assertCurrent()).toThrow(
-        change === "withdrawn"
-          ? "no allocation receipt"
-          : change === "changed HEAD"
-            ? "headSha"
-            : change === "reassigned"
-              ? "taskKey"
-              : "state schema",
-      );
-      expect(admitted?.current.headSha).toBe(JSON.parse(original).headSha);
-      if (change === "changed HEAD") {
-        expect(readFileSync(fixture.statePath, "utf8")).toBe(original);
-      }
-    },
-  );
+      writeFileSync(fixture.statePath, JSON.stringify(receipt));
+    }
+    const changedReceipt = existsSync(fixture.statePath)
+      ? readFileSync(fixture.statePath, "utf8")
+      : undefined;
+    expect(() => admitted?.assertCurrent()).toThrow(message);
+    if (change !== "changed HEAD") {
+      expect(() => fixture.reuse()).toThrow(message);
+    }
+    expect(admitted?.current.headSha).toBe(JSON.parse(original).headSha);
+    if (changedReceipt === undefined) {
+      expect(existsSync(fixture.statePath)).toBe(false);
+    } else {
+      expect(readFileSync(fixture.statePath, "utf8")).toBe(changedReceipt);
+    }
+    if (change === "changed HEAD") {
+      expect(readFileSync(fixture.statePath, "utf8")).toBe(original);
+    }
+  });
 
   it("ignores lease flags inside the command payload", () => {
     const fixture = createLeaseFixture();
@@ -320,77 +298,30 @@ describe("Testbox lease freshness", () => {
     for (const args of [["warmup"], ["run", "--keep"], ["run", "--keep-on-failure"]]) {
       expect(() => fixture.prepare(args, env)).toThrow("--label");
     }
+    for (const value of ["1", "t", "T", "TRUE", "true", "True"]) {
+      for (const flag of ["keep", "keep-on-failure"]) {
+        expect(() => fixture.prepare(["run", `--${flag}=${value}`], env)).toThrow("--label");
+        expect(() =>
+          fixture.prepare(["run", `--${flag}=${value}`, `--${flag}=false`], env),
+        ).not.toThrow();
+      }
+    }
     const prepared = fixture.prepare(["run", "--keep", "--label", "task-one", "--", "true"], env);
     recordTestboxLeaseFreshness(prepared, "tbx_fixture");
     expect(fixture.reuse(["--label", "task-one"], env)?.current).toEqual(prepared?.current);
     expect(() => fixture.reuse(["--label", "task-two"], env)).toThrow("taskKey");
   });
 
-  it.each(["1", "t", "T", "TRUE", "true", "True"])(
-    "matches native retained boolean %s",
-    (value) => {
-      const fixture = createLeaseFixture();
-      for (const flag of ["keep", "keep-on-failure"]) {
-        expect(() =>
-          fixture.prepare(["run", `--${flag}=${value}`], { CODEX_THREAD_ID: undefined }),
-        ).toThrow("--label");
-        expect(() =>
-          fixture.prepare(["run", `--${flag}=${value}`, `--${flag}=false`], {
-            CODEX_THREAD_ID: undefined,
-          }),
-        ).not.toThrow();
-      }
-    },
-  );
-
-  it("preserves allocation provenance across failed commands and subsequent reuse", () => {
+  it.each([
+    { args: ["run", "--", "true"], exitCode: 0, retained: false },
+    { args: ["run", "--keep-on-failure", "--", "task"], exitCode: 0, retained: false },
+    { args: ["run", "--keep-on-failure", "--", "task"], exitCode: 7, retained: true },
+  ])("records retention=$retained for $args exiting $exitCode", ({ args, exitCode, retained }) => {
     const fixture = createLeaseFixture();
-    const allocation = fixture.prepare(["run", "--keep", "--", "false"]);
-    // Allocation survives a failed command; reuse cannot replace it.
-    recordTestboxLeaseFreshness(allocation, "tbx_fixture");
-    const saved = readFileSync(fixture.statePath, "utf8");
-    const reused = fixture.reuse(["--", "pnpm", "test"]);
-    expect(reused?.current).toEqual(allocation?.current);
-    expect(reused?.attribution.commandKey).not.toBe(allocation?.attribution.commandKey);
-    const originalStat = statSync(fixture.statePath);
-
-    recordTestboxLeaseFreshness(reused);
-    expect(readFileSync(fixture.statePath, "utf8")).toBe(saved);
-    const reusedStat = statSync(fixture.statePath);
-    expect(reusedStat.ino).toBe(originalStat.ino);
-    expect(reusedStat.mtimeMs).toBe(originalStat.mtimeMs);
-  });
-
-  it("keeps one-shot attribution out of persistent lease state", () => {
-    const fixture = createLeaseFixture();
-    const prepared = fixture.prepare(["run", "--", "true"]);
-    recordTestboxLeaseFreshness(prepared, "tbx_fixture");
+    const prepared = fixture.prepare(args);
+    recordTestboxLeaseFreshness(prepared, "tbx_fixture", exitCode);
     expect(prepared?.attribution.operation).toBe("run");
-    expect(existsSync(fixture.statePath)).toBe(false);
-  });
-
-  it.each([0, 7])("records conditional retention only after native failure (exit %s)", (status) => {
-    const fixture = createLeaseFixture();
-    const prepared = fixture.prepare(["run", "--keep-on-failure", "--", "task"]);
-    recordTestboxLeaseFreshness(prepared, "tbx_fixture", status);
-    expect(existsSync(fixture.statePath)).toBe(status !== 0);
-  });
-
-  it("does not treat an empty workflow option as the entire checkout", () => {
-    const fixture = createLeaseFixture();
-    const args = ["--blacksmith-workflow="];
-    fixture.allocate(args);
-    writeFileSync(join(fixture.root, "unrelated-source.ts"), "source change\n");
-    expect(() => fixture.reuse(args)).not.toThrow();
-  });
-
-  it("does not allow the retired stale override to refresh allocation provenance", () => {
-    const fixture = createLeaseFixture();
-    fixture.allocate();
-    const saved = readFileSync(fixture.statePath, "utf8");
-    fixture.advanceBase();
-    expect(() => fixture.reuse([], { OPENCLAW_TESTBOX_ALLOW_STALE: "1" })).toThrow("baseSha");
-    expect(readFileSync(fixture.statePath, "utf8")).toBe(saved);
+    expect(existsSync(fixture.statePath)).toBe(retained);
   });
 });
 

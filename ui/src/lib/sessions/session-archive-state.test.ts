@@ -8,30 +8,9 @@ import {
   mergeSessionFieldObservations,
 } from "./session-row-provenance.ts";
 
-it.each([undefined, false])(
-  "skips published rows when no archive can hide the key (confirmed=%s)",
-  (archived) => {
-    const row: GatewaySessionRow = {
-      key: "agent:main:visible",
-      sessionId: "visible-id",
-      kind: "direct",
-    };
-    const publishedRow = vi.fn(() => row);
-    const provenance = createSessionRowProvenance();
-    const archives = createSessionArchiveState(publishedRow, () => {}, provenance);
-    if (archived !== undefined) {
-      provenance.observeReadRow(row, 1);
-      archives.observe(row.key, archived, row);
-    }
-
-    for (const key of [row.key, ` ${row.key} `, "agent:main:unknown", " "]) {
-      expect(archives.visibility(key)).toBeUndefined();
-    }
-    expect(publishedRow).not.toHaveBeenCalled();
-  },
-);
-
 it.each([
+  { pending: false, archived: undefined, publishedId: "same", expected: undefined },
+  { pending: false, archived: false, publishedId: "same", expected: undefined },
   { pending: true, archived: undefined, publishedId: null, expected: "pending" },
   { pending: false, archived: true, publishedId: null, expected: "archived" },
   { pending: false, archived: true, publishedId: "replacement", expected: undefined },
@@ -47,11 +26,10 @@ it.each([
       kind: "direct",
     };
     const provenance = createSessionRowProvenance();
-    const archives = createSessionArchiveState(
-      () => (publishedId === null ? undefined : { ...row, sessionId: publishedId }),
-      () => {},
-      provenance,
+    const publishedRow = vi.fn(() =>
+      publishedId === null ? undefined : { ...row, sessionId: publishedId },
     );
+    const archives = createSessionArchiveState(publishedRow, () => {}, provenance);
     if (archived !== undefined) {
       provenance.observeReadRow(row, 1);
       archives.observe(row.key, archived, row);
@@ -60,6 +38,12 @@ it.each([
       archives.beginPending(row.key, row.sessionId);
     }
     expect(archives.visibility(` ${row.key} `)).toBe(expected);
+    if (!pending && !archived) {
+      for (const key of [row.key, "agent:main:unknown", " "]) {
+        expect(archives.visibility(key)).toBeUndefined();
+      }
+      expect(publishedRow).not.toHaveBeenCalled();
+    }
   },
 );
 

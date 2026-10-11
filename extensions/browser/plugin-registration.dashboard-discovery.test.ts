@@ -24,12 +24,12 @@ import { registerBrowserPlugin } from "./plugin-registration.js";
 import { getBrowserStateRuntime, setBrowserStateRuntime } from "./src/browser-runtime-state.js";
 import { resolveBrowserConfig } from "./src/browser/config.js";
 import { createBrowserRuntimeState, stopBrowserRuntime } from "./src/browser/runtime-lifecycle.js";
+import { browserSessionTabStorageKey } from "./src/browser/session-tab-identity.js";
 import {
   closeTrackedBrowserTabsForSessions,
   trackSessionBrowserTab,
 } from "./src/browser/session-tab-registry.js";
 import {
-  browserSessionTabStorageKey,
   getBrowserSessionTabStore,
   persistBrowserDashboardStopIntent,
 } from "./src/browser/session-tab-store.js";
@@ -86,7 +86,6 @@ it.each(["stop", "replacement"] as const)(
         await lifecycle.stop();
         await stopBrowserRuntime({
           current: runtime,
-          getState: () => runtime,
           clearState: vi.fn(),
           onWarn: vi.fn(),
         });

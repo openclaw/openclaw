@@ -15,6 +15,10 @@ import {
 } from "./harness/selection-decision.js";
 import type { ModelCatalogDecisionParams } from "./model-catalog-decisions.js";
 import {
+  createModelCatalogSnapshotView,
+  listModelCatalogObservedRoutes,
+} from "./model-catalog-view.js";
+import {
   isCliRuntimeAliasForProvider,
   resolveCliRuntimeExecutionProvider,
 } from "./model-runtime-aliases.js";
@@ -193,14 +197,14 @@ export function resolveIsolatedCompletionRuntime(
         if (!prepared) {
           return undefined;
         }
-        const entry = prepared.snapshot.entries.find(
-          (candidate) => candidate.provider === provider && candidate.id === params.model,
-        );
+        const variants = createModelCatalogSnapshotView(config, prepared.snapshot).variantsOf({
+          provider,
+          id: params.model,
+        });
         const { attempts } = prepareAgentRuntimeAuth({
           provider,
           modelId: params.model,
-          modelApi: entry?.api,
-          modelBaseUrl: entry?.baseUrl,
+          observedRoutes: variants ? listModelCatalogObservedRoutes(variants) : undefined,
           config,
           agentId,
           agentDir: params.agentDir,

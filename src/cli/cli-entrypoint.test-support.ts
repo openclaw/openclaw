@@ -94,6 +94,30 @@ export const mcpImportBoundaryEntrypoints = {
   },
 } as const;
 
+// Preserve module boundaries so a child can retire only its own cleanup source copies.
+export const cliCleanupRetirementEntrypoints = {
+  scope: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "runtime-cleanup-scope",
+    distWorkerPath: "legacy-finalizer/src/cli/runtime-cleanup-scope.js",
+  },
+  cleanup: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "runtime-cleanup",
+    distWorkerPath: "legacy-finalizer/src/cli/runtime-cleanup.js",
+  },
+  database: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../state/openclaw-state-db-cache",
+    distWorkerPath: "legacy-finalizer/src/state/openclaw-state-db-cache.js",
+  },
+  workers: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/worker-native-lifecycle",
+    distWorkerPath: "legacy-finalizer/src/infra/worker-native-lifecycle.js",
+  },
+} as const;
+
 // Failure reporting and exit finalization must share their compiled error classes.
 export const updateCandidateExitEntrypoints = {
   oneShotExit: {
@@ -141,11 +165,6 @@ export const updateFinalizationOutputEntrypoint = {
 
 // Direct-stop children use the invocation's prepared graph before readiness starts.
 export const gatewayDirectStopEntrypoints = {
-  startupOrphanFixture: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "../gateway/startup-orphan-process.test-support",
-    distWorkerPath: "gateway/startup-orphan-process.test-support.js",
-  },
   forcedCronFixture: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "gateway-cli/run-loop.forced-cron.test-support",

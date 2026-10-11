@@ -244,9 +244,12 @@ export async function findMissingRequiredPluginDependencies(
 export function pluginInstallIncompleteDiagnostic(
   pluginId: string,
   detail: string,
-  installId = pluginId,
+  installId: string | null = pluginId,
 ): PluginDiagnostic {
-  const fixHint = `Run \`openclaw plugins install ${installId} --force\` to reinstall the plugin.`;
+  const fixHint =
+    installId === null
+      ? "Restore the plugin at its configured local path, then run `openclaw doctor --fix`."
+      : `Run \`openclaw plugins install ${installId} --force\` to reinstall the plugin.`;
   return {
     level: "error",
     pluginId,

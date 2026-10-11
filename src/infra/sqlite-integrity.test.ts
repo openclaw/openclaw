@@ -43,10 +43,11 @@ describe("assertSqliteIntegrity", () => {
       } catch (error) {
         failure = error;
       }
-      expect(failure).toMatchObject({ name: "SqliteIntegrityError" });
-      expect(String(failure)).toMatch(
-        /foreign_key_check failed for test database: children row 1 references parents \(foreign key 0\)/u,
-      );
+      expect(failure).toMatchObject({
+        name: "SqliteIntegrityError",
+        message:
+          'SQLite foreign_key_check failed for test database: children row 1 references parents (foreign key 0). Stop the Gateway, run "openclaw doctor --fix" to inspect and repair this database, and restart. Only if Doctor still cannot repair the offline database, preserve the database and WAL and restore a verified backup.',
+      });
     } finally {
       database.close();
     }
@@ -238,7 +239,7 @@ describe("assertSqliteIntegrity", () => {
       `);
 
       expect(() => assertSqliteIntegrity(database, "test database")).toThrow(
-        /children row 5 references parents \(foreign key 0\); additional violations omitted$/u,
+        /children row 5 references parents \(foreign key 0\); additional violations omitted\. Stop the Gateway, run "openclaw doctor --fix"/u,
       );
     } finally {
       database.close();
@@ -513,6 +514,45 @@ describe("isTerminalSqliteIntegrityError", () => {
 });
 
 describe("confirmSqliteFileIntegrity", () => {
+  it("confirms page corruption despite empty WAL sidecars created by its own reader", () => {
+    const databasePath = path.join(tempDirs.make("sqlite-corrupt-wal-"), "database.sqlite");
+    const database = new (requireNodeSqlite().DatabaseSync)(databasePath);
+    database.exec(
+      "PRAGMA journal_mode=WAL; CREATE TABLE damaged(value TEXT); INSERT INTO damaged VALUES ('preserved');",
+    );
+    const pageSize = Number(database.prepare("PRAGMA page_size").get()?.page_size);
+    const rootPage = Number(
+      database.prepare("SELECT rootpage FROM sqlite_schema WHERE name='damaged'").get()?.rootpage,
+    );
+    database.close();
+    expect(fs.existsSync(`${databasePath}-wal`)).toBe(false);
+    const file = fs.openSync(databasePath, "r+");
+    try {
+      fs.writeSync(file, Buffer.from([0xff]), 0, 1, (rootPage - 1) * pageSize);
+    } finally {
+      fs.closeSync(file);
+    }
+    const open = nodeSqlite.openNodeSqliteDatabase;
+    let opening = 0;
+    const reader = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
+      const db = open(...args);
+      // Reproduce native empty-WAL creation/retouching independently of SQLite and filesystem versions.
+      fs.writeFileSync(`${databasePath}-wal`, "");
+      fs.utimesSync(`${databasePath}-wal`, ++opening, opening);
+      return db;
+    });
+    try {
+      expect(confirmSqliteFileIntegrity(databasePath, "damaged WAL database")).toMatchObject({
+        status: "failed",
+        terminal: true,
+        error: { name: "SqliteIntegrityError" },
+        generation: { database: { size: BigInt(fs.statSync(databasePath).size) } },
+      });
+    } finally {
+      reader.mockRestore();
+    }
+  });
+
   it("leaves SQLite open failures unbound because the failed file identity is unknown", () => {
     const databasePath = path.join(tempDirs.make("sqlite-open-integrity-"), "database.sqlite");
     fs.writeFileSync(databasePath, "not a sqlite database");

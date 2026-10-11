@@ -1,8 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { vi } from "vitest";
 import { createAuthProfileStoreFixture } from "../agents/auth-profiles/credential-fixtures.test-support.js";
-import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
+import {
+  readPersistedAuthProfileStateRaw,
+  readPersistedAuthProfileStoreRaw,
+  resolveAuthProfileDatabasePath,
+} from "../agents/auth-profiles/sqlite.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
+import * as authStoreRuntime from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 
 export const OPENAI_API_KEY_ENV_REF = {
@@ -104,4 +110,51 @@ export async function seedDefaultApplyFixture(fixture: ApplyFixture): Promise<vo
     "OPENAI_API_KEY=sk-openai-plaintext\nUNRELATED=value\n", // pragma: allowlist secret
     "utf8",
   );
+}
+
+export function mutateAuthStoreBeforeNextPublication(
+  agentDir: string,
+  concurrentMutation: "credentials" | "state",
+): void {
+  const save = authStoreRuntime.saveAuthProfileStoreIfPersistenceSnapshotMatches;
+  vi.spyOn(
+    authStoreRuntime,
+    "saveAuthProfileStoreIfPersistenceSnapshotMatches",
+  ).mockImplementationOnce((params) => {
+    const committed = save(params);
+    const publish = committed.publishRuntimeSnapshots;
+    committed.publishRuntimeSnapshots = () => {
+      // Mutate persisted rows after the candidate commit but before its
+      // runtime ownership capture. Rollback must retain this newer writer.
+      const concurrentStore = readPersistedAuthProfileStoreRaw(agentDir) as {
+        version: number;
+        profiles: AuthProfileStore["profiles"];
+      };
+      const currentState = readPersistedAuthProfileStateRaw(agentDir) as {
+        order?: Record<string, string[]>;
+      } | null;
+      if (concurrentMutation === "credentials") {
+        concurrentStore.profiles["openai:oauth"] = {
+          type: "oauth",
+          provider: "openai",
+          access: "oauth-concurrent",
+          refresh: "refresh-concurrent",
+          expires: Date.now() + 120_000,
+        };
+      }
+      saveAuthProfileStore(
+        {
+          ...concurrentStore,
+          ...currentState,
+          ...(concurrentMutation === "state"
+            ? { order: { openai: ["openai:oauth", "openai:default"] } }
+            : {}),
+        },
+        agentDir,
+        { syncExternalCli: false },
+      );
+      return publish();
+    };
+    return committed;
+  });
 }

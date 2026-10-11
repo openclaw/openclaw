@@ -38,7 +38,6 @@ export function isClaudeStreamJsonDialect(params: {
   return isClaudeCliProvider(params.providerId);
 }
 
-/** Returns whether JSONL output carries correlated provider tool events. */
 export function supportsCliJsonlToolEvents(params: {
   backend: CliBackendConfig;
   providerId: string;
@@ -275,7 +274,6 @@ const CLAUDE_TURN_STOP_REASONS = new Set([
   "budget_exhausted",
 ]);
 
-/** Reads a reply-less Claude result that the backend deliberately stopped. */
 function readClaudeTurnStop(
   parsed: Record<string, unknown>,
 ): { terminalReason: string; stopReason?: string } | undefined {
@@ -473,7 +471,6 @@ function hasExplicitCliErrorPayload(parsed: Record<string, unknown>): boolean {
   return false;
 }
 
-/** Parses a single JSON payload emitted by a CLI backend. */
 export function parseCliJson(
   raw: string,
   backend: CliBackendConfig,

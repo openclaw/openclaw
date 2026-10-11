@@ -1,10 +1,8 @@
-// Gateway Talk relay session lifecycle helpers.
-// Enforces TTL and connection ownership for process-local relay sessions.
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 
-/**
- * Shared TTL and connection-ownership checks for Talk relay session maps.
- */
+const MAX_RELAY_SESSIONS_PER_CONN = 2;
+const MAX_RELAY_SESSIONS_GLOBAL = 64;
+
 type TalkRelayLifecycleSession = {
   connId: string;
   expiresAtMs: number;
@@ -14,6 +12,21 @@ type CloseTalkRelaySession<TSession extends TalkRelayLifecycleSession> = (
   session: TSession,
 ) => void;
 
+export function assertTalkRelaySessionCapacity(
+  sessions: readonly Pick<TalkRelayLifecycleSession, "connId">[],
+  connId: string,
+  label: "realtime relay" | "transcription Talk",
+): void {
+  if (sessions.length >= MAX_RELAY_SESSIONS_GLOBAL) {
+    throw new Error(`Too many active ${label} sessions`);
+  }
+  if (
+    sessions.filter((session) => session.connId === connId).length >= MAX_RELAY_SESSIONS_PER_CONN
+  ) {
+    throw new Error(`Too many active ${label} sessions for this connection`);
+  }
+}
+
 function isExpiredTalkRelaySession(
   session: TalkRelayLifecycleSession,
   validNowMs: number,
@@ -22,7 +35,6 @@ function isExpiredTalkRelaySession(
   return expiresAtMs === undefined || validNowMs > expiresAtMs;
 }
 
-/** Closes every expired relay session in the provided process-local map. */
 export function closeExpiredTalkRelaySessions<TSession extends TalkRelayLifecycleSession>(params: {
   sessions: Iterable<TSession>;
   closeSession: CloseTalkRelaySession<TSession>;
@@ -38,7 +50,6 @@ export function closeExpiredTalkRelaySessions<TSession extends TalkRelayLifecycl
   }
 }
 
-/** Closes every relay session owned by a disconnected gateway connection. */
 export async function closeTalkRelaySessionsForConnection<
   TSession extends TalkRelayLifecycleSession,
 >(params: {

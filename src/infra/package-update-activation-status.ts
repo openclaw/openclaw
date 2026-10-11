@@ -23,13 +23,13 @@ export function readReleasedPackageActivationReceipt(installKey: string) {
   if (!fs.lstatSync(journal, { throwIfNoEntry: false })) {
     return undefined;
   }
-  const anchorIdentity = privatePackageActivationIdentity(anchor, true);
-  const journalIdentity = privatePackageActivationIdentity(journal, false);
+  const anchorIdentity = privatePackageActivationIdentity(anchor, "anchor");
+  const journalIdentity = privatePackageActivationIdentity(journal, "journal");
   const parentIdentity = packageActivationIdentity(path.dirname(anchor), "parent");
   const assertIdentity = () => {
     if (
-      privatePackageActivationIdentity(anchor, true) !== anchorIdentity ||
-      privatePackageActivationIdentity(journal, false) !== journalIdentity ||
+      privatePackageActivationIdentity(anchor, "anchor") !== anchorIdentity ||
+      privatePackageActivationIdentity(journal, "journal") !== journalIdentity ||
       packageActivationIdentity(path.dirname(anchor), "parent") !== parentIdentity ||
       fs.realpathSync(anchor) !== anchor
     ) {
@@ -150,3 +150,20 @@ export const selectedPackageRetirementGeneration = (record: PackageActivationRec
     : record.phase === "publication-complete"
       ? "candidate"
       : "previous";
+
+export function assertPackageActivationActionAllowed(
+  record: PackageActivationRecord,
+  action: "repair" | "retire",
+) {
+  const allowed =
+    action === "repair"
+      ? ["preparing", "prepared", "publishing", "publication-complete"]
+      : ["publication-complete", "rolled-back", "aborted", "retiring", "anchor-retired"];
+  if (!allowed.includes(record.phase)) {
+    const refusal =
+      action === "repair"
+        ? "Forward publication is disarmed"
+        : "Package evidence cannot be retired";
+    throw new Error(`${refusal} (${record.phase}).`);
+  }
+}

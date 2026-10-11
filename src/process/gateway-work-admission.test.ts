@@ -11,11 +11,14 @@ import { createDeferredCore } from "../shared/deferred.js";
 import {
   beginGatewayRestartSignalAdmission,
   beginGatewayRootWorkAdmissionWhenOpen,
+  beginGatewayShutdownCleanup,
   captureGatewayRootWorkAdmissionContinuationScope,
+  captureGatewayRootWorkReleaseObserver,
   GatewayDrainingError,
   getActiveGatewayRootWorkCount,
   getActiveGatewayRootWorkHolders,
   getGatewayRestartDrainSignal,
+  getGatewayShutdownCleanupSignal,
   getGatewaySuspendAdmissionPhase,
   isGatewayRestartDrainError,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -94,9 +97,13 @@ it.each(["stop (SIGTERM)", "restart (SIGUSR2)"] as const)(
   "preserves cancellation while stop supersedes %s refusals",
   async (first) => {
     const signal = getGatewayRestartDrainSignal();
+    const cleanupSignal = getGatewayShutdownCleanupSignal();
+    beginGatewayShutdownCleanup();
+    expect(cleanupSignal.aborted).toBe(false);
     const aborted = vi.fn();
     signal.addEventListener("abort", aborted);
     markGatewayRestartDraining(first);
+    expect(cleanupSignal.aborted).toBe(false);
     const originalReason = signal.reason;
     expect(originalReason).toMatchObject({
       name: "GatewayDrainingError",
@@ -116,8 +123,11 @@ it.each(["stop (SIGTERM)", "restart (SIGUSR2)"] as const)(
     await expect(runWithGatewayIndependentRootWorkAdmission(async () => {})).rejects.toThrow(
       message,
     );
+    beginGatewayShutdownCleanup();
+    expect(cleanupSignal.aborted).toBe(true);
     resetGatewayWorkAdmission();
     expect(getGatewayRestartDrainSignal().aborted).toBe(false);
+    expect(getGatewayShutdownCleanupSignal().aborted).toBe(false);
   },
 );
 
@@ -516,6 +526,46 @@ it("does not retire process-lifetime work with the request that started it", asy
   releaseChild();
   await expect(child).resolves.toBe(false);
 });
+
+it.each(["settled", "reset"] as const)(
+  "observes final root release once without retaining it (%s)",
+  async (reason) => {
+    expect(captureGatewayRootWorkReleaseObserver()).toBeNull();
+    const root = tryBeginGatewayRootWorkAdmission()!;
+    const { observe, retained } = await root.run(async () => ({
+      observe: captureGatewayRootWorkReleaseObserver()!,
+      retained: retainGatewayRootWorkAdmissionContinuationScope()!,
+    }));
+    const released = vi.fn();
+    const removed = vi.fn();
+    observe(() => {
+      throw new Error("synthetic observer failure");
+    });
+    const stop = observe(released);
+    observe(removed)();
+    root.release();
+    expect(released).not.toHaveBeenCalled();
+    await retained.run(async () => {
+      retained.release();
+      expect(released).not.toHaveBeenCalled();
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      if (reason === "reset") {
+        resetGatewayWorkAdmission();
+      }
+    });
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+    expect(released).toHaveBeenCalledExactlyOnceWith(reason);
+    expect(removed).not.toHaveBeenCalled();
+    root.release();
+    retained.release();
+    resetGatewayWorkAdmission();
+    stop();
+    expect(released).toHaveBeenCalledOnce();
+    const late = vi.fn();
+    observe(late);
+    expect(late).toHaveBeenCalledExactlyOnceWith(reason);
+  },
+);
 
 it.each(
   continuations.flatMap((entry) =>

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../config/sessions.js";
+import { readResolvedSessionEntryInWorker } from "../config/sessions/session-accessor.entry.js";
 import {
   resolveSessionEntryAccessTarget,
   updateResolvedSessionEntry,
@@ -138,7 +139,7 @@ async function drainPluginNextTurnInjections(
     return [];
   }
   const scope = { cfg: params.cfg, sessionKey, agentId: params.agentId };
-  const { entry: selectedEntry } = resolveSessionEntryAccessTarget(scope);
+  const selectedEntry = await readResolvedSessionEntryInWorker(scope);
   // Empty queues need no qualified mutation target. Concurrent enqueues wait for the next turn.
   if (
     !selectedEntry?.pluginNextTurnInjections ||
@@ -262,14 +263,7 @@ export async function patchPluginSessionExtension(params: {
   // extension opted in via `sessionEntrySlotKey`. The slot is a read-only
   // mirror: writes still go through patchSessionExtension; the host overwrites
   // the slot value on every patch and clears it on unset.
-  const rawSlotKey = normalizeOptionalString(registration.extension.sessionEntrySlotKey);
-  const normalizedSlotKey = rawSlotKey ? normalizeSessionEntrySlotKey(rawSlotKey) : undefined;
-  if (normalizedSlotKey?.ok === false) {
-    log.warn(
-      `plugin session extension slot promotion skipped for ${pluginId}/${namespace}: ${normalizedSlotKey.error}`,
-    );
-  }
-  const slotKey = normalizedSlotKey?.ok === true ? normalizedSlotKey.key : undefined;
+  const slotKey = registration.extension.sessionEntrySlotKey;
   const updated = await updateResolvedSessionEntry(
     {
       cfg: params.cfg,

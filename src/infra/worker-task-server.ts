@@ -1,4 +1,5 @@
-import type { MessagePort, Transferable } from "node:worker_threads";
+import { MessagePort, type Transferable } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   serveOwnedWorkerTasks as serveRuntimeWorkerTasks,
   type WorkerTaskChannel,
@@ -10,8 +11,17 @@ import {
   decodeAgentDatabaseReaderRequest,
   installDeletedAgentDatabaseFences,
 } from "./agent-database-readers.js";
+import {
+  installSqliteDatabaseAdmissions,
+  withSqliteDatabaseAdmissionExchange,
+} from "./sqlite-database-admission.js";
+import {
+  bindSqliteDatabaseAdmissionUpstream,
+  exchangeSqliteDatabaseAdmissions,
+} from "./sqlite-worker-database-admission-relay.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "./worker-idle-gc.js";
 import { serveWorkerMemorySamples } from "./worker-memory.js";
+import { WORKER_TASK_PORT_MESSAGE, type WorkerTaskContext } from "./worker-task-transport.js";
 
 export type { WorkerTaskChannel } from "@openclaw/worker-runtime/worker";
 
@@ -39,29 +49,62 @@ export function serveOwnedWorkerTasks<Output>(
   } = {},
 ): void {
   let memoryPort: MessagePort;
+  let taskPort: MessagePort | undefined;
+  let databaseAdmissionPort: MessagePort | undefined;
   let memorySamplesStarted = false;
-  serveRuntimeWorkerTasks<Output, [string, string][]>(
-    handler,
+  const runWithDatabaseAdmission = async <T>(operation: () => T | Promise<T>): Promise<T> => {
+    const port = databaseAdmissionPort;
+    if (!port) {
+      return operation();
+    }
+    let active = true;
+    try {
+      return await withSqliteDatabaseAdmissionExchange((admissions, location, create) => {
+        if (!active) {
+          throw new Error("SQLite admission facts outlived their worker task");
+        }
+        return exchangeSqliteDatabaseAdmissions(port, admissions, location, create);
+      }, operation);
+    } finally {
+      active = false;
+    }
+  };
+  serveRuntimeWorkerTasks<Output, WorkerTaskContext>(
+    (input, channel, control) => runWithDatabaseAdmission(() => handler(input, channel, control)),
     {
       ...options,
-      closeResource: async (key) => {
-        const request = decodeAgentDatabaseReaderRequest(key);
-        if (!request && !options.closeResource) {
-          throw new Error("Worker does not own retained resources");
-        }
-        if (request) {
-          await applyAgentDatabaseReaderRequest(request);
-        }
-        if (!request || request.kind === "close") {
-          await options.closeResource?.(key);
-        }
-      },
+      closeResource: (key) =>
+        runWithDatabaseAdmission(async () => {
+          const request = decodeAgentDatabaseReaderRequest(key);
+          if (!request && !options.closeResource) {
+            throw new Error("Worker does not own retained resources");
+          }
+          if (request) {
+            await applyAgentDatabaseReaderRequest(request);
+          }
+          if (!request || request.kind === "close") {
+            await options.closeResource?.(key);
+          }
+        }),
     },
     {
+      selectStartupPort(message) {
+        if (!isRecord(message) || message.type !== WORKER_TASK_PORT_MESSAGE) {
+          return undefined;
+        }
+        if (!(message.port instanceof MessagePort)) {
+          throw new Error("Retained worker task port is invalid");
+        }
+        taskPort = message.port;
+        return taskPort;
+      },
       initialize(port) {
         // Results use the host port; worker-local diagnostics must keep JSON stdout clean.
         loggingState.forceConsoleToStderr = true;
         memoryPort = port;
+      },
+      onReady() {
+        taskPort?.postMessage({ status: "ready" }, []);
       },
       onMessage(sampleMemory) {
         if (sampleMemory && !memorySamplesStarted) {
@@ -70,7 +113,14 @@ export function serveOwnedWorkerTasks<Output>(
         }
         cancelWorkerIdleGc();
       },
-      installTaskContext: installDeletedAgentDatabaseFences,
+      installTaskContext(context) {
+        installDeletedAgentDatabaseFences(context.deletedAgentDatabaseFences);
+        installSqliteDatabaseAdmissions(context.databaseAdmissions);
+        if (context.databaseAdmissionPort) {
+          bindSqliteDatabaseAdmissionUpstream(context.databaseAdmissionPort);
+        }
+        databaseAdmissionPort ??= context.databaseAdmissionPort;
+      },
       onIdle: scheduleWorkerIdleGc,
     },
   );

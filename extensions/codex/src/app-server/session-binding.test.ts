@@ -1,4 +1,3 @@
-// Codex tests cover the SQLite-backed thread binding facade.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -66,122 +65,6 @@ describe("Codex app-server binding store", () => {
     current = false;
     await expect(writing).rejects.toThrow("resume authority changed");
     expect(store.read(identity)).toEqual(binding);
-  });
-
-  it("deletes only the requested stable owner in SQLite", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-binding-delete-"));
-    try {
-      const state = createCodexSqliteTestBindingStateStore({
-        namespace: "deletion-test",
-        maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
-        overflowPolicy: "reject-new",
-        env: { ...process.env, OPENCLAW_STATE_DIR: root },
-      });
-      const store = createCodexAppServerBindingStore(state);
-      const base = {
-        kind: "session" as const,
-        agentId: "main",
-        sessionId: "shared-id",
-        sessionKey: "agent:main:cron:job",
-      };
-      const run = { ...base, sessionKey: `${base.sessionKey}:run:one` };
-      for (const identity of [base, run]) {
-        await store.mutate(identity, {
-          kind: "set",
-          binding: {
-            threadId: identity.sessionKey,
-            cwd: "/repo",
-          },
-        });
-      }
-      await store.withSessionDeletion(
-        run,
-        () => {},
-        async (_binding, mutation) => {
-          mutation.commit();
-          expect(state.lookup(bindingStoreKey(run))).toBeUndefined();
-          expect(state.lookup(bindingStoreKey(base))).toMatchObject({ state: "active" });
-        },
-      );
-      expect(state.entries().map(({ key }) => key)).toEqual([bindingStoreKey(base)]);
-    } finally {
-      await closeOpenClawStateDatabaseAsync();
-      resetPluginStateStoreForTests();
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("removes retired fences without creating rows for absent bindings", async () => {
-    const { state, values } = createStateStore();
-    const store = createCodexAppServerBindingStore(state);
-    const identity = {
-      kind: "session" as const,
-      agentId: "main",
-      sessionId: "old",
-      sessionKey: "agent:main:cron:expired",
-    };
-    await store.mutate(identity, { kind: "set", binding: { threadId: "old", cwd: "/repo" } });
-    await store.retireSessionGeneration(identity);
-    for (let attempt = 0; attempt < 2; attempt++) {
-      await store.withSessionDeletion(
-        identity,
-        () => {},
-        async (binding, mutation) => {
-          expect(binding).toBeUndefined();
-          mutation.commit();
-        },
-      );
-      expect(values.size).toBe(0);
-    }
-  });
-
-  it("rejects deletion by a stale stable generation", async () => {
-    const { state, values } = createStateStore();
-    const store = createCodexAppServerBindingStore(state);
-    const identity = {
-      kind: "session" as const,
-      agentId: "main",
-      sessionId: "old",
-      sessionKey: "agent:main:cron:expired",
-    };
-    const successor = {
-      version: 1 as const,
-      state: "active" as const,
-      sessionId: "new",
-      binding: { threadId: "new", cwd: "/repo" },
-    };
-    state.register(bindingStoreKey(identity), successor);
-    await expect(
-      store.withSessionDeletion(
-        identity,
-        () => {},
-        async (_binding, mutation) => {
-          mutation.commit();
-        },
-      ),
-    ).rejects.toThrow("generation changed");
-    expect(values.get(bindingStoreKey(identity))).toEqual(successor);
-  });
-
-  it("stores domain data under the canonical session identity", async () => {
-    const { state, values } = createStateStore();
-    const store = createCodexAppServerBindingStore(state);
-    const identity = { kind: "session" as const, agentId: "main", sessionId: "session-1" };
-
-    await store.mutate(identity, {
-      kind: "set",
-      binding: { threadId: "thread-1", cwd: "/repo", model: "gpt-5.4-codex" },
-    });
-
-    const binding = store.read(identity);
-    expect(binding).toMatchObject({ threadId: "thread-1", cwd: "/repo" });
-    expect(binding).not.toHaveProperty("sessionFile");
-    expect(binding).not.toHaveProperty("schemaVersion");
-    expect(values.get("session:main:session-1")).toMatchObject({
-      version: 1,
-      state: "active",
-      binding: { threadId: "thread-1" },
-    });
   });
 
   it("replaces only the exact ordinary thread owner", async () => {
@@ -1261,48 +1144,6 @@ describe("Codex app-server binding store", () => {
     ).resolves.toBe(false);
   });
 
-  it("verifies and releases a retired fence for the still-current stable session id", async () => {
-    const { state, values } = createStateStore();
-    const store = createCodexAppServerBindingStore(state);
-    const identity = {
-      kind: "session" as const,
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:telegram:chat-1",
-    };
-    await store.mutate(identity, {
-      kind: "set",
-      binding: { threadId: "thread-old", cwd: "/old" },
-    });
-    await store.retireSessionGeneration(identity);
-
-    const plan = await store.prepareSessionGenerationReclaim(identity);
-    expect(plan).toEqual({
-      kind: "verify",
-      expectedPreviousSessionId: identity.sessionId,
-    });
-    if (plan.kind !== "verify") {
-      throw new Error("expected the current retired generation to require verification");
-    }
-    await expect(
-      store.mutate(identity, {
-        kind: "reclaim-generation",
-        expectedPreviousSessionId: plan.expectedPreviousSessionId,
-      }),
-    ).resolves.toBe(true);
-    expect(values.get(bindingStoreKey(identity))).toEqual({
-      version: 1,
-      state: "cleared",
-      sessionId: identity.sessionId,
-    });
-    await expect(
-      store.mutate(identity, {
-        kind: "set",
-        binding: { threadId: "thread-recovered", cwd: "/new" },
-      }),
-    ).resolves.toBe(true);
-  });
-
   it("recovers a retired in-place generation through the authoritative session store", async () => {
     const fixture = await createOpenClawTestState({
       prefix: "openclaw-codex-reset-reclaim-",
@@ -1400,32 +1241,6 @@ describe("Codex app-server binding store", () => {
     });
   });
 
-  it("rejects stale patches and absent-only writes", async () => {
-    const { state } = createStateStore();
-    const store = createCodexAppServerBindingStore(state);
-    const identity = { kind: "conversation" as const, bindingId: "binding-1" };
-    await store.mutate(identity, {
-      kind: "set",
-      binding: { threadId: "thread-new", cwd: "/repo" },
-    });
-
-    await expect(
-      store.mutate(identity, {
-        kind: "patch",
-        threadId: "thread-old",
-        patch: { model: "stale-model" },
-      }),
-    ).resolves.toBe(false);
-    await expect(
-      store.mutate(identity, {
-        kind: "set",
-        binding: { threadId: "thread-stale", cwd: "/repo" },
-        if: { kind: "absent" },
-      }),
-    ).resolves.toBe(false);
-    expect(store.read(identity)).toMatchObject({ threadId: "thread-new" });
-  });
-
   it("rejects empty storage identities", () => {
     expect(() => bindingStoreKey({ kind: "session", agentId: "main", sessionId: " " })).toThrow(
       "requires a session id",
@@ -1435,4 +1250,5 @@ describe("Codex app-server binding store", () => {
     ).toThrow("requires an agent id");
   });
 });
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

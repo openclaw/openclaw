@@ -76,7 +76,6 @@ export type SerializedCodeModeNamespaceValue =
   | { kind: "object"; entries: Array<[string, SerializedCodeModeNamespaceValue]> }
   | { kind: "value"; value: unknown };
 
-/** Descriptor sent to code mode for one visible namespace. */
 export type CodeModeNamespaceDescriptor = {
   id: string;
   globalName: string;
@@ -88,7 +87,6 @@ type CodeModeNamespaceCatalogEntry = {
   id?: string;
   source?: string;
   name: string;
-  sourceName?: string;
   description?: string;
   parameters?: unknown;
   mcp?: PluginToolMcpMeta;
@@ -102,7 +100,6 @@ type CodeModeMcpCatalogBinding = {
   apiPath: string;
 };
 
-/** Runtime dispatcher for invoking callable namespace paths. */
 export type CodeModeNamespaceRuntime = {
   descriptors: CodeModeNamespaceDescriptor[];
   apiFiles: CodeModeApiVirtualFile[];
@@ -112,22 +109,15 @@ export type CodeModeNamespaceRuntime = {
     path: string[],
     args: unknown[],
     executeTool: (params: {
-      pluginId: string;
       toolName: string;
       catalogId: string;
       input: unknown;
-      namespaceId: string;
-      path: string[];
     }) => Promise<unknown>,
   ): Promise<unknown>;
 };
 
 function toIdentifier(value: string, fallback: string): string {
-  const words = value
-    .trim()
-    .split(/[^A-Za-z0-9]+/u)
-    .map((word) => word.trim())
-    .filter(Boolean);
+  const words = value.split(/[^A-Za-z0-9]+/u).filter(Boolean);
   const base =
     words.length === 0
       ? fallback
@@ -138,8 +128,7 @@ function toIdentifier(value: string, fallback: string): string {
               : word.charAt(0).toUpperCase() + word.slice(1),
           )
           .join("");
-  const safe = base.replace(/^[^A-Za-z_$]+/u, "").replace(/[^A-Za-z0-9_$]/gu, "");
-  return /^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(safe) ? safe : fallback;
+  return base.replace(/^[^A-Za-z_$]+/u, "") || fallback;
 }
 
 function uniqueIdentifier(base: string, used: Set<string>): string {
@@ -163,11 +152,10 @@ function mapMcpNamespaceInput(schema: unknown, args: unknown[]): unknown {
     throw new Error("MCP namespace tools accept one object argument.");
   }
   const firstArg = args[0];
-  const input: Record<string, unknown> =
-    firstArg === undefined ? {} : isRecord(firstArg) ? { ...firstArg } : {};
   if (firstArg !== undefined && !isRecord(firstArg)) {
     throw new Error("MCP namespace tools accept one object argument.");
   }
+  const input: Record<string, unknown> = { ...firstArg };
   for (const [key, descriptor] of Object.entries(readMcpSchemaProperties(schema))) {
     if (
       !isRecord(descriptor) ||
@@ -228,7 +216,6 @@ type McpNamespaceModel = {
 
 type McpNamespaceServer = {
   key: string;
-  serverName: string;
   safeServerName: string;
   node?: NonNullable<NonNullable<CodeModeNamespaceCatalogEntry["mcp"]>["node"]>;
 };
@@ -299,7 +286,6 @@ function createMcpNamespacePlan(catalog: readonly CodeModeNamespaceCatalogEntry[
     if (!serversByKey.has(key)) {
       serversByKey.set(key, {
         key,
-        serverName: mcp.serverName,
         safeServerName: mcp.safeServerName,
         ...(mcp.node ? { node: mcp.node } : {}),
       });
@@ -351,7 +337,6 @@ function createMcpNamespaceModel(
       serverDoc = {
         identifier: serverIdentifier,
         serverName: mcp.serverName,
-        ...(mcp.node ? { nodeLabel: mcpNodeLabel(mcp.node) } : {}),
         tools: [],
       };
       serverDocs.set(serverIdentifier, serverDoc);
@@ -446,7 +431,6 @@ declare function log(message: string): void;
 // Schema: const fact = await agents.run<{ answer: string }>("Research", { schema: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"] } });
 `;
 
-/** Builds system-prompt text describing visible code-mode namespace globals. */
 export function describeCodeModeNamespacesForPrompt(
   catalog?: readonly CodeModeNamespaceCatalogEntry[],
 ): string {
@@ -501,7 +485,6 @@ function serializeMcpNamespaceScope(scope: McpNamespaceScope): SerializedCodeMod
   };
 }
 
-/** Creates the runtime descriptor/invocation layer for visible namespaces. */
 export function createCodeModeNamespaceRuntime(
   catalog: readonly CodeModeNamespaceCatalogEntry[] = [],
 ): CodeModeNamespaceRuntime {
@@ -544,11 +527,8 @@ export function createCodeModeNamespaceRuntime(
       }
       return toCodeModeJsonSafe(
         await executeTool({
-          pluginId: "bundle-mcp",
           ...target.tool,
           input,
-          namespaceId,
-          path: [...path],
         }),
       );
     },

@@ -25,51 +25,50 @@ afterEach(() => {
 });
 
 describe("release evidence API reads", () => {
-  it.each(["sync", "async"])("recovers a 502 followed by 200 (%s)", async (mode) => {
-    const wait = vi.spyOn(Atomics, "wait").mockReturnValue("timed-out");
-    const failure = Object.assign(new Error("gh failed"), {
-      stderr: "gh: Server Error (HTTP 502)",
-      stdout: "partial response",
-    });
-    transport.read.mockImplementationOnce(() => {
-      throw failure;
-    });
-    transport.read.mockReturnValue(
-      mode === "sync" ? '{"id":42}' : '{"total_count":1,"jobs":[{"id":7}]}',
-    );
-    const client = createReleaseEvidenceClient("openclaw/openclaw");
-    const result =
-      mode === "sync" ? client.getRunAttempt("42", 1) : await client.getRunAttemptJobs("42", 1);
-    expect(result).toEqual(mode === "sync" ? { id: 42 } : [{ id: 7 }]);
-    expect(transport.read).toHaveBeenCalledTimes(2);
-    expect(
-      mode === "sync"
-        ? wait.mock.calls.map((call) => call[3])
-        : transport.sleep.mock.calls.map((call) => call[0]),
-    ).toEqual([2000]);
-  });
-
-  it.each(["sync", "async"])("fails after four 502 responses (%s)", async (mode) => {
-    const wait = vi.spyOn(Atomics, "wait").mockReturnValue("timed-out");
-    const failure = Object.assign(new Error("gh failed"), {
-      stderr: "gh: Server Error (HTTP 502)",
-    });
-    transport.read.mockImplementation(() => {
-      throw failure;
-    });
-    const client = createReleaseEvidenceClient("openclaw/openclaw");
-    await expect(
-      Promise.resolve().then(() =>
+  it.each([
+    { mode: "sync", failures: 1, network: false },
+    { mode: "async", failures: 1, network: false },
+    { mode: "sync", failures: 4, network: false },
+    { mode: "async", failures: 4, network: false },
+    { mode: "sync", failures: 1, network: true },
+  ])(
+    "bounds $mode retries ($failures failures, network: $network)",
+    async ({ mode, failures, network }) => {
+      const wait = vi.spyOn(Atomics, "wait").mockReturnValue("timed-out");
+      const failure = Object.assign(
+        new Error("gh failed"),
+        network
+          ? { code: "ECONNRESET" }
+          : {
+              stderr: "gh: Server Error (HTTP 502)",
+              stdout: "partial response",
+            },
+      );
+      for (let attempt = 0; attempt < failures; attempt++) {
+        transport.read.mockImplementationOnce(() => {
+          throw failure;
+        });
+      }
+      transport.read.mockReturnValue(
+        mode === "sync" ? '{"id":42}' : '{"total_count":1,"jobs":[{"id":7}]}',
+      );
+      const client = createReleaseEvidenceClient("openclaw/openclaw");
+      const result = Promise.resolve().then(() =>
         mode === "sync" ? client.getRunAttempt("42", 1) : client.getRunAttemptJobs("42", 1),
-      ),
-    ).rejects.toBe(failure);
-    expect(transport.read).toHaveBeenCalledTimes(4);
-    expect(
-      mode === "sync"
-        ? wait.mock.calls.map((call) => call[3])
-        : transport.sleep.mock.calls.map((call) => call[0]),
-    ).toEqual([2000, 4000, 8000]);
-  });
+      );
+      if (failures === 4) {
+        await expect(result).rejects.toBe(failure);
+      } else {
+        await expect(result).resolves.toEqual(mode === "sync" ? { id: 42 } : [{ id: 7 }]);
+      }
+      expect(transport.read).toHaveBeenCalledTimes(failures === 4 ? 4 : 2);
+      expect(
+        mode === "sync"
+          ? wait.mock.calls.map((call) => call[3])
+          : transport.sleep.mock.calls.map((call) => call[0]),
+      ).toEqual(failures === 4 ? [2000, 4000, 8000] : [2000]);
+    },
+  );
 
   it.each([
     [
@@ -90,18 +89,6 @@ describe("release evidence API reads", () => {
     expect(() => runReleaseCiGh(args)).toThrow(failure);
     expect(transport.read).toHaveBeenCalledOnce();
     expect(wait).not.toHaveBeenCalled();
-  });
-
-  it("recovers a network error", () => {
-    vi.spyOn(Atomics, "wait").mockReturnValue("timed-out");
-    transport.read.mockImplementationOnce(() => {
-      throw Object.assign(new Error("connection failed"), { code: "ECONNRESET" });
-    });
-    transport.read.mockReturnValue('{"id":42}');
-    expect(createReleaseEvidenceClient("openclaw/openclaw").getRunAttempt("42", 1)).toEqual({
-      id: 42,
-    });
-    expect(transport.read).toHaveBeenCalledTimes(2);
   });
 
   it("does not retry a malformed successful response", () => {

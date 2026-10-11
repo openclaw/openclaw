@@ -18,7 +18,11 @@ import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contra
 import { encodeOpenClawStateWorkerError } from "../../state/openclaw-state-worker-error.js";
 import { withSqliteSessionDeletionWorkerParticipant } from "./session-accessor.sqlite-deletion.js";
 import { assertSessionSubagentRunsCurrent } from "./session-accessor.sqlite-descendant-basis.js";
-import { collectReclamationChangedSessionKeys } from "./session-accessor.sqlite-reclamation-publication.js";
+import { collectLifecycleIdentityChanges } from "./session-accessor.sqlite-identity.js";
+import {
+  collectReclamationChangedSessionKeys,
+  collectReclamationDeletionEntries,
+} from "./session-accessor.sqlite-reclamation-publication.js";
 import { reclaimSqliteSessionInTransaction } from "./session-accessor.sqlite-reclamation.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
 import type { SessionEntryPatchReceipt } from "./session-entry-patch.types.js";
@@ -49,34 +53,55 @@ export function deleteSessionWithNativeBindings(
   return runSessionNativeBindingTransaction(
     input,
     context,
-    "session.reclaim.entry",
+    `session.reclaim.${input.plan.kind}`,
     "Native binding deletion",
     (current, wrapReceipt) => {
       const result = reclaimSqliteSessionInTransaction({
         ...input.plan,
         databaseOptions: { ...input.plan.databaseOptions, ...context.options },
       });
-      if (result.kind !== "entry") {
+      if (
+        result.kind !== "entry" &&
+        result.kind !== "lifecycle-artifacts" &&
+        result.kind !== "maintenance-finalize" &&
+        result.kind !== "lifecycle-projection-commit"
+      ) {
         throw new Error("Native binding deletion returned another reclamation operation");
       }
-      const changedKeys = collectReclamationChangedSessionKeys(input.plan, result);
-      const publication = result.value.deleted
-        ? prepareSessionEntryReplacementPublication(
-            {
-              previous: new Map(
-                input.plan.preparedTargetSnapshot.map(({ sessionKey, entry }) => [
-                  sessionKey,
-                  entry,
-                ]),
-              ),
-              current: new Map(),
-              pendingArchiveRecovery: false,
-              membershipInvalidatedKeys: changedKeys,
-              maintenancePlans: [],
-            },
-            current,
-          )
-        : undefined;
+      const changedKeys =
+        result.kind === "entry" && !result.value.deleted
+          ? []
+          : collectReclamationChangedSessionKeys(input.plan, result);
+      const removedEntries = collectReclamationDeletionEntries(input.plan, result);
+      const identities =
+        input.plan.kind === "lifecycle-projection-commit" &&
+        result.kind === "lifecycle-projection-commit"
+          ? collectLifecycleIdentityChanges(
+              input.plan.input.projected,
+              result.value.removedSessionKeys,
+            )
+          : {
+              previous: new Map(removedEntries.map(({ sessionKey, entry }) => [sessionKey, entry])),
+              current: new Map<string, SessionEntry>(),
+            };
+      const publication =
+        changedKeys.length > 0
+          ? prepareSessionEntryReplacementPublication(
+              {
+                ...identities,
+                pendingArchiveRecovery:
+                  result.kind === "lifecycle-projection-commit"
+                    ? result.value.pendingArchives
+                    : false,
+                membershipInvalidatedKeys: changedKeys,
+                maintenancePlans:
+                  result.kind === "lifecycle-projection-commit"
+                    ? result.value.maintenancePlans
+                    : [],
+              },
+              current,
+            )
+          : undefined;
       if (publication) {
         publication.changedKeys = changedKeys;
       }

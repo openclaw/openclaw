@@ -67,14 +67,6 @@ vi.mock("../media/store.js", () => ({
   prunePlaybackTranscodeCache: () => forbiddenDefaultAdapter("playback media GC"),
 }));
 
-vi.mock("../skills/workshop/store-sqlite-record.js", () => ({
-  parseSkillProposalRow: () => forbiddenDefaultAdapter("skill proposal reader"),
-}));
-
-vi.mock("../skills/workshop/workspace-skill-read.js", () => ({
-  listWritableWorkshopSkillSummaries: () => forbiddenDefaultAdapter("skill status reader"),
-}));
-
 vi.mock("./chat-abort.js", () => ({
   abortChatRunById: () => forbiddenDefaultAdapter("chat abort"),
   removeChatAbortControllerEntry: () => forbiddenDefaultAdapter("chat abort removal"),

@@ -108,22 +108,26 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     if (recorder.hasPersisted()) {
       return blockedOwner();
     }
-    let attemptedSessionId: string | undefined;
+    const assertCurrent = () => {
+      state.getPreDispatchAbortSignal()?.throwIfAborted();
+      params.replyOptions?.operatorAuthority?.assertCurrent();
+    };
     let lastOwner: PluginBindingTranscriptOwner | undefined;
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const targetSessionStoreEntry = resolveSessionStoreLookup(
+      const targetSessionStoreEntry = await resolveSessionStoreLookup(
         {
           ...ctx,
           CommandTargetSessionKey: undefined,
           SessionKey: pluginBindingSessionKey,
         },
         cfg,
+        assertCurrent,
       );
+      assertCurrent();
       const targetSessionEntry = targetSessionStoreEntry.entry;
-      if (!targetSessionEntry || targetSessionEntry.sessionId === attemptedSessionId) {
+      if (!targetSessionEntry || targetSessionEntry.sessionId === lastOwner?.expectedSessionId) {
         break;
       }
-      attemptedSessionId = targetSessionEntry.sessionId;
       lastOwner = {
         agentId: targetAgentId,
         expectedSessionId: targetSessionEntry.sessionId,
@@ -245,17 +249,16 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     messageToolAvailable,
     sessionStableMessageToolAvailable,
     isHeartbeat: params.replyOptions?.isHeartbeat,
+    requested: params.replyOptions?.sourceReplyDeliveryMode,
   } as const;
   let sourceReplyPolicy = resolveSourceReplyVisibilityPolicy({
     ...sourceReplyPolicyParams,
-    requested: params.replyOptions?.sourceReplyDeliveryMode,
     defaultVisibleReplies: harnessDefaultVisibleReplies,
   });
   const alternateHarnessDefault =
     harnessDefaultVisibleReplies === "message_tool" ? "automatic" : "message_tool";
   const alternateSourceReplyDeliveryMode = resolveSourceReplyVisibilityPolicy({
     ...sourceReplyPolicyParams,
-    requested: params.replyOptions?.sourceReplyDeliveryMode,
     defaultVisibleReplies: alternateHarnessDefault,
   }).sourceReplyDeliveryMode;
   const sourceReplyDeliveryModeOrigin =
@@ -291,6 +294,10 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
           ...(sourceReplyPolicy.sendPolicyDenied ? { sendPolicyDenied: true } : {}),
         }
       : result;
+  const baseDispatchResult = (queuedFinal = false) => ({
+    queuedFinal,
+    counts: dispatcher.getQueuedCounts(),
+  });
   const explicitCommandTurnCtx = isExplicitCommandTurnContext(ctx, cfg);
   const activeRunSafeCommandTurn =
     explicitCommandTurnCtx &&
@@ -305,6 +312,13 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     !sourceReplyPolicy.suppressAutomaticSourceDelivery ||
     explicitCommandTurnCtx ||
     (ctx.InboundEventKind !== "room_event" && !unauthorizedTextSlashSourceReplyCtx);
+  const skipDuplicate = () => {
+    recordProcessed("skipped", { reason: "duplicate" });
+    return {
+      status: "complete" as const,
+      result: attachSourceReplyDeliveryMode(baseDispatchResult()),
+    };
+  };
 
   const durableSourceTurnId =
     readChannelSourceTurnId(ctx) ??
@@ -325,48 +339,42 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
   if (isDuplicateRestartRecoverySource(sessionStoreEntry.entry, durableSourceTurnId)) {
     // Process-local inbound dedupe cannot see provider redelivery after restart.
     // Drop durable duplicates before any plugin dispatch hook can repeat effects.
-    recordProcessed("skipped", { reason: "duplicate" });
-    return {
-      status: "complete" as const,
-      result: attachSourceReplyDeliveryMode({
-        queuedFinal: false,
-        counts: dispatcher.getQueuedCounts(),
-      }),
-    };
+    return skipDuplicate();
   }
 
   const sourceRunId = normalizeOptionalString(ctx.MessageSid);
   const recorder = params.replyOptions?.userTurnTranscriptRecorder;
-  const reclaimPendingInput =
+  let reclaimPendingInput: (() => boolean) | undefined;
+  if (
     recorder?.getPendingInputMessage?.() &&
     !recorder.hasPersisted() &&
     sourceRunId &&
     sessionStoreEntry.sessionKey &&
     sessionStoreEntry.entry?.sessionId
-      ? await prepareSessionPendingInputDedupeRecovery(
-          {
-            agentId: sessionStoreEntry.agentId ?? sessionAgentId,
-            storePath: sessionStoreEntry.storePath,
-            sessionKey: sessionStoreEntry.sessionKey,
-            sessionId: sessionStoreEntry.entry.sessionId,
-          },
-          sourceRunId,
-        )
-      : undefined;
-  const inboundDedupeClaim = claimInboundDedupe(ctx, {
-    reclaimPendingInput: reclaimPendingInput
-      ? () => !recorder!.hasPersisted() && reclaimPendingInput()
-      : undefined,
-  });
-  if (inboundDedupeClaim.status === "duplicate" || inboundDedupeClaim.status === "inflight") {
-    recordProcessed("skipped", { reason: "duplicate" });
-    return {
-      status: "complete" as const,
-      result: attachSourceReplyDeliveryMode({
-        queuedFinal: false,
-        counts: dispatcher.getQueuedCounts(),
-      }),
+  ) {
+    const recoveryScope = {
+      agentId: sessionStoreEntry.agentId ?? sessionAgentId,
+      storePath: sessionStoreEntry.storePath,
+      sessionKey: sessionStoreEntry.sessionKey,
+      sessionId: sessionStoreEntry.entry.sessionId,
     };
+    reclaimPendingInput = await prepareSessionPendingInputDedupeRecovery(
+      recoveryScope,
+      sourceRunId,
+    );
+  }
+  const claimInput = () => {
+    const reclaim = reclaimPendingInput;
+    return claimInboundDedupe(ctx, {
+      reclaimPendingInput: reclaim ? () => !recorder!.hasPersisted() && reclaim() : undefined,
+    });
+  };
+  const inboundDedupeClaim =
+    reclaimPendingInput && recorder?.withPendingInputCurrent
+      ? await recorder.withPendingInputCurrent(claimInput)
+      : claimInput();
+  if (inboundDedupeClaim.status === "duplicate" || inboundDedupeClaim.status === "inflight") {
+    return skipDuplicate();
   }
   const commitInboundDedupeIfClaimed = () => inboundDedupeClaim.commit?.();
   const releaseInboundDedupeIfClaimed = () => inboundDedupeClaim.release?.();
@@ -398,8 +406,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       commitInboundDedupeIfClaimed();
     }
     return attachSourceReplyDeliveryMode({
-      queuedFinal: false,
-      counts: dispatcher.getQueuedCounts(),
+      ...baseDispatchResult(),
       ...(opts?.sessionMetadataChanges
         ? { sessionMetadataChanges: opts.sessionMetadataChanges }
         : {}),
@@ -429,8 +436,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     markIdle("message_completed");
     state.completeDispatchReplyOperation();
     return attachSourceReplyDeliveryMode({
-      queuedFinal,
-      counts: dispatcher.getQueuedCounts(),
+      ...baseDispatchResult(queuedFinal),
       ...(state.turnLedger.hasObservedDelivery() ? { observedReplyDelivery: true } : {}),
     });
   };
@@ -461,8 +467,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     return {
       status: "complete" as const,
       result: attachSourceReplyDeliveryMode({
-        queuedFinal: false,
-        counts: dispatcher.getQueuedCounts(),
+        ...baseDispatchResult(),
         observedReplyDelivery: true,
       }),
     };

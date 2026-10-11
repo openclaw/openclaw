@@ -240,7 +240,7 @@ it.each(["forced cleanup", "stale admission"])(
     const reopened = openOpenClawAgentDatabase({ agentId: "integrity-lease", env: owner.env });
     expect(diagnostics?.integrityGateOutcome).toBe("healthy");
     if (recovery === "stale admission") {
-      expect(diagnostics?.integrityGateReason).toBe("stale-lease");
+      expect(diagnostics?.integrityGateReason).toBe("stale-lease-full");
     }
     expect(
       reopened.db
@@ -447,7 +447,7 @@ it.each(["", "-wal", "-shm", "-journal"])(
   },
 );
 
-it.each(["quarantine", "terminal latch", "healthy"] as const)(
+it.each(["quarantine", "schema-version latch"] as const)(
   "gates fresh read-only admission on %s and permits a repaired generation",
   (condition) => {
     const owner = openOwner();
@@ -466,9 +466,9 @@ it.each(["quarantine", "terminal latch", "healthy"] as const)(
       ).toBe(true);
     }
     closeOpenClawAgentDatabasesForTest();
-    const latchError = new Error("synthetic terminal latch");
-    latchError.name = "SqliteIntegrityError";
-    if (condition === "terminal latch") {
+    const latchError = new Error("synthetic schema-version latch");
+    latchError.name = "SqliteSchemaVersionError";
+    if (condition === "schema-version latch") {
       expect(recordOpenClawAgentDatabaseOpenFailure(owner.database.path, latchError)).toBe(true);
       expect(
         readOpenClawDatabaseQuarantineFailure("agent", owner.database.path, { env: owner.env }),

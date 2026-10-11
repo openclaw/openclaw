@@ -5,6 +5,7 @@ import type { GatewaySessionRow } from "../api/types.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
+import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { renderHoverMarquee } from "../lib/hover-marquee.ts";
 import {
   presenceViewerActivity,
@@ -42,11 +43,12 @@ import { renderNewSessionLink } from "./new-session-link.ts";
 import { areSessionCatalogsSettled } from "./session-data-controller-catalog.ts";
 import type { SessionDataController } from "./session-data-controller.ts";
 
+registerSessionOrganizationEnglish();
+
 type RenderableSessionSection = SidebarVisibleSections["sections"][number];
 
 type SidebarSessionListHost = SessionListHost & {
   readonly sidebarAgentsMode: "chip" | "roster";
-  readonly sessionInvolvingMeFilterActive: boolean;
   readonly sessionData: SessionListHost["sessionData"] &
     Pick<
       SessionDataController,
@@ -131,11 +133,6 @@ export function renderSessionSection(params: {
           : group
             ? "category"
             : "threads";
-  const personFilterActive =
-    host.sessionOwnerFilterActive && host.sessionOwnerFilterId === personOwner?.id;
-  const personFilterLabel = personFilterActive
-    ? t("chat.sidebar.showEveryone")
-    : t("chat.sidebar.showOnlyPerson", { name: label });
   // Collapsed Coding still signals live runs so background work stays visible.
   const collapsedRunningDot =
     collapsed &&
@@ -315,27 +312,6 @@ export function renderSessionSection(params: {
                       >
                         ${chevron}${ownerAvatar}${labelText}
                       </button>`
-                }
-                ${
-                  personOwner &&
-                  host.sessionOwnershipVisibility.filters &&
-                  host.sessionOwnerOptions.some((owner) => owner.id === personOwner.id)
-                    ? html`<button
-                        type="button"
-                        class="sidebar-session-group-actions sidebar-session-person-filter ${
-                          personFilterActive ? "sidebar-session-sort--filtered" : ""
-                        }"
-                        aria-pressed=${personFilterActive}
-                        title=${personFilterLabel}
-                        aria-label=${personFilterLabel}
-                        @click=${(event: MouseEvent) => {
-                          event.stopPropagation();
-                          host.setSessionOwnerFilter(personFilterActive ? null : personOwner.id);
-                        }}
-                      >
-                        ${icons.listFilter}
-                      </button>`
-                    : nothing
                 }
                 ${
                   group || section.id === "ungrouped"
@@ -707,6 +683,13 @@ export function renderSessionListFrame(host: SidebarSessionListHost, body: unkno
           : nothing
       }
       ${homeLoadKeys.map((key) => renderChildSessionLoadError(host, key))}
+      ${
+        host.sessionOrganizer.isDraggingChildSession
+          ? html`<div class="sidebar-session-root-drop" data-session-root-drop role="status">
+              ${t("sessionsView.moveToTopLevel")}
+            </div>`
+          : nothing
+      }
       ${renderSessionMutationError(host)} ${body}
     </section>
   `;

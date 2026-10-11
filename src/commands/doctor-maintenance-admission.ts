@@ -41,8 +41,21 @@ export function resolveDoctorUpdateAdmission(
       return current.kind === "continuation" ? current.run : undefined;
     },
     recordContinuation: () => {
-      readAdmission();
+      const current = readAdmission();
       if (continuation?.steps.some((step) => step.step === "finalize:repair-continuation")) {
+        const run =
+          current.kind === "continuation"
+            ? current.run
+            : current.runs.find((entry) => entry.runId === continuation.runId);
+        const step =
+          current.kind === "continuation"
+            ? "finalize:repair-continuation"
+            : "finalize:repair-takeover";
+        // Fresh admission still checks authority; an existing receipt needs no
+        // writer admission or full integrity scan inside native service deadlines.
+        if (run?.steps.some((entry) => entry.step === step)) {
+          return;
+        }
         recordUpdateRunRepairContinuation(continuation.runId, inheritedRunId, { env });
       }
     },

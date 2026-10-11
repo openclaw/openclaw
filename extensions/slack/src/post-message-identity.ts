@@ -1,8 +1,6 @@
-// Slack plugin module implements best-effort custom identity fallback for chat.postMessage.
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getSlackWebApiErrorData } from "./errors.js";
@@ -30,14 +28,14 @@ export function buildSlackMessageIdentityPayload(identity?: SlackPostMessageIden
 
 function classifySlackCustomIdentityError(err: unknown): "scope" | "argument" | undefined {
   const data = getSlackWebApiErrorData(err);
-  const code = normalizeLowercaseStringOrEmpty(normalizeOptionalString(data?.error));
+  const code = normalizeLowercaseStringOrEmpty(data?.error);
   if (code === "invalid_arguments" || code === "invalid_arg_name") {
     return "argument";
   }
   if (code !== "missing_scope") {
     return undefined;
   }
-  const needed = normalizeLowercaseStringOrEmpty(normalizeOptionalString(data?.needed));
+  const needed = normalizeLowercaseStringOrEmpty(data?.needed);
   if (needed.includes("chat:write.customize")) {
     return "scope";
   }

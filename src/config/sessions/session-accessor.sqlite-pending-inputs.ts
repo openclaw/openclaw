@@ -21,9 +21,13 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { hasSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import type {
+  SessionPendingInputAuthority,
+  SessionPendingInputAuthorityFacts,
+} from "./session-pending-input-authority.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
+import type { SessionPendingInputState } from "./session-pending-input-receipt.types.js";
 
-export type SessionPendingInputState = "queued" | "interrupted" | "cancelled";
 export type SessionPendingInput = {
   id: string;
   runId: string;
@@ -40,6 +44,8 @@ export type SessionPendingInputRow = Selectable<SessionPendingInputs>;
 type PendingInputDatabase = Pick<OpenClawAgentDatabase, "db" | "path">;
 
 export type SessionPendingInputOwner = {
+  agentId?: string;
+  databaseAgentId?: string;
   inputId: string;
   transcriptInputId: string;
   sessionId: string;
@@ -53,6 +59,7 @@ export type SessionPendingInputOwner = {
   messageJson: string;
   config?: OpenClawConfig;
   assertCurrent: () => void;
+  authority?: SessionPendingInputAuthority;
   /** Published only after the exact input was consumed by a committed transcript write. */
   consumed?: true;
   /** Prompt authority is revoked; this owner still holds terminal disposition custody. */
@@ -67,6 +74,8 @@ export type SessionPendingInputOwner = {
 export type SessionPendingInputWorkerFacts = Pick<
   SessionPendingInputOwner,
   | "inputId"
+  | "agentId"
+  | "databaseAgentId"
   | "transcriptInputId"
   | "sessionId"
   | "sessionKey"
@@ -74,7 +83,7 @@ export type SessionPendingInputWorkerFacts = Pick<
   | "idempotencyKey"
   | "lifecycleGeneration"
   | "messageJson"
-> & { sources?: readonly SessionPendingInputWorkerFacts[] };
+> & { preparedAuthority?: true; sources?: readonly SessionPendingInputWorkerFacts[] };
 
 export type SessionPendingInputWorkerReceipt = {
   transcriptInputId: string;
@@ -97,6 +106,8 @@ export function captureSessionPendingInputWorkerCustody() {
     return undefined;
   }
   const copy = (current: SessionPendingInputOwner): SessionPendingInputWorkerFacts => ({
+    agentId: current.agentId,
+    databaseAgentId: current.databaseAgentId,
     inputId: current.inputId,
     transcriptInputId: current.transcriptInputId,
     sessionId: current.sessionId,
@@ -105,13 +116,16 @@ export function captureSessionPendingInputWorkerCustody() {
     idempotencyKey: current.idempotencyKey,
     lifecycleGeneration: current.lifecycleGeneration,
     messageJson: current.messageJson,
+    preparedAuthority:
+      current.authority || current.sources?.some((source) => source.authority) ? true : undefined,
     ...(current.sources ? { sources: current.sources.map(copy) } : {}),
   });
   const relocation = owners.relocation.getStore();
   return {
     facts: copy(owner),
     ...(relocation?.owner === owner ? { relocation: relocation.sourceInputId } : {}),
-    assertCurrent: () => assertPendingInputOwnerCurrent(owner),
+    assertCurrent: (facts?: SessionPendingInputAuthorityFacts, assertSourceCurrent?: () => void) =>
+      assertPendingInputOwnerCurrent(owner, facts, assertSourceCurrent),
     publish(receipt: SessionPendingInputWorkerReceipt) {
       owner.transcriptInputId = receipt.transcriptInputId;
       const consumed = new Set(receipt.consumedInputIds);
@@ -223,18 +237,7 @@ export function assertRegisteredSessionPendingInputOwner(owner: SessionPendingIn
   }
 }
 
-function assertPendingInputOwnerCurrent(owner: SessionPendingInputOwner): void {
-  const worker = workerCustody.getStore();
-  if (worker?.owner === owner) {
-    worker.assertCurrent();
-    return;
-  }
-  if (owner.sources) {
-    for (const source of owner.sources) {
-      assertPendingInputOwnerCurrent(source);
-    }
-    return;
-  }
+function assertPendingInputOwnerActive(owner: SessionPendingInputOwner): void {
   if (
     owners.live.get(owner.inputId) !== owner ||
     owner.settling ||
@@ -244,7 +247,44 @@ function assertPendingInputOwnerCurrent(owner: SessionPendingInputOwner): void {
       "Pending input ownership ended; submit a new turn to continue",
     );
   }
-  owner.assertCurrent();
+}
+
+function assertPendingInputOwnerCurrent(
+  owner: SessionPendingInputOwner,
+  facts?: SessionPendingInputAuthorityFacts,
+  assertSourceCurrent?: () => void,
+): void {
+  const worker = workerCustody.getStore();
+  if (worker?.owner === owner) {
+    worker.assertCurrent();
+    return;
+  }
+  if (owner.sources) {
+    for (const source of owner.sources) {
+      assertPendingInputOwnerCurrent(source, facts, assertSourceCurrent);
+    }
+    return;
+  }
+  assertPendingInputOwnerActive(owner);
+  if (owner.authority && assertSourceCurrent) {
+    if (!facts) {
+      throw new Error("Pending input worker omitted current session authority");
+    }
+    owner.authority.withPreparedCurrent(facts, owner.assertCurrent, assertSourceCurrent);
+  } else {
+    owner.assertCurrent();
+  }
+}
+
+export function assertSessionPendingInputLifetimeCurrent(owner: SessionPendingInputOwner): void {
+  if (owner.sources) {
+    for (const source of owner.sources) {
+      assertSessionPendingInputLifetimeCurrent(source);
+    }
+    return;
+  }
+  assertPendingInputOwnerActive(owner);
+  (owner.authority?.assertLifetimeCurrent ?? owner.assertCurrent)();
 }
 
 export function runWithSessionPendingInput<T>(owner: SessionPendingInputOwner, run: () => T): T {
@@ -350,6 +390,12 @@ export function writeSessionInputCompletion(
   outcome: AgentRunTerminalOutcome,
 ): AgentRunTerminalOutcome {
   const retained = readSessionInputCompletion(database, scope);
+  if (
+    retained &&
+    (retained.run_id !== scope.runId || retained.request_hash !== scope.requestHash)
+  ) {
+    throw new SessionPendingInputCustodyError("Input completion conflicts with the accepted input");
+  }
   if (retained && isFinalInputCompletion(retained.outcome)) {
     return retained.outcome;
   }
@@ -427,7 +473,8 @@ export function prepareCurrentSessionPendingInputDedupeRecovery(
   ) {
     return undefined;
   }
-  assertPendingInputOwnerCurrent(owner);
+  // Preparation does not spend replay custody; the claim rechecks current authority.
+  assertSessionPendingInputLifetimeCurrent(owner);
   return (
     path: string,
     snapshot: { current: boolean; pending?: SessionPendingInputRow },

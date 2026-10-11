@@ -328,21 +328,15 @@ export function parseShippedBaselineExclusions(section: string) {
 }
 
 export function dedicatedSectionVersionForTag(tag: unknown) {
-  // Correction (vX-N) and alpha tags may carry their own exact changelog
-  // heading; beta and stable bodies must come from the stable base section.
+  // Exact beta sections freeze the npm-channel delta. Base-section fallback
+  // remains readable for immutable historical tags that shipped that layout.
   assertString(tag, "tag");
   const taggedVersion = tag.replace(/^v/u, "");
-  if (/-beta\.[1-9][0-9]*$/u.test(taggedVersion)) {
-    return undefined;
-  }
-  return /-(?:alpha\.)?[1-9][0-9]*$/u.test(taggedVersion) ? taggedVersion : undefined;
+  return /-(?:(?:alpha|beta)\.)?[1-9][0-9]*$/u.test(taggedVersion) ? taggedVersion : undefined;
 }
 
-function releaseNotesSectionForTag(changelog: unknown, version: unknown, tag: unknown) {
-  // Alpha and correction tags prefer their own exact heading when the
-  // changelog carries one; otherwise they fall back to the base version.
-  assertString(tag, "tag");
-  assertString(version, "version");
+function releaseNotesSectionForTag(changelog: string, version: string, tag: string) {
+  // Prefer frozen tag-specific notes; historical tags may use the base section.
   const dedicatedVersion = dedicatedSectionVersionForTag(tag);
   if (dedicatedVersion && dedicatedVersion !== version) {
     try {
@@ -385,9 +379,6 @@ export function loadReleaseNotesForTag({
   for (const selectedVersion of new Set(versions)) {
     const source = findReleaseChangelog({ rootDir, ref, version: selectedVersion });
     if (source) {
-      if (source.format !== "initial") {
-        fail("docs-mirrored release notes require the docs-publication renderer");
-      }
       return source;
     }
   }
@@ -408,9 +399,8 @@ export function renderGithubReleaseNotes({
   assertString(tag, "tag");
   assertString(version, "version");
   validateRepository(repository);
-  validateTag(tag);
   const tagVersion = releaseNotesVersionForTag(tag);
-  if (tagVersion !== version) {
+  if (tagVersion !== version && dedicatedSectionVersionForTag(tag) !== version) {
     fail(`release tag ${tag} requires CHANGELOG.md version ${tagVersion}, got ${version}`);
   }
   assertString(changelog, "changelog");
@@ -561,6 +551,9 @@ function main() {
     : changelogPath
       ? readFileSync(changelogPath, "utf8")
       : fail("release notes source was not validated");
+  const validationManifest: unknown = options.validationManifest
+    ? JSON.parse(readFileSync(options.validationManifest, "utf8"))
+    : undefined;
   const target = {
     changelog,
     version,
@@ -568,9 +561,7 @@ function main() {
     repository,
     regularStableVersion: options.regularStableVersion,
     contributionRecordPath: source?.recordPath ?? undefined,
-    validationManifest: options.validationManifest
-      ? JSON.parse(readFileSync(options.validationManifest, "utf8"))
-      : undefined,
+    validationManifest,
   };
   if (options.verifyBody) {
     const result = verifyGithubReleaseNotes({

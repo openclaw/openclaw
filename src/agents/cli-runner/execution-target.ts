@@ -1,3 +1,7 @@
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import type { CliBackendExecute } from "../../plugins/cli-backend.types.js";
 import { getPluginValueInstance } from "../../plugins/plugin-instance-scope.js";
@@ -5,6 +9,17 @@ import type { PluginInstanceConsumer } from "../../plugins/plugin-instance.types
 import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
 import { resolveReplyExpectation } from "../reply-completion.js";
 import type { CliExecutionTarget, PreparedCliRunContext, RunCliAgentParams } from "./types.js";
+
+export function unsupportedIsolatedCompletionError(
+  backendId: string,
+): Error & { code: "unsupported" } {
+  return Object.assign(
+    new Error(
+      `CLI backend "${backendId}" does not support isolated completion; OpenClaw did not start the run.`,
+    ),
+    { name: "IsolatedCompletionUnsupportedError", code: "unsupported" as const },
+  );
+}
 
 /** Keep all CLI transports bound to the same reply-operation identity and terminal contract. */
 export function attachCliReplyBackend(params: RunCliAgentParams, cancel: () => void) {
@@ -26,19 +41,21 @@ export function attachCliReplyBackend(params: RunCliAgentParams, cancel: () => v
 export function createCliRunCurrentAssertion(
   params: PreparedCliRunContext["params"],
   signal = params.abortSignal,
-): () => void {
+): SessionSourceAssertion {
   const assertCallerCurrent = params.assertCurrent;
   const assertAdmitted = resolveAdmittedRunActiveAssertion(params.admittedRunContext, signal);
-  return () => {
-    assertCallerCurrent?.();
-    if (signal?.aborted) {
-      throw createAbortError("CLI run aborted");
-    }
-    if (!assertAdmitted) {
-      throw new Error("CLI run authority is no longer active");
-    }
-    assertAdmitted();
-  };
+  return composeSessionSourceAssertion([
+    assertCallerCurrent,
+    composeSessionSourceAssertion([assertAdmitted], (assertSource) => {
+      if (signal?.aborted) {
+        throw createAbortError("CLI run aborted");
+      }
+      if (!assertAdmitted) {
+        throw new Error("CLI run authority is no longer active");
+      }
+      assertSource();
+    }),
+  ]);
 }
 
 /** Preparation and execution must agree on the owner of private prompt context. */

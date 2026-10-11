@@ -69,7 +69,7 @@ If a macOS node is paired, the Gateway can invoke `system.run` on it - this is r
 
 ## Dynamic skills (watcher / remote nodes)
 
-OpenClaw can refresh the skills list mid-session: the skills watcher updates the snapshot on the next agent turn when `SKILL.md` changes, and connecting a macOS node can make macOS-only skills eligible (based on bin probing). Treat skill folders as trusted code and restrict who can modify them.
+OpenClaw can refresh the skills list mid-session: the skills watcher updates the snapshot on the next agent turn when `SKILL.md` changes, and connecting a macOS node can make macOS-only skills eligible (based on bin checking). Treat skill folders as trusted code and restrict who can modify them.
 
 ## Plugins
 
@@ -135,6 +135,13 @@ Each agent can have its own sandbox + tool policy: full access, read-only, or no
 Common patterns: personal agent (full access, no sandbox), family/work agent (sandboxed + read-only tools), public agent (sandboxed + no filesystem/shell tools).
 
 Tool profiles do not narrow session-tool reach, and sandboxing only clamps the sandboxed caller to its spawn tree; an unsandboxed agent can still read a sandboxed agent's sessions. Session visibility is Gateway-wide and agent-to-agent messaging is on by default, so pair persona profiles with `tools.sessions.visibility` and `tools.agentToAgent` when agents on one Gateway should not see or message each other (see the last example below).
+
+To allow requests without cross-agent history access, keep visibility narrow and
+set the requester's `agents.entries.<agentId>.tools.agentToAgent.send` to selected
+target IDs or `*` patterns. This grants only `sessions_send` and the authorized
+turn's reply, not read, status, session-control, or otherwise hidden watch access.
+It does not override global agent-to-agent restrictions or sandbox spawned-only
+clamps. See the [send-only example and trust limits](/gateway/config-tools/sessions-and-subagents#per-agent-send-only-access).
 
 ### Full access (no sandbox)
 

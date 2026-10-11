@@ -5,6 +5,7 @@ import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import { logVerbose } from "../../globals.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { PreparedReplyTranscriptStart } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../types.js";
 import type { AgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { buildCommandOutputFromToolResultEvent } from "./agent-runner-command-output.js";
@@ -23,15 +24,11 @@ export type MessageToolDeliveryState = {
   completed: boolean;
 };
 
-function readApprovalScopeValue(value: unknown): "turn" | "session" | undefined {
-  return value === "turn" || value === "session" ? value : undefined;
-}
-
-/** Bridges embedded-agent events into channel progress and compaction notices. */
 export function createAgentRunEventHandler(params: {
   turn: AgentTurnParams;
   lifecycleBackstop: AgentLifecycleTerminalBackstop;
-  notifyAgentRunStart: () => void;
+  prepareAgentRunStart: () => void | Promise<void>;
+  notifyAgentRunStart: (transcriptStart?: PreparedReplyTranscriptStart | null) => void;
   sourceRepliesAreToolOnly: boolean;
   provider: string;
   model: string;
@@ -64,7 +61,12 @@ export function createAgentRunEventHandler(params: {
     params.lifecycleBackstop.note(evt);
     const hasLifecyclePhase = evt.stream === "lifecycle" && typeof evt.data.phase === "string";
     if (evt.stream !== "lifecycle" || hasLifecyclePhase) {
-      params.notifyAgentRunStart();
+      const preparation =
+        evt.transcriptStart === undefined ? params.prepareAgentRunStart() : undefined;
+      if (preparation) {
+        await preparation;
+      }
+      params.notifyAgentRunStart(evt.transcriptStart);
     }
     if (evt.stream === "tool" && evt.data.hideFromChannelProgress !== true) {
       const phase = readStringValue(evt.data.phase) ?? "";
@@ -162,6 +164,7 @@ export function createAgentRunEventHandler(params: {
       });
     }
     if (evt.stream === "approval" && !shouldSuppressProgressAfterMessageToolDelivery()) {
+      const scope = evt.data.scope;
       await params.turn.opts?.onApprovalEvent?.({
         phase: readStringValue(evt.data.phase),
         kind: readStringValue(evt.data.kind),
@@ -174,17 +177,20 @@ export function createAgentRunEventHandler(params: {
         command: readStringValue(evt.data.command),
         host: readStringValue(evt.data.host),
         reason: readStringValue(evt.data.reason),
-        scope: readApprovalScopeValue(evt.data.scope),
+        scope: scope === "turn" || scope === "session" ? scope : undefined,
         message: readStringValue(evt.data.message),
       });
     }
+    const readToolEventIdentity = () => ({
+      itemId: readStringValue(evt.data.itemId),
+      phase: readStringValue(evt.data.phase),
+      title: readStringValue(evt.data.title),
+      toolCallId: readStringValue(evt.data.toolCallId),
+      name: readStringValue(evt.data.name),
+    });
     if (evt.stream === "command_output" && !shouldSuppressProgressAfterMessageToolDelivery()) {
       await params.turn.opts?.onCommandOutput?.({
-        itemId: readStringValue(evt.data.itemId),
-        phase: readStringValue(evt.data.phase),
-        title: readStringValue(evt.data.title),
-        toolCallId: readStringValue(evt.data.toolCallId),
-        name: readStringValue(evt.data.name),
+        ...readToolEventIdentity(),
         output: readStringValue(evt.data.output),
         status: readStringValue(evt.data.status),
         exitCode:
@@ -196,21 +202,15 @@ export function createAgentRunEventHandler(params: {
       });
     }
     if (evt.stream === "patch" && !shouldSuppressProgressAfterMessageToolDelivery()) {
+      const readPaths = (value: unknown) =>
+        Array.isArray(value)
+          ? value.filter((entry): entry is string => typeof entry === "string")
+          : undefined;
       await params.turn.opts?.onPatchSummary?.({
-        itemId: readStringValue(evt.data.itemId),
-        phase: readStringValue(evt.data.phase),
-        title: readStringValue(evt.data.title),
-        toolCallId: readStringValue(evt.data.toolCallId),
-        name: readStringValue(evt.data.name),
-        added: Array.isArray(evt.data.added)
-          ? evt.data.added.filter((entry): entry is string => typeof entry === "string")
-          : undefined,
-        modified: Array.isArray(evt.data.modified)
-          ? evt.data.modified.filter((entry): entry is string => typeof entry === "string")
-          : undefined,
-        deleted: Array.isArray(evt.data.deleted)
-          ? evt.data.deleted.filter((entry): entry is string => typeof entry === "string")
-          : undefined,
+        ...readToolEventIdentity(),
+        added: readPaths(evt.data.added),
+        modified: readPaths(evt.data.modified),
+        deleted: readPaths(evt.data.deleted),
         summary: readStringValue(evt.data.summary),
       });
     }
@@ -221,7 +221,9 @@ export function createAgentRunEventHandler(params: {
     const phase = readStringValue(evt.data.phase) ?? "";
     const backend = readStringValue(evt.data.backend);
     const hookMessages = normalizeTrimmedStringList(evt.data.messages);
-    const sendCompactionUserNotices = async (noticePhase: "start" | "end" | "incomplete") => {
+    const sendCompactionUserNotices = async (
+      noticePhase: "start" | "end" | "incomplete" | "degraded",
+    ) => {
       if (hookMessages.length > 0) {
         const noticePayload = createCompactionHookNoticePayload({
           messages: hookMessages,
@@ -232,7 +234,7 @@ export function createAgentRunEventHandler(params: {
           await deliverCompactionNoticePayload(noticePayload, "hook");
         }
       }
-      if (params.notifyUserAboutCompaction) {
+      if (noticePhase === "degraded" || params.notifyUserAboutCompaction) {
         await deliverCompactionNoticePayload(
           createCompactionNoticePayload({
             phase: noticePhase,
@@ -278,6 +280,6 @@ export function createAgentRunEventHandler(params: {
       });
     }
     await params.turn.opts?.onCompactionEnd?.({ completed: true });
-    await sendCompactionUserNotices("end");
+    await sendCompactionUserNotices(evt.data.qualityDegraded === true ? "degraded" : "end");
   };
 }

@@ -50,24 +50,7 @@ const MAX_COMPACTION_SUMMARIES = 16;
 const MAX_SUCCESSFUL_TOOL_CALL_EVENTS = 64;
 const SESSION_RESET_RECALL_CUTOFF = Symbol.for("openclaw.memory.sessionResetRecallCutoff");
 
-type QaSessionTranscriptSummary = {
-  assistantMirrors?: Array<{ identity: string; text: string }>;
-  assistantToolCallCounts: Record<string, number>;
-  compactionSummaries: string[];
-  completedToolCallCounts: Record<string, number>;
-  currentSourceToolDeliveries?: Array<{ toolName: string; threadId?: string }>;
-  eventCursor: number;
-  hasPendingCodeModeWait?: boolean;
-  userMessageCount: number;
-  successfulToolCallCounts: Record<string, number>;
-  successfulToolCallEvents?: Array<{ name: string; timestamp: number; toolCallId: string }>;
-  finalText: string;
-  hasDirectReplySelfMessage: boolean;
-  lastAssistantContentTypes?: string[];
-  lastAssistantErrorMessage?: string;
-  lastAssistantStopReason?: string;
-  lastAssistantToolNames?: string[];
-  lastMessageRole?: string;
+type QaSessionTranscriptSummary = ReturnType<typeof summarizeSessionTranscriptEvents> & {
   resetRecallCutoffLine?: number;
   probeTextEndLine?: number;
 };
@@ -132,7 +115,7 @@ function summarizeSessionTranscriptEvents(
   eventCursor = events.length,
   pendingCodeModeExecNeedle?: string,
   includeCodeModeControl = false,
-): QaSessionTranscriptSummary {
+) {
   const scanner = createDirectReplyTranscriptSentinelScanner();
   const assistantMirrors: Array<{ identity: string; text: string }> = [];
   const assistantToolCallCounts: Record<string, number> = {};
@@ -140,9 +123,8 @@ function summarizeSessionTranscriptEvents(
   const compactionSummaries: string[] = [];
   const currentSourceToolDeliveries: Array<{ toolName: string; threadId?: string }> = [];
   const successfulToolCallCounts: Record<string, number> = {};
-  const successfulToolCallEvents: NonNullable<
-    QaSessionTranscriptSummary["successfulToolCallEvents"]
-  > = [];
+  const successfulToolCallEvents: Array<{ name: string; timestamp: number; toolCallId: string }> =
+    [];
   const codeModeExecCallIds = new Set<string>();
   const codeModeRunIds = new Set<string>();
   const completedToolCallIds = new Set<string>();

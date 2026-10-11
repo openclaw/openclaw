@@ -36,15 +36,14 @@ export function findGitRoot(startDir: string, opts: { maxDepth?: number } = {}):
   return walkUpFrom(startDir, opts, (repoRoot) => (hasGitMarker(repoRoot) ? repoRoot : null));
 }
 
-function readGitMetadataFile(filePath: string): Buffer {
-  const limit = 1024 * 1024;
+export function readGitMetadataFile(filePath: string, limit = 1024 * 1024): Buffer {
   const fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0));
   try {
     const stat = fs.fstatSync(fd);
     if (!stat.isFile() || stat.size > limit) {
       throw new Error("Git metadata is not a bounded regular file");
     }
-    const bytes = readFileDescriptorBoundedSync(fd, limit);
+    const bytes = readFileDescriptorBoundedSync(fd, Math.min(stat.size, limit));
     if (bytes.length !== stat.size) {
       throw new Error("Git metadata changed during its read");
     }
@@ -420,8 +419,11 @@ function resolveGitHeadPath(startDir: string, opts: { maxDepth?: number } = {}):
 
 /** Read at most `limit` bytes from Git or build metadata. */
 export function readGitMetadataPrefix(filePath: string, limit = 256): string {
-  const fd = fs.openSync(filePath, "r");
+  const fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0));
   try {
+    if (!fs.fstatSync(fd).isFile()) {
+      throw new Error("Git metadata is not a regular file");
+    }
     const buf = Buffer.alloc(limit);
     const bytesRead = readFileWindowFullySync(fd, buf, 0);
     return buf.subarray(0, bytesRead).toString("utf-8");
@@ -438,7 +440,7 @@ export function readGitHead(
   if (!headPath) {
     return undefined;
   }
-  const head = fs.readFileSync(headPath, "utf-8").trim();
+  const head = readGitMetadataFile(headPath).toString("utf8").trim();
   if (!head.startsWith("ref:")) {
     return { headPath, ref: null, value: head || null };
   }
@@ -483,7 +485,11 @@ export function readGitRefs(refsBase: string, refs: readonly string[]): Map<stri
     return values;
   }
   try {
-    const packedRefs = fs.readFileSync(path.join(refsBase, "packed-refs"), "utf-8");
+    // Packed inventories outgrow pointer files; each read is still bounded to its opened size.
+    const packedRefs = readGitMetadataFile(
+      path.join(refsBase, "packed-refs"),
+      Number.MAX_SAFE_INTEGER,
+    ).toString("utf8");
     for (const line of packedRefs.split("\n")) {
       if (!line || line.startsWith("#") || line.startsWith("^")) {
         continue;
@@ -504,9 +510,6 @@ export function readGitRefs(refsBase: string, refs: readonly string[]): Map<stri
 /** Safely resolve a Git ref path, rejecting traversal from a crafted HEAD file. */
 function resolveRefPath(refsBase: string, ref: string): string | null {
   if (!ref.startsWith("refs/")) {
-    return null;
-  }
-  if (path.isAbsolute(ref)) {
     return null;
   }
   if (ref.split(/[/]/).includes("..")) {

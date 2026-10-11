@@ -296,14 +296,14 @@ Enabled by default. Requirements for it to fire:
   pairing only; upgrades, browsers, Control UI, and WebChat always prompt.
 
 While device approval is pending, the node client is told to keep retrying
-(`wait_then_retry`), including while an SSH probe is running. If the probe fails,
+(`wait_then_retry`), including while an SSH check is running. If the check fails,
 the request remains available for manual approval and the node keeps retrying.
 Failed SSH targets get a short cooldown (5 minutes after a key mismatch).
 
 Pairing settings hot-apply without restarting the Gateway. Automatic approvals
 recheck the current policy immediately before granting access, even if an SSH
-probe or store lock was already pending when the policy changed. Changes to SSH
-verification settings use a fresh probe and do not inherit the previous policy’s
+check or store lock was already pending when the policy changed. Changes to SSH
+verification settings use a fresh check and do not inherit the previous policy’s
 cooldown. Already paired devices remain paired.
 
 Approved devices record `approvedVia: "ssh-verified"` and their first declared
@@ -321,8 +321,8 @@ Harden or disable:
       pairing: {
         // Disable entirely:
         sshVerify: false,
-        // ...or scope/tune the probe:
-        // sshVerify: { user: "me", identity: "~/.ssh/probe", timeoutMs: 7000, cidrs: ["10.0.0.0/8"] },
+        // ...or scope/tune the check:
+        // sshVerify: { user: "me", identity: "~/.ssh/check", timeoutMs: 7000, cidrs: ["10.0.0.0/8"] },
       },
     },
   },

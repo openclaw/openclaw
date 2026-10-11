@@ -5,7 +5,7 @@ import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
   readUserProfileIdentity,
-  retainUserProfileCatalog,
+  prepareUserProfileCatalog,
 } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail, getUserProfileRole } from "../../state/user-profiles.js";
@@ -107,7 +107,7 @@ it.each(["failed delivery", "self downgrade"] as const)(
       expect(resolveOperatorRolePolicyForProfile(changed.id, roleConfig())?.scopes).toEqual([
         "operator.admin",
       ]);
-      release = retainUserProfileCatalog();
+      release = (await prepareUserProfileCatalog()).release;
       const clientClose = vi.fn();
       const targetClose = vi.fn();
       const client = profileClient(requester.id, "role-requester", clientClose);

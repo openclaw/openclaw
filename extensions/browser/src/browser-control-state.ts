@@ -11,7 +11,6 @@ import { isBrowserRuntimeRunning } from "./browser/server-context.lifecycle.js";
 type BrowserControlOwner = "server" | "service";
 
 let state: BrowserServerState | null = null;
-let owner: BrowserControlOwner | null = null;
 let lifecycleTail = Promise.resolve();
 let completedEffectiveStops = 0;
 let pendingLifecycles = 0;
@@ -66,7 +65,6 @@ export async function ensureBrowserControlRuntime(params: {
   server?: Server | null;
   port: number;
   resolved: BrowserServerState["resolved"];
-  owner: BrowserControlOwner;
 }): Promise<BrowserServerState> {
   if (state && isBrowserRuntimeRunning(state)) {
     if (params.server) {
@@ -75,7 +73,6 @@ export async function ensureBrowserControlRuntime(params: {
       state.server = params.server;
       state.port = params.port;
       state.resolved = { ...params.resolved, controlPort: params.port };
-      owner = "server";
     }
     return state;
   }
@@ -88,7 +85,6 @@ export async function ensureBrowserControlRuntime(params: {
     port: params.port,
     resolved: params.resolved,
   });
-  owner = params.owner;
   return state;
 }
 
@@ -103,17 +99,15 @@ export function stopBrowserControlRuntime(params: {
     if (!current) {
       return null;
     }
-    if (params.requestedBy === "service" && current.server && owner === "server") {
+    if (params.requestedBy === "service" && current.server) {
       // The background service must not close a runtime currently claimed by the
       // visible HTTP server; otherwise CLI/browser calls lose their control port.
       return null;
     }
     await stopBrowserRuntime({
       current,
-      getState: () => state,
       clearState: () => {
         state = null;
-        owner = null;
       },
       closeServer: params.closeServer,
       onWarn: params.onWarn,

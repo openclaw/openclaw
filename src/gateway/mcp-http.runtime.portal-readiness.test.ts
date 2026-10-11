@@ -34,6 +34,7 @@ it.for([
   { mode: "exact", boundary: "final publication" },
   { mode: "policy", boundary: "final publication" },
   { mode: "cached", boundary: "final publication" },
+  { mode: "cached", boundary: "readiness" },
 ] as const)(
   "revalidates portal catalog facts after $mode $boundary",
   async ({ mode, boundary }, { signal }) => {
@@ -47,7 +48,11 @@ it.for([
         agentId: "main",
       };
       const scope = { agentId: identity.agentId, sessionKey: identity.sessionKey };
-      const entry = { sessionId: identity.sessionId, updatedAt: 1, modelSelectionLocked: false };
+      const entry = {
+        sessionId: identity.sessionId,
+        updatedAt: 1,
+        modelSelectionLocked: boundary === "readiness",
+      };
       replaceSessionEntrySync(scope, entry);
       const projection = await createSessionRowProjection({ cfg });
       const binding = { ...identity, environmentId: "attached", ownerEpoch: 1, generation: 1 };
@@ -106,7 +111,10 @@ it.for([
                 ...identity,
                 senderIsOwner: false,
                 modelHasVision: true,
-                toolsAllow: boundary === "final publication" ? ["portal"] : ["portal", "computer"],
+                toolsAllow:
+                  boundary === "final publication" || boundary === "readiness"
+                    ? ["portal"]
+                    : ["portal", "computer"],
               },
             };
             const resolve =
@@ -116,11 +124,15 @@ it.for([
                   ? resolveMcpLoopbackScopedTools
                   : resolveMcpLoopbackPolicyTools;
             const primed = await resolve(params);
-            expect(primed.tools.map((tool) => tool.name)).toEqual(["portal"]);
+            expect(primed.tools.map((tool) => tool.name)).toEqual(
+              boundary === "readiness" ? [] : ["portal"],
+            );
             const retained = prepareSessionPortalToolTarget(identity);
-            expect(retained).toBeDefined();
+            if (boundary !== "readiness") {
+              expect(retained).toBeDefined();
+            }
 
-            if (boundary === "final publication") {
+            if (boundary === "final publication" || boundary === "readiness") {
               let published = false;
               const prepare = projection.withPreparedExactRows.bind(projection);
               const spy = vi
@@ -135,7 +147,7 @@ it.for([
                         replaceSessionEntrySync(scope, {
                           ...entry,
                           updatedAt: 2,
-                          modelSelectionLocked: true,
+                          modelSelectionLocked: boundary !== "readiness",
                         });
                       }
                       return catalog;
@@ -147,15 +159,16 @@ it.for([
               const resolving = resolve(params);
               pending = resolving;
               expect((await withinTest(resolving, signal)).tools.map((tool) => tool.name)).toEqual(
-                [],
+                boundary === "readiness" ? ["portal"] : [],
               );
               expect(published).toBe(true);
-              expect(() => retained?.assertCurrent()).toThrow();
+              if (retained) {
+                expect(() => retained.assertCurrent()).toThrow();
+              }
               return;
             }
 
             if (boundary === "authority") {
-              const selected: unknown[] = [];
               const prepare = projection.withPreparedExactRows.bind(projection);
               const spy = vi
                 .spyOn(projection, "withPreparedExactRows")
@@ -164,7 +177,6 @@ it.for([
                     queries,
                     (read) => {
                       const catalog = consume(read);
-                      selected.push(catalog);
                       authorityAbort.abort(new Error("Synthetic controller retirement"));
                       return catalog;
                     },
@@ -176,7 +188,6 @@ it.for([
               await expect(pending).rejects.toThrow(
                 "admitted run operator authority is no longer active",
               );
-              expect(selected).toEqual([primed]);
               return;
             }
 

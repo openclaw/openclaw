@@ -2,8 +2,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AgentWaitResult } from "../../agents/run-wait.types.js";
+import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
-import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import {
   getSubagentRunByChildSessionKey,
   listSubagentRunsForRequester,
@@ -70,7 +71,7 @@ describe("gateway agent handler yielded orchestrator follow-ups", () => {
         const failure = new Error("parent resume admission retired after commit");
         let adopted: SubagentRunRecord | undefined;
         const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
-          const current = getSubagentRunByChildSessionKey(childSessionKey);
+          const current = subagentRuns.get(runId);
           if (adopted || current?.runId !== runId || current.execution.status !== "running") {
             return;
           }
@@ -115,7 +116,7 @@ describe("gateway agent handler yielded orchestrator follow-ups", () => {
             suppressSessionEffects: true,
           },
         };
-        expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject(terminal);
+        expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject(terminal);
         const stored = loadSubagentRegistryFromSqlite();
         expect(stored.has(previousRunId)).toBe(false);
         expect(stored.get(runId)).toMatchObject(terminal);
@@ -230,7 +231,7 @@ describe("gateway agent handler yielded orchestrator follow-ups", () => {
           if (inputFailure) {
             expectRespondError(respond, { message: "resume input admission failed" });
             expect(mocks.agentCommand).not.toHaveBeenCalled();
-            expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+            expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
               runId: previousRunId,
               pauseReason: "sessions_yield",
             });
@@ -247,7 +248,7 @@ describe("gateway agent handler yielded orchestrator follow-ups", () => {
           }
 
           const continued = requireValue(
-            getSubagentRunByChildSessionKey(childSessionKey),
+            await getSubagentRunByChildSessionKey(childSessionKey),
             "expected the orchestrator's continued run",
           );
           if (!continuesRun) {
@@ -272,7 +273,7 @@ describe("gateway agent handler yielded orchestrator follow-ups", () => {
           await racePromiseWithAbortSignal(cleanup.cleanupCompleted, signal);
           expect(announce).toHaveBeenCalledTimes(1);
           const completed = requireValue(
-            getSubagentRunByChildSessionKey(childSessionKey),
+            await getSubagentRunByChildSessionKey(childSessionKey),
             "expected the orchestrator's completed run",
           );
           expectRecordFields(completed, { cleanupCompletedAt: expect.any(Number) });

@@ -1,4 +1,3 @@
-/** Shared bundle MCP catalog, runtime, and manager types. */
 import type {
   CallToolResult,
   GetPromptResult,
@@ -34,7 +33,6 @@ export type BundleMcpToolRuntime = {
   dispose: () => Promise<void>;
 };
 
-/** Catalog metadata for one configured MCP server. */
 export type McpServerCatalog = {
   serverName: string;
   safeServerName?: string;
@@ -82,7 +80,6 @@ export type McpCatalogTool = {
   oauthConnectBootstrap?: true;
 };
 
-/** Complete tool catalog for a session-scoped MCP runtime. */
 export type McpToolCatalog = {
   version: number;
   generatedAt: number;

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import type { SkillSnapshot } from "../types.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "./session-snapshot.js";
@@ -29,7 +30,7 @@ type SnapshotBuildOptions = NonNullable<
 
 function strippedSnapshot(skillName = "test", version = 1): SkillSnapshot {
   return {
-    prompt: "skills prompt",
+    prompt: `<available_skills>\n  <skill>\n    <name>${skillName}</name>\n    <location>/skills/${skillName}/SKILL.md</location>\n  </skill>\n</available_skills>`,
     skills: [{ name: skillName }],
     version,
     promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
@@ -84,7 +85,7 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     );
   });
 
-  it("reuses complete cached snapshots for fresh sessions until the snapshot version changes", async () => {
+  it("prepares fresh session eligibility even when the snapshot version is unchanged", async () => {
     buildWorkspaceSkillSnapshotMock.mockReturnValue({
       prompt: "cached skills prompt",
       skills: [{ name: "cached-skill" }],
@@ -107,18 +108,18 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     );
     const second = await resolveReusableWorkspaceSkillSnapshot(params);
 
-    expect(second.snapshot).toBe(first.snapshot);
+    expect(second.snapshot).toEqual(first.snapshot);
     expect(second.snapshot.prompt).toBe("cached skills prompt");
     expect(second.snapshot.skills).toEqual([{ name: "cached-skill" }]);
     expect(second.snapshot.resolvedSkills).toEqual([{ name: "cached-skill" }]);
-    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledOnce();
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(2);
 
     getSkillsSnapshotVersionMock.mockReturnValue(2);
     await resolveReusableWorkspaceSkillSnapshot(params);
-    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(2);
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(3);
   });
 
-  it("keeps concurrent builds and completed caches separate by source host", async () => {
+  it("keeps concurrent builds separate by source host", async () => {
     const workspaceBuild = createDeferred<SnapshotFixture>();
     const gatewayBuild = createDeferred<SnapshotFixture>();
     buildWorkspaceSkillSnapshotMock.mockImplementation((_workspace, options) =>
@@ -142,8 +143,8 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     expect(hosted.snapshot.prompt).toBe("Gateway catalog");
     expect(resolveSkillSnapshotExecutionFileHost(local.snapshot)).toBeUndefined();
     expect(resolveSkillSnapshotExecutionFileHost(hosted.snapshot)).toBe("gateway");
-    expect((await resolveReusableWorkspaceSkillSnapshot(params)).snapshot).toBe(local.snapshot);
-    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(2);
+    expect((await resolveReusableWorkspaceSkillSnapshot(params)).snapshot).toEqual(local.snapshot);
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(3);
   });
 
   it.each([false, true])(
@@ -161,6 +162,64 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
       expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(changed ? 2 : 1);
     },
   );
+
+  it.each([
+    "legacy path",
+    "source path",
+    "source host",
+    "legacy workspace locator",
+    "legacy gateway host",
+    "legacy implicit host",
+  ])("rejects an unverified provider during cold hydration (%s)", async (identity) => {
+    const original = strippedSnapshot();
+    if (identity.startsWith("source")) {
+      original.skills[0]!.source = { filePath: "/skills/test/SKILL.md", fileHost: "gateway" };
+    }
+    if (identity === "legacy gateway host") {
+      original.skills[0]!.gatewayFilePath = "/skills/test/SKILL.md";
+    }
+    if (identity === "legacy workspace locator") {
+      original.prompt = original.prompt.replace(
+        "/skills/test/SKILL.md",
+        "workspace-skill://workspace/test/SKILL.md",
+      );
+    }
+    const replacement = createCanonicalFixtureSkill({
+      name: "test",
+      description: "Different provider",
+      filePath: identity.endsWith("host") ? "/skills/test/SKILL.md" : "/other-root/test/SKILL.md",
+      baseDir: "/other-root/test",
+      source: "openclaw-workspace",
+    });
+    if (identity === "source host" || identity === "legacy workspace locator") {
+      replacement.fileHost = "workspace";
+    } else if (identity === "source path" || identity === "legacy implicit host") {
+      replacement.fileHost = "gateway";
+    }
+    buildWorkspaceSkillSnapshotMock.mockReturnValue({
+      ...original,
+      prompt: strippedSnapshot().prompt.replace("/skills/test/SKILL.md", replacement.filePath),
+      skills: [
+        {
+          name: replacement.name,
+          source: { filePath: replacement.filePath, fileHost: replacement.fileHost },
+        },
+      ],
+      resolvedSkills: [replacement],
+    });
+    const params = { workspaceDir, config: {}, watch: false };
+    await resolveReusableWorkspaceSkillSnapshot(params);
+    for (const existingSnapshot of [original, { ...original }]) {
+      const { snapshot } = await resolveReusableWorkspaceSkillSnapshot({
+        ...params,
+        existingSnapshot,
+      });
+      expect(snapshot.prompt).toBe(original.prompt);
+      expect(snapshot.skills).toBe(original.skills);
+      expect(snapshot.resolvedSkills).toEqual([]);
+      expect(snapshot.discoverySkills).toEqual([]);
+    }
+  });
 
   it.each([
     {
@@ -196,7 +255,6 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(refresh ? 1 : 0);
     if (!refresh) {
       expect(result.snapshot).toBe(snapshot);
-      expect(result.snapshot.prompt).toBe("skills prompt");
       expect(result.snapshot.skillFilter).toBe(cached);
     }
   });
@@ -245,7 +303,7 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     drain.resolve();
     await Promise.all([firstRejected, secondResolved]);
     expect(events).toEqual(["cancelled", "drained", "rebuilt"]);
-    expect((await resolveReusableWorkspaceSkillSnapshot(params)).snapshot).toBe(
+    expect((await resolveReusableWorkspaceSkillSnapshot(params)).snapshot).toEqual(
       (await second).snapshot,
     );
   });
@@ -344,10 +402,17 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
   it.each(["removed", "rotated"] as const)(
     "keys config eligibility on secret presence when %s",
     async (change) => {
+      const discord = createCanonicalFixtureSkill({
+        name: "discord",
+        description: "Discord skill",
+        filePath: "/skills/discord/SKILL.md",
+        baseDir: "/skills/discord",
+        source: "openclaw-workspace",
+      });
       buildWorkspaceSkillSnapshotMock.mockImplementation((_workspaceDir, opts) => ({
         prompt: "",
         skills: [],
-        resolvedSkills: opts.config?.channels?.discord?.token ? [{ name: "discord" }] : [],
+        resolvedSkills: opts.config?.channels?.discord?.token ? [discord] : [],
       }));
       const snapshot = strippedSnapshot("discord");
       const prepare = (config: OpenClawConfig) =>
@@ -357,14 +422,12 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
           existingSnapshot: { ...snapshot },
         });
       const first = await prepare({ channels: { discord: { token: "first-secret" } } });
-      expect(first.snapshot.resolvedSkills).toEqual([{ name: "discord" }]);
+      expect(first.snapshot.resolvedSkills).toEqual([discord]);
       expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
       const second = await prepare({
         channels: { discord: change === "rotated" ? { token: "rotated-secret" } : {} },
       });
-      expect(second.snapshot.resolvedSkills).toEqual(
-        change === "rotated" ? [{ name: "discord" }] : [],
-      );
+      expect(second.snapshot.resolvedSkills).toEqual(change === "rotated" ? [discord] : []);
       expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(change === "rotated" ? 1 : 2);
     },
   );

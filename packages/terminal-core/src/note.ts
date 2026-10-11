@@ -11,10 +11,9 @@ const suppressNotesStorage = new AsyncLocalStorage<boolean>();
 
 function isSuppressedByEnv(value: string | undefined): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(value);
-  if (!normalized) {
-    return false;
-  }
-  return normalized !== "0" && normalized !== "false" && normalized !== "off";
+  return (
+    Boolean(normalized) && normalized !== "0" && normalized !== "false" && normalized !== "off"
+  );
 }
 
 function isCopySensitiveToken(word: string): boolean {

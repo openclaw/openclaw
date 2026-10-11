@@ -1,4 +1,5 @@
-import { AsyncLocalStorage } from "node:async_hooks";
+import { AsyncLocalStorage, createHook } from "node:async_hooks";
+import { queryObjects } from "node:v8";
 import { describe, expect, it, vi } from "vitest";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -6,6 +7,7 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { GatewayScheduler } from "./gateway-scheduler.js";
 
 const schedulerLog = vi.hoisted(() => ({ debug: vi.fn(), trace: vi.fn(), error: vi.fn() }));
 vi.mock("../logging/subsystem.js", () => ({
@@ -19,6 +21,70 @@ function fixture() {
 }
 
 describe("Gateway timed work", () => {
+  it.each(["root", "scope"] as const)(
+    "releases the retiring caller while its %s abort signal remains reachable",
+    (kind) => {
+      class RetiredOwner {
+        close() {
+          const { scheduler } = fixture();
+          const owner = kind === "root" ? scheduler : scheduler.scope();
+          owner.beginClose();
+          return owner.signal;
+        }
+      }
+      const signals = Array.from({ length: 12 }, () => new RetiredOwner().close());
+      expect(queryObjects(RetiredOwner)).toBe(0);
+      for (const signal of signals) {
+        expect(signal.aborted).toBe(true);
+        expect(signal.reason).toMatchObject({ name: "AbortError" });
+      }
+    },
+  );
+
+  it("does not wake or allocate async resources before a fractional deadline", async () => {
+    const time = createGatewaySchedulerClock(1_000);
+    let wakes = 0;
+    const scheduler = new GatewayScheduler({
+      clock: {
+        ...time.clock,
+        arm: (run, delayMs) =>
+          time.clock.arm(() => {
+            wakes += 1;
+            return run();
+          }, Math.trunc(delayMs)),
+      },
+    });
+    const run = vi.fn();
+    scheduler.schedule({ id: "sample", delayMs: 20, everyMs: 20, run });
+    void time.advanceBy(0.25);
+    time.setTime(1_000);
+    // An unrelated registration rearms with 19.75ms left on the elapsed deadline.
+    scheduler.schedule({ id: "later", delayMs: 10_000, run: () => {} });
+    let allocations = 0;
+    const hook = createHook({
+      init: () => {
+        allocations += 1;
+      },
+    });
+    try {
+      hook.enable();
+      for (let tick = 0; tick < 19; tick += 1) {
+        void time.advanceBy(1);
+      }
+    } finally {
+      hook.disable();
+    }
+    try {
+      expect(wakes).toBe(0);
+      expect(allocations).toBe(0);
+      await time.advanceBy(1);
+      expect(run).toHaveBeenCalledOnce();
+      expect(wakes).toBe(1);
+    } finally {
+      await scheduler.stop();
+    }
+  });
+
   it("preserves equal-deadline dispatch order when replacing a waiting registration", async () => {
     const { time, scheduler } = fixture();
     const seen: string[] = [];

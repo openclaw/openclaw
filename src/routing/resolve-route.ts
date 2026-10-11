@@ -174,7 +174,7 @@ export function pickFirstExistingAgentId(cfg: OpenClawConfig, agentId: string): 
     return DEFAULT_AGENT_ID;
   }
   if (lookup.agentIds.size === 0) {
-    return normalizeAgentId(trimmed);
+    return normalized;
   }
   throw new AgentSelectionRequiredError([...lookup.agentIds], {
     surface: "route binding",
@@ -328,12 +328,10 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       groupScope: effectiveGroupScope,
       identityLinks,
     });
-    const mainSessionKey = normalizeLowercaseStringOrEmpty(
-      buildAgentMainSessionKey({
-        agentId: resolvedAgentId,
-        mainKey: input.cfg.session?.mainKey,
-      }),
-    );
+    const mainSessionKey = buildAgentMainSessionKey({
+      agentId: resolvedAgentId,
+      mainKey: input.cfg.session?.mainKey,
+    });
     const route = {
       agentId: resolvedAgentId,
       channel,

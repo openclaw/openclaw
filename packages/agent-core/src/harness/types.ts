@@ -1,4 +1,4 @@
-import type { ImageContent, TextContent } from "@openclaw/llm-core";
+import type { AssistantMessage, ImageContent, TextContent } from "@openclaw/llm-core";
 import type { AgentMessage } from "../types.js";
 
 export { err, ok } from "@openclaw/normalization-core/result";
@@ -23,7 +23,27 @@ export class InvalidSummaryOutputError extends CompactionError {
   }
 }
 
-/** A length stop with no visible summary is deterministic for an unchanged request. */
+/** The provider failed the summary request; hosts classify the failed response, not this text. */
+export class SummaryProviderError extends CompactionError {
+  constructor(
+    message: string,
+    readonly response: AssistantMessage,
+  ) {
+    super("summarization_failed", message);
+    this.name = "SummaryProviderError";
+  }
+}
+
+/** Recognizes the error by name: duplicated module copies break `instanceof`. */
+export function isSummaryProviderError(error: unknown): error is SummaryProviderError {
+  return error instanceof Error && error.name === "SummaryProviderError" && "response" in error;
+}
+
+/**
+ * The summary request cannot fit its budget: a length stop with no visible
+ * summary, or a summarizer window too small for the request. Either result is
+ * deterministic for an unchanged request, so callers do not retry it.
+ */
 export class SummaryOutputBudgetError extends CompactionError {
   constructor(message: string) {
     super("summarization_failed", message);

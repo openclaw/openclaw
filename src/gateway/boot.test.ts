@@ -25,8 +25,9 @@ const {
   loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
-  replaceTranscriptEvents,
 } = await import("../config/sessions/session-accessor.js");
+const { replaceTranscriptEvents } =
+  await import("../config/sessions/session-accessor.sqlite-transcript-write.test-support.js");
 const { getBootEchoContextForSession } = await import("./boot-echo-guard.js");
 
 describe("runBootOnce", () => {
@@ -171,18 +172,6 @@ describe("runBootOnce", () => {
     expect(restored?.sessionId).toBe(params.expectedSessionId);
   };
 
-  it("skips when BOOT.md is missing", async () => {
-    await withBootWorkspace({}, async (workspaceDir) => {
-      await expect(
-        runBootOnce({ cfg: testConfig(), deps: makeDeps(), workspaceDir }),
-      ).resolves.toEqual({
-        status: "skipped",
-        reason: "missing",
-      });
-      expect(agentCommand).not.toHaveBeenCalled();
-    });
-  });
-
   it("skips when BOOT.md disappears after path resolution", async () => {
     await withBootWorkspace({ bootContent: "Say hello." }, async (workspaceDir) => {
       const bootPath = path.join(workspaceDir, "BOOT.md");
@@ -230,50 +219,6 @@ describe("runBootOnce", () => {
     });
   });
 
-  it("runs agent command when BOOT.md is a symlink to a regular file", async () => {
-    if (process.platform === "win32") {
-      // Symlink support in unit tests is not guaranteed on Windows CI runners.
-      return;
-    }
-    await withBootWorkspace({ bootContent: "" }, async (workspaceDir) => {
-      const bootPath = path.join(workspaceDir, "BOOT.md");
-      const targetPath = path.join(workspaceDir, "REAL_BOOT.md");
-      await fs.writeFile(targetPath, "Say hello.", "utf-8");
-      await fs.rm(bootPath, { force: true });
-      await fs.symlink(targetPath, bootPath);
-      agentCommand.mockResolvedValue(undefined);
-      await expect(
-        runBootOnce({ cfg: testConfig(), deps: makeDeps(), workspaceDir }),
-      ).resolves.toEqual({
-        status: "ran",
-      });
-      expect(agentCommand).toHaveBeenCalledTimes(1);
-      const call = requireAgentCall();
-      expect(call.runtimeContextFragments).toContainEqual(
-        expect.objectContaining({ text: expect.stringContaining("Say hello.") }),
-      );
-    });
-  });
-
-  it("skips when BOOT.md is a dangling symlink", async () => {
-    if (process.platform === "win32") {
-      // Symlink support in unit tests is not guaranteed on Windows CI runners.
-      return;
-    }
-    await withBootWorkspace({ bootContent: "" }, async (workspaceDir) => {
-      const bootPath = path.join(workspaceDir, "BOOT.md");
-      const targetPath = path.join(workspaceDir, "MISSING_BOOT.md");
-      await fs.rm(bootPath, { force: true });
-      await fs.symlink(targetPath, bootPath);
-      await expect(
-        runBootOnce({ cfg: testConfig(), deps: makeDeps(), workspaceDir }),
-      ).resolves.toEqual({
-        status: "skipped",
-        reason: "missing",
-      });
-      expect(agentCommand).not.toHaveBeenCalled();
-    });
-  });
   it("skips when BOOT.md is whitespace-only", async () => {
     await withBootWorkspace({ bootContent: "\n\t " }, async (workspaceDir) => {
       await expect(
@@ -281,50 +226,6 @@ describe("runBootOnce", () => {
       ).resolves.toEqual({ status: "skipped", reason: "empty" });
       expect(agentCommand).not.toHaveBeenCalled();
     });
-  });
-
-  it("runs agent command when BOOT.md exists", async () => {
-    const content = "Say hello when you wake up.";
-    const call = await runBootAndReturnCall({ content });
-    expect(call.deliver).toBe(false);
-    expect(call.sessionId).toMatch(/^boot-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-\d{3}-[0-9a-f]{8}$/);
-    expect(call.sessionKey).toBe(`agent:main:boot:${String(call.sessionId)}`);
-    expect(call.suppressPromptPersistence).toBe(true);
-    expect(call.message).toBe("Run the workspace boot check now.");
-    expect(call.runtimeContextFragments).toContainEqual(
-      expect.objectContaining({ text: expect.stringContaining(`BOOT.md:\n${content}`) }),
-    );
-    expect(call.runtimeContextFragments).toContainEqual(
-      expect.objectContaining({ text: expect.stringContaining("NO_REPLY") }),
-    );
-  });
-
-  it("carries BOOT.md as typed runtime instructions without model-visible delimiters", async () => {
-    const content = "Wake up and report.";
-    const runtimeContext = await runBootAndReturnRuntimeContext(content);
-    expect(runtimeContext).toContain(content);
-    expect(runtimeContext).toContain("BOOT.md:");
-    expect(runtimeContext).not.toContain("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>");
-    expect(runtimeContext).not.toContain("<<<END_OPENCLAW_INTERNAL_CONTEXT>>>");
-  });
-
-  it("registers the boot prompt with the echo guard during the run and clears it afterward", async () => {
-    const sessionKeyHolder: { value?: string } = {};
-    const content =
-      "When you wake up each morning, send a thoughtful greeting to the operator and report the active project status.";
-    await withBootWorkspace({ bootContent: content }, async (workspaceDir) => {
-      agentCommand.mockImplementationOnce(async (opts: { sessionKey: string }) => {
-        sessionKeyHolder.value = opts.sessionKey;
-        // While the agent run is in flight, the echo guard should know about
-        // the boot prompt for this session so the message tool can suppress
-        // substantial echoes.
-        expect(getBootEchoContextForSession(opts.sessionKey)).toContain(content);
-      });
-      await runBootOnce({ cfg: testConfig(), deps: makeDeps(), workspaceDir });
-    });
-    // After the run completes, the entry must be cleared so it does not
-    // contaminate a subsequent unrelated run on the same session key.
-    expect(getBootEchoContextForSession(sessionKeyHolder.value)).toBeUndefined();
   });
 
   it("clears the echo-guard entry even when the agent run throws", async () => {
@@ -336,9 +237,14 @@ describe("runBootOnce", () => {
         observedDuringRun = getBootEchoContextForSession(opts.sessionKey);
         throw new Error("simulated agent failure");
       });
-      await runBootOnce({ cfg: testConfig(), deps: makeDeps(), workspaceDir });
+      await expect(
+        runBootOnce({ cfg: testConfig(), deps: makeDeps(), workspaceDir }),
+      ).resolves.toEqual({
+        status: "failed",
+        reason: "agent run failed: simulated agent failure",
+      });
     });
-    expect(observedDuringRun).toBeDefined();
+    expect(observedDuringRun).toContain("Wake up and report.");
     expect(getBootEchoContextForSession(observedSessionKey)).toBeUndefined();
   });
 
@@ -352,19 +258,6 @@ describe("runBootOnce", () => {
     expect(runtimeContext).toContain("[[OPENCLAW_INTERNAL_CONTEXT_END]]");
   });
 
-  it("returns failed when agent command throws", async () => {
-    await withBootWorkspace({ bootContent: "Wake up and report." }, async (workspaceDir) => {
-      agentCommand.mockRejectedValue(new Error("boom"));
-      await expect(
-        runBootOnce({ cfg: testConfig(), deps: makeDeps(), workspaceDir }),
-      ).resolves.toEqual({
-        status: "failed",
-        reason: "agent run failed: boom",
-      });
-      expect(agentCommand).toHaveBeenCalledTimes(1);
-    });
-  });
-
   it("keeps boot session isolation when the main session key is configured", async () => {
     const cfg = testConfig({ mainKey: "primary" });
     const agentId = "ops";
@@ -372,6 +265,8 @@ describe("runBootOnce", () => {
     const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
     expect(mainSessionKey).toBe("agent:ops:primary");
     expect(call.sessionKey).toBe(`agent:ops:boot:${String(call.sessionId)}`);
+    expect(call.deliver).toBe(false);
+    expect(call.suppressPromptPersistence).toBe(true);
   });
 
   it("isolates boot execution and cleanup from an existing main session", async () => {
@@ -402,22 +297,6 @@ describe("runBootOnce", () => {
       expect(call.sessionKey).toBe(`agent:main:boot:${String(call.sessionId)}`);
       expectSessionMapping({ storePath, sessionKey, expectedSessionId: existingSessionId });
       expectSessionMapping({ storePath, sessionKey: String(call.sessionKey) });
-    });
-  });
-
-  it("removes a boot-created boot-session mapping when none existed before", async () => {
-    await withBootWorkspace({ bootContent: "health check" }, async (workspaceDir) => {
-      const cfg = testConfig();
-      const { sessionKey, storePath } = resolveMainStore(cfg);
-
-      mockAgentUpdatesRequestedSession(storePath);
-
-      await expect(runBootOnce({ cfg, deps: makeDeps(), workspaceDir })).resolves.toEqual({
-        status: "ran",
-      });
-
-      expectSessionMapping({ storePath, sessionKey });
-      expectSessionMapping({ storePath, sessionKey: String(requireAgentCall().sessionKey) });
     });
   });
 

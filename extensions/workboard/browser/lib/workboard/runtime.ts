@@ -1,7 +1,16 @@
+import type { WorkboardChange } from "@openclaw/workboard-contract";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { WORKBOARD_DRAFT_DEFAULTS } from "./card-state.ts";
+import { normalizeWorkboardChange } from "./change-payload.ts";
 import { WORKBOARD_STATUSES, type WorkboardUiState } from "./types.ts";
 
 export type WorkboardHost = object;
+
+export type WorkboardClientContext = {
+  host: WorkboardHost;
+  client: GatewayBrowserClient | null;
+  requestUpdate?: () => void;
+};
 
 export type WorkboardLoadToken = {
   queuedAfterGeneration?: number;
@@ -17,6 +26,7 @@ type WorkboardLiveRefreshEntry = {
 
 type WorkboardRuntime = {
   state?: WorkboardUiState;
+  cardsRevision?: WorkboardChange | null;
   loadPromise?: Promise<boolean>;
   loadToken?: WorkboardLoadToken;
   loadError?: string;
@@ -56,6 +66,7 @@ export function invalidateWorkboardLoads(host: WorkboardHost) {
       }
     }
   }
+  delete runtime.cardsRevision;
   nextWorkboardLoadGeneration(host);
   delete runtime.loadPromise;
   delete runtime.loadToken;
@@ -95,9 +106,7 @@ export function resetWorkboardConnectionState(host: WorkboardHost) {
     state.loaded = false;
     state.loadAttempted = false;
   }
-  nextWorkboardLoadGeneration(host);
-  delete runtime.loadPromise;
-  delete runtime.loadToken;
+  invalidateWorkboardLoads(host);
 }
 
 function createDefaultState(): WorkboardUiState {
@@ -128,20 +137,8 @@ function createDefaultState(): WorkboardUiState {
     expandedEmptyStatuses: new Set(),
     lastRefreshAt: null,
     lastRefreshError: null,
-    draftOpen: false,
-    draftDiscardOpen: false,
+    ...WORKBOARD_DRAFT_DEFAULTS,
     draftSaving: false,
-    editingCardId: null,
-    editingCardBase: null,
-    draftTitle: "",
-    draftNotes: "",
-    draftStatus: "todo",
-    draftPriority: "normal",
-    draftLabels: "",
-    draftAgentId: "",
-    draftSessionKey: "",
-    draftTemplateId: "",
-    draftCommentBody: "",
     detailCardId: null,
     detailTab: "overview",
     detailCommentBody: "",
@@ -178,4 +175,12 @@ export function workboardMutationsReady(state: WorkboardUiState): boolean {
 
 export function workboardHasActiveWrites(state: WorkboardUiState): boolean {
   return Boolean(state.bulkSaving || state.draftSaving || state.busyCardIds.size);
+}
+
+export function hasCurrentWorkboardCards(host: WorkboardHost, payload: unknown): boolean {
+  const change = normalizeWorkboardChange(payload);
+  const held = getWorkboardRuntime(host).cardsRevision;
+  return Boolean(
+    change && held && change.epoch === held.epoch && change.cardsRevision === held.revision,
+  );
 }

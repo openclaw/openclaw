@@ -32,7 +32,6 @@ import {
   type ExtensionErrorListener,
   ExtensionRunner,
   type ExtensionUIContext,
-  type SessionStartEvent,
   type ShutdownHandler,
   type ToolDefinition,
   type ToolInfo,
@@ -48,7 +47,7 @@ import {
 } from "./queued-user-message-retirement.js";
 import type { ResourceLoader } from "./resource-loader.js";
 import type { SessionManager } from "./session-manager.js";
-import { prepareSessionToolResult } from "./session-tool-result-redaction.js";
+import { createSessionToolResultPreparer } from "./session-tool-result-redaction.js";
 import type { SettingsManager } from "./settings-manager.js";
 import { reportSteeringMessagePersistenceFailure } from "./steering-message-identity.js";
 import type { BuildSystemPromptOptions } from "./system-prompt-metadata.js";
@@ -90,7 +89,6 @@ export abstract class AgentSessionBase {
   protected cwd: string;
   protected extensionRunnerRef?: { current?: ExtensionRunner };
   protected allowedToolNames: Set<string>;
-  protected sessionStartEvent: SessionStartEvent;
   protected withExternalSessionWriteSettlement?: AgentSessionWriteSettlementRunner;
   protected extensionUIContext?: ExtensionUIContext;
   protected extensionCommandContextActions?: ExtensionCommandContextActions;
@@ -121,10 +119,6 @@ export abstract class AgentSessionBase {
     this.sessionModelRegistry = config.modelRegistry;
     this.extensionRunnerRef = config.extensionRunnerRef;
     this.allowedToolNames = new Set(config.allowedToolNames);
-    this.sessionStartEvent = config.sessionStartEvent ?? {
-      type: "session_start",
-      reason: "startup",
-    };
     this.withExternalSessionWriteSettlement = config.withSessionWriteSettlement;
     this.contextOverflowRecoveryOwner = config.contextOverflowRecoveryOwner ?? "session";
     this.resolveCompactionThinkingLevel = config.resolveCompactionThinkingLevel;
@@ -132,7 +126,6 @@ export abstract class AgentSessionBase {
       config.cleanupProviderSessionResourcesOnDispose ?? true;
   }
 
-  /** Model registry for API key resolution and model discovery */
   get modelRegistry(): ModelRegistry {
     return this.sessionModelRegistry;
   }
@@ -301,7 +294,6 @@ export abstract class AgentSessionBase {
       this.emitQueueUpdate();
       return true;
     });
-    this.emitQueueUpdate();
   }
 
   // Track last assistant message for auto-compaction check
@@ -311,6 +303,7 @@ export abstract class AgentSessionBase {
 
   /** Internal handler for agent events - shared by subscribe and reconnect */
   protected handleAgentEvent = async (event: AgentEvent, signal?: AbortSignal): Promise<void> => {
+    const prepareToolResult = createSessionToolResultPreparer(this.sessionManager, event);
     if (event.type === "agent_end") {
       const reason: unknown = signal?.reason;
       this.lastRunEndedForTurnHandoff =
@@ -321,16 +314,19 @@ export abstract class AgentSessionBase {
     }
     if (this.eventMayWriteSession(event)) {
       await this.runWithSessionWriteSettlement(
-        async () => await this.handleAgentEventUnlocked(event),
+        async () => await this.handleAgentEventUnlocked(event, prepareToolResult),
       );
       // Supported callbacks can change the current result or register another secret.
-      prepareSessionToolResult(this.sessionManager, event);
+      prepareToolResult();
       return;
     }
-    await this.handleAgentEventUnlocked(event);
+    await this.handleAgentEventUnlocked(event, prepareToolResult);
   };
 
-  private async handleAgentEventUnlocked(event: AgentEvent): Promise<void> {
+  private async handleAgentEventUnlocked(
+    event: AgentEvent,
+    prepareToolResult: () => boolean,
+  ): Promise<void> {
     if (event.type === "agent_start") {
       this.lastAssistantEntryId = undefined;
     }
@@ -348,7 +344,7 @@ export abstract class AgentSessionBase {
       messageChanged = await this.emitExtensionEvent(event);
     }
     // Extensions can replace the final result. Protect listeners before publishing it.
-    messageChanged = prepareSessionToolResult(this.sessionManager, event) || messageChanged;
+    messageChanged = prepareToolResult() || messageChanged;
     const publishAfterPersistence = event.type === "message_end" && event.message.role === "user";
 
     if (event.type === "agent_end") {
@@ -361,7 +357,7 @@ export abstract class AgentSessionBase {
       this.emit(event);
     }
     // Persist the same prepared bytes after synchronous listener changes.
-    messageChanged = prepareSessionToolResult(this.sessionManager, event) || messageChanged;
+    messageChanged = prepareToolResult() || messageChanged;
 
     if (event.type === "message_end") {
       if (event.message.role === "custom") {
@@ -584,22 +580,18 @@ export abstract class AgentSessionBase {
     }
   }
 
-  /** Full agent state */
   get state(): AgentState {
     return this.agent.state;
   }
 
-  /** Current model (may be undefined if not yet selected) */
   get model(): Model | undefined {
     return this.agent.state.model;
   }
 
-  /** Current thinking level */
   get thinkingLevel(): ThinkingLevel {
     return this.agent.state.thinkingLevel;
   }
 
-  /** Whether agent is currently streaming a response */
   get isStreaming(): boolean {
     return this.agent.state.isStreaming;
   }
@@ -614,7 +606,6 @@ export abstract class AgentSessionBase {
     return this.retryCount;
   }
 
-  /** Names of the tools currently set on the agent. */
   getActiveToolNames(): string[] {
     return this.agent.state.tools.map((t) => t.name);
   }
@@ -703,7 +694,6 @@ export abstract class AgentSessionBase {
     return this.sessionManager.getSessionId();
   }
 
-  /** Current session display name, if set */
   get sessionName(): string | undefined {
     return this.sessionManager.getSessionName();
   }

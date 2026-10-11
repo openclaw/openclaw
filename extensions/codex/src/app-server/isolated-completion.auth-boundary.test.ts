@@ -8,7 +8,7 @@ import { CodexAppServerClient } from "./client.js";
 import { turnStartResult } from "./codex-app-server.test-fixtures.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import { runCodexIsolatedCompletion } from "./isolated-completion.js";
-import { resetSharedCodexAppServerClientForTests } from "./shared-client.js";
+import { resetSharedCodexAppServerClientForTests } from "./shared-client.test-support.js";
 import { createClientHarness } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 

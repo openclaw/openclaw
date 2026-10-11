@@ -225,17 +225,15 @@ enum CLIInstaller {
     static func managedStatus(
         expectedVersion: String? = GatewayEnvironment.expectedGatewayVersionString(),
         installedCLI: GatewayLaunchAgentManager.InstalledServiceCLI? = nil,
+        serviceProfile: AppProfile = .current,
         usesBundledRuntime: Bool = true,
         homeDirectory: URL = FileManager().homeDirectoryForCurrentUser) async -> Status
     {
         let location = self.managedExecutableLocation(homeDirectory: homeDirectory)
         if let installedCLI {
             let environment = GatewayLaunchAgentManager.daemonEnvironment(
-                runtime: nil,
                 installedCLI: installedCLI,
-                environment: ProcessInfo.processInfo.environment,
-                profile: .current,
-                searchPaths: CommandResolver.preferredPaths())
+                profile: serviceProfile)
             let response = await ShellExecutor.runDetailed(
                 command: installedCLI.prefix + ["--version"], cwd: nil, env: environment, timeout: 15)
             return response.success
@@ -251,6 +249,7 @@ enum CLIInstaller {
                 return await self.managedStatus(
                     expectedVersion: expectedVersion,
                     installedCLI: authority.cli,
+                    serviceProfile: serviceProfile,
                     usesBundledRuntime: false,
                     homeDirectory: homeDirectory)
             }
@@ -320,9 +319,6 @@ enum CLIInstaller {
         let normalized = GatewayEnvironment.normalizeGatewayVersionOutput(output)
         guard let normalized, Semver.parse(normalized) != nil else {
             return .unusable(location: location)
-        }
-        guard Semver.parse(expectedVersion) != nil else {
-            return .ready(location: location, version: normalized)
         }
         guard Semver.satisfiesExpectedGatewayVersion(installed: normalized, expected: expectedVersion) else {
             return .incompatible(
@@ -588,12 +584,7 @@ enum CLIInstaller {
             repair: repair)
         if let installedCLI { command = installedCLI.prefix + command.dropFirst() }
         let environment = installedCLI.map {
-            GatewayLaunchAgentManager.daemonEnvironment(
-                runtime: nil,
-                installedCLI: $0,
-                environment: ProcessInfo.processInfo.environment,
-                profile: .current,
-                searchPaths: CommandResolver.preferredPaths())
+            GatewayLaunchAgentManager.daemonEnvironment(installedCLI: $0)
         } ?? self.probeEnvironment(location: executable)
         let canonicalAuthority: CanonicalUpdateAuthority?
         do {

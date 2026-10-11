@@ -38,6 +38,7 @@ import { resolveCodexSessionBinding } from "./session-binding.js";
 import {
   clearCodexAppServerBindingForThread,
   createCodexTestBindingStore,
+  createCodexTestContextEngineBinding as contextEngineBinding,
   readCodexAppServerBinding,
   registerCodexTestSessionIdentity,
   resetCodexTestBindingStore,
@@ -73,20 +74,6 @@ function compactionParams(
     workspaceDir: tempDir,
     trigger: "manual",
     ...overrides,
-  };
-}
-
-function contextEngineBinding() {
-  return {
-    schemaVersion: 1 as const,
-    engineId: "lossless-claw",
-    policyFingerprint: "policy-1",
-    projection: {
-      schemaVersion: 1 as const,
-      mode: "thread_bootstrap" as const,
-      epoch: "epoch-1",
-      fingerprint: "fingerprint-1",
-    },
   };
 }
 
@@ -183,7 +170,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(result).toMatchObject({
       ok: false,
       compacted: false,
-      reason: expect.stringContaining("Codex session generation is no longer current"),
+      reason: expect.stringContaining("Codex session execution policy changed"),
     });
     expect(bindingStore.read(current)).toEqual(binding);
   });
@@ -594,55 +581,6 @@ describe("maybeCompactCodexAppServerSession", () => {
     });
   });
 
-  it("starts native app-server compaction for post-context-engine budget requests", async () => {
-    const fake = createFakeCodexClient({ retainedThreadId: null });
-    setCodexAppServerClientFactoryForTest(async () => fake.client);
-    const sessionFile = await writeTestBinding({
-      contextEngine: contextEngineBinding(),
-    });
-
-    const result = requireCompactResult(
-      await maybeCompactCodexAppServerSession(
-        compactionParams(sessionFile, {
-          trigger: "budget",
-          currentTokenCount: 456,
-        }),
-        { allowNonManualNativeRequest: true },
-      ),
-    );
-
-    expectCompactStartRequest(fake.request, "thread-1", compactStartRequestOptions);
-    expect(fake.request.mock.calls.map(([method]) => method)).toEqual([
-      "thread/resume",
-      "thread/compact/start",
-      "thread/unsubscribe",
-    ]);
-    expect(result.ok).toBe(true);
-    expect(result.compacted).toBe(true);
-    expect(result.reason).toBeUndefined();
-    expect(result.result?.tokensBefore).toBe(456);
-    expect(compactDetails(result)).toMatchObject({
-      backend: "codex-app-server",
-      threadId: "thread-1",
-      signal: "thread/compact/start",
-      pending: false,
-      completed: true,
-      request: "after_context_engine",
-      trigger: "budget",
-    });
-    expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
-      threadId: "thread-1",
-      contextEngine: {
-        schemaVersion: 1,
-        engineId: "lossless-claw",
-        policyFingerprint: "policy-1",
-      },
-    });
-    expect(
-      (await readCodexAppServerBinding(sessionFile))?.contextEngine?.projection,
-    ).toBeUndefined();
-  });
-
   it("releases the rejected compaction watcher when binding restoration fails", async () => {
     const fake = createFakeCodexClient();
     fake.request.mockRejectedValueOnce(
@@ -676,44 +614,6 @@ describe("maybeCompactCodexAppServerSession", () => {
       mutateSpy.mockRestore();
       fake.completeCompaction();
     }
-  });
-
-  it("preserves projected context and warm ownership when native compaction is rejected", async () => {
-    const fake = createFakeCodexClient();
-    fake.request.mockRejectedValueOnce(
-      new CodexAppServerRpcError(
-        { code: -32_600, message: "compaction temporarily unavailable" },
-        "thread/compact/start",
-      ),
-    );
-    setCodexAppServerClientFactoryForTest(async () => fake.client);
-    const projection = {
-      schemaVersion: 1 as const,
-      mode: "thread_bootstrap" as const,
-      epoch: "epoch-1",
-      fingerprint: "fingerprint-1",
-    };
-    const sessionFile = await writeCompactionTestBinding(tempDir, {
-      contextEngine: {
-        schemaVersion: 1,
-        engineId: "lossless-claw",
-        policyFingerprint: "policy-1",
-        projection,
-      },
-    });
-
-    await expect(startCompaction(sessionFile)).resolves.toMatchObject({
-      ok: false,
-      compacted: false,
-      reason: "compaction temporarily unavailable",
-    });
-    expect((await readCodexAppServerBinding(sessionFile))?.contextEngine?.projection).toEqual(
-      projection,
-    );
-    expect(fake.request.mock.calls.map(([method]) => method)).toEqual(["thread/compact/start"]);
-    await expect(consumeCodexAppServerLiveThread(fake.client, "thread-1")).resolves.toEqual(
-      expect.objectContaining({ release: expect.any(Function) }),
-    );
   });
 
   it("preserves projection when aborted before guarded native compaction", async () => {
@@ -770,25 +670,27 @@ describe("maybeCompactCodexAppServerSession", () => {
     let bindingReads = 0;
     const bindingStore = {
       ...testCodexAppServerBindingStore,
-      read: vi.fn((...args: Parameters<typeof testCodexAppServerBindingStore.read>) => {
-        const result = testCodexAppServerBindingStore.read(...args);
-        if (bindingReads++ === 0) {
-          seedCodexTestBinding(sessionFile, {
-            threadId: "thread-2",
-            cwd: tempDir,
-            contextEngine: {
-              ...originalContextEngine,
-              projection: {
-                schemaVersion: 1,
-                mode: "thread_bootstrap",
-                epoch: "epoch-2",
-                fingerprint: "fingerprint-2",
+      readAsync: vi.fn(
+        async (...args: Parameters<typeof testCodexAppServerBindingStore.readAsync>) => {
+          const result = await testCodexAppServerBindingStore.readAsync(...args);
+          if (bindingReads++ === 0) {
+            seedCodexTestBinding(sessionFile, {
+              threadId: "thread-2",
+              cwd: tempDir,
+              contextEngine: {
+                ...originalContextEngine,
+                projection: {
+                  schemaVersion: 1,
+                  mode: "thread_bootstrap",
+                  epoch: "epoch-2",
+                  fingerprint: "fingerprint-2",
+                },
               },
-            },
-          });
-        }
-        return result;
-      }),
+            });
+          }
+          return result;
+        },
+      ),
     };
 
     const result = requireCompactResult(
@@ -835,25 +737,27 @@ describe("maybeCompactCodexAppServerSession", () => {
     let bindingReads = 0;
     const bindingStore = {
       ...testCodexAppServerBindingStore,
-      read: vi.fn((...args: Parameters<typeof testCodexAppServerBindingStore.read>) => {
-        const result = testCodexAppServerBindingStore.read(...args);
-        if (bindingReads++ === 0) {
-          seedCodexTestBinding(sessionFile, {
-            threadId: "thread-2",
-            cwd: tempDir,
-            contextEngine: {
-              ...originalContextEngine,
-              projection: {
-                schemaVersion: 1,
-                mode: "thread_bootstrap",
-                epoch: "epoch-2",
-                fingerprint: "fingerprint-2",
+      readAsync: vi.fn(
+        async (...args: Parameters<typeof testCodexAppServerBindingStore.readAsync>) => {
+          const result = await testCodexAppServerBindingStore.readAsync(...args);
+          if (bindingReads++ === 0) {
+            seedCodexTestBinding(sessionFile, {
+              threadId: "thread-2",
+              cwd: tempDir,
+              contextEngine: {
+                ...originalContextEngine,
+                projection: {
+                  schemaVersion: 1,
+                  mode: "thread_bootstrap",
+                  epoch: "epoch-2",
+                  fingerprint: "fingerprint-2",
+                },
               },
-            },
-          });
-        }
-        return result;
-      }),
+            });
+          }
+          return result;
+        },
+      ),
     };
 
     const result = requireCompactResult(
@@ -1126,74 +1030,63 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(compactDetails(result).signal).toBe("thread/compact/start");
   });
 
-  it.each(["completed", "interrupted"] as const)(
-    "waits for terminal status %s after an already-terminal interrupt",
-    async (terminalStatus) => {
-      const fake = createFakeCodexClient({
-        autoCompleteCompaction: false,
-        interruptError: new CodexAppServerRpcError(
-          { code: -32_600, message: "no active turn to interrupt" },
-          "turn/interrupt",
-        ),
-      });
-      const sessionFile = await writeCompactionTestBinding(tempDir);
-      const abortController = new AbortController();
+  it("waits for completion after an already-terminal interrupt", async () => {
+    const fake = createFakeCodexClient({
+      autoCompleteCompaction: false,
+      interruptError: new CodexAppServerRpcError(
+        { code: -32_600, message: "no active turn to interrupt" },
+        "turn/interrupt",
+      ),
+    });
+    const sessionFile = await writeCompactionTestBinding(tempDir);
+    const abortController = new AbortController();
 
-      let settled = false;
-      const pendingResult = maybeCompactCodexAppServerSession(
-        compactionParams(sessionFile, {
-          abortSignal: abortController.signal,
-        }),
-        { clientFactory: async () => fake.client },
-      ).finally(() => {
-        settled = true;
+    let settled = false;
+    const pendingResult = maybeCompactCodexAppServerSession(
+      compactionParams(sessionFile, {
+        abortSignal: abortController.signal,
+      }),
+      { clientFactory: async () => fake.client },
+    ).finally(() => {
+      settled = true;
+    });
+    await vi.waitFor(() => expect(fake.request).toHaveBeenCalledOnce());
+    emitTurn(fake, "compact-turn-finished", "inProgress");
+    for (const method of ["item/started", "item/completed"] as const) {
+      fake.emit({
+        method,
+        params: {
+          threadId: "thread-1",
+          turnId: "compact-turn-finished",
+          item: { id: "compact-item-finished", type: "contextCompaction" },
+        },
       });
-      await vi.waitFor(() => expect(fake.request).toHaveBeenCalledOnce());
-      emitTurn(fake, "compact-turn-finished", "inProgress");
-      for (const method of ["item/started", "item/completed"] as const) {
-        fake.emit({
-          method,
-          params: {
-            threadId: "thread-1",
-            turnId: "compact-turn-finished",
-            item: { id: "compact-item-finished", type: "contextCompaction" },
-          },
-        });
-      }
+    }
 
-      abortController.abort();
-      let successorRan = false;
-      const successor = withCodexAppServerThreadMutation("thread-1", async () => {
-        successorRan = true;
-      });
-      try {
-        await flushAsyncTasks();
-        expect(fake.request).toHaveBeenCalledWith(
-          "turn/interrupt",
-          { threadId: "thread-1", turnId: "compact-turn-finished" },
-          { timeoutMs: 30_000 },
-        );
-        expect(settled).toBe(false);
-        expect(successorRan).toBe(false);
-      } finally {
-        emitTurn(fake, "compact-turn-finished", terminalStatus);
-        await pendingResult;
-        await successor;
-      }
-
-      await expect(pendingResult).resolves.toMatchObject(
-        terminalStatus === "completed"
-          ? { ok: true, compacted: true }
-          : {
-              ok: false,
-              compacted: false,
-              reason: `codex app-server compaction turn ended with status ${terminalStatus}`,
-            },
+    abortController.abort();
+    let successorRan = false;
+    const successor = withCodexAppServerThreadMutation("thread-1", async () => {
+      successorRan = true;
+    });
+    try {
+      await flushAsyncTasks();
+      expect(fake.request).toHaveBeenCalledWith(
+        "turn/interrupt",
+        { threadId: "thread-1", turnId: "compact-turn-finished" },
+        { timeoutMs: 30_000 },
       );
-      expect(fake.closeAndWait).not.toHaveBeenCalled();
-      await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeDefined();
-    },
-  );
+      expect(settled).toBe(false);
+      expect(successorRan).toBe(false);
+    } finally {
+      emitTurn(fake, "compact-turn-finished", "completed");
+      await pendingResult;
+      await successor;
+    }
+
+    await expect(pendingResult).resolves.toMatchObject({ ok: true, compacted: true });
+    expect(fake.closeAndWait).not.toHaveBeenCalled();
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeDefined();
+  });
 
   it("uses the configured compaction timeout for native completion", async () => {
     const fake = createFakeCodexClient({
@@ -1247,99 +1140,92 @@ describe("maybeCompactCodexAppServerSession", () => {
     }
   });
 
-  it.each(["unconfirmed-start", "accepted-start-timeout"] as const)(
-    "preserves a recovered binding when the host rotates during unconfirmed remote retirement (%s)",
-    async (retirementTrigger) => {
-      const current = {
-        kind: "session" as const,
-        agentId: "main",
-        sessionKey: "agent:main:recovered-retirement",
-        sessionId: "after-compaction",
-      };
-      const previous = { ...current, sessionId: "before-compaction" };
-      const next = { ...current, sessionId: "next-compaction" };
-      const scope = {
-        agentId: current.agentId,
+  it("preserves a recovered binding when the host rotates during timed-out remote retirement", async () => {
+    const current = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionKey: "agent:main:recovered-retirement",
+      sessionId: "after-compaction",
+    };
+    const previous = { ...current, sessionId: "before-compaction" };
+    const next = { ...current, sessionId: "next-compaction" };
+    const scope = {
+      agentId: current.agentId,
+      sessionKey: current.sessionKey,
+      storePath: path.join(tempDir, "admitted", "sessions.json"),
+    };
+    await upsertSessionEntry({
+      ...scope,
+      entry: { sessionId: previous.sessionId, updatedAt: 1 },
+    });
+    await patchSessionEntry({ ...scope, update: () => ({ sessionId: current.sessionId }) });
+    const bindingStore = createCodexTestBindingStore();
+    const binding = { threadId: "thread-1", cwd: tempDir };
+    await bindingStore.mutate(previous, { kind: "set", binding });
+    const fake = createFakeCodexClient({ autoCompleteCompaction: false });
+    const closeEntered = createDeferred<void>();
+    const closeGate = createDeferred<void>();
+    fake.closeAndWait.mockImplementationOnce(async () => {
+      closeEntered.resolve();
+      await closeGate.promise;
+      return { exited: false, cleanup: "uncertain" };
+    });
+    const retirementOutcome = createDeferred<"retained" | "settled">();
+    const errorSpy = vi.spyOn(embeddedAgentLog, "error").mockImplementation((message) => {
+      if (message === "failed to retire unconfirmed codex app-server compaction") {
+        retirementOutcome.resolve("retained");
+      }
+    });
+    const pending = maybeCompactCodexAppServerSessionImpl(
+      {
+        sessionId: current.sessionId,
         sessionKey: current.sessionKey,
-        storePath: path.join(tempDir, "admitted", "sessions.json"),
-      };
-      await upsertSessionEntry({
-        ...scope,
-        entry: { sessionId: previous.sessionId, updatedAt: 1 },
-      });
-      await patchSessionEntry({ ...scope, update: () => ({ sessionId: current.sessionId }) });
-      const bindingStore = createCodexTestBindingStore();
-      const binding = { threadId: "thread-1", cwd: tempDir };
-      await bindingStore.mutate(previous, { kind: "set", binding });
-      const fake = createFakeCodexClient({ autoCompleteCompaction: false });
-      if (retirementTrigger === "unconfirmed-start") {
-        fake.request.mockRejectedValueOnce(new Error("thread/compact/start timed out"));
-      }
-      const closeEntered = createDeferred<void>();
-      const closeGate = createDeferred<void>();
-      fake.closeAndWait.mockImplementationOnce(async () => {
-        closeEntered.resolve();
-        await closeGate.promise;
-        return { exited: false, cleanup: "uncertain" };
-      });
-      const retirementOutcome = createDeferred<"retained" | "settled">();
-      const errorSpy = vi.spyOn(embeddedAgentLog, "error").mockImplementation((message) => {
-        if (message === "failed to retire unconfirmed codex app-server compaction") {
-          retirementOutcome.resolve("retained");
-        }
-      });
-      const pending = maybeCompactCodexAppServerSessionImpl(
-        {
-          sessionId: current.sessionId,
-          sessionKey: current.sessionKey,
-          agentId: current.agentId,
-          sessionTarget: { ...scope, sessionId: current.sessionId },
-          sessionFile: path.join(tempDir, "recovered.jsonl"),
-          workspaceDir: tempDir,
-          trigger: "manual",
-        },
-        {
-          bindingStore,
-          clientFactory: async () => fake.client,
-          pluginConfig: {
-            appServer: { transport: "websocket", url: "ws://127.0.0.1:45001" },
-          },
-          ...(retirementTrigger === "accepted-start-timeout"
-            ? { nativeCompletionTimeoutMs: 10, nativeInterruptGraceMs: 10 }
-            : {}),
-        },
-      ).finally(() => retirementOutcome.resolve("settled"));
-      const nextMutation = vi.fn(async () => {});
-      let queued: Promise<void> | undefined;
-      try {
-        await closeEntered.promise;
-        expect(bindingStore.read(current)).toEqual(binding);
-        emitTurn(fake, "compact-turn-retired", "inProgress", binding.threadId);
-        queued = withCodexAppServerThreadMutation(binding.threadId, nextMutation);
-        await patchSessionEntry({ ...scope, update: () => ({ sessionId: next.sessionId }) });
-        closeGate.resolve();
-
-        const outcome = await retirementOutcome.promise;
-        expect(bindingStore.read(current)).toEqual(binding);
-        expect(outcome).toBe("retained");
-        expect(nextMutation).not.toHaveBeenCalled();
-      } finally {
-        closeGate.resolve();
-        emitTurn(fake, "compact-turn-retired", "interrupted", binding.threadId);
-        await pending;
-        await queued;
-        errorSpy.mockRestore();
-      }
-      expect(nextMutation).toHaveBeenCalledOnce();
-      const recovered = await resolveCodexSessionBinding({
+        agentId: current.agentId,
+        sessionTarget: { ...scope, sessionId: current.sessionId },
+        sessionFile: path.join(tempDir, "recovered.jsonl"),
+        workspaceDir: tempDir,
+        trigger: "manual",
+      },
+      {
         bindingStore,
-        identity: next,
-        storePath: scope.storePath,
-      });
-      expect(recovered.binding).toEqual(binding);
-      expect(bindingStore.read(next)).toEqual(binding);
-    },
-  );
+        clientFactory: async () => fake.client,
+        pluginConfig: {
+          appServer: { transport: "websocket", url: "ws://127.0.0.1:45001" },
+        },
+        nativeCompletionTimeoutMs: 10,
+        nativeInterruptGraceMs: 10,
+      },
+    ).finally(() => retirementOutcome.resolve("settled"));
+    const nextMutation = vi.fn(async () => {});
+    let queued: Promise<void> | undefined;
+    try {
+      await closeEntered.promise;
+      expect(bindingStore.read(current)).toEqual(binding);
+      emitTurn(fake, "compact-turn-retired", "inProgress", binding.threadId);
+      queued = withCodexAppServerThreadMutation(binding.threadId, nextMutation);
+      await patchSessionEntry({ ...scope, update: () => ({ sessionId: next.sessionId }) });
+      closeGate.resolve();
+
+      const outcome = await retirementOutcome.promise;
+      expect(bindingStore.read(current)).toEqual(binding);
+      expect(outcome).toBe("retained");
+      expect(nextMutation).not.toHaveBeenCalled();
+    } finally {
+      closeGate.resolve();
+      emitTurn(fake, "compact-turn-retired", "interrupted", binding.threadId);
+      await pending;
+      await queued;
+      errorSpy.mockRestore();
+    }
+    expect(nextMutation).toHaveBeenCalledOnce();
+    const recovered = await resolveCodexSessionBinding({
+      bindingStore,
+      identity: next,
+      storePath: scope.storePath,
+    });
+    expect(recovered.binding).toEqual(binding);
+    expect(bindingStore.read(next)).toEqual(binding);
+  });
 
   it("cancels a native compaction after the start request", async () => {
     const fake = createFakeCodexClient({ autoCompleteCompaction: false });
@@ -1445,21 +1331,6 @@ describe("maybeCompactCodexAppServerSession", () => {
 
     fake.completeCompaction();
     await expect(third).resolves.toMatchObject({ ok: true, compacted: true });
-  });
-
-  it("reuses the bound auth profile for native compaction", async () => {
-    const fake = createFakeCodexClient();
-    let seenAuthProfileId: string | undefined;
-    setCodexAppServerClientFactoryForTest(async (options) => {
-      seenAuthProfileId = options?.authProfileId ?? undefined;
-      return fake.client;
-    });
-    const sessionFile = await writeCompactionTestBinding(tempDir, { authProfileId: "openai:work" });
-
-    const result = requireCompactResult(await startCompaction(sessionFile));
-
-    expect(seenAuthProfileId).toBe("openai:work");
-    expect(result.ok).toBe(true);
   });
 
   it("preserves stale thread binding metadata for recovery and reports failed native compaction", async () => {

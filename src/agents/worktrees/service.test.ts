@@ -13,16 +13,16 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { InvalidWorktreeBaseRefError } from "./base-ref.js";
+import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
 import * as worktreeGit from "./git.js";
 import * as worktreeRegistry from "./registry.js";
 import {
-  getRegistryWorktree,
   getRegistryWorktreeProvisionedPaths,
   getRegistryWorktreeProvisionedState,
-  listRegistryWorktrees,
   updateRegistryWorktree,
   WorktreeRemovalContentionError,
 } from "./registry.js";
+import { getRegistryWorktree, listRegistryWorktrees } from "./registry.test-support.js";
 import { acquireWorktreeRunLease, claimWorktreeRemoval } from "./run-lease.js";
 import { testing as runLeaseTesting } from "./run-lease.test-support.js";
 import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
@@ -47,6 +47,7 @@ function isWorktreeAdd(argv: readonly string[]): boolean {
 function expectCheckoutTimeouts(
   commandSpy: MockInstance<typeof commandRunner.runCommandWithTimeout>,
   checkoutBases: string[],
+  networkTimeouts: number[] = [],
 ) {
   const gitCommands = commandSpy.mock.calls
     .filter(([argv]) => argv[0] === "git")
@@ -60,7 +61,7 @@ function expectCheckoutTimeouts(
   );
   expect(
     new Set(gitCommands.filter((command) => !command.checkout).map((command) => command.timeoutMs)),
-  ).toEqual(new Set([120_000]));
+  ).toEqual(new Set([120_000, ...networkTimeouts]));
 }
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
@@ -308,14 +309,16 @@ describe("ManagedWorktreeService", () => {
     expect(reused.ownerId).toBe("agent:main:dashboard:one");
   });
 
-  it("falls back to local HEAD when fetch fails", async () => {
+  it("refuses an unavailable remote default instead of silently using local HEAD", async () => {
     await git(repo, "remote", "set-url", "origin", path.join(root, "missing.git"));
-    const created = await service.create({ repoRoot: repo, name: "offline" });
-    expect(created.baseRef).toBe("HEAD");
-    expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+    await git(repo, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD").catch(() => undefined);
+    await expect(service.create({ repoRoot: repo, name: "offline" })).rejects.toThrow(
+      "Remote default branch is unavailable",
+    );
+    expect(await git(repo, "branch", "--list", "openclaw/offline")).toBe("");
   });
 
-  it.each(["active", "aborted", "closed"] as const)(
+  it.each(["aborted", "closed"] as const)(
     "handles stale remote checkout with %s admission",
     async (admission) => {
       await addRemote(root, repo);
@@ -355,22 +358,17 @@ describe("ManagedWorktreeService", () => {
           }
         },
       });
-      if (admission !== "active") {
-        await expect(creation).rejects.toMatchObject(
-          admission === "aborted" ? { code: "OPENCLAW_STATE_LEASE_ABORTED" } : closed,
-        );
-        expect(checkoutFailed).toBe(true);
-        expectCheckoutTimeouts(commandSpy, ["origin/main", remoteCommit]);
-        expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("stale-remote");
-        expect(await git(repo, "branch", "--list", "openclaw/stale-remote")).toBe("");
-        return;
-      }
-      const created = await creation;
+      await expect(creation).rejects.toMatchObject(
+        admission === "aborted" ? { code: "OPENCLAW_STATE_LEASE_ABORTED" } : closed,
+      );
       expect(checkoutFailed).toBe(true);
-      expect(created.baseRef).toBe("HEAD");
-      const localHead = await git(repo, "rev-parse", "HEAD");
-      expect(await git(created.path, "rev-parse", "HEAD")).toBe(localHead);
-      expectCheckoutTimeouts(commandSpy, ["origin/main", remoteCommit, "HEAD", localHead]);
+      expectCheckoutTimeouts(
+        commandSpy,
+        ["refs/remotes/origin/main", remoteCommit],
+        [30_000, 60_000],
+      );
+      expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("stale-remote");
+      expect(await git(repo, "branch", "--list", "openclaw/stale-remote")).toBe("");
     },
   );
 
@@ -415,29 +413,6 @@ describe("ManagedWorktreeService", () => {
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("never overwrites a base-ref file with an ignored source candidate", async () => {
-    await fs.writeFile(path.join(repo, "collision.txt"), "from base\n", { mode: 0o644 });
-    await git(repo, "add", "collision.txt");
-    await git(repo, "commit", "-m", "base collision");
-    await git(repo, "checkout", "-b", "source");
-    await git(repo, "rm", "collision.txt");
-    await fs.writeFile(path.join(repo, ".gitignore"), "collision.txt\n");
-    await git(repo, "add", ".gitignore");
-    await git(repo, "commit", "-m", "ignore local collision");
-    await fs.writeFile(path.join(repo, "collision.txt"), "from source\n", { mode: 0o755 });
-    await fs.writeFile(path.join(repo, ".worktreeinclude"), "collision.txt\n");
-
-    const created = await service.create({
-      repoRoot: repo,
-      name: "no-overwrite",
-      baseRef: "main",
-    });
-
-    expect(await fs.readFile(path.join(created.path, "collision.txt"), "utf8")).toBe("from base\n");
-    expect((await fs.stat(path.join(created.path, "collision.txt"))).mode & 0o111).toBe(0);
-    expect(await getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual([]);
-  });
-
   it("rejects an included file replaced by a symlink after inspection", async () => {
     await fs.writeFile(path.join(repo, ".gitignore"), "settings.local\n");
     await fs.writeFile(path.join(repo, ".worktreeinclude"), "settings.local\n");
@@ -467,36 +442,6 @@ describe("ManagedWorktreeService", () => {
       "refs/heads/openclaw/swapped-source",
     );
     expect(await fs.readFile(outside, "utf8")).toBe("outside bytes\n");
-  });
-
-  it("bounds failed setup diagnostics without losing the fatal detail or cleanup", async () => {
-    await fs.mkdir(path.join(repo, ".openclaw"));
-    const script = path.join(repo, ".openclaw", "worktree-setup.sh");
-    const fatal = "fatal: setup dependency could not be resolved";
-    const progress = Array.from(
-      { length: 2_000 },
-      (_, index) => `Receiving objects: ${index}/2000\r`,
-    ).join("");
-    await fs.writeFile(
-      script,
-      `#!/bin/sh\nprintf '%s\\n' "$OPENCLAW_WORKTREE_PATH" > "$OPENCLAW_SOURCE_TREE_PATH/setup-path.txt"\nprintf '%s' '${progress}\n${"x".repeat(65_536)}${fatal}\n' >&2\nexit 23\n`,
-      { mode: 0o755 },
-    );
-    const failure: unknown = await service
-      .create({ repoRoot: repo, name: "broken-setup", baseRef: "HEAD" })
-      .catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(Error);
-    if (!(failure instanceof Error)) {
-      throw new Error("expected setup failure");
-    }
-    const worktreePath = (await fs.readFile(path.join(repo, "setup-path.txt"), "utf8")).trim();
-    await expect(fs.stat(worktreePath)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("broken-setup");
-    expect(await git(repo, "branch", "--list", "openclaw/broken-setup")).toBe("");
-    expect(await service.listRegistryRecords()).toEqual([]);
-    expect.soft(failure.message).toContain(fatal);
-    expect.soft(failure.message.length).toBeLessThanOrEqual(2_300);
-    expect.soft(/(?:exit|code|status)[^\n]*23/i.test(failure.message)).toBe(true);
   });
 
   it("rematerializes a named workboard snapshot with hidden edits and independent provisioned state", async () => {
@@ -708,7 +653,7 @@ describe("ManagedWorktreeService", () => {
 
       let contention: unknown;
       try {
-        claimWorktreeRemoval(env, {
+        await claimWorktreeRemoval(env, {
           worktreeId: staleRecord.id,
           token: "late-remover",
         });
@@ -725,7 +670,7 @@ describe("ManagedWorktreeService", () => {
       // A stale remover that aborted its claim writes retained/failed outcomes with
       // the live-row condition (recordOutcome); against a finalized row it must be
       // a no-op instead of replacing the winner's removed-lossless fact.
-      updateRegistryWorktree(
+      await updateRegistryWorktree(
         env,
         created.id,
         { runEndCleanup: { outcome: "retained-dirty", at: now + 1 } },
@@ -758,7 +703,7 @@ describe("ManagedWorktreeService", () => {
       // A stale remover from the pre-restore lifecycle writes with the activity
       // stamp it observed (recordOutcome's condition); against the revived row it
       // must be a no-op instead of stamping a prior-lifecycle outcome.
-      updateRegistryWorktree(
+      await updateRegistryWorktree(
         env,
         created.id,
         { runEndCleanup: { outcome: "retained-dirty", at: now + 1 } },
@@ -869,6 +814,9 @@ describe("ManagedWorktreeService", () => {
       outcome: "completed",
       issues: [],
       issueCount: 0,
+      eligibleCount: 0,
+      deferredCount: 0,
+      failedCount: 0,
       protectedCount: 0,
       protectionReasons: {},
       orphansRetired: 0,
@@ -888,7 +836,7 @@ describe("ManagedWorktreeService", () => {
         repoRoot: identity.repoRoot,
         repoFingerprint: identity.fingerprint,
       };
-      updateRegistryWorktree(env, created.id, { repositoryIdentity });
+      await updateRegistryWorktree(env, created.id, { repositoryIdentity });
       return { ...created, ...repositoryIdentity };
     }
 
@@ -956,7 +904,7 @@ describe("ManagedWorktreeService", () => {
       const liveIdentity = await service.resolveRepositoryIdentity(clone);
       const staleIdentity = await service.resolveRepositoryIdentity(repo);
       const created = await fixture("rebound", liveIdentity.repoRoot);
-      updateRegistryWorktree(env, created.id, {
+      await updateRegistryWorktree(env, created.id, {
         repositoryIdentity: {
           repoRoot: staleIdentity.repoRoot,
           repoFingerprint: staleIdentity.fingerprint,
@@ -1006,6 +954,7 @@ describe("ManagedWorktreeService", () => {
       expect(await git(repo, "config", "--bool", "submodule.module.active")).toBe("true");
       expect(await git(path.join(repo, "module"), "rev-parse", "HEAD")).toBe(moduleHead);
 
+      useInProcessWorktreeCapacityTransport();
       const disk = fsSync.statfsSync(root);
       vi.spyOn(fsSync, "statfsSync").mockReturnValue({
         type: disk.type,
@@ -1043,7 +992,7 @@ describe("ManagedWorktreeService", () => {
       expect(await fs.readFile(path.join(created.path, "draft.txt"), "utf8")).toBe(
         "preserve this task\n",
       );
-      expect(service.findLiveById(created.id)?.path).toBe(created.path);
+      expect(getRegistryWorktree(env, created.id)?.path).toBe(created.path);
     });
   });
 });

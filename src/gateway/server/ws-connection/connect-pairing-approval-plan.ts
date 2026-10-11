@@ -44,15 +44,12 @@ function resolveTrustedProxyDeviceAutoApproveScopes(params: {
     return configuredScopes;
   }
   const configured = new Set(configuredScopes);
-  const requestedScopes = normalizeSortedUniqueTrimmedStringList(params.requestedScopes);
   // Trusted-proxy Control UI tabs can remain open across upgrades. Grant newly
   // required default UI scopes without widening an explicitly configured cap.
-  if (params.configuredScopes === undefined) {
-    requestedScopes.push("operator.questions");
-  }
-  return normalizeSortedUniqueTrimmedStringList(requestedScopes).filter((scope) =>
-    configured.has(scope),
-  );
+  return normalizeSortedUniqueTrimmedStringList([
+    ...params.requestedScopes,
+    ...(params.configuredScopes === undefined ? ["operator.questions"] : []),
+  ]).filter((scope) => configured.has(scope));
 }
 
 /** One approval lane per pairing request; exactly one wins, "manual" prompts. */

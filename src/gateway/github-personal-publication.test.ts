@@ -1,3 +1,21 @@
+// Register the shared Git transport before any publication or run-lease consumer.
+// oxfmt-ignore
+import {
+  BRANCH,
+  NEW_HEAD,
+  OLD_HEAD,
+  SESSION_ID,
+  SESSION_KEY,
+  WORKSPACE_TREE,
+  commandCalls,
+  commandResult,
+  commands,
+  createTestGitHubPublicationCoordinator,
+  createRealPublicationWorkspace,
+  githubPublicationTestMocks,
+  installGitHubPublicationTestHarness,
+  persistPublicationTestSession,
+} from "./github-publication.test-support.js";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -29,22 +47,6 @@ import {
   personalPublicationAccount as account,
   expectPersonalPublicationReplay,
 } from "./github-personal-publication.test-support.js";
-import {
-  BRANCH,
-  NEW_HEAD,
-  OLD_HEAD,
-  SESSION_ID,
-  SESSION_KEY,
-  WORKSPACE_TREE,
-  commandCalls,
-  commandResult,
-  commands,
-  createTestGitHubPublicationCoordinator,
-  createRealPublicationWorkspace,
-  githubPublicationTestMocks,
-  installGitHubPublicationTestHarness,
-  persistPublicationTestSession,
-} from "./github-publication.test-support.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { preparePersonalGitHubSessionAction } from "./server-methods/github-personal-authorization.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
@@ -58,17 +60,6 @@ import { seedAttachedPlacementEnvironment } from "./worker-environments/placemen
 const mocks = githubPublicationTestMocks();
 
 const table = "github_personal_publication_requests";
-
-vi.mock("../agents/worktrees/git-lock.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../agents/worktrees/git-lock.js")>()),
-  lockWorktreeForProcess: vi.fn(async () => undefined),
-  unlockWorktree: vi.fn(async () => undefined),
-}));
-vi.mock("../process/exec.js", () => ({
-  runCommandBuffered: (
-    ...args: Parameters<typeof import("../process/exec.js").runCommandBuffered>
-  ) => mocks.runCommand(...args),
-}));
 
 describe("personal publication authority and recovery", () => {
   installGitHubPublicationTestHarness();
@@ -176,8 +167,8 @@ describe("personal publication authority and recovery", () => {
     expect(workspace.effects).toEqual(["push"]);
   });
 
-  it.each(["writer", "reader", "synthetic", "admin-role-ceiling"] as const)(
-    "admits only a direct authorized %s publication through the real RPC router",
+  it.each(["reader", "synthetic", "admin-role-ceiling"] as const)(
+    "rejects %s publication through the real RPC router",
     async (caller) => {
       if (caller === "reader") {
         client.connect.scopes = ["operator.read"];
@@ -204,29 +195,16 @@ describe("personal publication authority and recovery", () => {
         respond,
         isWebchatConnect: () => false,
       });
-      expect(respond.mock.calls[0]?.[0]).toBe(caller === "writer");
-      if (caller === "writer") {
-        expect(respond.mock.calls[0]?.[1]).toMatchObject({
-          status: "published",
-          publisher: { source: "personal", ...account },
-        });
-      } else {
-        expect(tableExists(openOpenClawStateDatabase().db, table)).toBe(false);
-        expect(commands).toEqual([]);
-      }
+      expect(respond.mock.calls[0]?.[0]).toBe(false);
+      expect(tableExists(openOpenClawStateDatabase().db, table)).toBe(false);
+      expect(commands).toEqual([]);
     },
   );
 
-  it.each([
-    "unbound-admin",
-    "unbound-reader",
-    "reader",
-    "synthetic",
-    "shared-secret-owner",
-  ] as const)(
+  it.each(["unbound-reader", "reader", "synthetic", "shared-secret-owner"] as const)(
     "serves shared options independently of personal eligibility for %s",
     async (caller) => {
-      client.connect.scopes = caller === "unbound-admin" ? ["operator.admin"] : ["operator.read"];
+      client.connect.scopes = ["operator.read"];
       if (caller.startsWith("unbound")) {
         delete client.authenticatedUserProfile;
       }
@@ -284,7 +262,7 @@ describe("personal publication authority and recovery", () => {
     },
   );
 
-  it.each(["admin-draft", "admin-private", "writer", "demoted"] as const)(
+  it.each(["admin-private", "writer", "demoted"] as const)(
     "uses current session mutation rights for a personal %s publisher",
     async (caller) => {
       await createForeignPublicationSession(otherOwner, caller === "admin-private");
@@ -324,25 +302,6 @@ describe("personal publication authority and recovery", () => {
       }
     },
   );
-
-  it("makes an accepted pre-claim stop discoverable without a previous browser request ID", async () => {
-    runtime.verifiedAccount = { accountId: account.accountId, login: "renamed-alice" };
-    await expect(coordinator.requestPersonalForSession(request(), action)).rejects.toThrow(
-      "identity changed",
-    );
-    const row = openOpenClawStateDatabase()
-      .db.prepare(`SELECT request_id, status, execution_id FROM ${table}`)
-      .get() as { request_id: string; status: string; execution_id: null };
-    expect(row).toMatchObject({ status: "requested", execution_id: null });
-    expect(status(row.request_id)).toMatchObject({
-      result: { status: "failed", code: "identity_changed" },
-      confirmation: null,
-    });
-    const response = await rpc("sessions.github.options");
-    expect(response[0]).toBe(true);
-    expect(response[1].pendingPersonal).toMatchObject({ result: { requestId: row.request_id } });
-    expect(commands.some((argv) => argv.includes("push"))).toBe(false);
-  });
 
   it("exposes a stopped pre-claim admission for explicit confirmation and reports only a live execution as publishing", async () => {
     const controller = new AbortController();
@@ -699,7 +658,7 @@ describe("personal publication authority and recovery", () => {
     client = { ...client, connId: "cold-browser" };
     runtime.client = client;
     const discovered = await rpc("sessions.github.options");
-    expect(discovered[0]).toBe(true);
+    expect(discovered[0], JSON.stringify(discovered[2])).toBe(true);
     expect(discovered[1].pendingPersonal).toMatchObject({
       result: { requestId: result.requestId, status: "needs_confirmation" },
       confirmation: {

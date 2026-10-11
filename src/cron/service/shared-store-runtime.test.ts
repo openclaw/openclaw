@@ -8,6 +8,7 @@ import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -243,6 +244,7 @@ describe("scheduler-disabled shared-store mutations", () => {
       }),
     );
 
+    await closeOpenClawStateDatabaseAsync();
     await runSchedulerChild(
       cases.map(({ canary, storePath }) => ({ jobId: canary.id, storePath })),
     );

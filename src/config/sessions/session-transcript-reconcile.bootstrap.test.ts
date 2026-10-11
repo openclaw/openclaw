@@ -24,14 +24,18 @@ function runDiskTask(context: OpenClawStateWorkerContext, pathname: string) {
   return runSessionTranscriptReconcileOperation(
     captureSessionTranscriptReconcileGeneration(),
     async (operation) => {
-      const task = await operation.startTask({
-        mode: "disk",
-        agentId: "main",
-        path: pathname,
-        stateDir: context.environment.OPENCLAW_STATE_DIR,
-        externallySupervised: true,
-        leaseId: randomUUID(),
-      });
+      const task = await operation.startTask(
+        {
+          mode: "disk",
+          sessionIds: [],
+          agentId: "main",
+          path: pathname,
+          stateDir: context.environment.OPENCLAW_STATE_DIR,
+          externallySupervised: true,
+          leaseId: randomUUID(),
+        },
+        0,
+      );
       const messages: string[] = [];
       task.port.on("message", (message: SessionTranscriptReconcileWorkerMessage) => {
         messages.push(message.type);
@@ -139,7 +143,10 @@ it("refuses an agent replacement during canonical first creation", async () => {
         });
       const observation = observe(context, agentPath);
       try {
-        await expect(runDiskTask(context, agentPath)).rejects.toThrow();
+        await expect(runDiskTask(context, agentPath)).resolves.toEqual([
+          "failed",
+          "lease-released",
+        ]);
         expect(replaced).toBe(true);
         expect(readDatabasePathIdentitySync(agentPath).key).not.toBe(original.key);
         await closeSessionTranscriptReconcileWorkerPool();

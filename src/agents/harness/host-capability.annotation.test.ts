@@ -14,7 +14,6 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   readActiveTranscriptEntryAnchor,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
@@ -22,6 +21,7 @@ import {
   resolveSqliteTranscriptScope,
   runExclusiveSqliteSessionWrite,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { readClosedTranscriptTurnInDatabase } from "../../config/sessions/session-accessor.transcript-range.js";
 import { markSessionTranscriptIndexDirtyInTransaction } from "../../config/sessions/session-transcript-index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -366,10 +366,12 @@ describe("host-owned current admission annotation", () => {
         effectiveEngine: engine,
         effectiveEngineId: "annotation",
         degraded: false,
+        disposed: false,
         selectForHost: vi.fn(),
         degradeBeforeStart: vi.fn(),
         begin: vi.fn(),
         deferDisposalUntil: vi.fn(),
+        onDispose: vi.fn(),
         dispose: async () => {},
       };
       const warn = vi.fn();

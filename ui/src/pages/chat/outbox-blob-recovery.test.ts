@@ -158,22 +158,6 @@ describe("Blob-preserving metadata migration", () => {
     );
   });
 
-  it("recovers a selected-text annotation with its queued file payload", async () => {
-    const annotation: ChatSelectionAnnotation = {
-      text: "complete source bytes",
-      comment: "Keep this context. 🦞",
-      sessionKey: "agent:main:review",
-      messageId: "assistant-1",
-      entryId: "entry-1",
-      start: 5,
-      end: 26,
-    };
-    const host = hostFor();
-    const item = await prepare(host, "selection", "global", annotation);
-    const restored = await expectBytes(host, item);
-    expect(restored?.selectionAnnotation).toEqual(annotation);
-  });
-
   it("does not settle payload preparation under a pending connected recovery owner", async () => {
     const host = hostFor();
     const original = await prepare(host, "pending-owner");
@@ -526,15 +510,26 @@ describe("Blob-preserving metadata migration", () => {
     },
   );
   it.each(["paste", "file", undefined] as const)(
-    "preserves %s origin and bytes after durable queue reload",
+    "preserves %s origin, annotation, and bytes after durable queue reload",
     async (origin) => {
+      const annotation: ChatSelectionAnnotation = {
+        text: "complete source bytes",
+        comment: "Keep this context. 🦞",
+        sessionKey: "agent:main:review",
+        messageId: "assistant-1",
+        entryId: "entry-1",
+        start: 5,
+        end: 26,
+      };
       const host = hostFor();
-      const item = await prepare(host, `origin-${origin}`, "agent:main:review", undefined, origin);
+      const selection = origin === undefined ? annotation : undefined;
+      const item = await prepare(host, `origin-${origin}`, "agent:main:review", selection, origin);
       seed([item], "agent:main:review", 4);
       const store = readStoredOutboxStore(sessionStorage, target);
       const restoredItem = Object.values(store.sessions)[0]?.queue?.[0];
       const restored = await expectBytes(host, expectDefined(restoredItem, "stored queue item"));
       expect(restored?.origin).toBe(origin);
+      expect(restored?.selectionAnnotation).toEqual(selection);
     },
   );
 });

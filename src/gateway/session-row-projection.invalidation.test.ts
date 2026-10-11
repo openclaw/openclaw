@@ -1,6 +1,7 @@
 import { renameSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import type { SessionCommunicationMode } from "../../packages/gateway-protocol/src/session-communication.js";
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreSnapshotsRevision,
@@ -28,6 +29,11 @@ import { recordSessionParticipant } from "../config/sessions/session-accessor.sq
 import * as transcriptWorker from "../config/sessions/session-transcript-worker-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
+  clearAgentRunContext,
+  recordAgentRunModel,
+  registerAgentRunContext,
+} from "../infra/agent-run-registry.js";
+import {
   activateSecretsRuntimeSnapshotState,
   clearSecretsRuntimeSnapshotState,
   getActiveSecretsRuntimeSnapshotRevisionState,
@@ -44,6 +50,7 @@ import {
 import { linkEmail, setDisplayName } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import {
   identifiedClient,
   listSessions,
@@ -51,6 +58,7 @@ import {
 } from "./server-methods/sessions-read-cache.test-support.js";
 import * as projectionWork from "./session-projection-work.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
+import { prepareSessionRowPublication } from "./session-row-presentation.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import * as materialization from "./session-row-projection-materialize.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
@@ -129,6 +137,24 @@ it("reuses descendants after parent progress while keeping inherited models curr
       );
       const original = children.map(sequence);
       const siblingSequence = sequence(siblingKey);
+      const snapshot = (key: string) =>
+        prepareSessionRowPublication(projection, Date.now())(
+          client,
+          createVisibleActiveSessionRunProjector(
+            context,
+            projection.state.rowContext.projectedAgentRuns,
+          ),
+        ).snapshot({
+          agentId: "main",
+          key,
+        }).row!;
+      const siblingSnapshot = snapshot(siblingKey);
+      const parentSnapshot = snapshot(parentKey);
+      const siblingBytes = JSON.stringify(siblingSnapshot);
+      expect(() => {
+        siblingSnapshot.label = "Reader mutation";
+      }).toThrow(TypeError);
+      expect(() => siblingSnapshot.childOwnerSessionKeys!.push(parentKey)).toThrow(TypeError);
       for (const change of [undefined, { label: "Updated parent", updatedAt: 10 }]) {
         if (change) {
           Object.assign(parent, change);
@@ -138,6 +164,13 @@ it("reuses descendants after parent progress while keeping inherited models curr
         }
         await list();
         expect(children.map(sequence)).toEqual(original);
+        expect(snapshot(siblingKey)).toBe(siblingSnapshot);
+        expect(JSON.stringify(snapshot(siblingKey))).toBe(siblingBytes);
+        if (change) {
+          expect(snapshot(parentKey)).not.toBe(parentSnapshot);
+          expect(snapshot(parentKey).label).toBe("Updated parent");
+          expect(parentSnapshot.label).toBeUndefined();
+        }
       }
       const cases: Array<{ change: Partial<SessionEntry>; provider: string; model: string }> = [
         { change: { providerOverride: "other-test" }, provider: "other-test", model: "selected" },
@@ -186,6 +219,26 @@ it("reuses descendants after parent progress while keeping inherited models curr
       for (const key of children) {
         expect(pinned.sessions.find((row) => row.key === key)?.model).toBe("changed");
       }
+      registerAgentRunContext("publication-model", {
+        agentId: "main",
+        sessionKey: siblingKey,
+        sessionId: "child-2",
+        projectSessionActive: true,
+      });
+      try {
+        for (const model of ["first", "replacement", undefined]) {
+          recordAgentRunModel(
+            "publication-model",
+            model ? { provider: "unit-test", model } : undefined,
+          );
+          const row = snapshot(siblingKey);
+          expect(row.activeModel).toBe(model);
+          expect(snapshot(siblingKey)).toBe(row);
+        }
+      } finally {
+        clearAgentRunContext("publication-model");
+      }
+      expect(snapshot(siblingKey).activeModel).toBeUndefined();
       const childScope = { agentId: "main", sessionKey: children[0]! };
       reads.length = 0;
       replaceSessionEntrySync(childScope, {
@@ -239,62 +292,64 @@ it("hydrates a same-path replacement with a reused inode and retires its previou
       { agentId: "main", storePath: staged, sessionKey: "agent:main:new" },
       { sessionId: "new", updatedAt: 2, category: "new group" },
     );
-    await closeOpenClawAgentDatabaseByPathAsync(staged, "main");
-    const projection = await createSessionRowProjection({ cfg });
-    await projection.ensureMaterialized();
-    try {
-      const readIdentity = databaseIdentity.readOpenClawAgentDatabaseIdentity;
-      const previousIdentity = readIdentity(
-        openOpenClawAgentDatabase({ agentId: "main", path: storePath }),
-      );
-      const reusedIdentity = previousIdentity.identity;
-      if (typeof reusedIdentity !== "string") {
-        throw new Error("Expected a persistent fixture database identity");
-      }
-      expect([...projection.sessionGroupTargets().keys()]).toEqual(["old group"]);
-      await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
-      renameSync(staged, storePath);
-      registerOpenClawAgentDatabase({ agentId: "main", path: storePath });
-      const replacementIdentity = readIdentity(
-        openOpenClawAgentDatabase({ agentId: "main", path: storePath }),
-      );
-      // Coarse filesystem clocks must not determine whether the inode-reuse case is covered.
-      const replacementBirthtime =
-        replacementIdentity.birthtime === previousIdentity.birthtime
-          ? (BigInt(previousIdentity.birthtime ?? "0") + 1n).toString()
-          : replacementIdentity.birthtime;
-      const identity = vi
-        .spyOn(databaseIdentity, "readOpenClawAgentDatabaseIdentity")
-        .mockImplementation((database) => {
-          const prepared = readIdentity(database);
-          return prepared.filename === replacementIdentity.filename
-            ? { ...prepared, identity: reusedIdentity, birthtime: replacementBirthtime }
-            : prepared;
-        });
-      const readDatabases = transcriptWorker.withSessionHistoryWorkerDatabases;
-      // Both observations must describe the same simulated inode reuse.
-      const workerIdentity = vi
-        .spyOn(transcriptWorker, "withSessionHistoryWorkerDatabases")
-        .mockImplementation((targets, consume) =>
-          readDatabases(targets, (owners) =>
+    const readIdentity = databaseIdentity.readOpenClawAgentDatabaseIdentity;
+    const previousIdentity = readIdentity(
+      openOpenClawAgentDatabase({ agentId: "main", path: storePath }),
+    );
+    const replacementIdentity = readIdentity(
+      openOpenClawAgentDatabase({ agentId: "main", path: staged }),
+    );
+    if (typeof replacementIdentity.identity !== "string") {
+      throw new Error("Expected a persistent fixture database identity");
+    }
+    const reusedIdentity = replacementIdentity.identity;
+    const previousBirthtime = (BigInt(replacementIdentity.birthtime ?? "0") + 1n).toString();
+    const initialSource = (source: { identity?: string; birthtime?: string }) =>
+      source.identity === previousIdentity.identity &&
+      source.birthtime === previousIdentity.birthtime;
+    const readDatabases = transcriptWorker.withSessionHistoryWorkerDatabases;
+    // Simulate the initial inode while retaining real file verification at both admissions.
+    const workerIdentity = vi
+      .spyOn(transcriptWorker, "withSessionHistoryWorkerDatabases")
+      .mockImplementation((targets, consume, lane) =>
+        readDatabases(
+          targets,
+          (owners) =>
             consume(
               owners.map((owner) => ({
                 ...owner,
-                async readMembershipFacts(input) {
-                  const reply = await owner.readMembershipFacts(input);
-                  return reply.identity === replacementIdentity.identity &&
-                    reply.birthtime === replacementIdentity.birthtime
+                async readStoreProjection(input) {
+                  const reply = await owner.readStoreProjection(input);
+                  return reply.source && initialSource(reply.source)
                     ? {
                         ...reply,
-                        identity: reusedIdentity,
-                        birthtime: replacementBirthtime,
+                        source: {
+                          ...reply.source,
+                          identity: reusedIdentity,
+                          birthtime: previousBirthtime,
+                        },
                       }
+                    : reply;
+                },
+                async readMembershipFacts(input) {
+                  const reply = await owner.readMembershipFacts(input);
+                  return initialSource(reply)
+                    ? { ...reply, identity: reusedIdentity, birthtime: previousBirthtime }
                     : reply;
                 },
               })),
             ),
-          ),
-        );
+          lane,
+        ),
+      );
+    await closeOpenClawAgentDatabaseByPathAsync(staged, "main");
+    const projection = await createSessionRowProjection({ cfg });
+    await projection.ensureMaterialized();
+    try {
+      expect([...projection.sessionGroupTargets().keys()]).toEqual(["old group"]);
+      await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
+      renameSync(staged, storePath);
+      registerOpenClawAgentDatabase({ agentId: "main", path: storePath });
       try {
         await withReadySessionRows(
           projection,
@@ -323,7 +378,6 @@ it("hydrates a same-path replacement with a reused inode and retires its previou
         }
       } finally {
         workerIdentity.mockRestore();
-        identity.mockRestore();
       }
     } finally {
       projection.dispose();
@@ -442,11 +496,13 @@ it("reuses row identities across lists until their entry, profile, or config cha
       agents: {
         entries: { main: { identity: { name: "Original agent" } } },
       },
+      session: { communication: { receive: "ask" as SessionCommunicationMode } },
     };
     const scope = { agentId: "main", sessionKey: "agent:main:identity-cache" };
     const entry = {
       sessionId: "identity-cache",
       updatedAt: 1,
+      communication: { send: "never" as const },
       createdActor: { type: "agent" as const, id: "main" },
     };
     replaceSessionEntrySync(scope, entry);
@@ -455,7 +511,10 @@ it("reuses row identities across lists until their entry, profile, or config cha
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     const list = () => listProjectedSessions({ projection, opts: {} });
     try {
-      await list();
+      expect((await list()).sessions[0]?.effectiveCommunication).toEqual({
+        send: "never",
+        receive: "ask",
+      });
       const identities = vi.spyOn(agentIdentity, "resolveAgentIdentity");
       for (let index = 0; index < 3; index++) {
         expect((await list()).sessions[0]?.owner?.actor.label).toBe("Original agent");
@@ -470,8 +529,14 @@ it("reuses row identities across lists until their entry, profile, or config cha
       expect(identities).not.toHaveBeenCalled();
 
       cfg.agents.entries.main.identity.name = "Renamed agent";
+      cfg.session.communication.receive = "always";
       sessionChanges.emit({ all: true, scope: "config" });
       expect((await list()).owners?.[0]?.label).toBe("Renamed agent");
+      expect((await list()).sessions[0]?.effectiveCommunication).toEqual({
+        send: "never",
+        receive: "always",
+      });
+      expect((await list()).sessions[0]?.communication).toEqual({ send: "never" });
       assignSessionOwner(scope, {
         owner: { type: "agent", id: "missing" },
         assignedBy: { type: "system", id: "test" },

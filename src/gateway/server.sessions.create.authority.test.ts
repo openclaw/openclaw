@@ -343,7 +343,7 @@ test("sessions.create revalidates parent participation before committing a fork 
 
 test("createGatewaySession rejects explicit and key-derived unconfigured creation owners", async () => {
   const { createGatewaySession } = await import("./session-create-service.js");
-  const cfg = { agents: { entries: { ops: {} } } };
+  const cfg = { agents: { ownership: "explicit" as const, entries: { ops: {} } } };
   const prepareLifecycle = vi.fn();
 
   for (const { owner, message } of [
@@ -353,6 +353,11 @@ test("createGatewaySession rejects explicit and key-derived unconfigured creatio
       message: 'Unknown agent id "main"',
     },
     { owner: { agentId: "   " }, message: 'Unknown agent id "   "' },
+    { owner: { parentSessionKey: "agent:retired:main" }, message: 'Unknown agent id "retired"' },
+    {
+      owner: { agentId: "   ", parentSessionKey: "agent:ops:main" },
+      message: 'Unknown agent id "   "',
+    },
   ]) {
     await expect(
       createGatewaySession({ cfg, ...owner, commandSource: "test", prepareLifecycle }),

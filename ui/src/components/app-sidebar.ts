@@ -1,13 +1,11 @@
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
-import { repeat } from "lit/directives/repeat.js";
 import type {
   FsListDirResult,
   WorktreeRepositoryStatus,
   WorktreesBranchesResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import { serializeSidebarEntry } from "../app-navigation.ts";
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { t } from "../i18n/index.ts";
@@ -30,13 +28,9 @@ import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
 import { renderPluginSurface } from "../plugins/control-ui-view.ts";
 import { renderAppSidebarOnline } from "./app-sidebar-online.ts";
 import "../styles/app-sidebar.css";
-import {
-  renderAppSidebarBrand,
-  renderAppSidebarFooterBar,
-  renderAppSidebarHomeRow,
-  renderAppSidebarPagesHead,
-  renderAppSidebarZoneEntry,
-} from "./app-sidebar-render.ts";
+import "../styles/sidebar-rail.css";
+import { renderSidebarRail, renderSidebarPages, renderSidebarScope } from "./app-sidebar-rail.ts";
+import { renderAppSidebarBrand } from "./app-sidebar-render.ts";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.ts";
 import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
 import { renderSessionList } from "./app-sidebar-session-list-render.ts";
@@ -139,7 +133,10 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       (gateway) => gateway.subscribeEvents((event) => this.narration?.handleEvent(event)),
     )
     .watchStore(() => this.context?.agentIdentity)
-    .watchStore(() => this.context?.theme)
+    .watchStore(
+      () => this.context?.theme,
+      () => this.syncCommunityInviteState(),
+    )
     .watchStore(
       () => this.context?.config,
       () => this.syncCommunityInviteState(),
@@ -322,7 +319,11 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   };
 
   private syncCommunityInviteState() {
-    if (this.context?.config.current.communityInvite !== true || !isCommunityInviteEligible()) {
+    if (
+      this.context?.theme.branding.communityLinks === false ||
+      this.context?.config.current.communityInvite !== true ||
+      !isCommunityInviteEligible()
+    ) {
       this.communityInvitePresentation = "unavailable";
     } else if (this.communityInvitePresentation !== "shown") {
       this.communityInvitePresentation = "pending";
@@ -342,12 +343,9 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   }
 
   toggleSessionPin(session: SidebarRecentSession): void {
-    void this.sessionOrganizer.patchSession(
-      session,
-      { pinned: !session.pinned },
-      {
-        sessionScope: true,
-      },
+    this.sessionOrganizer.setPersonalSessionPin(
+      session.key,
+      !this.sessionOrganizer.isPersonalSessionPin(session.key),
     );
   }
 
@@ -521,10 +519,9 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   }
 
   override render() {
-    const sidebarZone = this.reconciledSidebarZone();
     return html`
       <aside
-        class="sidebar"
+        class="sidebar sidebar--rail"
         @pointerleave=${this.handleSidebarInteractionEnd}
         @focusout=${this.handleSidebarInteractionEnd}
         @contextmenu=${(event: MouseEvent) => {
@@ -534,14 +531,12 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
           }
         }}
       >
+        ${renderSidebarRail(this)}
         <div class="sidebar-shell" @mousedown=${beginNativeWindowDragFromTopInset}>
           ${renderAppSidebarBrand(
             this,
             this.sidebarAgentsMode === "roster"
-              ? this.rosterRenderer?.renderSidebarNewSessionMenu(
-                  this,
-                  "sidebar-brand__icon sidebar-brand__header-control sidebar-brand__new-thread",
-                )
+              ? this.rosterRenderer?.renderSidebarNewSessionMenu(this)
               : nothing,
           )}
           <div class="sidebar-shell__content">
@@ -549,35 +544,22 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
               class="sidebar-shell__body sidebar-shell__body--scroll-${this.sessionData.sessionsScrollState}"
               @scroll=${(event: Event) => this.sidebarContext.handleScroll(event)}
             >
-              <nav
-                class="sidebar-nav"
-                @contextmenu=${this.sidebarMenus.openCustomizeMenuFromContext}
-              >
-                ${renderAppSidebarPagesHead(this)}
-                <div
-                  class="nav-section__items"
-                  @dragover=${(event: DragEvent) =>
-                    this.sessionOrganizer.handleSidebarZoneDragOver(event)}
-                  @dragleave=${(event: DragEvent) =>
-                    this.sessionOrganizer.handleSidebarZoneDragLeave(event)}
-                  @drop=${(event: DragEvent) => this.sessionOrganizer.handleSidebarZoneDrop(event)}
-                >
-                  ${renderAppSidebarHomeRow(this)}
-                  <openclaw-mcp-app-catalog surface="sidebar"></openclaw-mcp-app-catalog>
-                  ${repeat(sidebarZone.entries, serializeSidebarEntry, (entry) =>
-                    renderAppSidebarZoneEntry(
-                      this,
-                      entry,
-                      sidebarZone.sessionRows,
-                      sidebarZone.pluginTabs,
-                    ),
-                  )}
-                </div>
-              </nav>
-              <div class="sidebar-session-content" ?hidden=${Boolean(this.contextualSidebar)}>
-                ${renderAppSidebarOnline(this)} ${this.renderSessions()}
-              </div>
-              ${this.contextualSidebar?.render(this.contextualSidebar.data, this.contextualSidebar.loaderPending, true) ?? nothing}
+              ${
+                this.navigationView === "pages"
+                  ? renderSidebarPages(this)
+                  : this.navigationView === "online"
+                    ? renderAppSidebarOnline(this)
+                    : html`
+                        ${renderSidebarScope(this)}
+                        <div
+                          class="sidebar-session-content"
+                          ?hidden=${Boolean(this.contextualSidebar)}
+                        >
+                          ${this.renderSessions()}
+                        </div>
+                        ${this.contextualSidebar?.render(this.contextualSidebar.data, this.contextualSidebar.loaderPending, true) ?? nothing}
+                      `
+              }
             </div>
             ${
               this.contextualSidebar || this.sessionsStatusFilter === "archived"
@@ -604,7 +586,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
                   </openclaw-tooltip>`
                 : nothing
             }
-            ${renderAppSidebarFooterBar(this)}
           </div>
         </div>
         ${this.sidebarMenus.render()}

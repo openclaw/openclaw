@@ -1,13 +1,12 @@
 // Stale hashed-chunk recovery for lazy routes and the entry stylesheet.
 //
-// A gateway update replaces `ui/dist` in place, so a document loaded before the
+// A gateway update replaces `dist/control-ui` in place, so a document loaded before the
 // update still references the old hashed chunk URLs; the first visit to a lazy
 // route after the update 404s and the dynamic import rejects ("Importing a
-// module script failed"). Secure-context browsers recover through the service
-// worker registered in main.ts (prior-build chunk caches + reload broadcast),
-// but WKWebView (macOS/iOS apps) and plain-HTTP LAN origins never register a
-// service worker, so reloading against the freshly served index.html is the
-// only recovery path there.
+// module script failed"). Reload the freshly served document in every browser,
+// including WKWebView and plain-HTTP LAN origins without a service worker.
+// Worker update announcements use this same guarded recovery; unsaved work
+// blocks automatic reloads and leaves the Reload banner available.
 import { raceWithTimeout, sleepWithAbort } from "@openclaw/retry";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
@@ -234,9 +233,7 @@ async function waitForReachableControlUiDocument(
     if (remainingWait <= 0) {
       return false;
     }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, Math.min(REACHABLE_WAIT_INTERVAL_MS, remainingWait));
-    });
+    await sleepWithAbort(Math.min(REACHABLE_WAIT_INTERVAL_MS, remainingWait));
   }
 }
 

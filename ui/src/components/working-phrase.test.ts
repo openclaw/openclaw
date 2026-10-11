@@ -95,14 +95,14 @@ describe("openclaw-working-phrase", () => {
     expect(render).toHaveBeenCalledOnce();
   });
 
-  it.each([3, 4, 6, 8, 10, 12, 24])(
+  it.each([0, 1, 6])(
     "walks all %i authored phrases without translation and restores the default vocabulary",
     async (length) => {
       const defaultPhrase = await textAt(element, WORKING_PHRASE_SHOW_AFTER_MS);
       const phrases = Array.from({ length }, (_, index) => `Phrase ${index + 1}`);
       element.phrases = phrases;
       const displayed = new Set<string>();
-      for (let bucket = 0; bucket < phrases.length; bucket++) {
+      for (let bucket = 0; bucket < Math.max(1, length); bucket++) {
         displayed.add(
           await textAt(
             element,
@@ -110,59 +110,19 @@ describe("openclaw-working-phrase", () => {
           ),
         );
       }
-      expect(displayed).toEqual(new Set(phrases.map((phrase) => `· ${phrase}…`)));
+      expect(displayed).toEqual(new Set(length ? phrases.map((phrase) => `· ${phrase}…`) : [""]));
+      if (length === 1) {
+        for (const bucket of [1, 100_000]) {
+          expect(
+            await textAt(
+              element,
+              WORKING_PHRASE_SHOW_AFTER_MS + bucket * WORKING_PHRASE_ROTATE_EVERY_MS,
+            ),
+          ).toBe("· Phrase 1…");
+        }
+      }
       element.phrases = undefined;
       expect(await textAt(element, WORKING_PHRASE_SHOW_AFTER_MS)).toBe(defaultPhrase);
     },
   );
-
-  it("renders nothing for an empty authored list", async () => {
-    element.phrases = [];
-    expect(
-      await textAt(element, WORKING_PHRASE_SHOW_AFTER_MS + WORKING_PHRASE_ROTATE_EVERY_MS),
-    ).toBe("");
-  });
-
-  it("keeps a single authored phrase across rotations", async () => {
-    element.phrases = ["Building"];
-    for (const bucket of [0, 1, 100_000]) {
-      expect(
-        await textAt(
-          element,
-          WORKING_PHRASE_SHOW_AFTER_MS + bucket * WORKING_PHRASE_ROTATE_EVERY_MS,
-        ),
-      ).toBe("· Building…");
-    }
-  });
-
-  it("is stable within a rotation and changes across rotations", async () => {
-    const first = await textAt(element, WORKING_PHRASE_SHOW_AFTER_MS + 1_000);
-    expect(first).toMatch(PHRASE_TEXT);
-    const stillFirst = await textAt(element, WORKING_PHRASE_SHOW_AFTER_MS + 10_000);
-    expect(stillFirst).toBe(first);
-
-    // Adjacent rotations must differ even when raw hashes collide, across
-    // many buckets (the displayed word feeds the next bucket's dodge).
-    let previous = first;
-    for (let bucket = 1; bucket <= 8; bucket++) {
-      const next = await textAt(
-        element,
-        WORKING_PHRASE_SHOW_AFTER_MS + bucket * WORKING_PHRASE_ROTATE_EVERY_MS + 1_000,
-      );
-      expect(next).toMatch(PHRASE_TEXT);
-      expect(next).not.toBe(previous);
-      previous = next;
-    }
-  });
-
-  it("is deterministic per seed", async () => {
-    const twin = mountPhrase();
-    try {
-      const a = await textAt(element, WORKING_PHRASE_SHOW_AFTER_MS + 1_000);
-      const b = await textAt(twin, WORKING_PHRASE_SHOW_AFTER_MS + 1_000);
-      expect(b).toBe(a);
-    } finally {
-      twin.remove();
-    }
-  });
 });

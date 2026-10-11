@@ -80,16 +80,22 @@ function mockMantisCliRuntime(runMantisSlackDesktopSmokeCommand = vi.fn()) {
 
 describe("mantis Slack desktop smoke runtime", () => {
   let repoRoot: string;
+  let previousExitCode: typeof process.exitCode;
+  let stderrWrite: ReturnType<typeof vi.spyOn>;
 
   function runSmoke(options: NonNullable<Parameters<typeof runMantisSlackDesktopSmoke>[0]>) {
     return runMantisSlackDesktopSmoke({ crabboxBin: "/tmp/crabbox", repoRoot, ...options });
   }
 
   beforeEach(async () => {
+    previousExitCode = process.exitCode;
+    stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mantis-slack-desktop-smoke-"));
   });
 
   afterEach(async () => {
+    process.exitCode = previousExitCode;
+    stderrWrite.mockRestore();
     vi.useRealTimers();
     vi.unstubAllGlobals();
     await fs.rm(repoRoot, { force: true, recursive: true });
@@ -878,16 +884,18 @@ describe("mantis Slack desktop smoke runtime", () => {
     const qa = new Command("qa");
     registerMantisCli(qa);
 
-    await expect(
-      qa.parseAsync([
-        "node",
-        "openclaw",
-        "mantis",
-        "slack-desktop-smoke",
-        "--approval-checkpoints",
-        "--gateway-setup",
-      ]),
-    ).rejects.toThrow("--approval-checkpoints cannot be used with --gateway-setup");
+    await qa.parseAsync([
+      "node",
+      "openclaw",
+      "mantis",
+      "slack-desktop-smoke",
+      "--approval-checkpoints",
+      "--gateway-setup",
+    ]);
+    expect(stderrWrite).toHaveBeenCalledWith(
+      expect.stringContaining("--approval-checkpoints cannot be used with --gateway-setup"),
+    );
+    expect(process.exitCode).toBe(1);
 
     expect(runMantisSlackDesktopSmokeCommand).not.toHaveBeenCalled();
     vi.doUnmock("./cli.runtime.js");

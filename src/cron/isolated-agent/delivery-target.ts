@@ -1,5 +1,7 @@
 /** Resolves isolated cron delivery requests into concrete outbound targets. */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { resolveChannelAllowFrom } from "../../channels/account-resolution.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { stripTargetProviderPrefix } from "../../infra/outbound/channel-target-prefix.js";
@@ -11,8 +13,9 @@ import { resolveSessionDeliveryTarget } from "../../infra/outbound/targets-sessi
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
-import { hasExplicitCronDeliveryTarget, type CronDeliveryPlan } from "../delivery-plan.js";
-import type { CronJob } from "../types.js";
+import type { CronDeliveryPlan } from "../delivery-plan.js";
+import { hasExplicitCronDeliveryTarget } from "../delivery-target-validation.js";
+import type { CronStoredJob } from "../types.js";
 import {
   readCronDeliveryTargetContexts,
   type CronDeliveryContextRequest,
@@ -37,6 +40,7 @@ export type DeliveryTargetResolution =
       threadId?: string | number;
       mode: "explicit" | "implicit";
       error: Error;
+      sourceConversationUnavailable?: true;
     };
 
 // Explicit destinations remain owed when channel selection fails; remembered
@@ -59,12 +63,12 @@ async function resolveOutboundTargetWithRuntime(
   params: Parameters<typeof tryResolveLoadedOutboundTarget>[0],
 ) {
   try {
-    const loaded = tryResolveLoadedOutboundTarget(params);
+    const loaded = await tryResolveLoadedOutboundTarget(params);
     if (loaded) {
       return loaded;
     }
     const { resolveOutboundTarget } = await targetsRuntimeLoader.load();
-    return resolveOutboundTarget({ ...params, allowBootstrap: true });
+    return await resolveOutboundTarget({ ...params, allowBootstrap: true });
   } catch (err) {
     return {
       ok: false as const,
@@ -78,6 +82,9 @@ const channelSelectionRuntimeLoader = createLazyImportLoader(
 );
 const deliveryTargetRuntimeLoader = createLazyImportLoader(
   () => import("./delivery-target.runtime.js"),
+);
+const sessionGenerationRuntimeLoader = createLazyImportLoader(
+  () => import("../../config/sessions/session-delivery-generation.js"),
 );
 
 /** Read one preview batch after runtime loading, then release all source read ownership. */
@@ -140,7 +147,7 @@ export async function resolveDeliveryTarget(
   cfg: OpenClawConfig,
   agentId: string,
   jobPayload: Pick<CronDeliveryPlan, "channel" | "to" | "threadId" | "accountId"> &
-    Partial<Pick<CronJob, "sessionKey" | "sessionTarget">>,
+    Partial<Pick<CronStoredJob, "sessionKey" | "sessionTarget" | "sourceConversation">>,
   options?: {
     dryRun?: boolean;
     inheritSessionThread?: boolean;
@@ -151,6 +158,31 @@ export async function resolveDeliveryTarget(
   const explicitTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
   const allowMismatchedLastTo = requestedChannel === "last";
   const deliveryTargetRuntime = await deliveryTargetRuntimeLoader.load();
+  const source =
+    jobPayload.sessionTarget === "isolated" ? jobPayload.sourceConversation : undefined;
+  if (source && !hasExplicitCronDeliveryTarget(jobPayload)) {
+    try {
+      const { prepareSessionGenerationFacts } = await sessionGenerationRuntimeLoader.load();
+      const generation = await prepareSessionGenerationFacts({
+        agentId,
+        storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
+        ...source,
+        lifecycleRevision: source.lifecycleRevision ?? null,
+      });
+      try {
+        generation.assertCurrent();
+      } finally {
+        generation.release();
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        mode: "implicit",
+        sourceConversationUnavailable: true,
+        error: new Error(`Creating conversation unavailable: ${formatErrorMessage(error)}`),
+      };
+    }
+  }
 
   const sessionContext =
     options?.sessionContext ??
@@ -163,8 +195,14 @@ export async function resolveDeliveryTarget(
       }
       return result.value;
     })();
-  const { mainSessionKey, rawSessionKey, threadSessionKey, main, usedSharedMainFallback } =
+  const { mainSessionKey, rawSessionKey, threadSessionKey, usedSharedMainFallback } =
     sessionContext;
+  const hasConversationCompletion =
+    jobPayload.sessionTarget === "current" ||
+    (jobPayload.sessionTarget === "isolated" && jobPayload.sourceConversation !== undefined);
+  // A missing creating conversation cannot inherit another conversation's shared route.
+  const main =
+    hasConversationCompletion && usedSharedMainFallback ? undefined : sessionContext.main;
 
   const preliminary = resolveSessionDeliveryTarget({
     entry: main,
@@ -179,11 +217,8 @@ export async function resolveDeliveryTarget(
   if (!preliminary.channel) {
     if (preliminary.lastChannel) {
       fallbackChannel = preliminary.lastChannel;
-    } else if (
-      jobPayload.sessionTarget !== "current" ||
-      hasExplicitCronDeliveryTarget(jobPayload)
-    ) {
-      // Current jobs without an external source route complete in their own
+    } else if (!hasConversationCompletion || hasExplicitCronDeliveryTarget(jobPayload)) {
+      // Bound jobs without an external source route complete in their creating
       // conversation; an unrelated configured channel cannot create a delivery obligation.
       try {
         const { resolveMessageChannelSelection } = await channelSelectionRuntimeLoader.load();
@@ -260,10 +295,9 @@ export async function resolveDeliveryTarget(
     const { getLoadedChannelPluginForRead, mapAllowFromEntries } = deliveryTargetRuntime;
     const channelPlugin = getLoadedChannelPluginForRead(channel);
     const resolvedAccountId = normalizeAccountId(accountId);
-    const configuredAllowFromRaw = channelPlugin?.config.resolveAllowFrom?.({
-      cfg,
-      accountId: resolvedAccountId,
-    });
+    const configuredAllowFromRaw = channelPlugin
+      ? await resolveChannelAllowFrom({ plugin: channelPlugin, cfg, accountId: resolvedAccountId })
+      : undefined;
     const configuredAllowFrom = configuredAllowFromRaw
       ? mapAllowFromEntries(configuredAllowFromRaw)
       : [];

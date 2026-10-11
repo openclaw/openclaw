@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
+import { createProps } from "./chat-thread.test-support.ts";
 import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
 
 type PendingInput = NonNullable<BuildChatItemsProps["pendingInputs"]>[number];
@@ -41,7 +42,7 @@ function acceptedInput(
 }
 
 function createInput(overrides: Partial<BuildChatItemsProps>): BuildChatItemsProps {
-  return {
+  return createProps({
     paneId: "input-order",
     sessionKey: "agent:main:input-order",
     messages: [
@@ -52,13 +53,8 @@ function createInput(overrides: Partial<BuildChatItemsProps>): BuildChatItemsPro
         __openclaw: { id: "earlier-answer", seq: 1 },
       },
     ],
-    toolMessages: [],
-    streamSegments: [],
-    stream: null,
-    streamStartedAt: null,
-    showToolCalls: true,
     ...overrides,
-  };
+  });
 }
 
 function visibleRows(
@@ -68,7 +64,7 @@ function visibleRows(
   return build(createInput(overrides)).flatMap((item) =>
     item.kind === "group"
       ? item.messages.map(({ message }) => extractTextCached(message))
-      : item.kind === "notice"
+      : item.kind === "notice" || item.kind === "stream"
         ? [item.text]
         : [],
   );
@@ -78,6 +74,175 @@ beforeEach(() => resetChatThreadState("input-order"));
 afterEach(() => resetChatThreadState("input-order"));
 
 describe("transcript input order", () => {
+  it("keeps parent output around a worker update in the same order live and saved", () => {
+    const original = {
+      role: "user",
+      content: "Publish the change",
+      timestamp: 10,
+      __openclaw: { id: "request", idempotencyKey: "parent:user", seq: 1 },
+    };
+    const update = {
+      role: "assistant",
+      content: "Worker update",
+      timestamp: 30,
+      provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+      senderSession: { sessionKey: "agent:main:worker" },
+      __openclaw: { id: "update", seq: 3 },
+    };
+    const before = {
+      role: "assistant",
+      content: "Preparing publication",
+      timestamp: 20,
+      __openclaw: { id: "before", runId: "parent", seq: 2 },
+    };
+    const after = {
+      role: "assistant",
+      content: "Published successfully",
+      timestamp: 40,
+      __openclaw: { id: "after", runId: "parent", seq: 4 },
+    };
+    const next = {
+      role: "user",
+      content: "Next request",
+      timestamp: 50,
+      __openclaw: { id: "next", idempotencyKey: "next:user", seq: 5 },
+    };
+    const expected = [
+      "Publish the change",
+      "Preparing publication",
+      "Worker update",
+      "Published successfully",
+      "Next request",
+    ];
+    for (const mode of ["stream", "segment", "saved"] as const) {
+      expect(
+        visibleRows({
+          messages: [original, before, update, ...(mode === "saved" ? [after] : []), next],
+          runId: mode === "saved" ? null : "parent",
+          runWorking: mode !== "saved",
+          stream: mode === "stream" ? "Published successfully" : null,
+          streamStartedAt: 40,
+          streamSegments:
+            mode === "segment"
+              ? [
+                  {
+                    text: "Published successfully",
+                    ts: 40,
+                    runId: "parent",
+                    itemId: "commentary",
+                    afterUserSendId: "parent",
+                  },
+                ]
+              : [],
+        }),
+        mode,
+      ).toEqual(expected);
+    }
+  });
+  it("keeps accepted steers at their transcript positions between same-run answers", () => {
+    const messages = [
+      { role: "user", content: "Original", __openclaw: { idempotencyKey: "run:user", seq: 1 } },
+      { role: "assistant", content: "Before", __openclaw: { runId: "run", seq: 2 } },
+      { role: "user", content: "Steer one", __openclaw: { steerTargetRunId: "run", seq: 3 } },
+      { role: "assistant", content: "After", __openclaw: { runId: "run", seq: 4 } },
+      { role: "user", content: "Steer two", __openclaw: { steerTargetRunId: "run", seq: 5 } },
+      { role: "assistant", content: "Final", __openclaw: { runId: "run", seq: 6 } },
+      { role: "user", content: "Next", __openclaw: { idempotencyKey: "next:user", seq: 7 } },
+      { role: "assistant", content: "Other run", __openclaw: { runId: "next", seq: 8 } },
+    ];
+    expect(visibleRows({ messages })).toEqual([
+      "Original",
+      "Before",
+      "Steer one",
+      "After",
+      "Steer two",
+      "Final",
+      "Next",
+      "Other run",
+    ]);
+    expect(messages.map((message) => message.content)).toEqual([
+      "Original",
+      "Before",
+      "Steer one",
+      "After",
+      "Steer two",
+      "Final",
+      "Next",
+      "Other run",
+    ]);
+  });
+
+  it.each([true, false])(
+    "keeps the live tail after accepted steers and before a later turn (original=%s)",
+    (includeOriginal) => {
+      const original = {
+        role: "user",
+        content: "Original",
+        __openclaw: { idempotencyKey: "run:user", seq: 1 },
+      };
+      const messages = [
+        ...(includeOriginal ? [original] : []),
+        { role: "assistant", content: "Before", __openclaw: { runId: "run", seq: 2 } },
+        {
+          role: "user",
+          content: "Steer one",
+          __openclaw: { idempotencyKey: "steer-one:user", steerTargetRunId: "run", seq: 3 },
+        },
+        { role: "assistant", content: "After", __openclaw: { runId: "run", seq: 4 } },
+        {
+          role: "user",
+          content: "Steer two",
+          __openclaw: { idempotencyKey: "steer-two:user", steerTargetRunId: "run", seq: 5 },
+        },
+        { role: "user", content: "Next turn", __openclaw: { idempotencyKey: "next:user", seq: 6 } },
+      ];
+      expect(
+        visibleRows({ messages, runId: "run", stream: "Live continuation", streamStartedAt: 1 }),
+      ).toEqual([
+        ...(includeOriginal ? ["Original"] : []),
+        "Before",
+        "Steer one",
+        "After",
+        "Steer two",
+        "Live continuation",
+        "Next turn",
+      ]);
+    },
+  );
+
+  it("keeps retained activity before a steer when its observed prompt is paged out", () => {
+    expect(
+      visibleRows({
+        runId: "run",
+        messages: [
+          {
+            role: "user",
+            content: "Steer",
+            __openclaw: { idempotencyKey: "steer:user", steerTargetRunId: "run", seq: 3 },
+          },
+        ],
+        streamSegments: [
+          {
+            text: "Earlier commentary",
+            itemId: "comment",
+            runId: "run",
+            ts: 9000,
+            afterUserSendId: "original",
+          },
+        ],
+        toolMessages: [
+          {
+            role: "assistant",
+            content: "Earlier tool",
+            runId: "run",
+            timestamp: 9001,
+            openclawToolStreamAfterSendId: "original",
+          },
+        ],
+      }),
+    ).toEqual(["Earlier commentary", "Earlier tool", "Steer"]);
+  });
+
   it.each(["steer", "interrupt"] as const)(
     "keeps consecutive sends in submission order while a %s ACK is pending",
     (queueMode) => {
@@ -117,27 +282,41 @@ describe("transcript input order", () => {
     },
   );
 
-  it.each(["unconfirmed", "waiting-reconnect"] as const)(
-    "keeps an earlier %s input ahead of a newer submitting input",
-    (sendState) => {
-      expect(
-        visibleRows({
-          queue: [queuedInput("Earlier input", 10, sendState), queuedInput("New input", 20)],
-        }),
-      ).toEqual(["Existing conversation", "Earlier input", "New input"]);
+  it.each(["unconfirmed", "waiting-reconnect", "accepted", "reordered"] as const)(
+    "keeps an earlier %s input ahead of a new submission through custody",
+    (state) => {
+      const reordered = state === "reordered";
+      const earlier = queuedInput(
+        "Earlier input",
+        reordered ? 30 : 10,
+        state === "unconfirmed" || state === "waiting-reconnect" ? state : "submitting",
+      );
+      const later = queuedInput("New input", reordered ? 10 : 20);
+      const queue =
+        state === "accepted"
+          ? [later]
+          : reordered
+            ? [
+                { ...earlier, orderKey: 10 },
+                { ...later, orderKey: 30 },
+              ]
+            : [earlier, later];
+      const pendingInputs = state === "accepted" ? [acceptedInput("Earlier input", 10)] : [];
+      const expected = ["Existing conversation", "Earlier input", "New input"];
+      expect(visibleRows({ queue, pendingInputs })).toEqual(expected);
+      if (state === "accepted" || reordered) {
+        expect(
+          visibleRows({
+            queue,
+            pendingInputs: [
+              ...pendingInputs,
+              acceptedInput(reordered ? "Earlier input" : "New input", reordered ? 40 : 30),
+            ],
+          }),
+        ).toEqual(expected);
+      }
     },
   );
-
-  it("keeps accepted input ahead of a new submission through its custody handoff", () => {
-    const queue = [queuedInput("New input", 20)];
-    const earlier = acceptedInput("Earlier input", 10);
-    const expected = ["Existing conversation", "Earlier input", "New input"];
-
-    expect([
-      visibleRows({ queue, pendingInputs: [earlier] }),
-      visibleRows({ queue, pendingInputs: [earlier, acceptedInput("New input", 30)] }),
-    ]).toEqual([expected, expected]);
-  });
 
   it.each([
     { state: "queued", label: "reversed", timestamps: [30, 20] },
@@ -166,18 +345,6 @@ describe("transcript input order", () => {
       ).toEqual(["Existing conversation", ...expectedInputs]);
     },
   );
-
-  it("preserves a reordered queue when its first input receives custody", () => {
-    const first = { ...queuedInput("Moved first", 30), orderKey: 10 };
-    const second = { ...queuedInput("Moved second", 10), orderKey: 30 };
-    const queue = [first, second];
-    const expected = ["Existing conversation", "Moved first", "Moved second"];
-
-    expect([
-      visibleRows({ queue }),
-      visibleRows({ queue, pendingInputs: [acceptedInput("Moved first", 40)] }),
-    ]).toEqual([expected, expected]);
-  });
 
   it("keeps the displayed order while consumption retires a local custody anchor", () => {
     const earlier = queuedInput("Earlier input", 10, "failed");

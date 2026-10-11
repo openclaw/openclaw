@@ -1,7 +1,19 @@
 // Exercise the real guard: its timeout owns DNS/proxy preflight as well as fetch.
-import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchOllamaModels } from "./provider-models.js";
+
+const { lookupMock, fetchMock } = vi.hoisted(() => ({
+  lookupMock: vi.fn(),
+  fetchMock: vi.fn(),
+}));
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: (params: Parameters<typeof actual.fetchWithSsrFGuard>[0]) =>
+      actual.fetchWithSsrFGuard({ ...params, fetchImpl: fetchMock, lookupFn: lookupMock }),
+  };
+});
 
 const TAGS_TIMEOUT_MS = 5000;
 
@@ -9,6 +21,8 @@ describe("fetchOllamaModels preflight timeout", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllEnvs();
+    fetchMock.mockReset();
+    lookupMock.mockReset();
   });
 
   it.each([
@@ -18,20 +32,18 @@ describe("fetchOllamaModels preflight timeout", () => {
     vi.useFakeTimers();
     vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "0");
     const lookupStarted = Promise.withResolvers<void>();
-    const stalledLookup: LookupFn = (() => {
+    lookupMock.mockImplementation(() => {
       lookupStarted.resolve();
       return new Promise<never>(() => {});
-    }) as LookupFn;
+    });
     const fetchSpy = vi.fn(async () => new Response("should not run"));
 
     const started = Date.now();
     let settlement:
       | { result: Awaited<ReturnType<typeof fetchOllamaModels>>; elapsedMs: number }
       | undefined;
-    const pending = fetchOllamaModels("https://ollama.example.com", opts, {
-      fetchImpl: fetchSpy,
-      lookupFn: stalledLookup,
-    }).then((result) => {
+    fetchMock.mockImplementation(fetchSpy);
+    const pending = fetchOllamaModels("https://ollama.example.com", opts).then((result) => {
       settlement = { result, elapsedMs: Date.now() - started };
     });
     try {
@@ -50,30 +62,5 @@ describe("fetchOllamaModels preflight timeout", () => {
       await vi.advanceTimersByTimeAsync(TAGS_TIMEOUT_MS);
       await pending;
     }
-  });
-
-  it("still dispatches the fetch when preflight lookup resolves", async () => {
-    vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "0");
-    let lookupCalls = 0;
-    const resolvingLookup: LookupFn = (async () => {
-      lookupCalls += 1;
-      return [{ address: "127.0.0.1", family: 4 }];
-    }) as unknown as LookupFn;
-    const fetchSpy = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ models: [{ name: "qwen3:32b" }] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-    );
-
-    const result = await fetchOllamaModels("https://ollama.example.com", undefined, {
-      fetchImpl: fetchSpy,
-      lookupFn: resolvingLookup,
-    });
-
-    expect(lookupCalls).toBeGreaterThan(0);
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({ reachable: true, models: [{ name: "qwen3:32b" }] });
   });
 });

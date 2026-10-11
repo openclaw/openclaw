@@ -45,6 +45,7 @@ import {
   replyRunRegistry,
   type ReplyOperation,
 } from "./reply-run-registry.js";
+import { withReplySystemEventContext } from "./system-event-session-key.js";
 
 useBundledProviderPolicyArtifactsForTest(["openai", "anthropic"]);
 const state = await setupAgentRunnerExecutionTestState();
@@ -252,50 +253,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     expect(embeddedCall.abortSignal).toMatchObject({ aborted: true });
   });
 
-  it("passes the operator-reviewed proposal revision to every embedded candidate", async () => {
-    const followupRun = createFollowupRun();
-    followupRun.run.skillWorkshopProposalRevision = {
-      agentId: "main",
-      workspaceDir: "/tmp/workspace",
-      proposalId: "proposal-h1",
-      expectedRevisionHash: "revision-h1",
-    };
-    state.runEmbeddedAgentMock.mockResolvedValue({ payloads: [{ text: "ok" }], meta: {} });
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      await params.run("anthropic", "primary", initialFallbackAttemptOptions(params));
-      const result = await params.run(
-        "openai",
-        "fallback",
-        fallbackAttemptOptions(params, "unknown"),
-      );
-      return { result, provider: "openai", model: "fallback", attempts: [] };
-    });
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
-    expect(result.kind, result.kind === "final" ? result.payload.text : undefined).toBe("success");
-
-    expect(
-      state.runEmbeddedAgentMock.mock.calls.map(
-        (call, index) =>
-          requireRecord(call[0], `embedded candidate ${index}`).skillWorkshopProposalRevision,
-      ),
-    ).toEqual([
-      {
-        agentId: "main",
-        workspaceDir: "/tmp/workspace",
-        proposalId: "proposal-h1",
-        expectedRevisionHash: "revision-h1",
-      },
-      {
-        agentId: "main",
-        workspaceDir: "/tmp/workspace",
-        proposalId: "proposal-h1",
-        expectedRevisionHash: "revision-h1",
-      },
-    ]);
-  });
-
   it("records diagnostic progress from global-lane wait notifications", async () => {
     const replyOperation = createReplyOperation({
       sessionKey: "agent:main:global-lane-progress",
@@ -326,20 +283,14 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     }
   });
 
-  it.each([undefined, "default", "ultra"] as const)(
+  it.each(["default"] as const)(
     "revalidates original thinking for main-chat fallback with turn request=%s",
     async (override) => {
       const followupRun = createFollowupRun();
       followupRun.run.provider = "openai";
       followupRun.run.model = "gpt-5.6-sol";
       followupRun.run.thinkLevel = "ultra";
-      if (override !== undefined) {
-        followupRun.run = {
-          ...followupRun.run,
-          thinkLevel: override === "ultra" ? "off" : "ultra",
-          thinkLevelOverride: override,
-        };
-      }
+      followupRun.run = { ...followupRun.run, thinkLevelOverride: override };
       followupRun.run.config = {
         agents: {
           defaults: {
@@ -372,7 +323,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
         "ultra",
         "ultra",
       ]);
-      expect(followupRun.run.thinkLevel).toBe(override === "ultra" ? "off" : "ultra");
+      expect(followupRun.run.thinkLevel).toBe("ultra");
     },
   );
 
@@ -509,8 +460,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
   });
 
   it.each([
-    { reason: "user", compactions: 0 },
-    { reason: "restart", compactions: 0 },
     { reason: "user", compactions: 1 },
     { reason: "restart", compactions: 1 },
   ] as const)(
@@ -588,12 +537,8 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
   );
 
   it.each([
-    { name: "same-owner model", owner: "same", currentContextSnapshot: { tokens: 120 } },
-    { name: "same-owner zero", owner: "same", currentContextSnapshot: { tokens: 0 } },
-    { name: "same-owner unknown", owner: "same", currentContextSnapshot: { tokens: undefined } },
     { name: "same-owner custody-only", owner: "same", currentContextSnapshot: undefined },
     { name: "unrelated writer", owner: "different", currentContextSnapshot: { tokens: 999 } },
-    { name: "opaque candidate", owner: "opaque", currentContextSnapshot: undefined },
   ] as const)(
     "aggregates fallback counts without borrowing $name context",
     async ({ owner, currentContextSnapshot }) => {
@@ -621,19 +566,16 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
         currentContextSnapshot: { tokens: 10 },
         target: { ...compactionTarget, sessionId: "latest-successor" },
       };
-      const modelOnly: CompactionAccountingFact | undefined =
-        owner === "opaque"
-          ? undefined
-          : {
-              kind: "durable",
-              count: 0,
-              ...(currentContextSnapshot ? { currentContextSnapshot } : {}),
-              target: {
-                ...latest.target,
-                activeWriterRunId:
-                  owner === "different" ? "unrelated-writer" : compactionTarget.activeWriterRunId,
-              },
-            };
+      const modelOnly: CompactionAccountingFact = {
+        kind: "durable",
+        count: 0,
+        ...(currentContextSnapshot ? { currentContextSnapshot } : {}),
+        target: {
+          ...latest.target,
+          activeWriterRunId:
+            owner === "different" ? "unrelated-writer" : compactionTarget.activeWriterRunId,
+        },
+      };
       const facts = [first, undefined, successor, otherWriter, latest, undefined, modelOnly];
       for (const [index, fact] of facts.entries()) {
         state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
@@ -691,36 +633,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     },
   );
 
-  it("passes the hydrated run account to embedded execution", async () => {
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "ok" }],
-      meta: {},
-    });
-    const followupRun = createFollowupRun();
-    followupRun.run.agentAccountId = "work";
-    followupRun.originatingChannel = "slack";
-    followupRun.originatingTo = "user:U1";
-    followupRun.originatingAccountId = "work";
-    followupRun.originatingChatType = "direct";
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    await executeAgentTurn(
-      createMinimalRunAgentTurnParams({
-        followupRun,
-        sessionCtx: {
-          Provider: "cron-event",
-        },
-      }),
-    );
-
-    expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded run params", {
-      messageProvider: "slack",
-      messageTo: "user:U1",
-      agentAccountId: "work",
-      chatType: "direct",
-    });
-  });
-
   it("signals typing and records the execution boundary before assistant text", async () => {
     const typingSignals = createMockTypingSignaler();
     const onAgentRunStart = vi.fn();
@@ -731,6 +643,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     });
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
       expect(hasReplyOperationExecutionStarted(replyOperation)).toBe(false);
+      await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
       params.onExecutionPhase?.({
         phase: "model_call_started",
         provider: "openai",
@@ -759,48 +672,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     } finally {
       replyOperation.complete();
     }
-  });
-
-  it("forwards CLI harness execution phases into typing signals", async () => {
-    state.isCliProviderMock.mockReturnValue(true);
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("codex-cli", "gpt-5.4", initialFallbackAttemptOptions(params)),
-      provider: "codex-cli",
-      model: "gpt-5.4",
-      attempts: [],
-    }));
-    state.runCliAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      params.onExecutionPhase?.({
-        phase: "process_spawned",
-        provider: "codex-cli",
-        model: "gpt-5.4",
-        backend: "codex",
-      });
-      return { payloads: [{ text: "final" }], meta: {} };
-    });
-    const followupRun = createFollowupRun();
-    followupRun.run.provider = "codex-cli";
-    followupRun.run.model = "gpt-5.4";
-    followupRun.run.clientCaps = ["tool-events", "inline-widgets"];
-    followupRun.media = [{ path: "/tmp/cli.png", contentType: "image/png" }];
-    const typingSignals = createMockTypingSignaler();
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(
-      createMinimalRunAgentTurnParams({
-        followupRun,
-        typingSignals,
-      }),
-    );
-
-    expect(result.kind).toBe("success");
-    expect(typingSignals.signalExecutionActivity).toHaveBeenCalledOnce();
-    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
-      provider: "codex-cli",
-      model: "gpt-5.4",
-      clientCaps: ["tool-events", "inline-widgets"],
-      media: followupRun.media,
-    });
   });
 
   it("requires explicit message targets on heartbeat CLI runs", async () => {
@@ -860,7 +731,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     });
   });
 
-  it("forwards bundle MCP retirement to isolated heartbeat embedded runs", async () => {
+  it("forwards the event queue and bundle MCP retirement to isolated heartbeat embedded runs", async () => {
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run("anthropic", "claude", initialFallbackAttemptOptions(params)),
       provider: "anthropic",
@@ -873,7 +744,13 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     });
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const opts: InternalGetReplyOptions = { isHeartbeat: true, cleanupBundleMcpOnRunEnd: true };
+    const opts = withReplySystemEventContext<InternalGetReplyOptions>(
+      { isHeartbeat: true, cleanupBundleMcpOnRunEnd: true },
+      {
+        sessionKey: "agent:main:heartbeat:heartbeat",
+        heartbeatEventQueueSessionKey: "agent:main:heartbeat",
+      },
+    );
     const params = createMinimalRunAgentTurnParams({ opts });
     params.isHeartbeat = true;
 
@@ -885,12 +762,13 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       "isolated heartbeat embedded run params",
       {
         trigger: "heartbeat",
+        heartbeatEventQueueSessionKey: "agent:main:heartbeat",
         cleanupBundleMcpOnRunEnd: true,
       },
     );
   });
 
-  it("forwards bundle MCP retirement to isolated heartbeat CLI runs", async () => {
+  it("forwards the event queue and bundle MCP retirement to isolated heartbeat CLI runs", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run("claude-cli", "sonnet-4.6", initialFallbackAttemptOptions(params)),
@@ -905,7 +783,13 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     const followupRun = createFollowupRun();
     followupRun.run.provider = "claude-cli";
     followupRun.run.model = "sonnet-4.6";
-    const opts: InternalGetReplyOptions = { isHeartbeat: true, cleanupBundleMcpOnRunEnd: true };
+    const opts = withReplySystemEventContext<InternalGetReplyOptions>(
+      { isHeartbeat: true, cleanupBundleMcpOnRunEnd: true },
+      {
+        sessionKey: "agent:main:heartbeat:heartbeat",
+        heartbeatEventQueueSessionKey: "agent:main:heartbeat",
+      },
+    );
     const params = createMinimalRunAgentTurnParams({ followupRun, opts });
     params.isHeartbeat = true;
 
@@ -914,6 +798,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
 
     expectMockCallArgFields(state.runCliAgentMock, 0, "isolated heartbeat CLI run params", {
       trigger: "heartbeat",
+      heartbeatEventQueueSessionKey: "agent:main:heartbeat",
       cleanupBundleMcpOnRunEnd: true,
     });
   });

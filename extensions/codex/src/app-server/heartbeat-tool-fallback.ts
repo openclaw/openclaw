@@ -25,14 +25,20 @@ export function resolveInactiveCodexHeartbeatResponseDescriptor(params: {
   return descriptor ? { name: descriptor.name, description: descriptor.description } : undefined;
 }
 
-/** Keeps the thread-stable heartbeat endpoint executable on ordinary Codex turns. */
-function createInactiveCodexHeartbeatResponseTool(
-  descriptor: InactiveCodexHeartbeatResponseDescriptor,
-): AnyAgentTool {
+export function selectInactiveCodexHeartbeatResponseTool(params: {
+  descriptor: InactiveCodexHeartbeatResponseDescriptor;
+  disableTools?: boolean;
+  toolsAllow?: string[];
+  pluginConfig: Pick<CodexPluginConfig, "codexDynamicToolsExclude">;
+}): AnyAgentTool | undefined {
+  if (params.disableTools) {
+    return undefined;
+  }
+  const descriptor = params.descriptor;
   if (descriptor.name !== HEARTBEAT_RESPONSE_TOOL_NAME) {
     throw new Error(`Expected ${HEARTBEAT_RESPONSE_TOOL_NAME}, received ${descriptor.name}`);
   }
-  return {
+  const tool: AnyAgentTool = {
     name: descriptor.name,
     label: descriptor.name,
     description: descriptor.description,
@@ -60,20 +66,7 @@ function createInactiveCodexHeartbeatResponseTool(
       };
     },
   };
-}
 
-export function selectInactiveCodexHeartbeatResponseTool(params: {
-  descriptor: InactiveCodexHeartbeatResponseDescriptor;
-  disableTools?: boolean;
-  toolsAllow?: string[];
-  pluginConfig: Pick<CodexPluginConfig, "codexDynamicToolsExclude">;
-}): AnyAgentTool | undefined {
-  if (params.disableTools) {
-    return undefined;
-  }
-  const allowed = applyEmbeddedAttemptToolsAllow(
-    [createInactiveCodexHeartbeatResponseTool(params.descriptor)],
-    params.toolsAllow,
-  );
+  const allowed = applyEmbeddedAttemptToolsAllow([tool], params.toolsAllow);
   return filterCodexDynamicTools(allowed, params.pluginConfig)[0];
 }

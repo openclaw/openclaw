@@ -86,6 +86,36 @@ it.each([true, false])(
   },
 );
 
+it.each(["existing", "missing"] as const)(
+  "rechecks a previously resolved %s declaration path after its parent becomes a symlink",
+  (kind) => {
+    const ancestor = fs.realpathSync.native(roots.make("declaration-path-recheck-"));
+    const root = path.join(ancestor, "checkout");
+    const outside = path.join(ancestor, "outside");
+    const parent = path.join(root, "generated");
+    const file = path.join(parent, "value.d.ts");
+    fs.mkdirSync(root);
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, "value.d.ts"), "export {};\n");
+    if (kind === "existing") {
+      fs.mkdirSync(parent);
+      fs.writeFileSync(file, "export {};\n");
+    }
+    const boundary = createDeclarationInputBoundary(root);
+    expect(boundary.assert(file)).toBe(file);
+    expect(boundary.assert(file)).toBe(file);
+
+    fs.rmSync(parent, { recursive: true, force: true });
+    fs.symlinkSync(outside, parent, "junction");
+    expect(() => boundary.assert(file)).toThrow("Declaration input escapes checkout");
+
+    fs.rmSync(parent, { recursive: true, force: true });
+    fs.mkdirSync(parent);
+    fs.writeFileSync(file, "export {};\n");
+    expect(boundary.assert(file)).toBe(file);
+  },
+);
+
 function createNativeFixture(root: string, declared = root) {
   fs.mkdirSync(root, { recursive: true });
   const native = materializeNativeCompiler(declared);
@@ -123,8 +153,14 @@ function createNativeFixture(root: string, declared = root) {
   return { native, write, compile };
 }
 
-it.each(
-  (["all", "declarations"] as const).flatMap((diagnostics) => [
+it.each<{
+  diagnostics: "all" | "declarations";
+  kind: string;
+  source: string;
+  error: RegExp;
+  corrected?: string;
+}>([
+  ...(["all", "declarations"] as const).flatMap((diagnostics) => [
     {
       diagnostics,
       kind: "declaration transform",
@@ -138,9 +174,16 @@ it.each(
       error: /TS2318: Cannot find global type 'IterableIterator'/u,
     },
   ]),
-)(
+  {
+    diagnostics: "all",
+    kind: "semantic",
+    source: 'export const count: number = "wrong";',
+    error: /TS2322: Type 'string' is not assignable/u,
+    corrected: "export const count: number = 42;",
+  },
+])(
   "rejects $kind errors in $diagnostics diagnostic mode",
-  async ({ diagnostics, source, error }) => {
+  async ({ diagnostics, source, error, corrected }) => {
     const root = fs.realpathSync.native(roots.make("native-declaration-errors-"));
     const fixture = createNativeFixture(root);
     fixture.write("src/index.ts", source);
@@ -152,25 +195,19 @@ it.each(
         configFile: path.join(root, "tsconfig.json"),
         roots: [path.join(root, "src/index.ts")],
         diagnostics,
-        compilerOptions: { lib: ["es5"] },
+        compilerOptions: corrected ? undefined : { lib: ["es5"] },
         assertInput: (file) => boundary.assert(file),
       }),
     ).rejects.toThrow(error);
+    if (corrected) {
+      fixture.write("src/index.ts", corrected);
+      const emitted = await fixture.compile();
+      expect(emitted.declarations.get(path.join(root, "src/index.ts"))?.code).toContain(
+        "export declare const count: number;",
+      );
+    }
   },
 );
-
-it("rejects semantic errors before returning valid native declarations", async () => {
-  const root = fs.realpathSync.native(roots.make("native-declaration-semantics-"));
-  const fixture = createNativeFixture(root);
-  fixture.write("src/index.ts", 'export const count: number = "wrong";');
-  await expect(fixture.compile()).rejects.toThrow(/TS2322: Type 'string' is not assignable/u);
-
-  fixture.write("src/index.ts", "export const count: number = 42;");
-  const emitted = await fixture.compile();
-  expect(emitted.declarations.get(path.join(root, "src/index.ts"))?.code).toContain(
-    "export declare const count: number;",
-  );
-});
 
 it("emits identical inferred declarations and maps across fresh compiler processes", async () => {
   const root = fs.realpathSync.native(roots.make("native-declaration-determinism-"));

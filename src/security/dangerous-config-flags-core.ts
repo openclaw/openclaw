@@ -1,4 +1,3 @@
-// Defines core dangerous config flag metadata for security audits.
 import { listAgentEntriesWithSource, type ListedAgentEntry } from "../agents/agent-scope-config.js";
 import { DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS } from "../agents/sandbox/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -59,7 +58,6 @@ function collectExactPluginConfigContractMatches({
 }
 
 /**
- * Return every enabled dangerous flag from core config plus plugin config contracts.
  * The returned strings are stable audit/report labels, not user-edited config paths.
  */
 export function collectEnabledInsecureOrDangerousFlagsFromContracts(

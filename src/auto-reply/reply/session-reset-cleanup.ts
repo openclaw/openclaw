@@ -1,6 +1,7 @@
 import { clearEmbeddedSessionPromptStates } from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import { killSessionSubagentRuns } from "../../agents/subagents/registry/subagent-control-kill.js";
 import { loadExactSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { captureIncognitoSessionOperation } from "../../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import {
@@ -13,7 +14,7 @@ import {
   normalizeOptionalAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
-import { clearSessionLifecycleQueues, type ClearSessionQueueResult } from "./queue/cleanup.js";
+import { clearSessionLifecycleQueues } from "./queue/cleanup.js";
 import {
   clearReplyRunForResetBySessionId,
   resolveActiveReplyOperationForSessionId,
@@ -28,15 +29,18 @@ export function createSessionResetCleanupGuard(params: {
   expectedSession: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined;
   assertCurrent?: () => void;
 }): () => void {
+  const binding = captureIncognitoSessionOperation(params);
   const sessionId = params.expectedSession?.sessionId;
   const lifecycleRevision = params.expectedSession?.lifecycleRevision;
   return () => {
     params.assertCurrent?.();
-    const current = loadExactSessionEntryReadOnly({
-      storePath: params.storePath,
-      sessionKey: params.sessionKey,
-      clone: false,
-    })?.entry;
+    const current = binding
+      ? binding.actor.sessions.readSharing(params.sessionKey)?.entry
+      : loadExactSessionEntryReadOnly({
+          storePath: params.storePath,
+          sessionKey: params.sessionKey,
+          clone: false,
+        })?.entry;
     if (current?.sessionId !== sessionId || current?.lifecycleRevision !== lifecycleRevision) {
       throw new SessionResetCleanupError(
         "Reset did not complete because the session changed before cleanup. Retry /reset.",
@@ -69,10 +73,6 @@ export async function stopSessionResetSubagents(
   }
 }
 
-type ClearSessionResetRuntimeStateResult = ClearSessionQueueResult & {
-  systemEventsCleared: number;
-};
-
 export function clearCommittedSessionResetRuntimeState(params: {
   previousSessionEntry: Pick<SessionEntry, "sessionId"> | undefined;
   agentId: string;
@@ -104,7 +104,7 @@ export function clearSessionResetRuntimeState(
     activeReplySessionId?: string;
     assertCurrent: () => void;
   },
-): ClearSessionResetRuntimeStateResult {
+): void {
   opts.assertCurrent();
   clearEmbeddedSessionPromptStates([opts.activeReplySessionId]);
   const cleared = clearSessionLifecycleQueues({
@@ -114,8 +114,6 @@ export function clearSessionResetRuntimeState(
     sessionId: opts.activeReplySessionId,
     assertCurrent: opts.assertCurrent,
   });
-  let systemEventsCleared = 0;
-
   for (const key of cleared.keys) {
     opts.assertCurrent();
     const owner = parseAgentSessionKey(key)?.agentId;
@@ -123,8 +121,7 @@ export function clearSessionResetRuntimeState(
       continue;
     }
     const queueKey = resolveSystemEventQueueKey(key, opts.agentId);
-    const removed = consumeSelectedSystemEventEntries(queueKey, peekSystemEventEntries(queueKey));
-    systemEventsCleared += removed.length;
+    consumeSelectedSystemEventEntries(queueKey, peekSystemEventEntries(queueKey));
   }
 
   if (opts.activeReplySessionId) {
@@ -145,9 +142,4 @@ export function clearSessionResetRuntimeState(
       clearReplyRunForResetBySessionId(opts.activeReplySessionId);
     }
   }
-
-  return {
-    ...cleared,
-    systemEventsCleared,
-  };
 }

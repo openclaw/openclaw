@@ -98,26 +98,21 @@ export class TuiSessionRunCoordinator {
         runId !== getPendingSubmitAcceptedRunId(this.context.state) &&
         !this.confirmedStreamRunIds.has(runId));
 
-    for (const [runId, observation] of runs) {
-      if (runs.size <= RETAINED_TRACKED_RUNS) {
-        break;
+    for (const expiredOnly of [true, false]) {
+      for (const [runId, observation] of runs) {
+        if (runs.size <= RETAINED_TRACKED_RUNS) {
+          break;
+        }
+        if (
+          (!expiredOnly ||
+            (typeof observation === "number" ? observation : observation.seenAt) < keepUntil) &&
+          canRemove(runId)
+        ) {
+          runs.delete(runId);
+        }
       }
-      if (
-        (typeof observation === "number" ? observation : observation.seenAt) < keepUntil &&
-        canRemove(runId)
-      ) {
-        runs.delete(runId);
-      }
-    }
-    if (runs.size <= MAX_TRACKED_RUNS) {
-      return;
-    }
-    for (const runId of runs.keys()) {
-      if (canRemove(runId)) {
-        runs.delete(runId);
-      }
-      if (runs.size <= RETAINED_TRACKED_RUNS) {
-        break;
+      if (runs.size <= MAX_TRACKED_RUNS) {
+        return;
       }
     }
   }

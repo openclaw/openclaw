@@ -19,11 +19,8 @@ const daemonMocks = vi.hoisted(() => ({
   runNodeHost: vi.fn(),
   runNodeHostWorker: vi.fn(),
   runNodeDaemonInstall: vi.fn(),
-  runNodeDaemonRestart: vi.fn(),
-  runNodeDaemonStart: vi.fn(),
+  runNodeDaemonLifecycle: vi.fn(),
   runNodeDaemonStatus: vi.fn(),
-  runNodeDaemonStop: vi.fn(),
-  runNodeDaemonUninstall: vi.fn(),
 }));
 
 vi.mock("./daemon.js", () => daemonMocks);
@@ -91,21 +88,23 @@ describe("registerNodeCli", () => {
       .find((command) => command.name() === "node")
       ?.commands.find((command) => command.name() === "run")
       ?.helpInformation();
-    for (const flag of ["--desktop-sharing", "--auth-from-env", "--parent-stdin"]) {
+    expect(help).toContain("--auth-from-env");
+    for (const flag of ["--desktop-sharing", "--parent-stdin"]) {
       expect(help).not.toContain(flag);
     }
   });
 
-  it.each([
-    ["status", daemonMocks.runNodeDaemonStatus],
-    ["uninstall", daemonMocks.runNodeDaemonUninstall],
-    ["stop", daemonMocks.runNodeDaemonStop],
-    ["start", daemonMocks.runNodeDaemonStart],
-    ["restart", daemonMocks.runNodeDaemonRestart],
-  ])("registers node %s and forwards --json", async (command, action) => {
-    await run([command, "--json"]);
-    expect(action.mock.calls[0]?.[0]?.json).toBe(true);
-  });
+  it.each(["status", "uninstall", "stop", "start", "restart"] as const)(
+    "registers node %s and forwards --json",
+    async (command) => {
+      await run([command, "--json"]);
+      if (command === "status") {
+        expect(daemonMocks.runNodeDaemonStatus).toHaveBeenCalledWith({ json: true });
+      } else {
+        expect(daemonMocks.runNodeDaemonLifecycle).toHaveBeenCalledWith(command, { json: true });
+      }
+    },
+  );
 
   it("forwards install options and an exact runtime pin", async () => {
     const pin = "C:\\Runtime Tools\\node.exe";
@@ -120,6 +119,7 @@ describe("registerNodeCli", () => {
       "--runtime-path",
       pin,
       "--force",
+      "--auth-from-env",
       "--json",
     ]);
     expect(daemonMocks.runNodeDaemonInstall).toHaveBeenCalledWith(
@@ -129,6 +129,7 @@ describe("registerNodeCli", () => {
         runtime: "bun",
         runtimePath: pin,
         force: true,
+        authFromEnv: true,
         json: true,
       }),
     );

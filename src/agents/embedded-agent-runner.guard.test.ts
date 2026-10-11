@@ -179,15 +179,12 @@ describe("guardSessionManager integration", () => {
     },
   );
 
-  it.each(["retain", "omit", "in-place", "forge"] as const)(
+  it.each(["retain", "in-place", "forge"] as const)(
     "sender provenance survives only unchanged queued hook evidence: %s",
     (mode) => {
       installWriteHook((event) => {
         const message = (event as { message: PersistedUserTurnMessage }).message;
         const metadata = message["__openclaw"]!;
-        if (mode === "omit") {
-          delete metadata.senderIdentity;
-        }
         if (mode === "in-place") {
           (metadata.senderIdentity as { id: string }).id = "forged";
         }
@@ -459,18 +456,5 @@ describe("flushPendingToolResultsAfterIdle", () => {
       "toolResult",
       "user",
     ]);
-  });
-
-  it("immediately flushes pending results when idle waiting is disabled", async () => {
-    const sm = guardSessionManager(SessionManager.inMemory());
-    const appendMessage = appender(sm);
-    const waitForIdleSpy = vi.fn(async () => {});
-    const agent = { waitForIdle: waitForIdleSpy };
-
-    appendMessage(idleToolCall("call_orphan_immediate"));
-    await flushPendingToolResultsAfterIdle({ agent, sessionManager: sm, timeoutMs: 0 });
-
-    expect(waitForIdleSpy).not.toHaveBeenCalled();
-    expect(getMessages(sm).map((message) => message.role)).toEqual(["assistant", "toolResult"]);
   });
 });

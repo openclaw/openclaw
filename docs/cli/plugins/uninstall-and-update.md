@@ -11,8 +11,8 @@ This page covers removing and updating installed plugins, and reloading edited
 plugin code without restarting the Gateway.
 
 With a running Gateway, ordinary uninstall waits for the package runtime owners
-to stop before removing files, and update refreshes the Gateway after the local
-package operation finishes. Without a running Gateway, these commands save changes
+to stop before removing files. Plugin updates require the Gateway to be stopped;
+they do not write alongside a running owner. Without a running Gateway, these commands save changes
 for its next startup. See [Install plugins](/cli/plugins/install#install) for
 installation sources and Gateway-host path requirements.
 
@@ -75,8 +75,8 @@ explicit npm spec overrides an ID-only selection of the same package; two
 different explicit specs for one package are rejected. Unknown targets and
 conflicting selections fail before updates start, including with `--dry-run`.
 The existing bulk updater processes plugin packages and then hook packs, retains
-successful updates when another package fails, and applies saved changes to the
-running Gateway with one final refresh.
+successful updates when another package fails, and saves changes for the next
+Gateway start. Stop the Gateway through its service owner before updating.
 
 Before activating a replacement, plugin updates apply its Doctor config repairs
 through the normal backed-up config writer. This preserves settings such as a
@@ -125,6 +125,9 @@ During `openclaw update`, a locally linked plugin with an explicit load path kee
   </Accordion>
   <Accordion title="Existing plugin source choices">
     Updates retain the recorded npm or ClawHub source. Older install records do not distinguish automatic ClawHub selection from an explicit `clawhub:` request, so OpenClaw does not silently switch those records to npm. To change an existing plugin deliberately, review and run `openclaw plugins install npm:<package> --force`. Automatic externalization of an image-owned bundled plugin uses npm first and its declared ClawHub source second.
+
+    Version checks report the compatible update available from that recorded source. ClawHub and npm can publish at different times, so the reported target can be older than core or the latest npm package. Updating core does not require switching registries.
+
   </Accordion>
   <Accordion title="Version checks and integrity drift">
     Before a live npm update, OpenClaw checks the installed package version against the npm registry metadata. If the installed version and recorded artifact identity already match the resolved target, it avoids downloading or reinstalling. A requested selector change or managed release-pin recovery can still update the plugin index without rewriting `openclaw.json`.
@@ -189,6 +192,8 @@ The receipt can also include cleanup warnings. Modules and native libraries may
 remain loaded after their registrations are removed.
 
 Bundled plugins can reload while preserving their enabled or disabled policy.
+Reload follows the selected bundled copy even when a dormant registry install
+record remains after a source update; that record stays unchanged.
 Bundled plugins, including TypeScript source entries, reuse their process-loaded
 code when their registrations reload. If the plugin's files changed while its
 original module remains loaded,

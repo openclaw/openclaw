@@ -1,5 +1,4 @@
 import { html, nothing, type TemplateResult } from "lit";
-import type { DirectiveResult } from "lit/directive.js";
 import type { SessionParticipantIdentity } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { t } from "../i18n/index.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
@@ -56,7 +55,7 @@ export function renderSessionLeadingState(
   avatarAuth?: SessionAvatarAuth,
   trailingState = false,
   icon?: TemplateResult,
-  runVisibility?: DirectiveResult,
+  runVisibility?: Parameters<typeof renderSessionGlyph>[0]["runVisibility"],
 ): {
   running: boolean;
   leadingIndicator: TemplateResult | typeof nothing;
@@ -79,7 +78,7 @@ export function renderSessionLeadingState(
   // Transient attention always outranks the persistent decorative icon.
   const iconContent =
     session.attention.kind !== "none" && !trailingState
-      ? renderSessionAttentionIcon(session.attention, true)
+      ? renderSessionAttentionIcon(session.attention)
       : (icon ?? (session.icon ? renderPersistentSessionIcon(session.icon) : nothing));
   if (iconContent !== nothing) {
     return {
@@ -91,23 +90,8 @@ export function renderSessionLeadingState(
       }),
     };
   }
-  if (session.isChild && !trailingState) {
-    if (session.channelAvatarUrl) {
-      ensureChannelAvatarElement();
-      return {
-        running,
-        leadingIndicator: renderSessionGlyph({
-          content: html`<openclaw-channel-avatar
-            .routeUrl=${session.channelAvatarUrl}
-            .authTokens=${avatarAuth?.authTokens ?? []}
-            .authReady=${avatarAuth?.authReady ?? false}
-          ></openclaw-channel-avatar>`,
-          ...runState,
-          circular: true,
-          badge: session.unread && !running ? renderSessionUnreadBadge() : nothing,
-        }),
-      };
-    }
+  const child = session.isChild && !trailingState;
+  if (child && !session.channelAvatarUrl) {
     return {
       running,
       leadingIndicator: running
@@ -116,16 +100,17 @@ export function renderSessionLeadingState(
     };
   }
 
-  const ownerChip = ownerActor?.id?.trim()
-    ? renderSessionOwnerChip(
-        ownerActor,
-        "row",
-        attribution,
-        ownerViewing,
-        participants,
-        participantCount,
-      )
-    : undefined;
+  const ownerChip =
+    !child && ownerActor?.id?.trim()
+      ? renderSessionOwnerChip(
+          ownerActor,
+          "row",
+          attribution,
+          ownerViewing,
+          participants,
+          participantCount,
+        )
+      : undefined;
   if (session.channelAvatarUrl) {
     ensureChannelAvatarElement();
     return {

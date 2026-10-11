@@ -1,4 +1,5 @@
 export { captureChannelReadAuthority } from "../shared/channel-read-authority.js";
+export { captureEffectAuthority, withEffectAuthority } from "../shared/effect-authority.js";
 // Public fetch/proxy helpers for plugins that need wrapped fetch behavior.
 
 export { resolveFetch, wrapFetchWithAbortSignal } from "../infra/fetch.js";
