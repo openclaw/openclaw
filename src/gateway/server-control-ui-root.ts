@@ -18,10 +18,6 @@ import {
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveRuntimeServiceBuildId } from "../version.js";
-import {
-  createControlUiAssetRetention,
-  type ControlUiAssetRetention,
-} from "./control-ui-asset-retention.js";
 import type {
   ControlUiFileRead,
   ControlUiFileSnapshot,
@@ -35,7 +31,6 @@ export type ControlUiRootState =
       kind: "bundled";
       path: string;
       realPath?: string;
-      retainedAssets?: ControlUiAssetRetention;
       publicAssetBuildId?: string;
     }
   | { kind: "resolved"; path: string; realPath?: string }
@@ -133,20 +128,13 @@ export function readControlUiRootAsset(
     );
   };
   const preparation = (async (): Promise<ControlUiRootAsset | null> => {
-    let location = {
+    const location = {
       rootPath: root.path,
       rootRealPath: root.realPath,
       filePath: path.resolve(root.path, fileRel),
       rejectHardlinks: root.kind !== "bundled",
     };
-    let file = await read(location);
-    if (!file && root.kind === "bundled" && fileRel.startsWith("assets/")) {
-      const retained = await root.retainedAssets?.resolveAsset(fileRel);
-      if (retained) {
-        location = { ...retained, rootPath: retained.rootRealPath, rejectHardlinks: true };
-        file = await read(location);
-      }
-    }
+    const file = await read(location);
     if (!file) {
       return null;
     }
@@ -226,7 +214,6 @@ function prepareResolvedRootState({
           kind: "bundled",
           ...resolvedRoot,
           publicAssetBuildId,
-          retainedAssets: createControlUiAssetRetention(root),
         }
       : { kind: "resolved", ...resolvedRoot };
   } catch (error) {
@@ -319,16 +306,6 @@ export function createGatewayControlUiRootLifecycle(
         const detail = error instanceof Error ? error.message : String(error);
         params.log.warn(`gateway: Control UI assets build failed: ${detail}`);
       }
-      return;
-    }
-    if (state.kind === "bundled") {
-      await state.retainedAssets?.prepare({ signal }).catch((error: unknown) => {
-        if (isStopped()) {
-          return;
-        }
-        const detail = error instanceof Error ? error.message : String(error);
-        params.log.warn(`gateway: Control UI asset retention failed: ${detail}`);
-      });
     }
   };
   const start = (): Promise<void> => {

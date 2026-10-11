@@ -19,6 +19,7 @@ import {
   sessionDeliveryOrigin,
 } from "../../utils/delivery-context.read.js";
 import { isInternalMessageChannel, normalizeMessageChannel } from "../../utils/message-channel.js";
+import { resolveCommandAuthorizationAsync } from "../command-auth.js";
 import {
   isAuthorizedTextSlashCommandTurn,
   isNativeCommandTurn,
@@ -144,7 +145,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     sessionState.sessionEntryHandle.replaceCurrent(persistedInitialEntry);
     sessionState.sessionId = persistedInitialEntry.sessionId;
   }
-  const command = buildCommandContext({
+  const commandContext = {
     ctx: params.ctx,
     cfg: params.cfg,
     agentId: params.agentId,
@@ -152,7 +153,11 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     isGroup: sessionState.isGroup,
     triggerBodyNormalized: sessionState.triggerBodyNormalized,
     commandAuthorized: params.commandAuthorized,
-  });
+  };
+  const command = buildCommandContext(
+    commandContext,
+    await resolveCommandAuthorizationAsync(commandContext),
+  );
   const commandScope = () => ({
     cfg: params.cfg,
     agentId: params.agentId,

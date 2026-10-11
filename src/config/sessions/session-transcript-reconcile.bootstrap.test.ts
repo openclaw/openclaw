@@ -143,7 +143,10 @@ it("refuses an agent replacement during canonical first creation", async () => {
         });
       const observation = observe(context, agentPath);
       try {
-        await expect(runDiskTask(context, agentPath)).rejects.toThrow();
+        await expect(runDiskTask(context, agentPath)).resolves.toEqual([
+          "failed",
+          "lease-released",
+        ]);
         expect(replaced).toBe(true);
         expect(readDatabasePathIdentitySync(agentPath).key).not.toBe(original.key);
         await closeSessionTranscriptReconcileWorkerPool();

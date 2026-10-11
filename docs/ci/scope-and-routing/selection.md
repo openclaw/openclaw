@@ -136,6 +136,16 @@ tests that use the same source for both driver and candidate. The selected job
 is required by `openclaw/ci-gate`, reserves one GitHub-hosted runner in the
 existing capacity accounting, and has a twenty-minute cell budget.
 
+The fixture uses `agents.entries` with explicit ownership so the published
+driver accepts both agents before updating. Retired OAuth sidecars are seeded
+after baseline setup, preserving the candidate's byte-retention check without
+asking the published Doctor to admit a retired credential format.
+`OPENCLAW_PUBLISHED_DRIVER_LEGACY_SQLITE=1` also seeds a retained node-host launch
+journal in the shared-state database using the published 2026.10.1 schema, without
+the later lazy boot-identity table. The update must preserve that launch alongside
+the existing session, transcript, search, and SQLite reclamation assertions. This
+is persisted-state upgrade proof; it does not exercise a running remote node.
+
 Labeler skips PR edits without title or base-branch changes. These ignored edits use isolated per-run concurrency groups so they cannot cancel running labeling or replace useful pending work. Opened, reopened, synchronize, and title/base-edit events retain the shared per-PR group and supersede older labeling runs. Issue labeling and manual backfills retain their existing non-cancelling ref group.
 
 Affected `main` pushes and exact-head `release_gate` fallbacks retain one required `ios-build (smoke)` phase and its Xcode, Swift, and Watch Rust tooling. Current smoke always runs Swift lint and compiles the app and test bundles once with `build-for-testing`. The retained `scripts/lib/ci-ios-smoke-plan.mjs` owner describes the existing voice/media/typography and Access/chat lifecycle simulator groups from their source owners. Both groups own the app's real hosted startup and linked runtime sources; the voice group also audits Watch and ActivityWidget typography. Their selected test files and fixtures select their respective group. Build/test configuration and unavailable path metadata retain both groups.

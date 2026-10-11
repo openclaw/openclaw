@@ -170,6 +170,10 @@ function resolveMemoryToolOptions(
 
 function createLazyMemoryRuntime(host: MemoryCoreRuntimeHost): MemoryPluginRuntime {
   return {
+    async searchForCli(params) {
+      const { createMemoryRuntime } = await loadRuntimeProviderModule();
+      return await createMemoryRuntime(host).searchForCli(params);
+    },
     supportsWorkspaceMemoryReadSources: true,
     prepareReload: prepareMemoryManagerReload,
     async getMemorySearchManager(params) {
@@ -245,7 +249,7 @@ export default definePluginEntry({
     if (normalizePluginsConfig(api.config.plugins).slots.memory === api.id) {
       api.registerService({
         id: "memory-core-index",
-        reload: { configPrefixes: ["memory.search", "agents"] },
+        reload: { configPrefixes: ["memory.search", "agents", "models.providers"] },
         start({ config, logger }) {
           const activate = async () => {
             await Promise.all(

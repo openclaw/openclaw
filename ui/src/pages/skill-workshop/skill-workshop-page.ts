@@ -52,10 +52,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext;
 
-  // Every result is owned by one connection and agent; a scope change retires them all.
   private scope: WorkshopScope | null = null;
-  private generation = 0;
-  private loadSequence = 0;
   private snapshot: WorkshopSnapshot | null = null;
   private loading = false;
   private error: string | null = null;
@@ -84,7 +81,6 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     if (client === (this.scope?.client ?? null) && agentId === (this.scope?.agentId ?? null)) {
       return;
     }
-    this.generation += 1;
     this.scope = client && agentId ? { client, agentId } : null;
     this.snapshot = null;
     this.error = null;
@@ -106,16 +102,13 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     if (!scope) {
       return;
     }
-    const generation = this.generation;
-    const sequence = ++this.loadSequence;
-    const isCurrent = () => generation === this.generation && sequence === this.loadSequence;
     void this.context?.runtimeConfig.ensureLoaded();
     this.loading = true;
     this.error = null;
     this.requestUpdate();
     try {
       const snapshot = await loadWorkshopSnapshot(scope.client, scope.agentId);
-      if (!isCurrent()) {
+      if (this.scope !== scope) {
         return;
       }
       this.snapshot = snapshot;
@@ -127,18 +120,25 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
       ) {
         this.viewer = null;
       }
-      if (!this.viewer) {
+      // A chat notice links here with ?skill=<name>; open it in whichever list holds it.
+      const requested = this.viewer
+        ? null
+        : new URLSearchParams(this.context?.router.getState().location.search).get("skill");
+      const requestedLive = snapshot.list.skills.some((skill) => skill.name === requested);
+      if (
+        requested &&
+        (requestedLive || snapshot.list.archived.some((skill) => skill.name === requested))
+      ) {
+        this.filter = requestedLive ? "active" : "archived";
+        this.selectSkill(requested);
+      } else if (!this.viewer) {
         this.selectFirst();
       }
     } catch (error) {
-      if (isCurrent()) {
-        this.error = formatUiError(error);
-      }
+      this.error = formatUiError(error);
     } finally {
-      if (isCurrent()) {
-        this.loading = false;
-        this.requestUpdate();
-      }
+      this.loading = false;
+      this.requestUpdate();
     }
   }
 
@@ -147,7 +147,6 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     if (!scope) {
       return;
     }
-    const generation = this.generation;
     const viewer: WorkshopViewer = { target, status: "loading" };
     this.viewer = viewer;
     this.requestUpdate();
@@ -173,7 +172,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     } catch (error) {
       next = { target, status: "error", error: formatUiError(error) };
     }
-    if (generation === this.generation && this.viewer === viewer) {
+    if (this.scope === scope && this.viewer?.target === target) {
       this.viewer = next;
       this.requestUpdate();
     }
@@ -244,18 +243,17 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     if (!scope || !allowed || this.pendingAction) {
       return;
     }
-    const generation = this.generation;
     this.pendingAction = key;
     this.actionError = null;
     this.requestUpdate();
     try {
       const { method, ...params } = mutation;
       await scope.client.request(method, { agentId: scope.agentId, ...params });
-      if (generation !== this.generation) {
+      if (this.scope !== scope) {
         return;
       }
       await this.load();
-      if (generation !== this.generation) {
+      if (this.scope !== scope) {
         return;
       }
       // Archiving or restoring moves the skill between lists; follow it there.
@@ -265,11 +263,11 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
         this.selectSkill(mutation.name);
       }
     } catch (error) {
-      if (generation === this.generation) {
+      if (this.scope === scope) {
         this.actionError = formatUiError(error);
       }
     } finally {
-      if (generation === this.generation) {
+      if (this.scope === scope) {
         this.pendingAction = null;
         this.requestUpdate();
       }
@@ -287,22 +285,17 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     ) {
       return;
     }
-    // A replaced application context or Gateway connection retires the write and its retry.
-    const generation = this.generation;
-    const isCurrent = () => this.context === context && generation === this.generation;
     this.modeBusy = true;
     this.modeError = null;
     this.requestUpdate();
     try {
-      const error = await setWorkshopMode(runtimeConfig, mode, isCurrent);
-      if (isCurrent()) {
+      const error = await setWorkshopMode(runtimeConfig, mode);
+      if (this.context === context) {
         this.modeError = error;
       }
     } finally {
-      if (isCurrent()) {
-        this.modeBusy = false;
-        this.requestUpdate();
-      }
+      this.modeBusy = false;
+      this.requestUpdate();
     }
   };
 
@@ -313,8 +306,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
       return;
     }
     const { client, agentId } = scope;
-    const generation = this.generation;
-    const isCurrent = () => this.context === context && generation === this.generation;
+    const isCurrent = () => this.context === context && this.scope === scope;
     const message = SKILL_WORKSHOP_LEARNING_PROMPT;
     const params = {
       agentId,
@@ -390,7 +382,6 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
 
   override disconnectedCallback() {
     this.subscriptions.clear();
-    this.generation += 1;
     this.scope = null;
     super.disconnectedCallback();
   }

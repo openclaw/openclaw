@@ -721,7 +721,7 @@ suite.define(() => {
     );
     const pinnedSessionKey = "agent:main:session-pinned";
     const createdOrder = [pinnedSessionKey, ...createdSessionKeys];
-    const updatedOrder = [pinnedSessionKey, ...createdSessionKeys.toReversed()];
+    const updatedOrder = [...createdSessionKeys.toReversed(), pinnedSessionKey];
     const sessions = {
       count: createdSessionKeys.length + 1,
       defaults: {
@@ -735,19 +735,29 @@ suite.define(() => {
           key: pinnedSessionKey,
           kind: "direct",
           label: "Pinned Session",
-          pinned: true,
-          pinnedAt: 1,
+          createdAt: 2_000,
           updatedAt: 50,
         },
         ...createdSessionKeys.map((key, index) => ({
           key,
           kind: "direct",
           label: `Session ${key.slice(-1).toUpperCase()}`,
+          createdAt: 1_000 - index,
           updatedAt: (index + 1) * 100,
         })),
       ],
       ts: Date.now(),
     };
+    await page.addInitScript(
+      ({ storageKey, entry }) => {
+        const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}");
+        localStorage.setItem(storageKey, JSON.stringify({ ...settings, sidebarEntries: [entry] }));
+      },
+      {
+        storageKey: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+        entry: `session:${pinnedSessionKey}`,
+      },
+    );
     await installMockGateway(page, {
       methodResponses: { "sessions.list": sessions },
       sessionKey: "agent:main:session-a",
@@ -760,7 +770,12 @@ suite.define(() => {
         .waitFor({
           timeout: 10_000,
         });
-      await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder.slice(0, 11));
+      // Personal shortcuts do not add a row to the ten-row Sessions page.
+      const pinnedLink = page.locator(
+        `.sidebar-rail [data-sidebar-entry="session:${pinnedSessionKey}"] a`,
+      );
+      await pinnedLink.waitFor();
+      await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder.slice(0, 10));
       await page.getByRole("button", { name: "Show more" }).click();
       await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder);
 
@@ -789,6 +804,7 @@ suite.define(() => {
       await chooseSidebarMenuOption(page, "Sort by", "Last updated");
       await closeSidebarMenu(page);
       await expect.poll(() => sidebarSessionOrder(page)).toEqual(updatedOrder);
+      expect(await pinnedLink.isVisible()).toBe(true);
 
       await filterAndSort.click();
       await chooseSidebarMenuOption(page, "Sort by", "Created");
@@ -883,13 +899,16 @@ suite.define(() => {
       await captureSessionAccessibilityProof(suite, page, "after-derived-title");
 
       const listCountBeforePatch = (await gateway.getRequests("sessions.list", rosterMatch)).length;
-      await row.hover();
-      await row.getByRole("button", { name: "Pin session" }).click();
+      // Unread remains shared session metadata; personal pinning no longer patches or refreshes it.
+      await row.click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Mark as unread", exact: true }).click();
 
-      const patchRequest = await gateway.waitForRequest("sessions.patch");
+      const patchRequest = await gateway.waitForRequest("sessions.patch", {
+        match: { key, unread: true },
+      });
       expect(requireRecord(patchRequest.params)).toMatchObject({
         key,
-        pinned: true,
+        unread: true,
       });
       await expect
         .poll(async () => {

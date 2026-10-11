@@ -13,6 +13,35 @@ const DEPRECATED_SESSION_COMPAT = {
 export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
   REPLY_TOOL_AUTHORITY_COMPAT_RECORD,
   {
+    code: "session-store-opaque-mutations",
+    ...DEPRECATED_SESSION_COMPAT,
+    introduced: "2026-09-08",
+    deprecated: "2026-10-09",
+    warningStarts: "2026-10-09",
+    replacement:
+      "Use prepareSessionEntryPatch for host preparation followed by an exact-snapshot conditional commit, applySessionEntryPatch for data-only patches, and updateLastRouteWithAuthority for guarded route updates. Legacy opaque transaction guards retain their ordering and will be removed in the next Plugin SDK major.",
+    docsPath: "/plugins/sdk-migration/how-to-migrate#prepare-session-entry-changes",
+    surfaces: [
+      "openclaw/plugin-sdk/session-store-runtime.patchSessionEntry",
+      "openclaw/plugin-sdk/session-store-runtime.updateSessionStoreEntry",
+      "openclaw/plugin-sdk/session-store-runtime.updateLastRoute.assertCommitAllowed",
+      "api.runtime.agent.session.patchSessionEntry",
+      "api.runtime.agent.session.updateSessionStoreEntry",
+      "api.runtime.channel.session.updateLastRoute.assertCommitAllowed",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotations and one shared DEP_PLUGIN_SDK warning per plugin and session-store family per process on legacy use",
+    ],
+    tests: [
+      "src/plugin-sdk/session-persistence-compat.test.ts",
+      "src/plugin-sdk/session-store-runtime.worker-patch.test.ts",
+      "src/plugin-sdk/session-store-runtime.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+    releaseNote:
+      "Plugins can prepare entry changes outside SQLite or submit conditional data patches to the existing worker. Public upserts and transcript watermarks use typed worker reducers. Released callback contracts remain compatible; native incognito and cross-store adapters retain their separate cutover boundaries.",
+  },
+  {
     code: "codex-transcript-sync-validation",
     ...DEPRECATED_SESSION_COMPAT,
     introduced: "2026-09-08",

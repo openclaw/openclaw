@@ -23,5 +23,7 @@ export type PluginExecutionScopes = {
 
 /** Runtime owners preserve their context when these independent scopes change. */
 export interface PluginExecutionFrame extends PluginExecutionScopes {
+  /** Runtime provenance for diagnostics, never authorization. */
+  readonly runtimePluginId?: string | undefined;
   withScopes(scopes: PluginExecutionScopes): PluginExecutionFrame;
 }

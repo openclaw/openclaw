@@ -324,7 +324,12 @@ class GitHub {
     return path;
   }
 
-  publicAsset(release, entry, limit = METADATA_LIMIT) {
+  publicAsset(
+    release,
+    entry,
+    limit = METADATA_LIMIT,
+    { expectedHash, url = entry.browser_download_url } = {},
+  ) {
     assert(
       Number.isSafeInteger(entry.id) &&
         entry.id > 0 &&
@@ -334,14 +339,48 @@ class GitHub {
         entry.state === "uploaded",
       `Invalid asset identity: ${entry.name}`,
     );
-    const url = assetUrl(release.tag_name, entry.name);
-    assert.equal(entry.browser_download_url, url, "Unexpected public asset URL");
-    const path = this.download(url, limit);
-    assert.equal(lstatSync(path).size, entry.size, "Public asset size mismatch");
-    if (entry.digest != null) {
-      assert.equal(entry.digest, `sha256:${fileDigest(path)}`, "Public asset digest mismatch");
+    assert.equal(
+      entry.browser_download_url,
+      assetUrl(release.tag_name, entry.name),
+      "Unexpected public asset URL",
+    );
+    if (expectedHash && entry.digest != null) {
+      assert.equal(
+        entry.digest,
+        `sha256:${expectedHash}`,
+        `Uploaded asset digest mismatch: asset=${entry.id} expected=${expectedHash} observed=${entry.digest}`,
+      );
     }
-    return path;
+    assert(
+      entry.digest == null || /^sha256:[0-9a-f]{64}$/u.test(entry.digest),
+      "Invalid asset digest",
+    );
+    const expected = expectedHash ?? entry.digest?.slice(7);
+    // Only API-confirmed mutable metadata gets a convergence window. Immutable
+    // bundles and uncertain uploads remain fail-fast; these reads never repeat a write.
+    const converging = entry.digest != null && limit === METADATA_LIMIT;
+    const delays = converging ? [0, 2, 5, 10] : [0];
+    let observed;
+    for (const delay of delays) {
+      if (delay) {
+        command("sleep", [String(delay)]);
+      }
+      const path = this.download(url, limit);
+      observed = fileDigest(path);
+      if (converging) {
+        assert.deepEqual(
+          assetIdentity(this.api(`releases/assets/${entry.id}`)),
+          assetIdentity(entry),
+          "Asset changed during public readback",
+        );
+      }
+      if (lstatSync(path).size === entry.size && (!expected || observed === expected)) {
+        return path;
+      }
+    }
+    throw new Error(
+      `Public asset digest mismatch: ${url} asset=${entry.id} expected=${expected} observed=${observed}. Retry readback, not upload or rebuild.`,
+    );
   }
 
   metadata(release, name) {
@@ -360,9 +399,9 @@ class GitHub {
     const bytesHash = fileDigest(path);
     const previous = asset(release, name);
     if (previous) {
-      const old = this.publicAsset(release, previous, BUNDLE_LIMIT);
+      const old = this.publicAsset(release, previous, mutable ? METADATA_LIMIT : BUNDLE_LIMIT);
       if (fileDigest(old) === bytesHash) {
-        return;
+        return previous;
       }
       assert(mutable, `Immutable asset conflict: ${name}`);
     }
@@ -396,11 +435,11 @@ class GitHub {
     const published = this.unchanged(release, source);
     const uploaded = asset(published, name);
     assert(uploaded, `Upload missing from release: ${name}`);
-    assert.equal(
-      fileDigest(this.publicAsset(published, uploaded, BUNDLE_LIMIT)),
-      bytesHash,
-      `Public upload readback failed: ${name}`,
-    );
+    assert.equal(uploaded.size, lstatSync(path).size, `Uploaded asset size mismatch: ${name}`);
+    this.publicAsset(published, uploaded, mutable ? METADATA_LIMIT : BUNDLE_LIMIT, {
+      expectedHash: bytesHash,
+    });
+    return uploaded;
   }
 }
 
@@ -676,7 +715,7 @@ function mirror(github, publicKey, target) {
   beforeWrite();
   const path = github.temp("latest.json");
   writeFileSync(path, selected.bytes, { flag: "wx" });
-  github.upload(latest, source, "latest.json", path, true, beforeWrite);
+  const mirrored = github.upload(latest, source, "latest.json", path, true, beforeWrite);
   assert.deepEqual(identity(github.latest()), identity(latest), "Core latest changed after mirror");
   assert.deepEqual(
     canonical(github, publicKey).bytes,
@@ -689,11 +728,10 @@ function mirror(github, publicKey, target) {
     selected.manifest.linuxPublication.channelSha,
     selected.manifest.version,
   );
-  const publicPath = github.download(
-    `https://github.com/${REPOSITORY}/releases/latest/download/latest.json`,
-    METADATA_LIMIT,
-  );
-  assert.deepEqual(readFileSync(publicPath), selected.bytes, "Legacy endpoint readback failed");
+  github.publicAsset(latest, mirrored, METADATA_LIMIT, {
+    expectedHash: digest(selected.bytes),
+    url: `https://github.com/${REPOSITORY}/releases/latest/download/latest.json`,
+  });
   assert.deepEqual(
     identity(github.latest()),
     identity(latest),

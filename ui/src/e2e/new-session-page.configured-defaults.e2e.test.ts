@@ -20,10 +20,18 @@ const thinkingLevels = ["low", "medium", "high"].map((id) => ({ id, label: id })
 const preference = { model: "openai/gpt-4.1-mini", thinkingLevel: "low", fastMode: true };
 
 suite.define(() => {
-  it.each(["browser", "identity"] as const)(
-    "uses configured defaults without erasing %s preferences",
-    async (source) => {
-      for (const policy of ["last-used", "configured"] as const) {
+  it.each([
+    { source: "browser", required: false },
+    { source: "identity", required: false },
+    { source: "browser", required: true },
+  ] as const)(
+    "uses configured defaults without erasing $source preferences (required: $required)",
+    async ({ source, required }) => {
+      const policies = required
+        ? ([undefined, "last-used", "configured"] as const)
+        : (["last-used", "configured"] as const);
+      for (const policy of policies) {
+        const configuredDefaults = required || policy === "configured";
         await suite.withPage(
           { ...createControlUiE2eContextOptions(), reducedMotion: "reduce" },
           async ({ page }) => {
@@ -66,6 +74,7 @@ suite.define(() => {
                 "chat.metadata",
                 "chat.startup",
                 "sessions.create",
+                ...(required ? ["sessions.describe", "sessions.send"] : []),
                 ...(source === "identity" ? ["users.prefs.get", "users.prefs.set"] : []),
               ],
               sessions: [],
@@ -83,7 +92,23 @@ suite.define(() => {
                   defaultId: "main",
                   mainKey: "main",
                   scope: "agent",
+                  sessionPlacement: required
+                    ? {
+                        requiredProfile: {
+                          id: "dedicated",
+                          providerId: "device",
+                          executionModes: ["worker-turn"],
+                        },
+                      }
+                    : {},
                 },
+                "sessions.describe": {
+                  session: {
+                    key: "agent:main:configured-defaults-proof",
+                    placement: { state: "active" },
+                  },
+                },
+                "sessions.send": { runId: "configured-defaults-proof", status: "started" },
                 "users.prefs.get": {
                   status: "ok",
                   entries: { "new-session.migration.v1": true, "new-session.v1:main": preference },
@@ -97,28 +122,28 @@ suite.define(() => {
             });
             await page.route("**/control-ui-config.json", (route) =>
               route.fulfill({
-                json: { ...createControlUiMockBootstrapConfig(), newSessionModelDefaults: policy },
+                json: {
+                  ...createControlUiMockBootstrapConfig(),
+                  ...(policy === undefined ? {} : { newSessionModelDefaults: policy }),
+                },
               }),
             );
             await page.goto(suite.server.baseUrl + "new");
             const effort = page.locator('[data-chat-thinking-select="true"]');
             await expect
               .poll(() => effort.getAttribute("data-chat-thinking-value"))
-              .toBe(policy === "configured" ? "" : "low");
-            if (policy === "configured") {
+              .toBe(configuredDefaults ? "" : "low");
+            if (configuredDefaults) {
               await expect
                 .poll(async () => (await effort.textContent())?.toLowerCase())
                 .toContain("high");
             }
             await expect
               .poll(() => page.locator('[data-chat-model-select="true"]').textContent())
-              .toContain(policy === "configured" ? "GPT-4.1" : "GPT-4.1 mini");
+              .toContain(configuredDefaults ? "GPT-4.1" : "GPT-4.1 mini");
             if (source === "browser" && process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
               await page.screenshot({
-                path: path.join(
-                  suite.artifactDir,
-                  policy === "configured" ? "after.png" : "before.png",
-                ),
+                path: path.join(suite.artifactDir, configuredDefaults ? "after.png" : "before.png"),
                 animations: "disabled",
               });
             }
@@ -133,7 +158,7 @@ suite.define(() => {
                 ),
               )
               .toBe("low");
-            if (policy === "configured") {
+            if (configuredDefaults) {
               if (source === "browser") {
                 // A draft with no explicit model choice has exactly the pre-change row
                 // format: content and blobs, without the optional modelSelection field.
@@ -334,6 +359,9 @@ suite.define(() => {
               await page.reload();
               await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("low");
               await expect
+                .poll(() => page.locator(".new-session-page__message").inputValue())
+                .toBe("Resume this draft");
+              await expect
                 .poll(() => page.locator('[data-chat-model-select="true"]').textContent())
                 .toContain("GPT-4.1 mini");
             }
@@ -344,8 +372,9 @@ suite.define(() => {
             const request = await gateway.waitForRequest("sessions.create");
             expect(request.params).toMatchObject({ model: preference.model, thinkingLevel: "low" });
             expect(request.params).toHaveProperty("fastMode", true);
-            if (policy === "configured" && source === "browser") {
-              expect(request.params).toMatchObject({
+            const initialTurn = required ? await gateway.waitForRequest("sessions.send") : request;
+            if (configuredDefaults && source === "browser") {
+              expect(initialTurn.params).toMatchObject({
                 attachments: [
                   {
                     fileName: "upgrade-notes.txt",
@@ -355,7 +384,7 @@ suite.define(() => {
                 ],
               });
             }
-            if (policy === "configured") {
+            if (configuredDefaults) {
               await waitForCommittedChatRoute(page);
               // Replacing the document must not interrupt the submitted draft's cleanup.
               await waitForCommittedComposerDraft(page, JSON.stringify(["", "", ""]), null, 0);

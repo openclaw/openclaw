@@ -5,9 +5,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { JitiOptions } from "jiti";
 import { hasErrnoCode } from "../infra/errno.js";
-import { createJiti } from "./jiti-factory.js";
 import { isPathInside, relativePluginPathInsideRootSync } from "./path-safety.js";
 import { getPluginCache } from "./plugin-cache.js";
+import { createPluginCaptureResolver } from "./plugin-capture-resolution.js";
 import { PluginSourceRecoveryUnavailableError } from "./plugin-instance-error.js";
 import type { PluginNativeRecovery } from "./plugin-native-admission.js";
 import {
@@ -51,10 +51,15 @@ type SourceCustody = {
   sourceDigest: string;
 };
 export type PluginSourceCustodyFork = Pick<SourceCustody, "source" | "files">;
-type SourceRoot = { rootDir: string; sourceRoot: string; entryFile?: string; entry?: string };
+type SourceRoot = {
+  rootDir: string;
+  sourceRoot: string;
+  entryFiles?: readonly string[];
+  entries?: readonly string[];
+};
 type PluginGenerationCaptureArguments = [
   rootDir: string,
-  entryFile?: string,
+  entryFile?: string | readonly string[],
   execute?: <V>(run: () => V) => V,
   moduleSource?: (filename: string) => string,
   nativeRecovery?: PluginNativeRecovery,
@@ -116,7 +121,12 @@ export function createPluginGenerationCapture<
     if (custody.closed) {
       throw new Error("Plugin source custody has been closed");
     }
-    const key = JSON.stringify([path.resolve(rootDir), entryFile && path.resolve(entryFile)]);
+    const key = JSON.stringify([
+      path.resolve(rootDir),
+      typeof entryFile === "string"
+        ? path.resolve(entryFile)
+        : entryFile?.map((file) => path.resolve(file)),
+    ]);
     let retained = custody.sources.get(key);
     if (retained) {
       try {
@@ -168,12 +178,12 @@ export function createPluginGenerationCapture<
 export function assertPluginSourceRootCurrent({
   rootDir,
   sourceRoot,
-  entryFile,
-  entry,
+  entryFiles,
+  entries,
 }: SourceRoot): void {
   if (
     fs.realpathSync(rootDir) !== sourceRoot ||
-    (entryFile && fs.realpathSync(entryFile) !== entry)
+    entryFiles?.some((file, index) => fs.realpathSync(file) !== entries?.[index])
   ) {
     throw new Error("Plugin source root changed after capture");
   }
@@ -204,16 +214,15 @@ function createRetainedSourceVerification(
         throw new Error("Plugin dependency lookup changed after capture");
       }
     }
+    const resolvers = new Map<string, ReturnType<typeof createPluginCaptureResolver>>();
     for (const { source, reference, conditions, options, resolved } of moduleLookups) {
-      const resolver = createJiti(source, {
-        ...options,
-        fsCache: false,
-        moduleCache: false,
-        tryNative: false,
-      });
-      if (
-        resolveModuleTarget(resolver.esmResolve(reference, { try: true, conditions })) !== resolved
-      ) {
+      const key = JSON.stringify(options);
+      let resolver = resolvers.get(key);
+      if (!resolver) {
+        resolver = createPluginCaptureResolver(options);
+        resolvers.set(key, resolver);
+      }
+      if (resolveModuleTarget(resolver.resolve(source, reference, conditions)) !== resolved) {
         throw new Error("Plugin module lookup changed after capture");
       }
     }
@@ -237,7 +246,7 @@ function resolveModuleTarget(resolved: string | undefined): string | undefined {
 /** Record source and dependency facts where recovery detaches them from instance lifetime. */
 export function createPluginSourceFacts(
   rootDir: string,
-  entryFile: string | undefined,
+  entryFiles: readonly string[] | undefined,
   dependencyLookupBoundary: Parameters<typeof createPluginDependencyResolver>[0],
   captureForCustody: boolean,
 ) {
@@ -286,17 +295,15 @@ export function createPluginSourceFacts(
     recordModuleLookup(
       source: string,
       reference: string,
-      resolver: ReturnType<typeof createJiti>,
+      resolver: ReturnType<typeof createPluginCaptureResolver>,
       conditions: readonly string[],
     ) {
       if (!captureForCustody || isBuiltin(reference)) {
         return;
       }
-      const resolved = resolveModuleTarget(
-        resolver.esmResolve(reference, { try: true, conditions: [...conditions] }),
-      );
+      const resolved = resolveModuleTarget(resolver.resolve(source, reference, conditions));
       // Keep resolution data, never Jiti's transformer or the instance's callbacks.
-      const { alias, extensions, nativeModules, tsconfigPaths } = resolver.options;
+      const { alias, extensions, nativeModules, tsconfigPaths } = resolver.get(source).options;
       moduleLookups.set(
         JSON.stringify([source, reference, conditions]),
         structuredClone({
@@ -310,18 +317,18 @@ export function createPluginSourceFacts(
     },
     captureCustody({
       sourceRoot,
-      entry,
+      entries,
       sourceDigest,
       capture,
     }: {
       sourceRoot: string;
-      entry?: string;
+      entries?: readonly string[];
       sourceDigest: string;
       capture: () => PluginRecoverySource;
     }): SourceCustody {
       const retainedFiles = structuredClone(files);
       const assertCurrent = createRetainedSourceVerification(
-        { rootDir, sourceRoot, entryFile, entry },
+        { rootDir, sourceRoot, entryFiles, entries },
         [...retainedFiles.values(), ...structuredClone(directories).values()],
         structuredClone([...dependencies.values()]),
         structuredClone([...moduleLookups.values()]),

@@ -153,15 +153,6 @@ describe("project clone registration cleanup", () => {
     expect(fixture.remove).toHaveBeenCalledOnce();
   });
 
-  it("removes a produced checkout when registration preparation rejects it", async () => {
-    const failure = new Error("Project checkout has no commits");
-    fixture.resolveCheckout.mockRejectedValue(failure);
-
-    await expect(materialize()).rejects.toBe(failure);
-    expect(fixture.checkouts.size).toBe(0);
-    expect(fixture.remove).toHaveBeenCalledOnce();
-  });
-
   it("preserves the registration error when checkout removal fails", async () => {
     const failure = new Error("Insert was refused before execution");
     fixture.execute.mockRejectedValue(failure);

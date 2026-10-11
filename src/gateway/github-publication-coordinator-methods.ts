@@ -20,6 +20,7 @@ import {
   prepareCurrentGitHubPublicationIdentity,
   readGitHubPublicationWorktreeOwner,
   type PublicationSessionIdentity,
+  readGitHubPublicationSession,
 } from "./github-publication-availability.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
 import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
@@ -43,7 +44,6 @@ import {
   markGitHubPublicationReported,
   readGitHubPublicationRequest,
 } from "./github-publication-store.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { projectWorkerSessionTurnClaim } from "./worker-environments/placement-record.js";
 import type {
   WorkerSessionPlacementStore,
@@ -200,7 +200,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         throw new Error("GitHub publication requires an authoritative session.");
       }
       assertRequester();
-      const initialLoaded = loadGatewaySessionEntryReadOnly(input.sessionKey, {
+      const initialLoaded = readGitHubPublicationSession(input.sessionKey, {
         agentId: input.agentId,
       });
       const sessionId = initialLoaded.entry?.sessionId;

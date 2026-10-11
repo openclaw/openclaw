@@ -40,6 +40,15 @@ import type { GatewayClient } from "./types.js";
 
 installQuestionTestHooks();
 
+function invalidateQuestionReadFacts() {
+  sessionChanges.invalidate({
+    agentId: "main",
+    sessionKey: requestParams.sessionKey,
+    storePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
+    factsInvalidated: true,
+  });
+}
+
 const sourceReleases = new Set<() => void>();
 afterEach(() => {
   for (const release of sourceReleases) {
@@ -523,6 +532,7 @@ it.each([
       owner.send.mockClear();
       const entered = createDeferredCore();
       const release = createDeferredCore();
+      invalidateQuestionReadFacts();
       const run = projectionLane.pool.run.bind(projectionLane.pool);
       let held = false;
       const spy = vi
@@ -651,6 +661,7 @@ it.each([
       }
       const entered = createDeferredCore();
       const release = createDeferredCore();
+      invalidateQuestionReadFacts();
       const run = projectionLane.pool.run.bind(projectionLane.pool);
       const spy = vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
         const result = await run(...args);
@@ -734,6 +745,7 @@ it.each(["admin", "narrow"] as const)(
       );
       const spy = vi.spyOn(projectionLane.pool, "run").mockRejectedValue(failure);
       try {
+        invalidateQuestionReadFacts();
         const client = kind === "narrow" ? f.producer : adminRequestClient;
         const request = f.call(
           "question.request",

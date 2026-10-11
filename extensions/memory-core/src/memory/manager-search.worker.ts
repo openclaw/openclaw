@@ -1,4 +1,3 @@
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { openOpenClawAgentDatabaseReadOnly } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import {
   readCuratedMemoryTriggerCandidates,
@@ -18,13 +17,18 @@ import type {
 import { readMemoryForgetIndexInWorker } from "../memory-forget-index-read.js";
 import type { ForgetIndexPlan, ForgetIndexReadInput } from "../memory-forget-index-task.js";
 import {
+  readMemoryDatabaseFacts,
   readMemoryRetrievalIndexState,
   readMemoryRecallData,
   type MemoryRecallData,
   type MemoryRecallQuery,
 } from "./manager-retrieval-read.js";
 import { searchChunksByEmbedding } from "./manager-search-vector.js";
-import { searchKeyword, searchPathKeyword } from "./manager-search.js";
+import {
+  searchKeywordWithFallback,
+  type searchKeyword,
+  type searchPathKeyword,
+} from "./manager-search.js";
 import { assertMemoryShadowIdentity, type MemoryShadowConnection } from "./manager-shadow-task.js";
 import { loadMemorySourceFileState } from "./manager-source-state.js";
 import { inspectMemoryIndexPresenceInWorker } from "./manager-status-presence.js";
@@ -49,6 +53,7 @@ export type MemorySearchWorkerInput =
       | { kind: "keyword"; query: MemoryKeywordWorkerQuery; includeIndexState?: boolean }
       | { kind: "vector"; query: MemoryVectorWorkerQuery }
       | { kind: "index-state" }
+      | { kind: "index-facts" }
       | {
           kind: "source-state";
           query: Omit<Parameters<typeof loadMemorySourceFileState>[0], "db">;
@@ -70,6 +75,7 @@ export type MemorySearchWorkerOutput =
   | { kind: "prewarm" }
   | { kind: "presence"; present: boolean }
   | { kind: "index-state"; state: ReturnType<typeof readMemoryRetrievalIndexState> }
+  | { kind: "index-facts"; facts: ReturnType<typeof readMemoryDatabaseFacts> }
   | { kind: "source-state"; rows: ReturnType<typeof loadMemorySourceFileState> }
   | ({ kind: "recall-metadata" } & ReturnType<typeof readMemoryRecallData>)
   | {
@@ -153,6 +159,9 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
     if (request.kind === "index-state") {
       return { kind: "index-state", state: readMemoryRetrievalIndexState(db) };
     }
+    if (request.kind === "index-facts") {
+      return { kind: "index-facts", facts: readMemoryDatabaseFacts(db) };
+    }
     if (request.kind === "curated") {
       const provenanceRepairPending =
         request.checkProvenanceRepair &&
@@ -179,12 +188,7 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
       return { kind: "vector", rows: await searchChunksByEmbedding({ ...request.query, db }) };
     }
     const indexState = request.includeIndexState ? readMemoryRetrievalIndexState(db) : undefined;
-    const body = await searchKeyword({ ...request.query.body, db })
-      .then((rows) => ({ rows }))
-      .catch((error: unknown) => ({ rows: [], error: formatErrorMessage(error) }));
-    const path = await searchPathKeyword({ ...request.query.path, db })
-      .then((rows) => ({ rows }))
-      .catch((error: unknown) => ({ rows: [], error: formatErrorMessage(error) }));
+    const { body, path } = await searchKeywordWithFallback({ ...request.query, db });
     const recallData = request.query.includeRecallMetadata
       ? readMemoryRecallData(db, {
           candidates: [...body.rows, ...path.rows],

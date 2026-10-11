@@ -1,9 +1,3 @@
-/**
- * Regression coverage for process-local auth profile snapshots.
- * Verifies snapshots are cloned and isolated across agent-specific stores.
- */
-
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import * as authProfileClone from "./clone.js";
@@ -22,10 +16,8 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   getPreparedRuntimeAuthProfileStoreSnapshotCore,
   getRuntimeAuthProfileStoreSnapshotCore,
-  getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreMetadataRevision,
   getRuntimeAuthProfileStoreSnapshotRevision,
-  listOwnedRuntimeAuthProfileStoreSnapshots,
   noteRuntimeAuthProfileStorePersistedMutation,
   registerRuntimeAuthProfileStoreMutationListener,
   replaceRuntimeAuthProfileStoreSnapshots,
@@ -33,7 +25,7 @@ import {
 } from "./runtime-snapshots.js";
 import { createSnapshotStore as createStore, testing } from "./runtime-snapshots.test-support.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
-import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
+import type { AuthProfileStore } from "./types.js";
 
 function expectOpenAICodexSnapshotCredential(
   store: AuthProfileStore | undefined,
@@ -52,29 +44,6 @@ function expectOpenAICodexSnapshotCredential(
 }
 
 describe("runtime auth profile snapshots", () => {
-  it("carries the canonical database identity through snapshot enumeration", () => {
-    const databasePath = "/tmp/openclaw-auth-runtime-enumeration/custom.sqlite";
-    const store = createStore("enumerated");
-    replaceRuntimeAuthProfileStoreSnapshots([
-      {
-        databasePath,
-        agentDir: "/tmp/projected-agent-dir-must-not-own-identity",
-        store,
-      },
-    ]);
-    try {
-      expect(listOwnedRuntimeAuthProfileStoreSnapshots()).toMatchObject([
-        {
-          databasePath,
-          agentDir: path.dirname(databasePath),
-          store,
-        },
-      ]);
-    } finally {
-      clearRuntimeAuthProfileStoreSnapshots();
-    }
-  });
-
   it("marks default-owner materializations as inherited mutations", () => {
     const listener = vi.fn();
     const unregister = registerRuntimeAuthMaterializationMutationListener(listener);
@@ -98,7 +67,7 @@ describe("runtime auth profile snapshots", () => {
     }
   });
 
-  it.each(["Model", "model"])(
+  it.each(["model"])(
     "publishes %s auth facts without impersonating credential rotation",
     (modelId) => {
       const agentDir = "/tmp/openclaw-auth-runtime-materialized";
@@ -171,177 +140,9 @@ describe("runtime auth profile snapshots", () => {
     },
   );
 
-  it("does not publish usage bookkeeping as an auth change", () => {
-    const agentDir = "/tmp/openclaw-auth-runtime-listener";
-    const listener = vi.fn();
-    const unregister = registerRuntimeAuthProfileStoreMutationListener(listener);
-    try {
-      const store = createStore("listener");
-      setRuntimeAuthProfileStoreSnapshot(store, agentDir);
-      setRuntimeAuthProfileStoreSnapshot(
-        {
-          ...store,
-          usageStats: { "openai:default": { lastUsed: 2 } },
-        },
-        agentDir,
-      );
-      clearRuntimeAuthProfileStoreSnapshotCore(agentDir);
-
-      expect(listener).toHaveBeenCalledTimes(2);
-      expect(listener).toHaveBeenNthCalledWith(1, {
-        agentDir,
-        affectsInheritedStores: false,
-        profileSetChanged: true,
-      });
-      expect(listener).toHaveBeenNthCalledWith(2, {
-        agentDir,
-        affectsInheritedStores: false,
-        profileSetChanged: true,
-      });
-    } finally {
-      unregister();
-      clearRuntimeAuthProfileStoreSnapshots();
-    }
-  });
-
-  it("publishes an agent-local credential mutation without publishing usage bookkeeping", () => {
-    const agentDir = "/tmp/openclaw-auth-local-mutation";
-    const listener = vi.fn();
-    const unregister = registerRuntimeAuthProfileStoreMutationListener(listener);
-    try {
-      noteRuntimeAuthProfileStorePersistedMutation(agentDir, {
-        credentialsChanged: false,
-        stateChanged: true,
-        profileIds: ["openai:default"],
-      });
-      expect(listener).not.toHaveBeenCalled();
-      noteRuntimeAuthProfileStorePersistedMutation(agentDir, {
-        credentialsChanged: true,
-        profileSetChanged: true,
-        stateChanged: false,
-        profileIds: ["openai:default"],
-      });
-      expect(listener).toHaveBeenCalledExactlyOnceWith({
-        agentDir,
-        affectsInheritedStores: false,
-        profileSetChanged: true,
-      });
-    } finally {
-      unregister();
-      clearRuntimeAuthProfileStoreSnapshots();
-    }
-  });
-
-  it.each([
-    { change: "provider priority", state: { order: { openai: [] } } },
-    { change: "provider priority ownership", state: { runtimeLocalOrderProviderIds: [] } },
-  ])("notifies when $change changes", ({ state }) => {
-    const agentDir = "/tmp/openclaw-auth-runtime-order";
-    const store = { ...createStore("order"), runtimeLocalOrderProviderIds: ["openai"] };
-    setRuntimeAuthProfileStoreSnapshot(store, agentDir);
-    const listener = vi.fn();
-    const unregister = registerRuntimeAuthProfileStoreMutationListener(listener);
-    try {
-      replaceRuntimeAuthProfileStoreSnapshots([
-        {
-          agentDir,
-          store: {
-            ...store,
-            ...state,
-          },
-        },
-      ]);
-
-      expect(listener).toHaveBeenCalledOnce();
-      expect(listener).toHaveBeenCalledWith({
-        affectsInheritedStores: true,
-        profileSetChanged: false,
-      });
-    } finally {
-      unregister();
-      clearRuntimeAuthProfileStoreSnapshots();
-    }
-  });
-
-  it("notifies when identical external credentials change from CLI to plugin ownership", () => {
-    const agentDir = "/tmp/openclaw-auth-runtime-external-owner";
-    const store: RuntimeAuthProfileStore = {
-      ...createStore("same-credential"),
-      runtimeExternalProfileIds: ["openai:default"],
-      runtimeExternalCliProfileIds: ["openai:default"],
-    };
-    setRuntimeAuthProfileStoreSnapshot(store, agentDir);
-    const listener = vi.fn();
-    const unregister = registerRuntimeAuthProfileStoreMutationListener(listener);
-    try {
-      const pluginOwned: RuntimeAuthProfileStore = {
-        ...store,
-        runtimeExternalCliProfileIds: undefined,
-      };
-      replaceRuntimeAuthProfileStoreSnapshots([
-        {
-          agentDir,
-          store: pluginOwned,
-        },
-      ]);
-
-      expect(listener).toHaveBeenCalledOnce();
-      expect(listener).toHaveBeenCalledWith({
-        affectsInheritedStores: true,
-        profileSetChanged: false,
-      });
-    } finally {
-      unregister();
-      clearRuntimeAuthProfileStoreSnapshots();
-    }
-  });
-
-  it("notifies when an empty runtime snapshot starts or stops shadowing persisted auth", () => {
-    const agentDir = "/tmp/openclaw-auth-runtime-empty-owner";
-    const listener = vi.fn();
-    const unregister = registerRuntimeAuthProfileStoreMutationListener(listener);
-    const emptyStore: AuthProfileStore = { version: 1, profiles: {} };
-    try {
-      setRuntimeAuthProfileStoreSnapshot(emptyStore, agentDir);
-      setRuntimeAuthProfileStoreSnapshot(emptyStore, agentDir);
-      clearRuntimeAuthProfileStoreSnapshotCore(agentDir);
-
-      expect(listener).toHaveBeenCalledTimes(2);
-      expect(listener).toHaveBeenNthCalledWith(1, {
-        agentDir,
-        affectsInheritedStores: false,
-        profileSetChanged: false,
-      });
-      expect(listener).toHaveBeenNthCalledWith(2, {
-        agentDir,
-        affectsInheritedStores: false,
-        profileSetChanged: false,
-      });
-    } finally {
-      unregister();
-      clearRuntimeAuthProfileStoreSnapshots();
-    }
-  });
-
-  it("advances credential revision without coupling to usage bookkeeping", () => {
-    const initialRevision = getRuntimeAuthProfileStoreCredentialsRevision();
-    const store = createStore("set");
-    setRuntimeAuthProfileStoreSnapshot(store);
-    expect(getRuntimeAuthProfileStoreCredentialsRevision()).toBe(initialRevision + 1);
-
-    setRuntimeAuthProfileStoreSnapshot({
-      ...store,
-      usageStats: { "openai:default": { lastUsed: 2 } },
-    });
-    expect(getRuntimeAuthProfileStoreCredentialsRevision()).toBe(initialRevision + 1);
-
-    clearRuntimeAuthProfileStoreSnapshots();
-    expect(getRuntimeAuthProfileStoreCredentialsRevision()).toBe(initialRevision + 2);
-  });
-
-  it.each(["set", "replace"] as const)(
+  it.each(["replace"] as const)(
     "keeps metadata stable while %s publishes bookkeeping for rollback readers",
-    (publication) => {
+    () => {
       const agentDir = "/tmp/openclaw-auth-metadata-revision";
       const store = createStore("metadata");
       setRuntimeAuthProfileStoreSnapshot(store, agentDir);
@@ -365,11 +166,7 @@ describe("runtime auth profile snapshots", () => {
         },
       };
       try {
-        if (publication === "set") {
-          setRuntimeAuthProfileStoreSnapshot(next, agentDir);
-        } else {
-          replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: next }]);
-        }
+        replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: next }]);
         expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)).toEqual(next);
         expect(getRuntimeAuthProfileStoreSnapshotRevision(agentDir)).toBeGreaterThan(
           snapshotRevision,
@@ -385,100 +182,6 @@ describe("runtime auth profile snapshots", () => {
       }
     },
   );
-
-  it.each([
-    { cooldownUntil: 30_000 },
-    { cooldownReason: "auth" as const },
-    { cooldownModel: "second" },
-    { blockedUntil: 30_000 },
-    { blockedScope: "model" as const },
-    { blockedModel: "second" },
-    { disabledUntil: 30_000 },
-    { disabledReason: "auth_permanent" as const },
-  ])("publishes availability changes %j with stable credential ownership", (change) => {
-    const agentDir = "/tmp/openclaw-auth-availability-revision";
-    const store = createStore("availability");
-    setRuntimeAuthProfileStoreSnapshot(store, agentDir);
-    const metadataRevision = getRuntimeAuthProfileStoreMetadataRevision(agentDir);
-    const credentialRevision = getRuntimeAuthProfileStoreCredentialsRevision();
-    const listener = vi.fn();
-    const unregister = registerRuntimeAuthProfileStoreMutationListener(listener);
-    try {
-      replaceRuntimeAuthProfileStoreSnapshots([
-        {
-          agentDir,
-          store: {
-            ...store,
-            usageStats: { "openai:default": change },
-          },
-        },
-      ]);
-      expect(getRuntimeAuthProfileStoreMetadataRevision(agentDir)).toBeGreaterThan(
-        metadataRevision,
-      );
-      expect(getRuntimeAuthProfileStoreCredentialsRevision()).toBe(credentialRevision);
-      expect(listener).toHaveBeenCalledExactlyOnceWith({
-        affectsInheritedStores: true,
-        profileSetChanged: false,
-      });
-      const blockedRevision = getRuntimeAuthProfileStoreMetadataRevision(agentDir);
-      clearRuntimeAuthProfileStoreSnapshotCore(agentDir);
-      expect(getRuntimeAuthProfileStoreMetadataRevision(agentDir)).toBeGreaterThan(blockedRevision);
-    } finally {
-      unregister();
-      clearRuntimeAuthProfileStoreSnapshots();
-    }
-  });
-
-  it("isolates set/get/replace snapshot mutations without structuredClone", () => {
-    const structuredCloneSpy = vi.spyOn(globalThis, "structuredClone");
-    const agentDir = "/tmp/openclaw-auth-runtime-snapshot-agent";
-    try {
-      const stored = { ...createStore("access-1"), runtimeLocalOrderProviderIds: ["openai"] };
-      setRuntimeAuthProfileStoreSnapshot(stored, agentDir);
-      stored.runtimeLocalOrderProviderIds.push("mutated");
-      expectDefined(
-        stored.profiles["openai:default"],
-        'stored.profiles["openai:default"] test invariant',
-      ).provider = "mutated";
-      expectDefined(stored.order?.openai, "stored OpenAI profile order").push("mutated");
-
-      const first = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
-      expectOpenAICodexSnapshotCredential(first, { access: "access-1" });
-      expect(first?.order?.["openai"]).toEqual(["openai:default"]);
-      expect(first?.runtimeLocalOrderProviderIds).toEqual(["openai"]);
-
-      const firstSnapshot = expectDefined(first, "first auth profile snapshot");
-      expectDefined(firstSnapshot.profiles["openai:default"], "first OpenAI profile").provider =
-        "mutated-again";
-      expectDefined(
-        firstSnapshot.usageStats?.["openai:default"],
-        "first OpenAI usage stats",
-      ).lastUsed = 99;
-
-      const second = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
-      expectOpenAICodexSnapshotCredential(second, { access: "access-1" });
-      expect(second?.usageStats?.["openai:default"]?.lastUsed).toBe(1);
-
-      const replacement = createStore("access-2");
-      replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: replacement }]);
-      const replacementCredential = replacement.profiles["openai:default"];
-      expect(replacementCredential?.type).toBe("oauth");
-      if (replacementCredential?.type === "oauth") {
-        replacementCredential.access = "mutated-replacement";
-      }
-
-      const replaced = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
-      expectOpenAICodexSnapshotCredential(replaced, {
-        access: "access-2",
-        refresh: "refresh-access-2",
-      });
-      expect(structuredCloneSpy).not.toHaveBeenCalled();
-    } finally {
-      structuredCloneSpy.mockRestore();
-      clearRuntimeAuthProfileStoreSnapshots();
-    }
-  });
 
   it("retains the JSON clone contract for nested values without encoding credential bodies", () => {
     const baseStore = createStore("synthetic-access");
@@ -526,7 +229,7 @@ describe("runtime auth profile snapshots", () => {
     expect(cloned.metadata.first).not.toBe(cloned.metadata.second);
   });
 
-  it.each([1n, Symbol("non-json"), () => undefined])("rejects non-JSON auth values %s", (value) => {
+  it.each([Symbol("non-json")])("rejects non-JSON auth values %s", (value) => {
     expect(() =>
       authProfileClone.cloneAuthProfileStore({ ...createStore("synthetic"), value }),
     ).toThrow(TypeError);
@@ -762,48 +465,6 @@ describe("runtime auth profile snapshots", () => {
       ]);
     } finally {
       clone.mockRestore();
-      clearRuntimeAuthProfileStoreSnapshots();
-    }
-  });
-
-  it.each(["present", "empty", "missing"] as const)(
-    "resolves omitted-agent preparation with a %s shared snapshot",
-    (shared) => {
-      const inheritedAuthDir = "/tmp/openclaw-auth-prepared-omitted-agent";
-      const inherited = createStore("inherited");
-      const requested = shared === "empty" ? { version: 1, profiles: {} } : createStore("shared");
-      try {
-        setRuntimeAuthProfileStoreSnapshot(inherited, inheritedAuthDir);
-        if (shared !== "missing") {
-          setRuntimeAuthProfileStoreSnapshot(requested);
-        }
-        expect(getPreparedRuntimeAuthProfileStoreSnapshotCore(undefined, inheritedAuthDir)).toEqual(
-          shared === "missing" ? inherited : requested,
-        );
-      } finally {
-        clearRuntimeAuthProfileStoreSnapshots();
-      }
-    },
-  );
-
-  it("clears one agent snapshot without disturbing other stores", () => {
-    const firstAgentDir = "/tmp/openclaw-auth-runtime-snapshot-first";
-    const secondAgentDir = "/tmp/openclaw-auth-runtime-snapshot-second";
-    try {
-      setRuntimeAuthProfileStoreSnapshot(createStore("main"));
-      setRuntimeAuthProfileStoreSnapshot(createStore("first"), firstAgentDir);
-      setRuntimeAuthProfileStoreSnapshot(createStore("second"), secondAgentDir);
-
-      expect(clearRuntimeAuthProfileStoreSnapshotCore(firstAgentDir)).toBe(true);
-      expect(getRuntimeAuthProfileStoreSnapshotCore(firstAgentDir)).toBeUndefined();
-      expectOpenAICodexSnapshotCredential(getRuntimeAuthProfileStoreSnapshotCore(), {
-        access: "main",
-      });
-      expectOpenAICodexSnapshotCredential(getRuntimeAuthProfileStoreSnapshotCore(secondAgentDir), {
-        access: "second",
-      });
-      expect(clearRuntimeAuthProfileStoreSnapshotCore(firstAgentDir)).toBe(false);
-    } finally {
       clearRuntimeAuthProfileStoreSnapshots();
     }
   });

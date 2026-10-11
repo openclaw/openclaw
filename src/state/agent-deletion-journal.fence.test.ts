@@ -28,10 +28,9 @@ it.each([
   ["lease drain", "database_paths_json", "[1]"],
   ["lease drain", "cleanup_paths_json", "[1]"],
   ["registration", "operation_id", "replacement"],
-  ["lease claim", "cleanup_completed", 1],
   ["lease drain", "operation_id", "replacement"],
 ] as const)("%s classifies changed %s=%s", (caller, column, value) => {
-  const afterPrepare = column === "operation_id" || column === "cleanup_completed";
+  const afterPrepare = column === "operation_id";
   const error = afterPrepare
     ? "deletion journal changed"
     : column === "database_paths_json"

@@ -47,9 +47,6 @@ export function createLazyExecTool(
   let loadedTool: LoadedExecTool | undefined;
   let loadingTool: Promise<LoadedExecTool> | undefined;
   const loadTool = () => {
-    if (loadedTool) {
-      return Promise.resolve(loadedTool);
-    }
     loadingTool ??= bashToolsModuleLoader.load().then(({ createExecTool }) => {
       loadedTool = withInstallationTarget(installationTarget, () =>
         createExecTool(

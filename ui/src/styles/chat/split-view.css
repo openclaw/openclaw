@@ -111,15 +111,6 @@
   }
 }
 
-.chat-pane__header--centered {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-}
-
-.chat-pane__header--centered .chat-pane__header-trailing {
-  margin-left: 0;
-}
-
 /* These groups become the two mobile identity rows. They stay transparent to
    the desktop flex trail so its existing one-line geometry is unchanged. */
 .chat-pane__project-row,
@@ -180,7 +171,8 @@
 }
 
 .chat-pane__session-title-text,
-.chat-pane__parent-session-text {
+.chat-pane__parent-session-text,
+.chat-pane__sharing-member-label {
   display: block;
   overflow: hidden;
   white-space: nowrap;
@@ -439,30 +431,6 @@
   height: 13px;
 }
 
-.chat-pane__header-center .chat-pane__sharing-menu,
-.chat-pane__header-center .chat-pane__draft-indicator {
-  position: absolute;
-  inset-block-start: 50%;
-  inset-inline-start: 100%;
-  display: inline-flex;
-  transform: translateY(-50%);
-}
-
-.chat-pane__header-center .chat-pane__sharing-trigger,
-.chat-pane__header-center .chat-pane__draft-indicator {
-  width: 28px;
-  height: 28px;
-  border-left: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-  border-radius: 0 var(--radius-full) var(--radius-full) 0;
-  background: color-mix(in srgb, var(--panel-strong) 76%, transparent);
-}
-
-.chat-pane__header-center .chat-pane__sharing-trigger {
-  min-width: 28px;
-  min-height: 28px;
-  padding: 0;
-}
-
 .chat-pane__sharing-menu::part(menu) {
   width: 260px;
   min-width: min(260px, calc(100vw - 24px));
@@ -546,13 +514,6 @@
   justify-content: center;
 }
 
-.chat-pane__sharing-member-label {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .chat-pane__sharing-status--error {
   max-width: 260px;
   color: var(--danger);
@@ -566,11 +527,6 @@
 .chat-pane__draft-indicator svg {
   width: 15px;
   height: 15px;
-}
-
-.chat-pane__header-center .chat-pane__draft-indicator {
-  align-items: center;
-  justify-content: center;
 }
 
 /* A full split header measures 793px including insets, so secondary controls

@@ -6,6 +6,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   OpenAsyncKeyedStoreOptions,
   OpenKeyedStoreOptions,
+  PluginStateActionAuthority,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
@@ -84,12 +85,15 @@ describe("registered Codex harness model attribution", () => {
         ...options,
         env: { ...process.env, OPENCLAW_STATE_DIR: path.join(tempDir, "plugin-state") },
       });
-    const openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
+    const openKeyedStoreV2 = <T>(
+      options: OpenAsyncKeyedStoreOptions,
+      authority?: PluginStateActionAuthority,
+    ) =>
       createPluginStateKeyedStoreForTests<T>("codex", {
         ...options,
         env: { ...process.env, OPENCLAW_STATE_DIR: path.join(tempDir, "plugin-state") },
-      });
-    const stateRuntime = { state: { openSyncKeyedStore, openKeyedStore } };
+      }).withCurrent(authority ?? { assertCurrent() {} });
+    const stateRuntime = { state: { openSyncKeyedStore, openKeyedStoreV2 } };
     const bindingStore = createCodexAppServerBindingStore(
       createCodexRuntimeTestBindingStateStore(stateRuntime, {
         namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,

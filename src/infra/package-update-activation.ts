@@ -26,7 +26,9 @@ import {
   isPackageActivationComplete,
   resolvePackageActivationAnchor,
   packageActivationIdentity,
+  type PackageActivationRecord,
 } from "./package-update-activation-journal.js";
+import { LEGACY_PACKAGE_RECOVERY_HELPER } from "./package-update-activation-paths.js";
 import {
   preparePackageActivationJournal,
   resolvePackageActivationRecoveryCommand as recoveryCommand,
@@ -220,34 +222,36 @@ type PackageActivationSettlement = {
 export async function settlePendingPackageActivation(
   installKey: string,
   onSettled?: (settlement: PackageActivationSettlement) => void,
+  expectedCompleted?: PackageActivationRecord,
 ) {
   const anchor = resolvePackageActivationAnchor(installKey);
-  if (!fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
+  if (!expectedCompleted && !fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
+    assertNoPendingPackageActivation(installKey);
     return undefined;
   }
   const journal = openPackageActivationJournal(anchor);
   const admission = await journal.readForRecovery();
   const initial = admission.record;
   const complete = isPackageActivationComplete(anchor, initial);
+  if (expectedCompleted && (!complete || !isDeepStrictEqual(initial, expectedCompleted))) {
+    throw new Error("Completed package receipt changed; inspect recovery status before retrying.");
+  }
   if (initial.phase === "rollback-in-progress") {
     throw new Error("Package restoration is unfinished; its rollback owner must finish recovery.");
   }
-  const receipt =
+  const priorSettlement =
     initial.phase === "superseded" && initial.intent && "settled" in initial.intent
+      ? initial.intent
+      : undefined;
+  const receipt =
+    priorSettlement || complete
       ? {
           operationId: initial.descriptor.operationId,
-          reason: initial.intent.kind,
+          reason: priorSettlement?.kind ?? "publication-retired",
           retained: `${anchor}.superseded-${initial.descriptor.operationId}`,
-          detail: initial.intent.detail,
+          detail: priorSettlement?.detail,
         }
-      : complete
-        ? {
-            operationId: initial.descriptor.operationId,
-            reason: "publication-retired",
-            retained: `${anchor}.superseded-${initial.descriptor.operationId}`,
-            detail: undefined,
-          }
-        : undefined;
+      : undefined;
   const originalAuthority = initial.descriptor.authority;
   let currentDatabase: ManagedUpdateLeaseDatabaseIdentity;
   // A recreated file can reuse the lost inode. Keep the recorded loss when
@@ -449,6 +453,12 @@ export async function runPackageActivationRecovery(
   const admission = await journal.readForRecovery();
   const initial = admission.record;
   assertPackageActivationOperation(initial, operationId);
+  const recoveryAction =
+    action === "repair" &&
+    initial.phase === "aborted" &&
+    initial.descriptor.helperDigest === LEGACY_PACKAGE_RECOVERY_HELPER
+      ? "retire"
+      : action;
   const complete = isPackageActivationComplete(anchor, initial);
   const authority = complete
     ? {
@@ -458,19 +468,6 @@ export async function runPackageActivationRecovery(
         )),
       }
     : initial.descriptor.authority;
-  if (!complete) {
-    // Reject malformed/foreign/disarmed recovery before acquiring a new writer.
-    // Admission is still followed by the same observations under the fresh fence.
-    await createPublicationOwner(
-      anchor,
-      journal,
-      () => {
-        assertManagedUpdateLeaseDatabaseIdentity(initial.descriptor.authority);
-      },
-      initial,
-      admission.assertUnchanged,
-    ).preflight(action);
-  }
   return withUpdateCommandExecutor(
     randomUUID(),
     async (executor) => {
@@ -490,7 +487,7 @@ export async function runPackageActivationRecovery(
         return status(initial);
       }
       const owner = createPublicationOwner(anchor, journal, fence.assertCurrent, initial);
-      return action === "repair" ? owner.publish(true) : owner.retire();
+      return recoveryAction === "repair" ? owner.publish(true) : owner.retire();
     },
     { existingAuthority: authority },
   );

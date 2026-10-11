@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveConfiguredGitHubHost } from "../../agents/github-host.js";
@@ -11,6 +12,7 @@ import {
   prepareSubagentSessionListReadCache,
 } from "../../agents/subagents/registry/subagent-registry-state.js";
 import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
@@ -33,6 +35,7 @@ import { gitHubPublicApi, type ControlUiGitHubPreviewIdentity } from "../github-
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
+import { captureSessionMutationRouting } from "../session-sharing-preparation.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { loadAccessorSessionEntryForGatewayTarget } from "./sessions-shared.js";
@@ -281,11 +284,80 @@ async function prepareCheckDetailsSession(
   context: GatewayRequestContext,
   client: GatewayClient | null,
 ): Promise<ControlUiSessionPrTarget | null> {
+  const sourceCfg = context.getRuntimeConfig();
+  const sourceRequest = resolveRequestedGlobalAgentId(sourceCfg, sessionKey);
+  if (!sourceRequest.ok) {
+    return null;
+  }
+  const binding = captureIncognitoSessionSource({ sessionKey, agentId: sourceRequest.agentId });
+  if (binding && "kind" in binding) {
+    binding.assertCurrent();
+    return null;
+  }
+  const claim = binding?.actor.sessions.captureCurrent(sessionKey);
+  const assertRoutingCurrent = captureSessionMutationRouting(sourceCfg);
+  const preparedEntry =
+    binding &&
+    (await binding.actor.sessions.read(
+      {
+        assertCurrent() {
+          binding.admissionSignal?.throwIfAborted();
+          claim?.assertCurrent();
+          assertRoutingCurrent(context.getRuntimeConfig());
+        },
+      },
+      { sessionKey },
+      binding.admissionSignal,
+    ));
+  preparedEntry?.snapshot.assertCurrent();
+  const preparedMedia = binding?.actor.sessions.readMedia(sessionKey);
   const readSelected = () => {
     const cfg = context.getRuntimeConfig();
     const requested = resolveRequestedGlobalAgentId(cfg, sessionKey);
     if (!requested.ok) {
       return undefined;
+    }
+    if (binding) {
+      binding.admissionSignal?.throwIfAborted();
+      claim?.assertCurrent();
+      assertRoutingCurrent(cfg);
+      const entry = preparedEntry?.entry && {
+        ...preparedEntry.entry,
+        pendingWorktree: preparedMedia?.pendingWorktree,
+        pendingProjectGitUrl: preparedMedia?.pendingProjectGitUrl,
+      };
+      const sharing = binding.actor.sessions.readSharing(sessionKey)?.entry;
+      const media = binding.actor.sessions.readMedia(sessionKey);
+      const entryFilter = createSessionListEntryFilter({ client, cfg });
+      if (
+        !entry ||
+        !sharing ||
+        !media ||
+        requested.agentId !== binding.actor.agentId ||
+        sharing.sessionId !== entry.sessionId ||
+        sharing.lifecycleRevision !== entry.lifecycleRevision ||
+        media.repositoryWorkspaceId !== entry.repositoryWorkspaceId ||
+        media.worktreeId !== entry.worktree?.id ||
+        media.spawnedCwd !== entry.spawnedCwd ||
+        media.spawnedWorkspaceDir !== entry.spawnedWorkspaceDir ||
+        !isDeepStrictEqual(media.pendingWorktree, entry.pendingWorktree) ||
+        media.pendingProjectGitUrl !== entry.pendingProjectGitUrl ||
+        (entryFilter && !entryFilter(sessionKey, sharing))
+      ) {
+        return undefined;
+      }
+      return {
+        cfg,
+        agentId: binding.actor.agentId,
+        canonicalKey: sessionKey,
+        storePath: binding.actor.path,
+        readSource: {
+          agentId: binding.actor.agentId,
+          path: binding.actor.path,
+          databaseIdentity: binding.actor.identity.incarnation,
+        },
+        entry,
+      };
     }
     const { target, entry, storePath } = loadAccessorSessionEntryForGatewayTarget({
       key: sessionKey,

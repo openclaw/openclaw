@@ -11,6 +11,7 @@ import {
   latestChanges,
   renderMutationButton,
   renderUses,
+  renderWorkshopChangeText,
   UNUSED_ARCHIVE_DAYS,
   unusedDays,
   type SkillWorkshopViewProps,
@@ -302,14 +303,7 @@ function renderHistory(
       const undo = undoMutationFor(change, snapshot.list);
       return html`<li class="sw-timeline__item ${index === 0 ? "sw-timeline__item--latest" : ""}">
         <span class="sw-timeline__dot" aria-hidden="true"></span>
-        <div class="sw-timeline__text">
-          <span class="sw-timeline__who"
-            >${t(`skillWorkshop.changes.actors.${change.actor}`)}
-            ${t(`skillWorkshop.changes.actions.${change.action}`)}</span
-          >
-          ${change.summary ? html`<span class="sw-timeline__why">${change.summary}</span>` : nothing}
-          <span class="sw-timeline__when">${formatRelativeTimestamp(change.createdAtMs)}</span>
-        </div>
+        <div class="sw-timeline__text">${renderWorkshopChangeText(change, "sw-timeline__")}</div>
         <div class="sw-timeline__actions">
           ${
             change.versionId && retained.has(change.versionId)

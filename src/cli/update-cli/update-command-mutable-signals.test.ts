@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { resolveVitestNodeArgs } from "../../../scripts/lib/vitest-process-env.mts";
@@ -47,7 +46,6 @@ it.skipIf(process.platform === "win32").for([
   { signal: "SIGINT", mode: "handoff" },
   { signal: "SIGINT", mode: "pending" },
   { signal: "SIGINT", mode: "activating" },
-  { signal: "SIGINT", mode: "migrated" },
   { signal: "SIGINT", mode: "lost" },
   { signal: "SIGINT", mode: "missing" },
   { signal: "SIGINT", mode: "completed" },
@@ -112,11 +110,13 @@ it.skipIf(process.platform === "win32").for([
     const { createUpdateRun, finishUpdateRun, getUpdateRun, recordUpdateRunPhase } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(triageTestRuntimeEntrypoints.updateRunLedger).href)});
     const { createRetainedUpdateRecovery } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.retainedRecovery).href)});
     const { closeOpenClawStateDatabaseForTest } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.stateDatabase).href)});
-    const { admitUpdateCommandRun, createUpdateRunProgress, withUpdatePreviewSignals } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.commandRun).href)});
+    const { admitUpdateCommandRun, withUpdatePreviewSignals } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.commandRun).href)});
     const { withUpdateCommandExecutor, captureUpdateCommandExecutorAuthority } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor).href)});
     const { recordUpdateRunStepAsync } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.candidateStepWriter).href)});
     const { createUpdateCommandExecutionGuards } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executionGuards).href)});
     const { registerSignalExitBarrier } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.signalExitBarrier).href)});
+    const { withCliProcessScope, withCliCommandCleanup } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.cliCleanupScope).href)});
+    const { runCliWithExitFinalization } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.oneShotExit).href)});
     const opts = {};
     if (mode === 'inherited') process.env.OPENCLAW_UPDATE_RUN_ID = createUpdateRun({trigger:'cli'}).runId;
     const run = await admitUpdateCommandRun({opts, root:installRoot});
@@ -141,16 +141,6 @@ it.skipIf(process.platform === "win32").for([
           createRetainedUpdateRecovery({runId:run.runId,from,to:{...from,version:'2.0.0'}},{env:run.env});
         }
         const expected = getUpdateRun(run.runId);
-        if (mode === 'migrated') {
-          createUpdateRunProgress(run, {}, async () => {
-            throw new Error("Deferred signal fixture must not write progress");
-          }).deferLedgerWrites();
-          closeOpenClawStateDatabaseForTest();
-          const { DatabaseSync } = await import('node:sqlite');
-          const db = new DatabaseSync(root + '/state/openclaw.sqlite');
-          db.exec('PRAGMA user_version = ' + (db.prepare('PRAGMA user_version').get().user_version + 1));
-          db.close();
-        }
         if (mode === 'missing') {
           closeOpenClawStateDatabaseForTest();
           fs.mkdirSync(root + '/state/.openclaw-restore-00000000-0000-4000-8000-000000000001-0');
@@ -224,7 +214,9 @@ it.skipIf(process.platform === "win32").for([
           return;
         }
         process.send({runId:run.runId,expected,sibling,databasePath,executorDatabasePath});
-        await new Promise(() => {});
+        await new Promise(resolve => {
+          if (mode !== "inherited") process.once(${JSON.stringify(signal)}, resolve);
+        });
       };
       if (mode === 'lost') {
         await withUpdateCommandExecutor(run.runId, async (executor) => {await enter(executor);});
@@ -243,7 +235,28 @@ it.skipIf(process.platform === "win32").for([
         } else {await execute();}
       }
     };
-    await operate();
+    try {
+      if (mode === "inherited") await operate();
+      else {
+        let resources;
+        await withCliProcessScope(() => runCliWithExitFinalization({
+          run: () => withCliCommandCleanup(false, async cleanup => {
+            resources = cleanup.pluginResources;
+            await operate();
+            process.exitCode = 19;
+          }),
+          onError: error => {
+            if (!run.interrupted) throw error;
+            process.exitCode = 19;
+          },
+          finalize: async () => { await resources?.release(); },
+        }));
+      }
+    } finally {
+      fs.writeFileSync(root + "/signal-owner-unwound", "settled");
+      closeOpenClawStateDatabaseForTest();
+      if (process.connected) process.disconnect();
+    }
   `,
         );
         const child = spawn(
@@ -415,6 +428,12 @@ it.skipIf(process.platform === "win32").for([
             expect(fs.existsSync(path.join(root, "unexpected-canary-child"))).toBe(false);
           }
           const [code, exitSignal] = await closed;
+          if (mode !== "inherited") {
+            expect(exitSignal).toBeNull();
+            expect(fs.readFileSync(path.join(root, "signal-owner-unwound"), "utf8")).toBe(
+              "settled",
+            );
+          }
           const expectedCode = signal === "SIGINT" ? 130 : signal === "SIGHUP" ? 129 : 143;
           expect(code ?? (exitSignal === signal ? expectedCode : null)).toBe(expectedCode);
           if (publicationMode) {
@@ -440,26 +459,6 @@ it.skipIf(process.platform === "win32").for([
             expect(report).toContain(`interrupted by ${signal} during activating`);
             expect(report).toContain("Bounded diagnostic JSON:");
             expect(stderr).toContain("openclaw update repair");
-            return;
-          }
-          if (mode === "migrated") {
-            expect(stderr).not.toContain("Update interruption could not be recorded");
-            const db = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"), {
-              readOnly: true,
-            });
-            try {
-              expect(
-                db
-                  .prepare("SELECT status, phase, updated_at_ms FROM update_runs WHERE run_id = ?")
-                  .get(message.runId),
-              ).toEqual({
-                status: message.expected?.status,
-                phase: message.expected?.phase,
-                updated_at_ms: message.expected?.updatedAtMs,
-              });
-            } finally {
-              db.close();
-            }
             return;
           }
           const options =

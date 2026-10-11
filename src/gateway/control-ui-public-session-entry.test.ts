@@ -30,6 +30,7 @@ function openReader(
       unavailable: options.unavailable !== false,
       latestUrl: "/control/chat/main/private",
       cardUrl: "https://gateway.test/control/share/card.png",
+      assetBasePath: basePath,
       entryUrl: `${basePath}/__openclaw__/session-entry?path=${encodeURIComponent(`${basePath}/chat/main/private`)}`,
       ...(options.clientAuth !== false ? { clientAuthBasePath: basePath } : {}),
     }),

@@ -309,7 +309,7 @@ type CreateSessionEntryResult = Awaited<
   ReturnType<PluginRuntime["agent"]["session"]["createSessionEntry"]>
 >;
 type PatchSessionEntryParams = Parameters<
-  PluginRuntime["agent"]["session"]["patchSessionEntry"]
+  PluginRuntime["agent"]["session"]["prepareSessionEntryPatch"]
 >[0];
 type SessionEntrySummary = ReturnType<
   PluginRuntime["agent"]["session"]["listSessionEntries"]
@@ -616,7 +616,7 @@ export function createRuntime(
       return null;
     }
     const current = structuredClone(summary.entry);
-    const patch = await patchParams.update(current, { existingEntry: structuredClone(current) });
+    const patch = await patchParams.prepare(current, { existingEntry: structuredClone(current) });
     if (!patch) {
       return summary.entry;
     }
@@ -645,7 +645,7 @@ export function createRuntime(
             ({ sessionKey }) => !agentPrefix || sessionKey.startsWith(agentPrefix),
           );
         }),
-        patchSessionEntry,
+        prepareSessionEntryPatch: patchSessionEntry,
       },
     },
   } as unknown as PluginRuntime;

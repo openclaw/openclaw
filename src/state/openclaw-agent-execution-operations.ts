@@ -2,7 +2,10 @@ import type { SessionTranscriptReadScope } from "../config/sessions/session-acce
 import type { SessionTranscriptInitializationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import type { SessionEntryReplacementCommit } from "../config/sessions/session-accessor.sqlite-replacement-types.js";
 import type { ResolvedTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
-import type { SessionEntryCohortRequest } from "../config/sessions/session-entry-read.types.js";
+import type {
+  SessionEntryCohortRequest,
+  SessionEntryReadWorkerInput,
+} from "../config/sessions/session-entry-read.types.js";
 import type {
   SessionTranscriptExecutionReadInputs,
   SessionTranscriptExecutionReadResult,
@@ -255,10 +258,12 @@ export async function loadAgentTranscriptReadOperations() {
 }
 
 export async function loadAgentReplacementOperations() {
-  const [kernel, { assertSessionSubagentRunsCurrent }] = await Promise.all([
-    import("../config/sessions/session-accessor.sqlite-replacement-state.js"),
-    import("../config/sessions/session-accessor.sqlite-descendant-basis.js"),
-  ]);
+  const [kernel, { assertSessionSubagentRunsCurrent }, { sealSessionEntryPublicationSource }] =
+    await Promise.all([
+      import("../config/sessions/session-accessor.sqlite-replacement-state.js"),
+      import("../config/sessions/session-accessor.sqlite-descendant-basis.js"),
+      import("../config/sessions/session-entry-publication-source.js"),
+    ]);
   return {
     "session.entries.replace": (
       input: SessionEntryReplacementCommit & { initializeTranscript?: TranscriptInitialization },
@@ -289,11 +294,18 @@ export async function loadAgentReplacementOperations() {
             });
           }
         });
-        const publication = kernel.prepareSessionEntryReplacementPublication(result, current);
+        const publication = kernel.prepareSessionEntryReplacementPublication(result, current, {
+          captureFullFacts: true,
+        });
+        const candidate = { ...result, publication };
+        if (publication.source && publication.fullEntries?.size) {
+          sealSessionEntryPublicationSource(publication.source);
+        }
+        kernel.boundSessionEntryReplacementPublication(publication, candidate);
         deferSqliteWorkerCommitReceipt(current.db, publication);
         context.admit("commit", publication);
         assertSessionSubagentRunsCurrent(input, context.options.env ?? process.env);
-        return { ...result, publication };
+        return candidate;
       }),
   } satisfies Handlers;
 }
@@ -319,16 +331,18 @@ export async function loadAgentRestartRecoveryOperations() {
 
 export async function loadAgentEntryReadOperations() {
   const kernel = await import("../config/sessions/session-entry-read.worker.js");
-  const { readSessionEntryCohort, readSessionEntryDataInDatabase } =
-    await import("../config/sessions/session-entry-cohort.worker.js");
+  const result = await import("../config/sessions/session-entry-read-result.worker.js");
+  const cohort = await import("../config/sessions/session-entry-cohort.worker.js");
   return {
+    "session.entry.readResult": (input: SessionEntryReadWorkerInput, { open }) =>
+      result.readSessionEntryResult(input, open()),
     "session.entry.read": (input: { sessionKey: string } | SessionEntryCohortRequest, { open }) => {
       const database = open();
       return "sessionKeys" in input
-        ? readSessionEntryCohort(database, input, (request) =>
+        ? cohort.readSessionEntryCohort(database, input, (request) =>
             kernel.readExactSessionEntriesWithLifecycle(request, database),
           )
-        : readSessionEntryDataInDatabase(database, input.sessionKey);
+        : cohort.readSessionEntryDataInDatabase(database, input.sessionKey);
     },
   } satisfies Handlers;
 }

@@ -1,12 +1,22 @@
 import type { FastMode, GatewayAgentRow } from "../../api/types.ts";
 import type { DurableDraftModelSelection } from "../../lib/chat/composer-draft-store.runtime.ts";
-import { reconcileDraftModelSelection } from "./model-target.ts";
+import { normalizeThinkingOptionValue } from "../../lib/chat/thinking.ts";
+import type { ModelRuntimeEntry } from "../../lib/model-runtime-choice.ts";
+import type { DraftCloudProfile } from "./discovery.ts";
+import {
+  reconcileDraftModelSelection,
+  resolveDraftModelTarget,
+  resolveDraftDefaultModelTarget,
+  resolveDraftDevicePlacementUnsupportedReason,
+  resolveDraftCloudRuntimeUnsupportedReason,
+} from "./model-target.ts";
 import type { NewSessionPreference } from "./preferences.ts";
 
 export type NewSessionModelLoadOptions = {
   agent?: GatewayAgentRow;
   preference?: NewSessionPreference | null;
   initialModel?: string;
+  configuredDefaults?: boolean;
 };
 
 export type ModelSelectionChange = (
@@ -14,7 +24,54 @@ export type ModelSelectionChange = (
 ) => void;
 
 /** Mutable intent belongs to this draft, separate from remembered defaults and catalog metadata. */
-export class NewSessionModelSelection {
+export abstract class NewSessionModelSelection {
+  abstract resolveAgentRuntime(): ModelRuntimeEntry["agentRuntime"];
+  abstract hostedEnvironments(): Array<{ id: string; model?: string }>;
+  abstract hostEnvironmentRuntime():
+    | { model: string; runtime: NonNullable<ModelRuntimeEntry["agentRuntime"]> }
+    | undefined;
+  abstract selectModel(model: string, agentRuntime?: string): void;
+  abstract hostEnvironmentDisabledReason(): string | undefined;
+
+  selectHostedEnvironment(id: string): boolean {
+    const choice = this.hostedEnvironments().find((entry) => entry.id === id);
+    if (!choice?.model) {
+      return false;
+    }
+    this.selectModel(choice.model, id);
+    return true;
+  }
+
+  selectHostEnvironment(): boolean {
+    if (!this.resolveAgentRuntime()?.workspaceEnvironment) {
+      return true;
+    }
+    const choice = this.hostEnvironmentRuntime();
+    if (!choice) {
+      return false;
+    }
+    this.selectModel(choice.model, choice.runtime.id);
+    return true;
+  }
+
+  devicePlacementUnsupportedReason(): string | undefined {
+    return resolveDraftDevicePlacementUnsupportedReason(this.resolveAgentRuntime());
+  }
+
+  // Worker-turn runtimes rank automatic placement by free worker slots;
+  // remote-exec runtimes select by eligible device order and must not be
+  // described as least-busy. Unresolved (auto/default) runtimes fall back to
+  // the worker-turn description, matching the server's default policy.
+  autoPlacementSelectionMode(
+    runtime = this.resolveAgentRuntime(),
+  ): "least-busy" | "eligible-order" {
+    return runtime?.cloudPlacementExecutionMode === "remote-exec" ? "eligible-order" : "least-busy";
+  }
+
+  cloudRuntimeUnsupportedReason(profile?: DraftCloudProfile): string | undefined {
+    return resolveDraftCloudRuntimeUnsupportedReason(this.resolveAgentRuntime(), profile);
+  }
+
   private selectionOrigin: "none" | "restored" | "explicit" = "none";
   protected fastModeSelected = false;
   protected pendingDraftSelection: DurableDraftModelSelection | undefined;
@@ -145,6 +202,41 @@ export class NewSessionModelSelection {
     if (selection.repaired && persistRepair) {
       this.persistSelection(preference.agentRuntime ? (this.agentRuntime ?? "") : undefined);
     }
+  }
+
+  protected selectModelIntent(
+    model: string,
+    agentRuntime: string | undefined,
+    options: Omit<
+      Parameters<typeof reconcileDraftModelSelection>[0],
+      "model" | "agentRuntime" | "thinkingLevel" | "fastMode"
+    >,
+    effectiveModel: string,
+  ) {
+    const selection = reconcileDraftModelSelection({
+      model,
+      agentRuntime,
+      thinkingLevel: this.thinkingLevel,
+      fastMode: this.fastMode,
+      ...options,
+    });
+    if (
+      selection.model === effectiveModel &&
+      selection.agentRuntime === this.agentRuntime &&
+      selection.fastMode === this.fastMode &&
+      normalizeThinkingOptionValue(selection.thinkingLevel) ===
+        normalizeThinkingOptionValue(this.thinkingLevel)
+    ) {
+      return false;
+    }
+    const runtimeChanged = this.agentRuntime !== selection.agentRuntime;
+    this.applyModelSelection(selection);
+    this.markExplicitSelection();
+    const target =
+      resolveDraftModelTarget(selection.model, undefined, options.catalog, this.agentRuntime) ??
+      resolveDraftDefaultModelTarget(options);
+    this.contextWindow = "";
+    return { target, runtimeChanged };
   }
 
   protected persistSelection(agentRuntime = this.agentRuntime) {

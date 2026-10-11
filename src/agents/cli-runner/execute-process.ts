@@ -141,6 +141,7 @@ export async function executeCliProcess(params: {
         onThinkingProgress: params.events.emitCliThinkingProgress,
         onCompaction: params.events.emitCliCompaction,
         onToolUseStart: params.events.emitParsedToolUseStart,
+        onToolInputDelta: params.events.emitCliToolInputDelta,
         onToolResult: params.events.emitParsedToolResult,
         onDisplayToolUseStart: params.events.emitCliDisplayToolUseStart,
         onDisplayToolResult: params.events.emitCliDisplayToolResult,

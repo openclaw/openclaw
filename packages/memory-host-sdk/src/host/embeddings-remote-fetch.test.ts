@@ -41,10 +41,14 @@ function respondJson(payload: unknown): number {
   return respond(JSON.stringify(payload));
 }
 
-function fetchEmbeddings(input: unknown = ["first", "second"]) {
+function fetchEmbeddings(
+  input: unknown = ["first", "second"],
+  onUsage?: Parameters<typeof fetchRemoteEmbeddingVectors>[0]["onUsage"],
+) {
   return fetchRemoteEmbeddingVectors({
     ...REQUEST,
     body: { model: "fixture-model", input },
+    onUsage,
   });
 }
 
@@ -52,6 +56,28 @@ describe("fetchRemoteEmbeddingVectors", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     remoteHttpMock.mockReset();
+  });
+
+  it.each([
+    { usage: { prompt_tokens: 7, total_tokens: 9 }, expected: { promptTokens: 7, totalTokens: 9 } },
+    { usage: { prompt_tokens: 3 }, expected: { promptTokens: 3, totalTokens: 3 } },
+    { usage: { total_tokens: 0 }, expected: { promptTokens: 0, totalTokens: 0 } },
+    { usage: undefined, expected: undefined },
+    { usage: { prompt_tokens: -1 }, expected: undefined },
+    { usage: { prompt_tokens: 1.5 }, expected: undefined },
+    { usage: { prompt_tokens: "7" }, expected: undefined },
+  ])("reports validated usage for $usage without changing vectors", async ({ usage, expected }) => {
+    respondJson({ data: [{ embedding: [0.1] }], usage });
+    const onUsage = vi.fn();
+    await expect(fetchEmbeddings(["one"], onUsage)).resolves.toEqual([[0.1]]);
+    expect(onUsage).toHaveBeenCalledExactlyOnceWith(expected);
+  });
+
+  it("ignores non-finite usage parsed from a valid JSON number", async () => {
+    respond('{"data":[{"embedding":[0.1]}],"usage":{"prompt_tokens":1e309}}');
+    const onUsage = vi.fn();
+    await expect(fetchEmbeddings(["one"], onUsage)).resolves.toEqual([[0.1]]);
+    expect(onUsage).toHaveBeenCalledExactlyOnceWith(undefined);
   });
 
   it("preserves positional vectors with differing dimensions", async () => {

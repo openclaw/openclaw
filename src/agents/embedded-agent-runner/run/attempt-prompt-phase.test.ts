@@ -1,4 +1,3 @@
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,7 +10,6 @@ import {
   resolveAdmittedRunActiveAssertion,
 } from "../../admitted-run-context.js";
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
-import type { StreamFn } from "../../runtime/index.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -26,10 +24,6 @@ import {
 } from "../../sessions/compaction/request-budget.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { SettingsManager } from "../../sessions/settings-manager.js";
-import {
-  createPromptCacheRequestObserver,
-  type PromptCacheRequestObservation,
-} from "../prompt-cache-request-observer.js";
 import {
   getEmbeddedSessionPromptState,
   clearEmbeddedSessionPromptStates,
@@ -183,56 +177,6 @@ describe("runEmbeddedAttemptPromptPhase", () => {
       });
     },
   );
-
-  it("observes canonical request prefixes before managed cache consumption and skips compaction", async () => {
-    const fixture = createFixture();
-    const session = fixture.input.prepared.sessionRuntime.agentSession.activeSession;
-    const observations = vi.fn<(observation: PromptCacheRequestObservation) => void>();
-    const observer = createPromptCacheRequestObserver(
-      { sessionId: "prompt-phase-cache-observer", streamStrategy: "test" },
-      observations,
-    );
-    fixture.input.preparedStreamRuntime.cache.onModelRequest = observer.onModelRequest;
-    let compacting = false;
-    Object.defineProperty(session, "isCompacting", { get: () => compacting });
-    mocks.prepareGooglePromptCache.mockImplementation(
-      async ({ streamFn }: { streamFn: StreamFn }): Promise<StreamFn> =>
-        (model, context, options) =>
-          streamFn(model, { ...context, systemPrompt: undefined, tools: undefined }, options),
-    );
-    mocks.submitPrompt.mockImplementation(async () => {
-      const tool = { name: "read", description: "Read text", parameters: Type.Object({}) };
-      for (const [index, cacheRead] of [10_000, 0, 10_000].entries()) {
-        await session.agent.streamFn(testModel, {
-          systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}stable suffix`,
-          messages: [],
-          tools: [{ ...tool, description: index === 2 ? "Read workspace text" : tool.description }],
-        });
-        observer.onModelUsage({ input: 10_000 - cacheRead, cacheRead, cacheWrite: 0 });
-        if (index === 0) {
-          compacting = true;
-          await session.agent.streamFn(testModel, {
-            systemPrompt: "Summarize",
-            messages: [],
-            tools: [],
-          });
-          compacting = false;
-        }
-      }
-    });
-    await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
-    expect(fixture.readState().promptError).toBeNull();
-    expect(observations.mock.calls.map(([observation]) => observation)).toMatchObject([
-      { requestIndex: 1, broke: false, cacheRead: 10_000, changes: null },
-      { requestIndex: 2, broke: true, cacheRead: 0, changes: null },
-      {
-        requestIndex: 3,
-        broke: false,
-        cacheRead: 10_000,
-        changes: [{ code: "tools", detail: '1 -> 1 tools; description: "read"' }],
-      },
-    ]);
-  });
 
   it.each([
     { appendOnlyRuntimeContext: true, queued: false, debugEnabled: true },

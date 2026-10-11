@@ -149,6 +149,13 @@ export function renderChatComposer(props: ChatComposerProps) {
     getMentions().length > 0 && (mentionsUnsupported || visibleDraft.trimStart().startsWith("/"))
       ? t("chat.mentions.unsupported")
       : null;
+  const shareTypingSelection = (target: HTMLTextAreaElement) => {
+    props.onTypingChange?.(
+      Boolean(target.value.trim()),
+      target.value,
+      target.selectionDirection === "backward" ? target.selectionStart : target.selectionEnd,
+    );
+  };
   const commitMenuDraft = (next: string, mentions?: readonly HumanMention[]) => {
     commitComposerDraft(props, next, mentions);
     props.onTypingChange?.(Boolean(next.trim()), next);
@@ -334,7 +341,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     ) {
       requestUpdate();
     }
-    props.onTypingChange?.(Boolean(target.value.trim()), target.value);
+    shareTypingSelection(target);
   };
   const handleBeforeInput = (event: InputEvent) => {
     const target = event.target;
@@ -382,6 +389,14 @@ export function renderChatComposer(props: ChatComposerProps) {
   };
   const handleSelect = (event: Event) => {
     const target = event.target as HTMLTextAreaElement;
+    if (
+      target === document.activeElement &&
+      target.value.trim() &&
+      !state.composerComposing &&
+      !target.readOnly
+    ) {
+      shareTypingSelection(target);
+    }
     updateEmojiMenu(target);
     if (goalComposer.active) {
       return;

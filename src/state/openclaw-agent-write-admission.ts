@@ -6,6 +6,7 @@ import {
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import { getChildLogger } from "../logging/logger.js";
+import { runStoreWriterAcquisitions } from "../shared/store-writer-acquisitions.js";
 import {
   isActiveStoreWriter,
   runQueuedStoreWrite,
@@ -180,19 +181,12 @@ export async function runOpenClawAgentWriteAdmissions<T>(
   if (paths.some((pathname) => inherited.some((held) => held > pathname))) {
     throw new Error("Session read batch would invert inherited SQLite writer admission order");
   }
-  const acquire = (index: number): Promise<T> => {
+  return await runStoreWriterAcquisitions((index, next) => {
     const pathname = paths[index];
     return pathname === undefined
       ? Promise.resolve().then(run)
       : observeWriteAdmission("ordered-read", undefined, (timing) =>
-          runOpenClawAgentWriteAdmission(
-            selected.get(pathname)!,
-            () => acquire(index + 1),
-            true,
-            timing,
-            signal,
-          ),
+          runOpenClawAgentWriteAdmission(selected.get(pathname)!, next, true, timing, signal),
         );
-  };
-  return await acquire(0);
+  });
 }

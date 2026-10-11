@@ -469,7 +469,7 @@ export function streamOpenAICompletionsRequest(
           if (mode === "direct") {
             for (const block of output.content) {
               delete (block as { index?: number }).index;
-              delete (block as { partialArgs?: string }).partialArgs;
+              delete (block as { partialJson?: string }).partialJson;
               delete (block as { streamIndex?: number }).streamIndex;
             }
           }

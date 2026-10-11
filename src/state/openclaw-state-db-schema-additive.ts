@@ -31,29 +31,13 @@ function ensureTable(
   database.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, table, options)); // sqlite-allow-raw -- Canonical feature-owned additive DDL only.
 }
 
-const repositoryWorkspacePendingSchemas = new WeakSet<DatabaseSync>();
-
-function hasRepositoryWorkspacePendingResultSchema(database: DatabaseSync): boolean {
-  if (repositoryWorkspacePendingSchemas.has(database)) {
-    return true;
-  }
-  const exists = tableHasColumn(
-    database,
-    "worker_workspace_pending_results",
-    "repository_workspace_id",
-  );
-  // Another process can create the column; cache only committed presence.
-  // First-use DDL inside an outer transaction may still roll back.
-  if (exists && !database.isTransaction) {
-    repositoryWorkspacePendingSchemas.add(database);
-  }
-  return exists;
-}
-
 export function ensureRepositoryWorkspacePendingResultSchema(database: DatabaseSync): void {
-  if (!hasRepositoryWorkspacePendingResultSchema(database)) {
-    ensureColumn(database, "worker_workspace_pending_results", "repository_workspace_id TEXT");
+  const table = "worker_workspace_pending_results";
+  const sql = getAdmittedSqliteSchemaFacts(database)?.tableSql.get(table);
+  if (sql && parseSqliteTableDefinition(sql, table).columns.has("repository_workspace_id")) {
+    return;
   }
+  ensureColumn(database, table, "repository_workspace_id TEXT");
 }
 
 export function ensureSessionRepositoryWorkspaceSchema(database: DatabaseSync): void {

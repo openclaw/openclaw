@@ -34,6 +34,8 @@ export function createContext(
     methods?: string[];
     scopes?: string[];
     runtimeConfig?: ReturnType<typeof createRuntimeConfigStub>;
+    /** Route query, e.g. "?skill=deploy" from a chat notice link. */
+    search?: string;
   },
 ): ApplicationContext {
   const client = { request } as unknown as GatewayBrowserClient;
@@ -57,7 +59,7 @@ export function createContext(
       subscribe,
     },
     agents: { state: { agentsList: null }, subscribe },
-    agentSelection: { state: { selectedId: "research" }, subscribe },
+    agentSelection: { state: { selectedId: "research" }, set: vi.fn(), subscribe },
     agentIdentity: {
       get: () => ({ agentId: "research", name: "Research" }),
       subscribe,
@@ -66,15 +68,10 @@ export function createContext(
     runtimeConfig: options?.runtimeConfig ?? createRuntimeConfigStub(),
     chatSubmissions: { retain: vi.fn() },
     navigate: vi.fn(),
-  } as unknown as ApplicationContext;
-}
-
-/** Simulates the operator connecting the same application context to another Gateway. */
-export function reconnectGateway(context: ApplicationContext, request: ReturnType<typeof vi.fn>) {
-  Object.assign(context.gateway, {
-    snapshot: {
-      ...context.gateway.snapshot,
-      client: createContext(request).gateway.snapshot.client,
+    router: {
+      getState: () => ({
+        location: { pathname: "/skills/workshop", search: options?.search ?? "" },
+      }),
     },
-  });
+  } as unknown as ApplicationContext;
 }

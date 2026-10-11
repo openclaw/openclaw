@@ -23,6 +23,7 @@ export function mergeProcessEnv(
   platform: NodeJS.Platform = process.platform,
 ): Record<string, string> {
   const merged: Record<string, string> = {};
+  const mergedKeys = new Map<string, string>();
   for (const source of sources) {
     if (!source) {
       continue;
@@ -32,23 +33,27 @@ export function mergeProcessEnv(
     // Windows env object. Later source objects still own override precedence.
     const sourceKeys = new Set<string>();
     for (const key of platform === "win32" ? keys.toSorted() : keys) {
-      if (platform === "win32") {
-        const normalizedKey = key.toUpperCase();
+      const normalizedKey = platform === "win32" ? key.toUpperCase() : undefined;
+      if (normalizedKey !== undefined) {
         if (sourceKeys.has(normalizedKey)) {
           continue;
         }
         sourceKeys.add(normalizedKey);
-        for (const previousKey of Object.keys(merged)) {
-          if (previousKey.toUpperCase() === normalizedKey) {
-            delete merged[previousKey];
-          }
+        const previousKey = mergedKeys.get(normalizedKey);
+        if (previousKey !== undefined) {
+          delete merged[previousKey];
         }
+        mergedKeys.delete(normalizedKey);
       }
       const value = source[key];
       if (value === undefined) {
         delete merged[key];
       } else {
         merged[key] = value;
+        // Only own keys participate in Windows override matching.
+        if (normalizedKey !== undefined && Object.hasOwn(merged, key)) {
+          mergedKeys.set(normalizedKey, key);
+        }
       }
     }
   }

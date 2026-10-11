@@ -4,11 +4,11 @@ import { MessagePort } from "node:worker_threads";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SqliteCoordinatorError } from "../infra/sqlite-lifecycle-errors.js";
 import {
+  failSqliteWorkerSlot,
   receiveSqliteWorkerReply,
-  settleFailedSqliteWorkerJobs,
   settleSqliteWorkerJob,
 } from "../infra/sqlite-worker-broker-reply.js";
-import type { Job } from "../infra/sqlite-worker-broker.types.js";
+import type { Actor, Job } from "../infra/sqlite-worker-broker.types.js";
 import {
   isSqliteWorkerError,
   SqliteWorkerError,
@@ -64,15 +64,12 @@ vi.mock("node:sqlite", () => ({ DatabaseSync: edge.forbidden }));
 vi.mock("node:worker_threads", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:worker_threads")>();
   return {
+    ...actual,
     parentPort: { on: edge.on, postMessage: edge.publishReply },
     isMainThread: false,
     workerData: null,
     threadId: 1,
-    isMarkedAsUntransferable: actual.isMarkedAsUntransferable,
     Worker: edge.forbidden,
-    MessageChannel: actual.MessageChannel,
-    MessagePort: actual.MessagePort,
-    receiveMessageOnPort: actual.receiveMessageOnPort,
   };
 });
 vi.mock("node:child_process", () => ({
@@ -220,29 +217,26 @@ function retireFailedReply(
     reject,
     detach() {},
   };
-  receiveSqliteWorkerReply(
-    { actors: new Set(), current: job, worker: { postMessage: edge.forbidden } },
-    reply,
-    {
-      fail(error, currentError, openOutcome) {
-        if (!(error instanceof Error)) {
-          throw error;
-        }
-        settleFailedSqliteWorkerJobs({
-          current: job,
-          queued: [],
-          queuedError: new SqliteWorkerError("retired", "unavailable"),
-          error,
-          currentError,
-          openOutcome,
-          retire: () => retired.promise,
-          finish: settleSqliteWorkerJob,
-        });
-      },
-      finish: edge.forbidden,
-      dispatch: edge.forbidden,
+  const slot: Parameters<typeof receiveSqliteWorkerReply>[0] &
+    Parameters<typeof failSqliteWorkerSlot>[0] = {
+    actors: new Set<Actor>(),
+    current: job,
+    queue: [],
+    worker: { postMessage: edge.forbidden },
+  };
+  receiveSqliteWorkerReply(slot, reply, {
+    fail(error, currentError, openOutcome, completed) {
+      failSqliteWorkerSlot(slot, error, {
+        currentError,
+        openOutcome,
+        completed,
+        retire: () => retired.promise,
+        finish: settleSqliteWorkerJob,
+      });
     },
-  );
+    finish: edge.forbidden,
+    dispatch: edge.forbidden,
+  });
   return { retired, completion, reject, settleNative };
 }
 

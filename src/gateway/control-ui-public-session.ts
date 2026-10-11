@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
 import type { ControlUiPublicSessionRequestGate } from "./control-ui-public-session-admission.js";
 import { isSecurePublicSessionIngress } from "./control-ui-public-session-ingress.js";
+import { PUBLIC_SESSION_CONTENT_SECURITY_POLICY } from "./control-ui-public-session-render.js";
 import { resolveControlUiShareOrigin } from "./control-ui-share.js";
 import type { GatewayAttributedIngress } from "./ingress-attribution.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
@@ -37,10 +38,7 @@ export async function serveControlUiPublicSession(params: {
   const secureIngress = isSecurePublicSessionIngress(req, params.ingress, publicOrigin);
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("X-Robots-Tag", "noindex, nofollow");
-  res.setHeader(
-    "Content-Security-Policy",
-    "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
-  );
+  res.setHeader("Content-Security-Policy", PUBLIC_SESSION_CONTENT_SECURITY_POLICY);
   const unavailable = (status: 404 | 429 | 503, retryAfterSeconds = 1) => {
     const body =
       status === 404
@@ -111,7 +109,12 @@ export async function serveControlUiPublicSession(params: {
         offset,
         origin,
       ]),
-      document: { latestUrl, canonicalUrl, cardUrl: `${origin}${basePath}/share/card.png` },
+      document: {
+        latestUrl,
+        canonicalUrl,
+        assetBasePath: basePath,
+        cardUrl: `${origin}${basePath}/share/card.png`,
+      },
       olderUrl: (olderOffset) => `${latestUrl}&offset=${olderOffset}`,
       unavailable,
     });

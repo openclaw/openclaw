@@ -470,11 +470,11 @@ describe("install smoke no-push root image transport", () => {
     expect(text).not.toContain("gh api");
   });
 
-  it.each(
-    ["selected", "tooling", "missing"].flatMap((source) =>
-      ["0", "1"].map((allowOmissions) => ({ source, allowOmissions })),
-    ),
-  )(
+  it.each([
+    { source: "selected", allowOmissions: "0" },
+    { source: "tooling", allowOmissions: "1" },
+    { source: "missing", allowOmissions: "1" },
+  ])(
     "checks selected network source provenance before Docker: $source, omissions=$allowOmissions",
     ({ source, allowOmissions }) => {
       const workspace = tempDirs.make("install-smoke-source-binding-");

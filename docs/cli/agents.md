@@ -59,6 +59,16 @@ and unreadable local images also fall back to the workspace avatar.
 
 Options: `--role <role>`, `--workspace <dir>`, `--model <id>`, `--agent-dir <dir>`, `--bind <channel[:accountId]>` (repeatable), `--non-interactive`, `--json`.
 
+Basic non-interactive creation uses the local Gateway while it is running. The
+command binds to that Gateway's state owner; an unsupported method, lost reply,
+or authentication failure never retries the write locally. Check `agents list`
+before retrying an uncertain result.
+
+Interactive setup, `--role`, `--agent-dir`, and `--bind` require the local Gateway
+to be stopped. These setup flows hold exclusive state ownership through workspace,
+credential, and config settlement. Stop the Gateway through its service owner,
+wait for it to exit, and rerun the same command.
+
 - The automation flags `--workspace`, `--model`, `--agent-dir`, `--bind`, and `--non-interactive` select the non-interactive path. Non-interactive mode requires an agent name and, unless `--role` is supplied, `--workspace`.
 - `--json` alone keeps the guided wizard interactive. Prompts and status are written to stderr, and stdout contains one JSON summary after setup completes.
 - Non-interactive `--json` reports normalized agent IDs in the summary without extra stdout status messages.
@@ -103,6 +113,9 @@ checkout. Follow the [Claw preview and consent flow](/cli/claws#inspect-and-prev
 to add it. Use `agents team create` to wire the agents into a team.
 
 ### `agents team create`
+
+Team creation requires the local Gateway to be stopped and holds exclusive state
+ownership until the created agents and config changes have settled.
 
 Options: `--preset <name>` (default and only bundled preset: `team`),
 `--coordinator <id>` (default: `coordinator`), `--prefix <p>`,

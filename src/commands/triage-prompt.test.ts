@@ -122,7 +122,7 @@ describe("renderTriagePrompt", () => {
     expect(prompt).toContain("restart-unhealthy");
     expect(prompt).not.toContain("sk-test-triage-secret-1234567890");
     expect(prompt).toContain("openclaw health --json");
-    expect(prompt).toContain("openclaw gateway status --deep");
+    expect(prompt).toContain("openclaw gateway status --deep --require-rpc");
     expect(prompt).toContain("2026.8.31");
     expect(prompt).toContain("original symptom");
   });

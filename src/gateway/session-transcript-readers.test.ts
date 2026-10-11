@@ -5,9 +5,9 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import {
   persistSessionTranscriptTurn,
   preflightSessionTranscriptForManualCompact,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { readTranscriptStatsAsync } from "../config/sessions/session-transcript-stats.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";

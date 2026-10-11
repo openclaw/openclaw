@@ -1,10 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
-import type {
-  GitHubPublicationRow,
-  RepositoryGitHubPublicationRow,
-} from "../state/github-publication-read.types.js";
+import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
 import {
   createGitHubPublicationWorkerScope,
   readGitHubPublicationInWorker as read,
@@ -212,58 +209,6 @@ export type RepositoryGitHubPublicationExecutionAsync = Awaited<
   ReturnType<typeof claimRepositoryGitHubPublicationAsync>
 >;
 
-export async function claimGitHubPublicationExecutionAsync(
-  requestId: string,
-  instanceId: string,
-  assertCustody: () => void,
-) {
-  return requireRow(
-    await sharedMutation(
-      mutationScope(),
-      { operation: "claim", requestId, instanceId },
-      assertCustody,
-    ),
-  );
-}
-
-export function createGitHubPublicationExecutionStoreAsync(
-  instanceId: string,
-  authority: GitHubPublicationTransitionAuthority,
-) {
-  const scope = mutationScope();
-  return {
-    async bindWorkspaceSnapshot(
-      input: Extract<SharedPublicationMutation, { operation: "bindWorkspaceSnapshot" }>["input"],
-    ) {
-      return requireRow(
-        await sharedMutation(
-          scope,
-          { operation: "bindWorkspaceSnapshot", input, instanceId },
-          authority,
-        ),
-      );
-    },
-    async updatePublishingFacts(
-      input: Extract<SharedPublicationMutation, { operation: "updatePublishingFacts" }>["input"],
-    ) {
-      return requireRow(
-        await sharedMutation(
-          scope,
-          { operation: "updatePublishingFacts", input, instanceId },
-          authority,
-        ),
-      );
-    },
-    async complete(row: GitHubPublicationRow, result: SessionGitHubPublicationResult) {
-      return requireRow(
-        await sharedMutation(scope, { operation: "complete", row, result, instanceId }, () =>
-          authority.assertCustody(),
-        ),
-      );
-    },
-  };
-}
-
 export async function bindRepositoryGitHubPublicationCheckpointAsync(
   row: RepositoryGitHubPublicationRow,
   checkpoint: Extract<RepositoryPublicationMutation, { operation: "checkpoint" }>["checkpoint"],
@@ -313,18 +258,6 @@ export async function deferGitHubPublicationRequestsAsync(
   await sharedMutation(mutationScope(), { operation: "defer", selection }, assertCurrent);
 }
 
-export async function requirePersonalGitHubPublicationConfirmationAsync(
-  instanceId: string,
-  assertCurrent?: () => void,
-) {
-  const scope = mutationScope();
-  await personalMutation(
-    scope,
-    { operation: "restart", instanceId },
-    assertCurrent ?? scope.assertCurrent,
-  );
-}
-
 export async function markGitHubPublicationReportedAsync(
   kind: "personal" | "repository" | "shared",
   requestId: string,
@@ -369,47 +302,4 @@ export async function readRepositoryGitHubPublicationBranchAsync(
   return result?.type === "githubPublications.branch"
     ? result.branch
     : { head: undefined, unsettled: false };
-}
-
-export async function listUnreportedPersonalGitHubPublicationsAsync() {
-  const result = await read({ type: "githubPublications.unreported", input: undefined });
-  return result?.type === "githubPublications.unreported" ? result.rows : [];
-}
-
-export async function listGitHubPublicationsForClaimAsync(
-  claim: PublicationReadOperations["githubPublications.claimRequests"]["input"]["claim"],
-  options: { pendingOnly?: boolean } = {},
-) {
-  const result = await read({
-    type: "githubPublications.claimRequests",
-    input: { claim, ...options },
-  });
-  return result?.type === "githubPublications.claimRequests" ? result.rows : [];
-}
-
-export async function listSharedGitHubPublicationsAsync(
-  input: PublicationReadOperations["githubPublications.sharedList"]["input"] = {},
-) {
-  const result = await read({ type: "githubPublications.sharedList", input });
-  return result?.type === "githubPublications.sharedList" ? result.rows : [];
-}
-
-export async function bindAcceptedGitHubPublicationClaimSnapshotAsync(
-  input: Extract<SharedPublicationMutation, { operation: "bindAcceptedSnapshot" }>["input"],
-  assertCustody: () => void,
-) {
-  return requireRow(
-    await sharedMutation(
-      mutationScope(),
-      { operation: "bindAcceptedSnapshot", input },
-      assertCustody,
-    ),
-  );
-}
-
-export async function readGitHubPublicationRequestAsync(
-  input: PublicationReadOperations["githubPublications.sharedRead"]["input"],
-) {
-  const result = await read({ type: "githubPublications.sharedRead", input });
-  return result?.type === "githubPublications.sharedRead" ? result.row : undefined;
 }

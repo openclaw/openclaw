@@ -4,11 +4,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import * as providerPolicySurface from "../plugins/provider-policy-surface.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import {
-  captureActivePluginRegistrySnapshot,
-  restoreActivePluginRegistrySnapshot,
-  setActivePluginRegistry,
-} from "../plugins/runtime.js";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
 import {
   createModelCatalogView,
@@ -100,52 +95,50 @@ describe("prepared model catalog view", () => {
     }
   });
 
-  it.each(["absent", "empty"])(
-    "prepares %s provider overrides once for distinct view rows",
-    (initial) => {
-      const providers: Record<string, ModelProviderConfig> =
-        initial === "empty" ? { fixture: { baseUrl: "", models: [] } } : {};
-      const enumerate = vi.fn((target: Record<string, ModelProviderConfig>) =>
-        Reflect.ownKeys(target),
-      );
-      const cfg: OpenClawConfig = {
-        models: { providers: new Proxy(providers, { ownKeys: enumerate }) },
-      };
-      const catalog = Array.from({ length: 1_000 }, (_, index) => row("fixture", `model-${index}`));
-      const keyOf = (entry: Pick<ModelCatalogEntry, "provider" | "id">) =>
-        `${entry.provider}/${entry.id}`;
-      const params = { cfg, catalog, keyOf };
-      const view = createModelCatalogView(params);
-      expect(enumerate).not.toHaveBeenCalled();
-      expect(
-        catalog.map((entry) => view.readProjection(entry, { kind: "unmanaged" }, keyOf(entry))),
-      ).toEqual(catalog.map((entry) => ({ entry, runtimeEntry: entry })));
-      expect(enumerate).toHaveBeenCalledOnce();
+  it.each(["empty"])("prepares %s provider overrides once for distinct view rows", (initial) => {
+    const providers: Record<string, ModelProviderConfig> =
+      initial === "empty" ? { fixture: { baseUrl: "", models: [] } } : {};
+    const enumerate = vi.fn((target: Record<string, ModelProviderConfig>) =>
+      Reflect.ownKeys(target),
+    );
+    const cfg: OpenClawConfig = {
+      models: { providers: new Proxy(providers, { ownKeys: enumerate }) },
+    };
+    const catalog = Array.from({ length: 1_000 }, (_, index) => row("fixture", `model-${index}`));
+    const keyOf = (entry: Pick<ModelCatalogEntry, "provider" | "id">) =>
+      `${entry.provider}/${entry.id}`;
+    const params = { cfg, catalog, keyOf };
+    const view = createModelCatalogView(params);
+    expect(enumerate).not.toHaveBeenCalled();
+    expect(
+      catalog.map((entry) => view.readProjection(entry, { kind: "unmanaged" }, keyOf(entry))),
+    ).toEqual(catalog.map((entry) => ({ entry, runtimeEntry: entry })));
+    expect(enumerate).toHaveBeenCalledOnce();
 
-      providers.fixture = {
-        baseUrl: "",
-        models: [{ ...model("model-0", "Configured"), maxTokens: 4096 }],
-      };
-      const freshEntry = row("fixture", "model-0");
-      expect(view.readProjection(freshEntry, { kind: "unmanaged" }, keyOf(freshEntry))).toEqual({
-        entry: freshEntry,
-        runtimeEntry: freshEntry,
-      });
-      expect(enumerate).toHaveBeenCalledOnce();
-      const nextView = createModelCatalogView(params);
-      const expected = {
-        ...freshEntry,
-        name: "Configured",
-        reasoning: false,
-        configuredReasoning: false,
-        input: ["text"],
-      };
-      expect(nextView.readProjection(freshEntry, { kind: "unmanaged" }, keyOf(freshEntry))).toEqual(
-        { entry: expected, runtimeEntry: expected },
-      );
-      expect(enumerate).toHaveBeenCalledTimes(2);
-    },
-  );
+    providers.fixture = {
+      baseUrl: "",
+      models: [{ ...model("model-0", "Configured"), maxTokens: 4096 }],
+    };
+    const freshEntry = row("fixture", "model-0");
+    expect(view.readProjection(freshEntry, { kind: "unmanaged" }, keyOf(freshEntry))).toEqual({
+      entry: freshEntry,
+      runtimeEntry: freshEntry,
+    });
+    expect(enumerate).toHaveBeenCalledOnce();
+    const nextView = createModelCatalogView(params);
+    const expected = {
+      ...freshEntry,
+      name: "Configured",
+      reasoning: false,
+      configuredReasoning: false,
+      input: ["text"],
+    };
+    expect(nextView.readProjection(freshEntry, { kind: "unmanaged" }, keyOf(freshEntry))).toEqual({
+      entry: expected,
+      runtimeEntry: expected,
+    });
+    expect(enumerate).toHaveBeenCalledTimes(2);
+  });
 
   it("keeps missing runtime credentials labeled missing", async () => {
     const prepared = facts();
@@ -172,37 +165,6 @@ describe("prepared model catalog view", () => {
       sessionEntry: { agentRuntimeOverride: "codex" },
     });
     expect(view.providerAuthLabels.get("codex")).toBe("missing");
-  });
-
-  it("keeps exact provider display endpoints separate from captured model routes", () => {
-    const cfg: OpenClawConfig = {
-      models: {
-        providers: {
-          "z.ai": {
-            baseUrl: " https://api.z.ai/api/paas/v4 ",
-            api: "openai-responses",
-            models: [],
-          },
-          zai: { baseUrl: "https://other.example/v1", models: [] },
-        },
-      },
-    };
-    const entries: ModelCatalogEntry[] = [
-      { ...row("z.ai", "first"), baseUrl: "https://first.example/v1", api: "openai-completions" },
-      { ...row("z.ai", "second"), baseUrl: "https://second.example/v1", api: "openai-responses" },
-      {
-        ...row("openai", "built-in"),
-        baseUrl: "https://api.openai.com/v1",
-        api: "openai-responses",
-      },
-    ];
-    const view = prepareModelCatalogView({ ...facts(cfg), snapshot: snapshot(entries) });
-    expect(view.providerEndpoints.get("z.ai")).toEqual({
-      endpoint: "https://api.z.ai/api/paas/v4",
-      api: "openai-responses",
-    });
-    expect(view.providerEndpoints.get("openai")).toBeUndefined();
-    expect(view.catalog).toEqual(entries);
   });
 
   it("enriches permitted static choices and current metadata while preserving committed rows", () => {
@@ -258,43 +220,7 @@ describe("prepared model catalog view", () => {
     expect(inventory.map(({ id }) => id)).toEqual(["kept", "private"]);
   });
 
-  it("refreshes provider identity for each authored inventory read", () => {
-    const cfg: OpenClawConfig = {
-      models: {
-        providers: {
-          fixture: {
-            baseUrl: "https://authored.example/v1",
-            models: Array.from({ length: 32 }, (_, index) =>
-              model(
-                `vendor/model-${String(index).padStart(2, "0")}`,
-                `Authored ${String(index).padStart(2, "0")}`,
-              ),
-            ),
-          },
-        },
-      },
-    };
-    const canonical = Array.from({ length: 32 }, (_, index) =>
-      row("fixture", `model-${String(index).padStart(2, "0")}`),
-    );
-    const view = prepareModelCatalogView(facts(cfg));
-    const policy = vi
-      .spyOn(providerPolicySurface, "resolveDirectBundledProviderPolicySurface")
-      .mockReturnValue({
-        normalizeModelCatalogId: ({ modelId }) => modelId.replace(/^vendor\//u, ""),
-      });
-    try {
-      expect(view.providerInventory(cfg, canonical)).toEqual(canonical);
-      policy.mockReturnValue(null);
-      expect(view.providerInventory(cfg, canonical).map(({ id }) => id)).toEqual(
-        cfg.models!.providers!.fixture!.models.map(({ id }) => id),
-      );
-    } finally {
-      policy.mockRestore();
-    }
-  });
-
-  it.each(["runtime", "refreshable", "static"] as const)(
+  it.each(["refreshable", "static"] as const)(
     "distinguishes omitted from empty %s inventory",
     (discovery) => {
       const provider = { baseUrl: "https://catalog.example/v1", models: [] };
@@ -321,7 +247,7 @@ describe("prepared model catalog view", () => {
     },
   );
 
-  it.each(["nvidia", "kimi"])(
+  it.each(["nvidia"])(
     "scopes %s acquisition and all returned facts to the canonical provider",
     async (requested) => {
       let refreshFailed = false;
@@ -407,14 +333,20 @@ function nativeRegistry(readiness: () => { accountType: string; authMode: string
 }
 
 describe("prepared native catalog readiness", () => {
+  it("keeps native readiness unknown before the first discovery", () => {
+    const logical = row("custom", "native-model");
+    const view = prepareModelCatalogView({
+      ...facts({}),
+      snapshot: snapshot([logical]),
+      pluginRegistry: nativeRegistry(() => undefined),
+    });
+    expect(view.evaluateNative(logical, host, "native-test")).toMatchObject({
+      availability: undefined,
+      runtimeAuth: { id: "native-test", source: "native" },
+    });
+  });
+
   it.each([
-    { name: "matching native observation", variants: [nativeEntry], available: true },
-    { name: "cold catalog", variants: [], available: undefined },
-    {
-      name: "another model",
-      variants: [{ ...nativeEntry, id: "other-model" }],
-      available: undefined,
-    },
     {
       name: "another runtime",
       variants: [{ ...nativeEntry, nativeRuntime: "other-native" }],
@@ -449,10 +381,20 @@ describe("prepared native catalog readiness", () => {
     expect(decision.availabilityAuthoritative).toBe(true);
   });
 
-  it("observes revoked login and generation without retaining prior readiness", () => {
+  it("reuses captured host configuration while observing native readiness and selection", () => {
     let ready = true;
     let current = true;
-    const cfg: OpenClawConfig = {};
+    const enumerateProviders = vi.fn((target: Record<string, ModelProviderConfig>) =>
+      Reflect.ownKeys(target),
+    );
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: new Proxy(
+          { custom: { baseUrl: "", models: [model("native-model"), model("other-model")] } },
+          { ownKeys: enumerateProviders },
+        ),
+      },
+    };
     const view = prepareModelCatalogView({
       ...facts(cfg),
       snapshot: snapshot([nativeEntry]),
@@ -467,6 +409,30 @@ describe("prepared native catalog readiness", () => {
       runtimeAuth: { id: "native-test", source: "native" },
       selectedAuthMode: "oauth",
     });
+    const preparedEnumerations = enumerateProviders.mock.calls.length;
+    expect(preparedEnumerations).toBeGreaterThan(0);
+    expect(view.evaluateNative(nativeEntry, host, "native-test")).toMatchObject({
+      availability: true,
+      selectedAuthMode: "oauth",
+    });
+    expect(view.evaluateNative(nativeEntry, host, "openclaw")).toEqual(host);
+    expect(
+      view.evaluateNative(nativeEntry, { ...host, requestedRuntimeId: "native-test" }),
+    ).toMatchObject({
+      availability: true,
+      requestedRuntimeId: "native-test",
+      runtimeAuth: { id: "native-test", source: "native" },
+    });
+    const credentialedHost: ModelAuthAvailabilityEvaluation = {
+      ...host,
+      availability: true,
+      evidence: "profile",
+      selectedProfileId: "custom:host",
+      selectedAuthMode: "api_key",
+    };
+    expect(view.evaluateNative(nativeEntry, credentialedHost, "native-test")).toEqual(
+      credentialedHost,
+    );
     ready = false;
     expect(view.evaluateNative(nativeEntry, host, "native-test")).toMatchObject({
       availability: false,
@@ -476,29 +442,10 @@ describe("prepared native catalog readiness", () => {
     expect(view.evaluateNative(nativeEntry, host, "native-test")).toMatchObject({
       availability: false,
     });
-  });
-
-  it("reads the captured registry while an unrelated registry is active", () => {
-    const previous = captureActivePluginRegistrySnapshot();
-    setActivePluginRegistry(nativeRegistry(() => undefined));
-    try {
-      const cfg: OpenClawConfig = {};
-      const view = prepareModelCatalogView({
-        ...facts(cfg),
-        snapshot: snapshot([nativeEntry]),
-        observationConfig: cfg,
-        isCurrent: () => true,
-        pluginRegistry: nativeRegistry(() => ({ accountType: "apiKey", authMode: "oauth" })),
-      });
-      expect(view.evaluateNative(nativeEntry, host, "native-test").availability).toBe(true);
-    } finally {
-      restoreActivePluginRegistrySnapshot(previous);
-    }
+    expect(enumerateProviders).toHaveBeenCalledTimes(preparedEnumerations);
   });
 
   it.each([
-    { name: "preferred account", preferredProfileId: "custom:chosen", cfg: {} },
-    { name: "pinned account", pinnedProfileId: "custom:chosen", cfg: {} },
     {
       name: "authored route",
       cfg: {

@@ -14,6 +14,10 @@ import {
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { t } from "../i18n/index.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
+import {
+  prepareSessionNavigationHandoff,
+  runSessionNavigationIntent,
+} from "../lib/sessions/navigation-handoff.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -401,17 +405,42 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
   }
 
   private openHomePage(): void {
-    if (this.context) {
-      const { sessionKey, agentId } = this.homeTarget;
-      const target = sessionNavigationTarget({
-        context: this.context,
-        face: "chat",
-        sessionKey,
-        agentId,
-        focusComposer: true,
-      });
-      this.context.navigate("chat", target.options);
+    const context = this.context;
+    if (!context) {
+      return;
     }
+    const { sessionKey, agentId } = this.homeTarget;
+    const { pageRouteId, pageSessionKey } = this;
+    const { client, hello } = context.gateway.snapshot;
+    const target = sessionNavigationTarget({
+      context,
+      face: "chat",
+      sessionKey,
+      agentId,
+      focusComposer: true,
+    });
+    // Full-page Home is explicit selection, even when its URL already owns an unbound split.
+    runSessionNavigationIntent(this, {
+      face: "chat",
+      sessionKey,
+      agentId,
+      commit: () => {
+        if (
+          this.context !== context ||
+          this.pageRouteId !== pageRouteId ||
+          this.pageSessionKey !== pageSessionKey ||
+          context.gateway.snapshot.client !== client ||
+          context.gateway.snapshot.hello !== hello ||
+          this.homeTarget.sessionKey !== sessionKey ||
+          this.homeTarget.agentId !== agentId
+        ) {
+          return false;
+        }
+        prepareSessionNavigationHandoff(context.gateway, target.options.pathname, sessionKey);
+        context.navigate("chat", target.options);
+        return true;
+      },
+    });
   }
 
   private setOpen(open: boolean): void {

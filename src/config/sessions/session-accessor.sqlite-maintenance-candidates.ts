@@ -17,6 +17,7 @@ const maintenanceFields = [
   "lastInteractionAt",
   "sessionStartedAt",
   "pinnedAt",
+  "sidebarRoot",
   "spawnedBy",
   "parentSessionKey",
   "modelSelectionLocked",

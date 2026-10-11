@@ -517,7 +517,7 @@ async function prepareSharedGitHubIdentity(
     if (probe.status !== "available") {
       throw new GitHubIdentityError(probe.status);
     }
-    const prepared: PreparedGitHubPublicationIdentity = Object.freeze({
+    const prepared = Object.freeze({
       source: identity.source,
       ...(managed ? { profileId: identity.config.profileId } : {}),
       host,
@@ -525,7 +525,7 @@ async function prepareSharedGitHubIdentity(
       // Broker children and worker launches receive this fixed snapshot. Profile
       // retirement cannot redirect an already-admitted operation.
       env: Object.freeze(withGitHubToken(env, token)),
-    });
+    }) satisfies PreparedGitHubPublicationIdentity;
     return { prepared, token, readToken };
   }, params);
 }
@@ -544,7 +544,7 @@ export async function prepareGitHubPublicationIdentity(
 /** Options expose account facts only; publication obtains its own live credential. */
 export async function prepareGitHubPublicationOptionsIdentity(
   params: GitHubIdentityPreparation & { assertCurrent?: () => void },
-): Promise<Pick<PreparedGitHubPublicationIdentity, "source" | "account">> {
+) {
   const { prepared } = await prepareSharedGitHubIdentity(params, readCachedNativeGitHubToken);
   if (!prepared) {
     throw new GitHubIdentityError("unavailable");

@@ -643,8 +643,16 @@ export async function inspectSqliteSchemaHeaderInProcess(
   pathname: string,
   stagingRoot?: string,
   agentSchemaVersionForOwnership?: number,
+  preserveSourceArtifacts = false,
 ) {
   const canonicalPath = fs.realpathSync.native(pathname);
+  if (preserveSourceArtifacts) {
+    return readSqliteSchemaHeaderFromSnapshot(
+      await prepareSqliteReadOnlyCopyInProcess(canonicalPath, stagingRoot),
+      undefined,
+      agentSchemaVersionForOwnership,
+    );
+  }
   const mode = readSourceJournalMode(canonicalPath);
   const sidecars = readSourceSidecars(canonicalPath);
   if (mode !== "wal" || (sidecars.wal && sidecars.shm)) {

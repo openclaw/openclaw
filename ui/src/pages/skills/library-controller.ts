@@ -65,7 +65,6 @@ export class SkillLibraryController {
   importSelection: File[] = [];
   newFilePath = "";
   query = "";
-  private readSequence = 0;
 
   constructor(
     private readonly host: ReactiveControllerHost,
@@ -93,7 +92,6 @@ export class SkillLibraryController {
     }
   }
   reset() {
-    this.readSequence++;
     this.list = null;
     this.view = null;
     this.loading = false;
@@ -145,14 +143,10 @@ export class SkillLibraryController {
       this.list = result;
       this.view ??= result.defaultTarget === "personal" ? "mine" : "workspace";
     } catch (error) {
-      if (this.gateway.isCurrent(connection)) {
-        this.error = formatUiError(error);
-      }
+      this.error = formatUiError(error);
     } finally {
-      if (this.gateway.isCurrent(connection)) {
-        this.loading = false;
-        this.changed();
-      }
+      this.loading = false;
+      this.changed();
     }
   }
 
@@ -171,7 +165,6 @@ export class SkillLibraryController {
     if (this.busy || (this.draft?.dirty && !window.confirm(t("skillLibrary.discard")))) {
       return;
     }
-    this.readSequence++;
     this.draft = null;
     this.importOpen = false;
     this.newFilePath = "";
@@ -186,12 +179,11 @@ export class SkillLibraryController {
     if (!connection || this.busy) {
       return;
     }
-    const sequence = ++this.readSequence;
     await this.perform(async () => {
       const read = await connection.client.request<SkillsLibraryReadResult>("skills.library.read", {
         skillId,
       });
-      if (!this.gateway.isCurrent(connection) || sequence !== this.readSequence) {
+      if (!this.gateway.isCurrent(connection)) {
         return;
       }
       this.draft = libraryDraft(connection, read);
@@ -332,7 +324,7 @@ export class SkillLibraryController {
       }
       // Record the committed mutation even if the follow-up list or revision read fails.
       await this.receipt(receipt);
-      if (!this.gateway.isCurrent(draft.connection) || action === "remove") {
+      if (action === "remove") {
         return;
       }
       if (action === "rollback") {
@@ -340,9 +332,6 @@ export class SkillLibraryController {
           "skills.library.read",
           { skillId: receipt.entry.skillId, revision: receipt.entry.revision },
         );
-        if (!this.gateway.isCurrent(draft.connection)) {
-          return;
-        }
         draft.content = read.content;
         draft.files = read.files;
         draft.baseFiles = read.files.map((file) => ({ ...file }));

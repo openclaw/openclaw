@@ -3,6 +3,7 @@
 import { emptyReply, mock, queueTask, source, tempDirs } from "./openclaw-state-read-worker.test-harness.js";
 import fs from "node:fs";
 import path from "node:path";
+import { threadId } from "node:worker_threads";
 import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { expect, it, vi } from "vitest";
 import type { AcpSessionReadInput } from "../acp/runtime/session-meta-read.types.js";
@@ -15,7 +16,7 @@ import {
 } from "./openclaw-state-db-cache.js";
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
-import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import { captureOpenClawStateReadSource } from "./openclaw-state-read-worker.js";
 import type {
   OpenClawStateReadCommand,
@@ -159,6 +160,51 @@ it("captures queued read routing and schema facts without reading unrelated envi
     dispatch.resolve();
     task.result.resolve(emptyReply);
     await Promise.allSettled([result]);
+  }
+});
+
+it("lets an active reader's host callback finish a nested read before the parent settles", async () => {
+  const { pathname, options } = source();
+  if (threadId === 0) {
+    // Native hosts publish real admission; raw Worker hosts intentionally retain native checks.
+    fs.unlinkSync(pathname);
+    openOpenClawStateDatabase(options);
+  }
+  const context = captureOpenClawStateWorkerContext(options);
+  const location = { context, location: pathname, checkFreshAdmission: false };
+  const controller = new AbortController();
+  const authority = { signal: controller.signal, assertCurrent: context.admission.assertCurrent };
+  const firstTask = queueTask();
+  const nestedTask = queueTask();
+  const nestedTransport = captureOpenClawStateReadSource().createTransport({ type: "backup.runs" });
+  let nested: Promise<unknown> | undefined;
+  const transport = captureOpenClawStateReadSource().createTransport(
+    { type: "backup.runs" },
+    () => {
+      nested = nestedTransport.startRead(location, authority).result;
+    },
+  );
+  const parent = transport.startRead(location, authority).result;
+  try {
+    const submitted = await firstTask.submitted;
+    await firstTask.captured;
+    if (!submitted.onRequestSync) {
+      throw new Error("Reader callback was not installed");
+    }
+    submitted.onRequestSync("synthetic chunk", {
+      signal: controller.signal,
+      yieldSignal: controller.signal,
+    });
+    await nestedTask.captured;
+    nestedTask.result.resolve(emptyReply);
+    await expect(nested).resolves.toEqual({ value: emptyReply });
+    firstTask.result.resolve(emptyReply);
+    await expect(parent).resolves.toEqual({ value: emptyReply });
+  } finally {
+    firstTask.result.resolve(emptyReply);
+    nestedTask.result.resolve(emptyReply);
+    await Promise.allSettled([parent, nested]);
+    await Promise.all([transport.startClose().result, nestedTransport.startClose().result]);
   }
 });
 
@@ -734,10 +780,11 @@ it.each(captures)(
         expect(submitted.inputBytes).toBeGreaterThanOrEqual(fixture.bytes);
       }
       dispatch.resolve();
+      await baselineTask.captured;
+      baselineTask.result.resolve(emptyReply);
       const request = await task.captured;
       expect(request.command).toEqual(expected);
       expect(request.context.environment.OPENCLAW_STATE_DIR).toBe(originalRoot);
-      baselineTask.result.resolve(emptyReply);
       task.result.resolve(fixture.reply);
       expect(await result).toEqual(transport ? { value: fixture.reply } : fixture.reply);
       await baseline;
@@ -817,6 +864,8 @@ it.each(["mcpOAuth.statuses", "userPreferences.values", "acpSessions.metadata"] 
       entry.sessionStartedAt = 99;
       entries.push({ keys: ["added-entry-after-admission"] });
       dispatch.resolve();
+      await baselineTask.captured;
+      baselineTask.result.resolve(emptyReply);
       expect((await task.captured).command).toEqual(
         type === "mcpOAuth.statuses"
           ? { type, input: expected }
@@ -824,7 +873,6 @@ it.each(["mcpOAuth.statuses", "userPreferences.values", "acpSessions.metadata"] 
             ? { type, profileIds: expected, key }
             : { type, entries: expectedEntries },
       );
-      baselineTask.result.resolve(emptyReply);
       task.result.resolve(
         type === "mcpOAuth.statuses"
           ? {

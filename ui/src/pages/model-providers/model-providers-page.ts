@@ -188,21 +188,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     canOpen: () => this.canMutate(),
     getOwner: () => ({
       client: this.gateway.client,
-      epoch: this.gateway.epoch,
-      agentEpoch: this.agentEpoch,
       agentId: this.context.settingsAgentSelection.state.selectedId,
-      selectionIntentRevision: this.context.settingsAgentSelection.intentRevision,
-      selectionPending:
-        this.context.settingsAgentSelection.state.selectedId === null &&
-        this.context.agents.state.agentsList === null,
     }),
-    isCurrent: (owner) =>
-      Boolean(
-        this.isConnected &&
-        owner.client &&
-        this.gateway.isCurrent({ client: owner.client, epoch: owner.epoch }) &&
-        this.agentEpoch === owner.agentEpoch,
-      ),
     onClose: () => void this.refresh("replacement"),
     onError: (error) =>
       this.setMessage("connection", { kind: "error", text: modelProviderErrorMessage(error) }),

@@ -228,7 +228,9 @@ it("migrates a copied large v23 store without losing snapshots or rewriting tran
         opened.db.exec("ROLLBACK");
       }
       expect(readUnchangedLifecycleTargetSnapshot(opened, prepared)).toBe(prepared);
-      expect(readSessionEntryCacheValidityToken(opened.db)).toEqual(revision);
+      const rolledBackRevision = readSessionEntryCacheValidityToken(opened.db);
+      expect(rolledBackRevision).not.toEqual(revision);
+      expect(readSessionEntryCacheValidityToken(opened.db)).toEqual(rolledBackRevision);
       expect(readRevision()).toEqual(migratedRevision);
       expect(snapshotRows(opened.db)).toEqual(coldRows);
     } finally {

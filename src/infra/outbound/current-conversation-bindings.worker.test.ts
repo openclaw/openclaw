@@ -13,6 +13,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import * as workerStore from "../../state/openclaw-state-worker-store.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
@@ -20,7 +21,10 @@ import { requireNodeSqlite } from "../node-sqlite.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "../sqlite-worker-contract.js";
 import * as admission from "../sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../sqlite-worker-owner-probe.test-support.js";
-import { createAccountScopedConversationBindingManager } from "./account-scoped-conversation-bindings.js";
+import {
+  createAccountScopedConversationBindingManager,
+  createAccountScopedConversationBindingManagerV2,
+} from "./account-scoped-conversation-bindings.js";
 import { resolveBoundDeliveryDestination } from "./bound-delivery-router.js";
 import {
   bindCurrentConversationRecordAsync,
@@ -267,6 +271,62 @@ it("keeps inspection noncreating and performs durable read, expiry, and scoped t
     expect(await inspectCurrentConversationBindingRecordAsync(sibling.conversation)).toEqual(
       sibling,
     );
+  });
+});
+
+it("reuses resolved bindings until sync or worker writes publish new facts", async () => {
+  await withOpenClawTestState({ label: "binding-resolve-cache" }, async () => {
+    const original = record("cached");
+    openOpenClawStateDatabase();
+    const run = vi.spyOn(workerStore, "runOpenClawStateWorkerOperation");
+    expect(await resolveCurrentConversationBindingRecordAsync(original.conversation)).toBeNull();
+    run.mockClear();
+    expect(await resolveCurrentConversationBindingRecordAsync(original.conversation)).toBeNull();
+    expect(run).not.toHaveBeenCalled();
+
+    updateCurrentConversationBindingRecord(original.conversation, () => original);
+    const resolved = await resolveCurrentConversationBindingRecordAsync(original.conversation);
+    expect(resolved).toEqual(original);
+    expect(run).not.toHaveBeenCalled();
+    resolved!.metadata!.lastActivityAt = 99;
+    run.mockClear();
+    expect(await resolveCurrentConversationBindingRecordAsync(original.conversation)).toEqual(
+      original,
+    );
+    expect(run).not.toHaveBeenCalled();
+
+    const replacement = { ...original, targetSessionKey: "agent:main:replacement" };
+    await bindCurrentConversationRecordAsync({ record: replacement });
+    run.mockClear();
+    expect(await resolveCurrentConversationBindingRecordAsync(original.conversation)).toEqual(
+      replacement,
+    );
+    expect(run).not.toHaveBeenCalled();
+    await touchCurrentConversationBindingRecordAsync({
+      conversation: original.conversation,
+      bindingId: original.bindingId,
+      at: 100,
+    });
+    run.mockClear();
+    expect(await resolveCurrentConversationBindingRecordAsync(original.conversation)).toMatchObject(
+      {
+        metadata: { lastActivityAt: 100 },
+      },
+    );
+    expect(run).not.toHaveBeenCalled();
+    const sibling = record("sibling");
+    updateCurrentConversationBindingRecord(sibling.conversation, () => sibling);
+    expect(await resolveCurrentConversationBindingRecordAsync(original.conversation)).toMatchObject(
+      { metadata: { lastActivityAt: 100 } },
+    );
+    expect(run).not.toHaveBeenCalled();
+    await removeCurrentConversationBindingsAsync({
+      conversation: original.conversation,
+      bindingId: original.bindingId,
+    });
+    run.mockClear();
+    expect(await resolveCurrentConversationBindingRecordAsync(original.conversation)).toBeNull();
+    expect(run).not.toHaveBeenCalled();
   });
 });
 
@@ -822,6 +882,58 @@ it("commits oversized expiry batches and retires binding coverage before replyin
       expect(events).toEqual(["pending", "unknown", "settled", "reply"]);
     } finally {
       unsubscribe();
+    }
+  });
+});
+
+it("runs the V2 account manager's complete persistence lifecycle in workers", async () => {
+  await withOpenClawTestState({ label: "binding-manager-v2" }, async () => {
+    const manager = createAccountScopedConversationBindingManagerV2({
+      channel: "fixture",
+      accountId: "owner",
+      cfg: { session: { threadBindings: { idleHours: 0, maxAgeHours: 0 } } },
+      stateKey: Symbol("binding-manager-v2"),
+      toStoredTargetKind: (kind) => kind,
+      toSessionBindingTargetKind: (kind) => kind,
+    });
+    openOpenClawStateDatabase();
+    const hostSql = observeHostDataSql();
+    try {
+      const binding = await manager.bindConversationAsync({
+        conversationId: "room",
+        targetSessionKey: "agent:main:managed",
+        targetKind: "session",
+        metadata: { label: "worker-owned" },
+      });
+      expect(binding).toMatchObject({ conversationId: "room", label: "worker-owned" });
+      expect(await manager.getByConversationIdAsync("room")).toEqual(binding);
+      expect(await manager.listBySessionKeyAsync("agent:main:managed")).toEqual([binding]);
+      expect(await manager.touchConversationAsync("room", 123)).toMatchObject({
+        lastActivityAt: 123,
+      });
+      expect(await manager.unbindConversationAsync("room")).toMatchObject({ lastActivityAt: 123 });
+      expect(await manager.getByConversationIdAsync("room")).toBeUndefined();
+      await manager.bindConversationAsync({
+        conversationId: "room",
+        targetSessionKey: "agent:main:managed",
+        targetKind: "session",
+      });
+      expect(await manager.unbindBySessionKeyAsync("agent:main:managed")).toHaveLength(1);
+      expect(await manager.listBySessionKeyAsync("agent:main:managed")).toEqual([]);
+      for (const call of hostSql.calls) {
+        expect(call).not.toHaveBeenCalled();
+      }
+      manager.stop();
+      await expect(
+        manager.bindConversationAsync({
+          conversationId: "closed",
+          targetSessionKey: "agent:main:managed",
+          targetKind: "session",
+        }),
+      ).rejects.toThrow("no longer active");
+    } finally {
+      hostSql.restore();
+      manager.stop();
     }
   });
 });

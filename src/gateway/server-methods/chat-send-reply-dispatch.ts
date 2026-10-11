@@ -346,12 +346,7 @@ export function createChatSendReplyDispatch(params: {
       inputs: replaceChatSendReplyPayload(input, stripVisibleTextFromTtsSupplement(payload)),
       abortSignal: params.abortSignal,
       includeSensitiveMedia: payload.sensitiveMedia !== true,
-      onLocalAudioAccessDenied: (err) => {
-        logGateway.warn(`webchat audio embedding denied local path: ${formatForLog(err)}`);
-      },
-      onManagedMediaPrepareError: (message) => {
-        logGateway.warn(`webchat media embedding skipped attachment: ${message}`);
-      },
+      logGateway,
     });
     if (!transcriptPayload) {
       return;

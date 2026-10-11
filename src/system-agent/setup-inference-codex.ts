@@ -148,16 +148,11 @@ export async function stageCodexCandidate(
             "OpenAI sign-in is unavailable. Connect OpenAI in Model Setup, then retry Codex setup.",
         };
       }
-      const authContext: StageContext = {
-        ...ctx,
-        cfg: config,
-        params: { ...ctx.params, modelRef, authChoice: choice.id },
-      };
-      try {
-        return await stageProviderAuthCandidate(authContext, true, "codex");
-      } finally {
-        ctx.credentialsSaved = authContext.credentialsSaved;
-      }
+      return await stageProviderAuthCandidate(
+        { ...ctx, cfg: config, params: { ...ctx.params, modelRef, authChoice: choice.id } },
+        true,
+        "codex",
+      );
     }
     registerSecretValueForRedaction(credential.key);
     const saved = await saveSetupCredential({
@@ -170,7 +165,7 @@ export async function stageCodexCandidate(
       agentDir: ctx.agentDir,
       beforePersistentEffect: () => ctx.beforePersistentEffect("credential"),
     });
-    ctx.credentialsSaved = true;
+    ctx.effects.credentialsSaved = true;
     return { ...candidate, authProfileId: saved.profile.profileId, config: saved.config };
   });
 }

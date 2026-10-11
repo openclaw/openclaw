@@ -493,6 +493,8 @@ export function createGatewayAuxHandlers(
       "secrets.store.list": secretsHandler("secrets.store.list"),
       "secrets.store.set": secretsHandler("secrets.store.set"),
       "secrets.store.delete": secretsHandler("secrets.store.delete"),
+      "secrets.store.import": secretsHandler("secrets.store.import"),
+      "secrets.store.allowedHosts": secretsHandler("secrets.store.allowedHosts"),
     },
   };
 }

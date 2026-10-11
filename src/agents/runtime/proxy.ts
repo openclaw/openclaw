@@ -410,39 +410,31 @@ function processProxyEvent(
       };
     }
 
-    case "text_end": {
+    case "text_end":
+    case "thinking_end": {
       const content = partial.content[proxyEvent.contentIndex];
-      if (content?.type === "text") {
+      const expectedType = proxyEvent.type === "text_end" ? "text" : "thinking";
+      if (content?.type !== expectedType) {
+        throw new Error(`Received ${proxyEvent.type} for non-${expectedType} content`);
+      }
+      if (content.type === "text") {
         if (proxyEvent.contentSignature !== undefined) {
           content.textSignature = proxyEvent.contentSignature;
         }
-        return {
-          type: "text_end",
-          contentIndex: proxyEvent.contentIndex,
-          content: content.text,
-          partial,
-        };
+      } else {
+        content.thinkingSignature = proxyEvent.contentSignature;
       }
-      throw new Error("Received text_end for non-text content");
+      return {
+        type: proxyEvent.type,
+        contentIndex: proxyEvent.contentIndex,
+        content: content.type === "text" ? content.text : content.thinking,
+        partial,
+      };
     }
 
     case "thinking_start":
       partial.content[proxyEvent.contentIndex] = { type: "thinking", thinking: "" };
       return { type: "thinking_start", contentIndex: proxyEvent.contentIndex, partial };
-
-    case "thinking_end": {
-      const content = partial.content[proxyEvent.contentIndex];
-      if (content?.type === "thinking") {
-        content.thinkingSignature = proxyEvent.contentSignature;
-        return {
-          type: "thinking_end",
-          contentIndex: proxyEvent.contentIndex,
-          content: content.thinking,
-          partial,
-        };
-      }
-      throw new Error("Received thinking_end for non-thinking content");
-    }
 
     case "toolcall_start": {
       const content = {

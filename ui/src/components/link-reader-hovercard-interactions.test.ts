@@ -40,6 +40,7 @@ const cardLinks = () => [
   ...document.querySelectorAll<HTMLAnchorElement>(".link-reader-hovercard a[href]"),
 ];
 async function hover(anchor: HTMLAnchorElement) {
+  await Promise.resolve(); // Allow the bridge to mount before dispatching intent.
   anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
   await vi.advanceTimersByTimeAsync(250);
 }
@@ -68,8 +69,9 @@ describe("generic preview portal lifecycle", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-05T10:00:00Z"));
   });
-  afterEach(() => {
+  afterEach(async () => {
     document.body.replaceChildren();
+    await Promise.resolve();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -129,6 +131,7 @@ describe("generic preview portal lifecycle", () => {
       const { anchor, provider } = createLink(ISSUE_HREF);
       const request = vi.fn().mockReturnValue(pending.promise);
       provider.client = { request } as unknown as GatewayBrowserClient;
+      await provider.updateComplete;
       if (trigger === "pointer") {
         anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
         await vi.advanceTimersByTimeAsync(249);
@@ -193,6 +196,7 @@ describe("generic preview portal lifecycle", () => {
         return pending.promise;
       }),
     } as unknown as GatewayBrowserClient;
+    await provider.updateComplete;
     if (dismissal === "focus leave") {
       anchor.focus();
       await vi.advanceTimersByTimeAsync(0);
@@ -285,6 +289,7 @@ describe("generic preview portal lifecycle", () => {
       if (trigger === "pointer") {
         await hover(inner.anchor);
       } else {
+        await inner.provider.updateComplete;
         inner.anchor.focus();
         await vi.advanceTimersByTimeAsync(0);
       }
@@ -327,6 +332,7 @@ describe("generic preview portal lifecycle", () => {
     one.provider.remove();
     const two = createLink("https://github.com/openclaw/openclaw/issues/99816");
     two.provider.client = client;
+    await two.provider.updateComplete;
     const mounted = observeHovercardMounts();
     two.anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
     await vi.advanceTimersByTimeAsync(249);
@@ -522,7 +528,8 @@ describe("generic preview portal lifecycle", () => {
   it.each(["forward", "backward", "outside"])(
     "dismisses keyboard previews on %s exit",
     async (exit) => {
-      const { anchor } = createIssueLink();
+      const { anchor, provider } = createIssueLink();
+      await provider.updateComplete;
       const outside = exit === "outside" ? document.createElement("button") : null;
       if (outside) {
         document.body.append(outside);
@@ -626,6 +633,7 @@ describe("generic preview portal lifecycle", () => {
       pane.append(anchor);
       provider.append(pane);
     }
+    await provider.updateComplete;
     anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
     if (phase === "held") {
       await vi.advanceTimersByTimeAsync(250);

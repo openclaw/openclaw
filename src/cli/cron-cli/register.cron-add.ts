@@ -93,7 +93,7 @@ export function registerCronAddCommand(cron: Command) {
         .argument("[message]", "Agent message when using a positional schedule"),
       "add",
     )
-      .option("--declaration-key <key>", "Idempotent declaration identity key")
+      .option("--declaration-key <key>", "Key to avoid duplicate declarations")
       .option("--disabled", "Create job disabled", false)
       .action(
         async (

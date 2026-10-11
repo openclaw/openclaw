@@ -62,6 +62,7 @@ import {
 } from "./attempt-stage-timing.js";
 import { installHistoryImagePruneContextTransform } from "./history-image-prune.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
+import { checkMidTurnPrecheck } from "./preemptive-compaction.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 type PreparedProviderRuntimePluginHandle = ProviderRuntimePluginHandle & {
@@ -198,28 +199,6 @@ export function installEmbeddedAttemptContextGuards(input: {
   });
   let pendingMidTurnPrecheckRequest: MidTurnPrecheckRequest | null = null;
   let afterTurnCheckpoint: number | null = null;
-  const midTurnPrecheckOptions =
-    attempt.config?.agents?.defaults?.compaction?.midTurnPrecheck?.enabled === true
-      ? {
-          midTurnPrecheck: {
-            enabled: true,
-            getReplay: () => ({
-              model: attempt.model,
-              sessionId: attempt.sessionId,
-              authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
-              enabled: input.getCompactionReplayEnabled(),
-            }),
-            contextTokenBudget,
-            reserveTokens: () => settingsManager.getCompactionReserveTokens(),
-            toolResultMaxChars,
-            getSystemPrompt: input.getSystemPrompt,
-            getPrePromptMessageCount: input.getPrePromptMessageCount,
-            onMidTurnPrecheck: (request: MidTurnPrecheckRequest) => {
-              pendingMidTurnPrecheckRequest = request;
-            },
-          },
-        }
-      : {};
 
   const cacheTtlCompat: ModelCompatConfig | undefined = attempt.model.compat;
   const contextPruning = attempt.config?.agents?.defaults?.contextPruning;
@@ -333,7 +312,6 @@ export function installEmbeddedAttemptContextGuards(input: {
   const removeToolResultGuard = installToolResultContextGuard({
     agent: activeSession.agent,
     contextWindowTokens: contextTokenBudget,
-    ...midTurnPrecheckOptions,
   });
 
   const removeHistoryImagePruneContextTransform = installHistoryImagePruneContextTransform(
@@ -379,6 +357,28 @@ export function installEmbeddedAttemptContextGuards(input: {
   };
 
   return {
+    checkMidTurnPrecheck: (
+      request: Pick<Parameters<typeof checkMidTurnPrecheck>[0], "context" | "previousRequest">,
+    ) => {
+      if (attempt.config?.agents?.defaults?.compaction?.midTurnPrecheck?.enabled !== true) {
+        return;
+      }
+      checkMidTurnPrecheck({
+        ...request,
+        contextTokenBudget,
+        reserveTokens: settingsManager.getCompactionReserveTokens(),
+        toolResultMaxChars,
+        replay: {
+          model: attempt.model,
+          sessionId: attempt.sessionId,
+          authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
+          enabled: input.getCompactionReplayEnabled(),
+        },
+        onPrecheck: (precheck) => {
+          pendingMidTurnPrecheckRequest = precheck;
+        },
+      });
+    },
     getAfterTurnCheckpoint: () => afterTurnCheckpoint,
     recordCacheTouch: (startedAt: number) => {
       lastCacheTouchAt = startedAt;

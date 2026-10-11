@@ -195,6 +195,8 @@ export type DreamNarrativeOutcome =
   | { status: "completed" | "pending" | "skipped" }
   | { status: "degraded"; error: string };
 
+export type PreparedDreamNarrative = Pick<DreamNarrativeRequest, "data" | "model" | "timezone">;
+
 async function generateAndAppendDreamNarrative(
   params: DreamNarrativeRequest,
 ): Promise<DreamNarrativeOutcome> {
@@ -272,9 +274,8 @@ async function generateAndAppendDreamNarrative(
 }
 
 /**
- * Single entry point for every dreaming phase. Cron sweeps detach so a stalled diary run
- * cannot hold the sweep open; heartbeat sweeps await so the phase reports the outcome.
- * A sweep without an owning agent still runs; only the subagent narrative is unavailable.
+ * Cron sweeps return before inference, but their service retains completion and
+ * publication until settlement. Heartbeat callers await the same work.
  */
 export async function runDreamNarrative(
   params: Omit<DreamNarrativeRequest, "agentId"> & { agentId?: string },

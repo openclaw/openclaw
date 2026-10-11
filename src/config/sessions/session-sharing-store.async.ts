@@ -336,8 +336,8 @@ export async function runSessionCollaborationWrite<
               },
             );
             try {
-              await worker.run(async (operation) => {
-                if (prepare) {
+              if (prepare) {
+                await worker.run(async (operation) => {
                   const prepared = await prepare(
                     {
                       async execute(prepareCommand, executeOptions) {
@@ -357,12 +357,17 @@ export async function runSessionCollaborationWrite<
                   if (prepared) {
                     capturedCommand.input = structuredClone({ ...prepared, scope: commandScope });
                   }
-                }
+                  assertQueuedCurrent();
+                  mutationDispatched = capturedCommand.type !== "category.prepare";
+                  await operation.execute(capturedCommand);
+                  resultReceived = true;
+                }, assertQueuedCurrent);
+              } else {
                 assertQueuedCurrent();
                 mutationDispatched = capturedCommand.type !== "category.prepare";
-                await operation.execute(capturedCommand);
+                await worker.execute(capturedCommand, assertQueuedCurrent);
                 resultReceived = true;
-              }, assertQueuedCurrent);
+              }
               if (!publicationState.result) {
                 throw new SqliteWorkerError(
                   "Session collaboration omitted its native commit receipt",

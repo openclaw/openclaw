@@ -75,16 +75,27 @@ export async function resolveAcpSpawnRequesterState(params: {
   requesterAgentId: string;
   ownerAgentId: string;
   ctx: AcpSpawnRequesterContext;
+  assertActive?: () => void;
 }): Promise<AcpSpawnRequesterState> {
   const requesterParsedSession = parseAgentSessionKey(params.parentSessionKey);
   const isSubagentSession =
     Boolean(requesterParsedSession) && isSubagentSessionKey(params.parentSessionKey);
-  const hasActiveSubagentBinding =
+  const [hasActiveSubagentBinding, heartbeatRelayRouteUsable] = await Promise.all([
     isSubagentSession && params.parentSessionKey
-      ? (await listSessionBindingsBySessionAsync(params.parentSessionKey)).some(
-          (record) => record.targetKind === "subagent" && record.status !== "ended",
+      ? listSessionBindingsBySessionAsync(params.parentSessionKey).then((records) =>
+          records.some((record) => record.targetKind === "subagent" && record.status !== "ended"),
         )
-      : false;
+      : false,
+    params.parentSessionKey && params.requesterAgentId
+      ? hasSessionLocalHeartbeatRelayRoute({
+          cfg: params.cfg,
+          parentSessionKey: params.parentSessionKey,
+          requesterAgentId: params.requesterAgentId,
+          assertActive: params.assertActive,
+        })
+      : false,
+  ]);
+  params.assertActive?.();
   const hasThreadContext =
     typeof params.ctx.agentThreadId === "string"
       ? Boolean(normalizeOptionalString(params.ctx.agentThreadId))
@@ -98,14 +109,7 @@ export async function resolveAcpSpawnRequesterState(params: {
       requesterAgentId: params.requesterAgentId,
       sessionKey: params.parentSessionKey,
     }),
-    heartbeatRelayRouteUsable:
-      params.parentSessionKey && params.requesterAgentId
-        ? hasSessionLocalHeartbeatRelayRoute({
-            cfg: params.cfg,
-            parentSessionKey: params.parentSessionKey,
-            requesterAgentId: params.requesterAgentId,
-          })
-        : false,
+    heartbeatRelayRouteUsable,
     origin: resolveRequesterOriginForChild({
       cfg: params.cfg,
       targetAgentId: params.ownerAgentId,

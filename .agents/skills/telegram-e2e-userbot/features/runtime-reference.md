@@ -124,6 +124,15 @@ For a Test Server forum without a prepared fixture, pass `--create-forum` with
 `--scenario` instead of `--chat`: the runner creates a forum and topic, sends
 every scenario message there, deletes the forum before releasing the lease, and
 records `testForum` setup and cleanup in `summary.json`.
+If creation returns no chat ID, cleanup searches the leased account's server
+chats for the exact run-owned title, verifies creator ownership, and deletes the
+match with a group-state read-back. An inconclusive search or deletion retains an
+`uncertain-creation` record with the title, creation timestamp, and tester user
+ID in the summary. Cleanup failure retains the lease state for recovery; do not
+treat an absent ID or an empty search as proof that creation never happened.
+A successful deletion awaiting a fresh read-back is saved separately as
+`deletion-pending-verification`, including its deletion receipt. Retrying cleanup
+only verifies that recorded deletion; it does not delete the group again.
 The direct driver also accepts `send --forum-topic-id <id>`. TDLib 1.8.67 uses
 `topic_id: messageTopicForum` for forum topics; ordinary message threads use
 `messageTopicThread`. Inspect `topicType` and `topicId` on both the sent message

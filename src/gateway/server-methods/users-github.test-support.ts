@@ -1,5 +1,4 @@
 import { vi } from "vitest";
-import { updateUserGitHubConnection } from "../../state/user-github-connections.test-support.js";
 
 const network = vi.hoisted(() => ({
   assertCli: vi.fn(),
@@ -84,38 +83,4 @@ export function resetPersonalGitHubNetwork() {
       stderr: Buffer.alloc(0),
     };
   });
-}
-
-export function expireAuthorization(owner: string) {
-  updateUserGitHubConnection(
-    owner,
-    (current) => {
-      if (current?.pending?.kind !== "device") {
-        throw new Error("Expected pending device authorization");
-      }
-      const expiresAtMs = Date.now() - 1;
-      return {
-        ...current,
-        pending: {
-          ...current.pending,
-          createdAtMs: expiresAtMs - 900000,
-          expiresAtMs,
-          nextPollAtMs: expiresAtMs,
-        },
-      };
-    },
-    () => {},
-  );
-}
-export function expireAccessToken(owner: string) {
-  updateUserGitHubConnection(
-    owner,
-    (current) => {
-      if (current?.selection.kind !== "connected") {
-        throw new Error("Expected connection");
-      }
-      return { ...current, selection: { ...current.selection, accessExpiresAtMs: Date.now() - 1 } };
-    },
-    () => {},
-  );
 }

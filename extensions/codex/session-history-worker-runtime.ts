@@ -64,13 +64,10 @@ export async function projectCodexSettledHistoryInWorker(
   contextReader?: CodexSessionContextReader,
 ): Promise<CodexHistoryReadResult<JsonValue[]>> {
   signal?.throwIfAborted();
-  if (contextReader && !target.sessionTarget) {
-    throw new Error("Actor history requires a captured sessionTarget");
-  }
-  const resolved = resolveCodexHistoryTarget(target);
+  const resolved = await resolveCodexHistoryTarget(target);
   const reader =
     contextReader ??
-    (target.sessionTarget && resolved.kind === "sqlite"
+    (resolved.kind === "sqlite"
       ? captureCodexSessionContextReader({ ...target.sessionTarget, ...resolved.target }, signal)
       : undefined);
   if (reader) {

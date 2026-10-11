@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "Import profiling, CPU and heap profiles, shard timings, and benchmark scripts"
 title: "Test performance and benchmarks"
 read_when:
@@ -316,7 +317,21 @@ cache is warm.
 
 </Accordion>
 
+<a id="workspace-computation" />
+
 <Accordion title="Workspace computation (scripts/bench-workspace-computation.ts)">
+
+Workspace inventory inspection, raw manifest parsing and comparison, and bulk file
+hashing use a bounded computation pool on the Gateway and node. Decoded manifests
+are compared synchronously against typed entries without another inventory copy.
+Independent workspaces can progress while the main thread serves requests. The
+host owns session authority, workspace mutations, Git subprocesses, and durable
+acceptance; cancellation joins outstanding work before cleanup.
+
+Node capture reuses this pool and its compiled manifest program rather than
+starting a process per verification. Each capture has a private workspace, hash
+memo, and limits; the node host owns Git inventory commands. For acceptance and
+recovery ordering, see [session lifecycle](/gateway/cloud-workers/session-lifecycle#accept-a-completed-turn).
 
 Compare workspace inventory, manifest capture, and result preparation against a
 frozen source checkout with its own installed dependencies:

@@ -144,9 +144,10 @@ function ownsStream(item: ChatRenderItem, stream: LiveStream): item is StreamOwn
 }
 
 function sameStreamStructure(previous: LiveStream, next: LiveStream): boolean {
-  const fields = Reflect.ownKeys(previous).filter((field) => field !== "text");
+  const structural = (field: PropertyKey) => field !== "text" && field !== "thinking";
+  const fields = Reflect.ownKeys(previous).filter(structural);
   return (
-    fields.length === Reflect.ownKeys(next).filter((field) => field !== "text").length &&
+    fields.length === Reflect.ownKeys(next).filter(structural).length &&
     fields.every(
       (field) =>
         Object.hasOwn(next, field) &&

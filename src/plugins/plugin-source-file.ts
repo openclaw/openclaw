@@ -89,13 +89,12 @@ function copySmallPluginSourceFile(
 ) {
   const parent = path.dirname(target);
   const parentIdentity = fs.lstatSync(parent, { bigint: true });
-  const assertParent = () =>
+  const assertAdmission = () => {
     assertDirectoryIdentitySync(parent, {
       dev: parentIdentity.dev,
       ino: parentIdentity.ino,
       realPath: parent,
     });
-  const assertSource = () =>
     withPluginSourceFile(source, boundary, (currentFd) => {
       const current = fs.fstatSync(currentFd, { bigint: true });
       const before = pluginSourceStatIdentity(admitted);
@@ -107,9 +106,6 @@ function copySmallPluginSourceFile(
         );
       }
     });
-  const assertAdmission = () => {
-    assertParent();
-    assertSource();
   };
   using copied = createFileSync(target, { mode: 0o600, assertBeforeMutation: assertAdmission });
   const identity = fs.fstatSync(copied.fd, { bigint: true });
@@ -165,8 +161,9 @@ export function copyPluginSourceFile(
       const mode = options.preserveSourceMode
         ? Number(admitted.mode & 0o777n)
         : 0o600 | Number(admitted.mode & 0o100n);
+      // Windows needs this path most: fs-safe skips native copies and path-admission
+      // caching on win32, so guarded clones of every small file stall Gateway startup.
       if (
-        process.platform !== "win32" &&
         admitted.size <= BigInt(SMALL_SOURCE_COPY_BYTES) &&
         !/\.(?:node|so|dylib|dll)$/iu.test(source) &&
         !isPluginNativeDescriptor(fd) &&

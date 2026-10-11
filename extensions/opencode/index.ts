@@ -148,6 +148,15 @@ export default defineSingleProviderPluginEntry({
     ...buildProviderReplayFamilyHooks({ family: "passthrough-gemini" }),
     isModernModelRef: ({ modelId }) => isModernOpencodeModel(modelId),
     resolveThinkingProfile: resolveOpencodeThinkingProfile,
+    classifyFailoverReason: ({ status, errorType, code, errorMessage }) =>
+      status === 403 &&
+      (errorType === "FreeTierError" ||
+        code === "FreeTierError" ||
+        /\bFreeTierError\b|OpenCode's free tier can only be used from within OpenCode/.test(
+          errorMessage,
+        ))
+        ? "model_not_found"
+        : undefined,
     wrapStreamFn: (ctx) => {
       if (!ctx.streamFn) {
         return undefined;

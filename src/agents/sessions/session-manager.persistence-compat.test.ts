@@ -9,11 +9,11 @@ import {
   appendTranscriptMessage,
   loadTranscriptEvents,
   loadTranscriptEventsSync,
-  replaceTranscriptEventsSync,
   resolveSessionTranscriptDatabasePath,
   updateSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";

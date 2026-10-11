@@ -69,7 +69,7 @@ DM the bot or @ mention it in a group channel.
 
 OpenClaw persists accepted Tlon DM and group-chat events before agent dispatch. Pending or retryable turns survive a Gateway restart, and work remains serialized per group channel or direct peer. Stable Urbit message IDs also suppress a redelivered event while its queue record or retained completion record exists.
 
-Delivery is at least once across the queue-to-agent boundary: a crash during handoff can replay a turn. Agent actions that produce external side effects should therefore remain idempotent where practical.
+Delivery is at least once across the queue-to-agent boundary: a crash during handoff can replay a turn. Agent actions that produce external side effects should therefore avoid duplicating those effects on retries where practical.
 
 ## Private/LAN ships
 
@@ -241,7 +241,7 @@ regardless of this flag):
 }
 ```
 
-Auto-accept group invites from an allowlist (fails closed: with `autoAcceptGroupInvites: true` and
+Auto-accept group invites from an allowlist (with `autoAcceptGroupInvites: true` and
 an empty `groupInviteAllowlist`, no non-owner invite is accepted):
 
 ```json5

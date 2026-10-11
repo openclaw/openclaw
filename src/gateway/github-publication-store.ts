@@ -494,15 +494,51 @@ export function deferGitHubPublicationRequests(requestIds: string[]): void {
   );
 }
 
+const sharedGitHubPublicationAuthorityColumns = [
+  "request_id",
+  "idempotency_key",
+  "request_digest",
+  "session_id",
+  "session_key",
+  "agent_id",
+  "worktree_id",
+  "repository_fingerprint",
+  "claim_id",
+  "run_id",
+  "environment_id",
+  "owner_epoch",
+  "placement_generation",
+  "identity_source",
+  "identity_profile_id",
+  "identity_account_id",
+  "identity_login",
+  "status",
+  "gateway_instance_id",
+  "repository",
+  "branch",
+  "base_branch",
+  "source_head_commit",
+  "source_index_tree",
+  "workspace_tree",
+  "head_commit",
+  "pull_request_url",
+  "error_code",
+  "created_at_ms",
+  "updated_at_ms",
+  "reported_at_ms",
+] as const satisfies readonly (keyof Omit<
+  GitHubPublicationRow,
+  "title" | "body" | "next_action"
+>)[];
+
 export function deferGitHubPublicationRequestsInDatabase(
   database: OpenClawStateDatabase,
   requestIds: readonly string[],
-): GitHubPublicationRow[] {
+): void {
   if (requestIds.length === 0) {
-    return [];
+    return;
   }
   const { db } = database;
-  const rows: GitHubPublicationRow[] = [];
   const query = githubPublicationDatabase(db);
   const updatedAtMs = Date.now();
   for (const requestId of requestIds) {
@@ -522,15 +558,13 @@ export function deferGitHubPublicationRequestsInDatabase(
         })
         .where("request_id", "=", requestId)
         .where("status", "in", ["requested", "publishing"])
-        .returningAll(),
+        .returning(sharedGitHubPublicationAuthorityColumns),
     ).rows;
     for (const row of changed) {
-      rows.push(row);
       githubPublicationReceipts.stageRow(db, "shared", row);
       deferSharedGitHubPublicationChanged(db, row);
     }
   }
-  return rows;
 }
 
 export function isGitHubPublicationExecutionOwner(

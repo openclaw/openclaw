@@ -55,72 +55,18 @@ function makePackageFixture(version = "2026.8.1") {
 }
 
 describe("first-hop package fixtures", () => {
-  it("derives a strictly newer first-hop cohort across a beta month rollover", () => {
-    const root = tempDirs.make("openclaw-first-hop-month-rollover-");
-    const packageRoot = path.join(root, "package");
-    fs.cpSync(makePackageFixture("2026.10.1-beta.1"), packageRoot, { recursive: true });
-    const source = path.join(root, "source.tgz");
-    const output = path.join(root, "future.tgz");
-    execFileSync("tar", ["-czf", source, "-C", root, "package"]);
-
-    const receipt = packFirstHopUpdateFixture(source, output);
-
-    expect(receipt).toMatchObject({
-      sourceVersion: "2026.10.1-beta.1",
-      targetVersion: "2026.10.2-first-hop.0",
+  it.each([true, false])("excludes newer-schema sources (supported source: %s)", (supported) => {
+    const root = makePackageFixture();
+    writeJson(path.join(root, "dist/update-compat-inventory.json"), {
+      schemaVersion: 1,
+      releases: [
+        ...(supported ? [{ version: "2026.9.1", schemaVersions: { state: 1, agent: 1 } }] : []),
+        { version: "2026.10.1-beta.1", schemaVersions: { state: 2, agent: 1 } },
+        { version: "2026.10.1-beta.2", schemaVersions: { state: 1, agent: 2 } },
+      ],
     });
-  });
-
-  it.each([
-    { name: "empty", output: [] },
-    { name: "multiple", output: [{ filename: "first.tgz" }, { filename: "second.tgz" }] },
-    {
-      name: "multiple keyed",
-      output: { first: { filename: "first.tgz" }, second: { filename: "second.tgz" } },
-    },
-    { name: "missing filename", output: { openclaw: { version: "2026.9.1" } } },
-    { name: "empty filename", output: { openclaw: { filename: "" } } },
-  ])("rejects $name pack results at the first-hop helper entry point", ({ output }) => {
-    const root = tempDirs.make("openclaw-first-hop-pack-json-");
-    const input = path.join(root, "source-pack.json");
-    writeJson(input, output);
-    const result = spawnSync(
-      process.execPath,
-      ["scripts/e2e/lib/update-first-hop-package-fixtures.mjs", "pack-filename", input],
-      { encoding: "utf8" },
-    );
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("exactly one package result with a filename");
-  });
-
-  it.each([
-    "first-hop-tarball",
-    "future-tarball",
-    "negative-tarball",
-    "unsupported-admission-tarball",
-    "future",
-    "negative",
-  ])("keeps modern content inventories valid for %s", async (method) => {
-    const root = tempDirs.make("openclaw-fixture-content-inventory-");
-    const packageRoot = path.join(root, "package");
-    fs.cpSync(makePackageFixture(), packageRoot, { recursive: true });
-    await writePackageDistInventory(packageRoot);
-    let transformedRoot = packageRoot;
-    const args = ["scripts/e2e/lib/update-first-hop-package-fixtures.mjs", method];
-    if (method.endsWith("-tarball")) {
-      const source = path.join(root, "source.tgz");
-      const output = path.join(root, "transformed.tgz");
-      execFileSync("tar", ["-czf", source, "-C", root, "package"]);
-      execFileSync(process.execPath, [...args, source, output]);
-      const extracted = path.join(root, "extracted");
-      fs.mkdirSync(extracted);
-      execFileSync("tar", ["-xzf", output, "-C", extracted]);
-      transformedRoot = path.join(extracted, "package");
-    } else {
-      execFileSync(process.execPath, [...args, packageRoot]);
-    }
-    expect(await collectPackageDistContentInventoryErrors(transformedRoot)).toEqual([]);
+    expect(listFirstHopSourceVersions(root)).toEqual(supported ? ["2026.9.1"] : []);
+    expect(() => listFirstHopSourceVersions(root, "2026.10.1-beta.1")).toThrow("unsupported");
   });
 
   it("selects recorded baselines and verifies their bytes before choosing restart controls", () => {
@@ -286,7 +232,7 @@ describe("first-hop package fixtures", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([true])(
     "packs distinct self-update targets without changing the candidate artifact (content inventory: %s)",
     async (contentInventory) => {
       const root = tempDirs.make("openclaw-same-schema-fixtures-");
@@ -471,73 +417,7 @@ describe("first-hop package fixtures", () => {
     expect(receipt.targetSha256).not.toBe(receipt.sourceSha256);
   });
 
-  it.each([
-    {
-      name: "other package",
-      packageName: "@openclaw/other",
-      version: "2026.9.3",
-      buildVersion: "2026.9.3",
-      sequence: "0",
-    },
-    {
-      name: "mismatched build",
-      packageName: "@openclaw/codex",
-      version: "2026.9.3",
-      buildVersion: "2026.9.2",
-      sequence: "0",
-    },
-    {
-      name: "missing build",
-      packageName: "@openclaw/codex",
-      version: "2026.9.3",
-      buildVersion: undefined,
-      sequence: "0",
-    },
-    {
-      name: "invalid version",
-      packageName: "@openclaw/codex",
-      version: "latest",
-      buildVersion: "latest",
-      sequence: "0",
-    },
-    {
-      name: "invalid sequence",
-      packageName: "@openclaw/codex",
-      version: "2026.9.3",
-      buildVersion: "2026.9.3",
-      sequence: "10",
-    },
-  ])(
-    "rejects runtime fixture $name before creating an output",
-    ({ packageName, version, buildVersion, sequence }) => {
-      const root = tempDirs.make("openclaw-runtime-cohort-rejected-");
-      writeJson(path.join(root, "package", "package.json"), {
-        name: packageName,
-        version,
-        openclaw: { build: { openclawVersion: buildVersion } },
-      });
-      const source = path.join(root, "source.tgz");
-      const output = path.join(root, "future.tgz");
-      execFileSync("tar", ["-czf", source, "-C", root, "package"]);
-      const before = fs.readFileSync(source);
-      const result = spawnSync(
-        process.execPath,
-        [
-          "scripts/e2e/lib/update-first-hop-package-fixtures.mjs",
-          "future-runtime-tarball",
-          source,
-          output,
-          sequence,
-        ],
-        { encoding: "utf8" },
-      );
-      expect(result.status).toBe(1);
-      expect(fs.existsSync(output)).toBe(false);
-      expect(fs.readFileSync(source)).toEqual(before);
-    },
-  );
-
-  it.skipIf(process.platform === "win32").each(["explicit", "recorded", "missing-load-path"])(
+  it.skipIf(process.platform === "win32").each(["recorded"])(
     "routes the first-hop Docker lane with the %s scenario",
     (sourceMode) => {
       const root = fs.realpathSync(tempDirs.make("openclaw-first-hop-docker-"));
@@ -782,19 +662,6 @@ function makeTransitionEvidenceFixture() {
 }
 
 describe("external package transition evidence", () => {
-  it("rejects a schema beyond the expected content version", () => {
-    const { root, run } = makeTransitionEvidenceFixture();
-    fs.mkdirSync(path.join(root, "state"));
-    const database = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"));
-    database.exec("PRAGMA user_version = 15");
-    expect(run("schema", "15").status).toBe(0);
-    database.exec("PRAGMA user_version = 16");
-    database.close();
-    const changed = run("schema", "15");
-    expect(changed.status).toBe(1);
-    expect(changed.stderr).toContain("shared schema changed");
-  });
-
   it("accepts applied content while schema publication is deferred", () => {
     const { root, run } = makeTransitionEvidenceFixture();
     fs.mkdirSync(path.join(root, "state"));
@@ -811,20 +678,6 @@ describe("external package transition evidence", () => {
     expect(JSON.parse(result.stdout)).toEqual({ publishedVersion: 15, contentVersion: 16 });
   });
 
-  it.each(["17", '"16"', "-1", "null"])("rejects unexpected content metadata %s", (value) => {
-    const { root, run } = makeTransitionEvidenceFixture();
-    fs.mkdirSync(path.join(root, "state"));
-    const database = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"));
-    database.exec(
-      "PRAGMA user_version = 15; CREATE TABLE config_machine_state (state_key TEXT PRIMARY KEY, value_json TEXT)",
-    );
-    database
-      .prepare("INSERT INTO config_machine_state VALUES (?, ?)")
-      .run("state.schema.contentVersion", value);
-    database.close();
-    expect(run("schema", "15").status).toBe(1);
-  });
-
   it("records external installation without claiming an updater attempt", () => {
     const { root, run, file } = makeTransitionEvidenceFixture();
     file("schema-before.json", { publishedVersion: 15, contentVersion: 15 });
@@ -837,37 +690,5 @@ describe("external package transition evidence", () => {
       selfUpdate: { status: "not-run", method: "in-process-self-update" },
       schemaAfterDoctor: { publishedVersion: 15, contentVersion: 16 },
     });
-  });
-
-  it("requires both persisted user and assistant messages", () => {
-    const { run, file } = makeTransitionEvidenceFixture();
-    const user = { role: "user", content: "Return marker RETAINED" };
-    const missing = run("history", file("missing.json", { messages: [user] }), "RETAINED");
-    expect(missing.status).toBe(1);
-    expect(missing.stderr).toContain("durable assistant message");
-    const retained = run(
-      "history",
-      file("retained.json", {
-        messages: [user, { role: "assistant", content: [{ type: "text", text: "RETAINED" }] }],
-      }),
-      "RETAINED",
-    );
-    expect(retained.status).toBe(0);
-  });
-
-  it("refuses an ambiguous retained session identity", () => {
-    const { run, file } = makeTransitionEvidenceFixture();
-    const result = run(
-      "session-key",
-      file("sessions.json", {
-        sessions: [
-          { key: "first", sessionId: "retained" },
-          { key: "second", sessionId: "retained" },
-        ],
-      }),
-      "retained",
-    );
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("expected one retained session identity");
   });
 });

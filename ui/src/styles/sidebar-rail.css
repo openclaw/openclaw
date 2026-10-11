@@ -1,0 +1,262 @@
+.sidebar.sidebar--rail {
+  flex-direction: row;
+}
+
+.sidebar--rail .sidebar-shell {
+  min-width: 0;
+  overflow: hidden;
+  --sidebar-pad-x: 8px;
+}
+
+.sidebar-rail {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 var(--shell-nav-rail-width, 52px);
+  min-width: 0;
+  min-height: 0;
+  padding: 8px 4px;
+  gap: 12px;
+  border-inline-end: 1px solid var(--border);
+}
+
+.sidebar-rail__views,
+.sidebar-rail__bottom,
+.sidebar-rail__pins {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.sidebar-rail__pins {
+  flex: 1;
+  min-height: 32px;
+  overflow: auto;
+  scrollbar-width: none;
+}
+
+.sidebar-rail__button,
+.sidebar-rail .nav-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  min-height: 36px;
+  padding: 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.sidebar-rail__button:hover,
+.sidebar-rail__button[aria-pressed="true"],
+.sidebar-rail__button[aria-current="page"] {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.sidebar-rail__button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.sidebar-rail__button svg {
+  width: 20px;
+  height: 20px;
+}
+
+.sidebar-rail .nav-item__text,
+.sidebar-rail .sidebar-identity-card__text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.sidebar-rail .sidebar-footer-bar.sidebar-footer-bar--one-action {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  width: 36px;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+}
+
+.sidebar-rail .sidebar-footer-actions {
+  position: static;
+  inset: auto;
+  height: auto;
+  transform: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sidebar-rail .sidebar-identity-card {
+  flex: 0 0 36px;
+  justify-content: center;
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  padding: 0;
+}
+
+.sidebar-rail .sidebar-identity-card[data-connection-status] {
+  outline: 1px solid var(--warn);
+  outline-offset: -2px;
+}
+
+.sidebar-rail .sidebar-brand__icon {
+  width: 36px;
+  height: 36px;
+}
+
+.sidebar-footer-bar__home {
+  position: relative;
+}
+
+/* Home keeps its centered activity glyph; compact badges never move the rail. */
+.sidebar-footer-bar__home .session-row-badges {
+  position: absolute;
+  inset-block-end: 0;
+  inset-inline-end: 0;
+  gap: 2px;
+  padding: 1px;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.sidebar-footer-bar__home .session-row-badge svg {
+  width: 10px;
+  height: 10px;
+}
+
+/* The tooltip and accessible label retain the full outbox count. */
+.sidebar-footer-bar__home .session-row-badge--attention > span {
+  display: none;
+}
+
+/* Reordering owns a separate hit area below the shortcut, never its glyph. */
+.sidebar-rail__pin {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  width: 36px;
+  min-height: 60px;
+  flex: 0 0 auto;
+}
+
+.sidebar-rail .sidebar-rail__pin > .sidebar-reorder-menu {
+  position: static;
+}
+
+.sidebar-rail__pin .sidebar-reorder-trigger {
+  width: 36px;
+  height: 24px;
+  min-height: 24px;
+  flex: none;
+  padding: 0;
+  opacity: 0;
+}
+
+.sidebar-rail__pin:hover .sidebar-reorder-trigger,
+.sidebar-rail__pin:focus-within .sidebar-reorder-trigger {
+  opacity: 1;
+  background: var(--bg-elevated);
+}
+
+.sidebar-rail .sidebar-zone-entry .sidebar-reorder-menu,
+.sidebar-pages .sidebar-reorder-menu {
+  display: none;
+}
+
+.sidebar-pages__entry {
+  display: flex;
+  align-items: center;
+}
+
+.sidebar-pages__entry > .sidebar-zone-entry {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-pages__pin {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  opacity: 0;
+}
+
+.sidebar-pages__pin svg {
+  width: 14px;
+  height: 14px;
+}
+
+.sidebar-pages__entry:hover .sidebar-pages__pin,
+.sidebar-online__row:hover .sidebar-pages__pin,
+.sidebar-pages__pin:focus-visible {
+  opacity: 1;
+}
+
+.sidebar-pages__heading {
+  padding: 6px 8px;
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+}
+
+.sidebar-navigation-scope {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+html:is(.openclaw-native-desktop, .openclaw-native-macos)
+  .shell:not(.shell--mobile-nav)
+  .sidebar-rail {
+  padding-top: var(--openclaw-native-titlebar-height, 52px);
+}
+
+@media (hover: none), (pointer: coarse) {
+  .sidebar-rail {
+    flex-basis: 52px;
+  }
+
+  .sidebar-rail__button {
+    width: 44px;
+    height: 44px;
+  }
+
+  .sidebar-rail__pin .sidebar-reorder-trigger {
+    opacity: 1;
+  }
+
+  .sidebar-pages__pin {
+    opacity: 1;
+    height: 44px;
+  }
+}
+
+.shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) {
+  --shell-nav-width: var(--shell-nav-rail-width);
+  grid-template-columns: var(--shell-nav-width) minmax(0, 1fr);
+}
+
+.shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) .shell-nav {
+  display: flex;
+}
+
+.shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) .sidebar-shell {
+  display: none;
+}

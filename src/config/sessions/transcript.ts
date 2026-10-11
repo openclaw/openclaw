@@ -15,6 +15,7 @@ import {
   extractAssistantPhaseText,
   extractFirstTextBlock,
 } from "../../shared/chat-message-content.js";
+import type { SkillWorkshopChangeNotice } from "../../shared/skill-workshop-change-notice.js";
 import {
   CRON_DIRECT_DELIVERY_CONTEXT_KIND,
   OPENCLAW_DELIVERY_MIRROR_MODEL,
@@ -105,7 +106,8 @@ type InternalSessionTranscriptDeliveryMirror =
     }
   | {
       kind: typeof CRON_DIRECT_DELIVERY_CONTEXT_KIND;
-    };
+    }
+  | SkillWorkshopChangeNotice;
 
 export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
   role: "assistant";
