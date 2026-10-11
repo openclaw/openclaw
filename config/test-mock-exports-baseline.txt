@@ -10000,7 +10000,6 @@
 ["ui/src/app/router-outlet-chat.test.ts","../pages/chat/chat-page.ts","0c0b0e4ed29e9fcbd4b068521e045fa1b22727a9e3cdb000c832517add0b1b19",1]
 ["ui/src/app/service-worker-refresh.runtime.test.ts","./stale-chunk-reload.ts","a10a2db3e4d39b687450c377b506abab507e7e1c7c28ad520aa993277f330b7a",1]
 ["ui/src/app/update-failure-report.test.ts","../components/confirm-dialog.ts","491b4acc036b2467c91641f99c83cbddad6706dde8475fdfbd1b562606a5ae89",1]
-["ui/src/app/web-push.test.ts","./web-push.runtime.ts","51267e04eae4fd74291fd132874122aa97243dd7948dbd57ae266b7556dd3c60",1]
 ["ui/src/components/assistant-panel.test.ts","./home-session.runtime.ts","3512d1bf20dbfc4e462ac3729de2780f066179f22fd6371eb101865c315b0ae0",1]
 ["ui/src/components/markdown-mermaid.test.ts","../lib/clipboard.ts","83722cd240abb045bee1208cd4d94851677fedf613ddf7e4ce9ac1c3c65143a9",1]
 ["ui/src/components/menu-surface.test.ts","../app/native-browser-host.ts","ede6e031c1bb7d091007931f2ae2fc1e4d5825a5173608e489d7f1e6f7e95dd6",1]

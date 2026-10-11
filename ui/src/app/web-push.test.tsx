@@ -175,6 +175,7 @@ describe("web push Gateway reconciliation", () => {
 
   it("makes actions unavailable when the lazy runtime fails to load", async () => {
     vi.resetModules();
+    // mock-isolation: Reject the lazy import before any real Web Push runtime can execute.
     vi.doMock("./web-push.runtime.ts", () => {
       throw new Error("Web Push runtime unavailable");
     });

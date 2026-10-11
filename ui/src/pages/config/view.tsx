@@ -422,7 +422,7 @@ export function Config(props: ConfigProps) {
             state().rawAvailable ? (
               <div class="config-content-callout">
                 <div class="callout info">
-                  <UnsupportedPathSummary paths={state().unsupportedActivePaths} />
+                  <UnsupportedPathSummary paths={state().unsupportedActivePaths} />{" "}
                   <button
                     type="button"
                     class="btn btn--sm"
