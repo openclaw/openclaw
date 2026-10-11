@@ -15,7 +15,7 @@ import type { OpenClawStateDatabase } from "../../../state/openclaw-state-db-con
 import {
   matchesSubagentChildSessionOwner,
   resolveSubagentChildAgentId,
-  resolveSubagentChildAuthorityError,
+  resolveSubagentChildAuthority,
 } from "../registry/subagent-child-owner-match.js";
 import {
   consumeSubagentPauseNotice,
@@ -92,7 +92,7 @@ export function retiredCancellationEndedAt(
 ): number | undefined {
   const endedAt = subagent.execution.endedAt;
   if (
-    resolveSubagentChildAuthorityError(subagent) ||
+    resolveSubagentChildAuthority(subagent).status === "mismatch" ||
     subagent.execution.status !== "terminal" ||
     subagent.execution.outcome?.status !== "error" ||
     subagent.endedReason !== SUBAGENT_ENDED_REASON_KILLED ||

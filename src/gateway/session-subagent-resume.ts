@@ -1,4 +1,5 @@
 /** Exact parent-owned paused-task binding for explicit model-tool resume admission. */
+import { resolveSubagentChildAuthority } from "../agents/subagents/registry/subagent-child-owner-match.js";
 import {
   ensureSubagentControllerOwnsRun,
   resolveSubagentController,
@@ -55,15 +56,17 @@ function requirePausedChild(cfg: OpenClawConfig, caller: TrustedAgentToolCaller,
     key,
     (candidate) => candidate.pauseReason === "sessions_yield",
   );
+  const authority = entry && resolveSubagentChildAuthority(entry);
   if (
     !entry ||
+    authority?.status === "mismatch" ||
     typeof entry.execution.endedAt !== "number" ||
     entry.killIntent ||
     entry.killReconciliation ||
     entry.terminalOwner ||
     entry.suppressAnnounceReason ||
     entry.cleanupCompletedAt !== undefined ||
-    entry.execution.suppressSessionEffects
+    (entry.execution.suppressSessionEffects && authority?.status !== "legacy-unverified")
   ) {
     throw new Error(
       "Task resume requires a currently paused native child; inspect subagents first.",
@@ -94,8 +97,10 @@ export function bindParentSubagentResume(params: {
   }
   const entry = requirePausedChild(params.cfg, params.caller, params.childSessionKey);
   if (
-    entry.childSessionIdentity?.sessionId !== params.childSessionId ||
-    entry.childSessionIdentity.lifecycleRevision !== params.childLifecycleRevision
+    resolveSubagentChildAuthority(entry, {
+      sessionId: params.childSessionId,
+      lifecycleRevision: params.childLifecycleRevision,
+    }).status === "mismatch"
   ) {
     throw new Error(
       "Paused child session incarnation changed or is unresolved; inspect subagents again.",
@@ -127,8 +132,10 @@ export function assertParentSubagentResumeCurrent(params: {
     params.sessionKey !== resume.childSessionKey ||
     params.sessionId !== resume.childSessionId ||
     params.sessionLifecycleRevision !== resume.childLifecycleRevision ||
-    entry.childSessionIdentity?.sessionId !== resume.childSessionId ||
-    entry.childSessionIdentity.lifecycleRevision !== resume.childLifecycleRevision ||
+    resolveSubagentChildAuthority(entry, {
+      sessionId: resume.childSessionId,
+      lifecycleRevision: resume.childLifecycleRevision,
+    }).status === "mismatch" ||
     entry.runId !== resume.previousRunId ||
     (entry.taskRunId ?? entry.runId) !== resume.taskRunId ||
     entry.generation !== resume.generation ||

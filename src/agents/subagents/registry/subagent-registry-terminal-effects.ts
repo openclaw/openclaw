@@ -5,7 +5,7 @@ import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-e
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { retireSessionMcpRuntime } from "../../agent-bundle-mcp-tools.js";
 import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
-import { resolveSubagentChildAgentId } from "./subagent-child-owner-match.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import {
   SUBAGENT_ENDED_REASON_KILLED,
   type SubagentLifecycleEndedReason,
@@ -43,7 +43,7 @@ export async function completeTerminalEffects(
   const { completeParams, completionReason, mutated } = args;
   let terminalGeneration = args.terminalGeneration;
   let entry = args.entry;
-  if (!resolveSubagentChildAgentId(entry)) {
+  if (resolveSubagentChildAuthority(entry).status === "mismatch") {
     return;
   }
   let { sessionSuperseded, suppressSessionEffects } = args;

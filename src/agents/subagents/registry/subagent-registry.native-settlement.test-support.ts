@@ -19,12 +19,18 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function registerQueuedCollectorLaunchSettlementTest({
   getRegistry,
+  mocks,
 }: {
   getRegistry: () => SubagentRegistryHarness;
+  mocks: Pick<ReturnType<typeof createSubagentRegistryMockState>, "entries">;
 }): void {
   it("keeps an in-flight queued collector pending until launch cleanup settles", async () => {
     const mod = getRegistry();
     const runId = "run-collector-launch-kill";
+    mocks.entries["agent:main:subagent:launch-kill"] = createSessionEntry({
+      sessionId: "session-launch-kill",
+      lifecycleRevision: "revision-launch-kill",
+    });
     await mod.addSubagentRunForTests({
       runId,
       childSessionKey: "agent:main:subagent:launch-kill",

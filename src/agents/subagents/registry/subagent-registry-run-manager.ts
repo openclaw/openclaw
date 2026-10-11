@@ -13,7 +13,10 @@ import {
   updateSwarmCollectorCompletion,
 } from "../swarm/swarm-collector.js";
 import { holdQueuedSwarmRun, isSwarmRunActive } from "../swarm/swarm-scheduler.js";
-import { resolveSubagentChildAuthorityError } from "./subagent-child-owner-match.js";
+import {
+  resolveSubagentChildAuthority,
+  warnLegacySubagentAuthority,
+} from "./subagent-child-owner-match.js";
 import { matchesSubagentKillIntent } from "./subagent-control-kill-intent.js";
 import {
   persistSubagentAbortedLastRun,
@@ -45,15 +48,16 @@ const log = createSubsystemLogger("agents/subagent-registry");
 class SubagentRunManager extends SubagentLaunchManager {
   readonly releaseSubagentRun = async (runId: string): Promise<void> => {
     const selected = this.options.runs.get(runId);
-    if (!selected || resolveSubagentChildAuthorityError(selected)) {
+    if (!selected || resolveSubagentChildAuthority(selected).status === "mismatch") {
       return;
     }
+    warnLegacySubagentAuthority(selected, log.warn);
     const entry = await mutateSubagentRuns(
       [runId],
       (rows) => {
         const current = rows.get(runId);
         return current &&
-          !resolveSubagentChildAuthorityError(current) &&
+          resolveSubagentChildAuthority(current).status !== "mismatch" &&
           isSameSubagentRunOwner(current, selected)
           ? { value: current, postimages: new Map([[runId, null]]) }
           : { value: undefined };
@@ -69,6 +73,7 @@ class SubagentRunManager extends SubagentLaunchManager {
       void safeRemoveAttachmentsDir(entry);
     }
     const releasedSessionStillUnowned = () =>
+      resolveSubagentChildAuthority(entry).status === "verified" &&
       !Array.from(
         this.options.getRunsForChildSession(entry.childSessionKey, entry.childAgentId),
       ).some((candidate) => !isSameSubagentRunOwner(candidate, entry));
@@ -118,7 +123,7 @@ class SubagentRunManager extends SubagentLaunchManager {
         if (
           !runId ||
           !entry ||
-          resolveSubagentChildAuthorityError(entry) ||
+          resolveSubagentChildAuthority(entry).status !== "verified" ||
           !isSameSubagentRunOwner(entry, claimParams.expected) ||
           entry.killReconciliation ||
           entry.killIntent ||
@@ -153,7 +158,7 @@ class SubagentRunManager extends SubagentLaunchManager {
         if (
           !runId ||
           !entry ||
-          resolveSubagentChildAuthorityError(entry) ||
+          resolveSubagentChildAuthority(entry).status !== "verified" ||
           !isSameSubagentRunOwner(entry, releaseParams.expected) ||
           !claim ||
           !matchesSubagentKillIntent(claim, releaseParams.claim)
@@ -206,7 +211,9 @@ class SubagentRunManager extends SubagentLaunchManager {
     const selected = new Map(
       [...runIds].flatMap((id) => {
         const entry = this.options.runs.get(id);
-        return entry && !resolveSubagentChildAuthorityError(entry) ? [[id, entry] as const] : [];
+        return entry && resolveSubagentChildAuthority(entry).status === "verified"
+          ? [[id, entry] as const]
+          : [];
       }),
     );
     let published = false;
@@ -290,7 +297,7 @@ class SubagentRunManager extends SubagentLaunchManager {
             const postimages = new Map<string, SubagentRunRecord | null>();
             for (const runId of runIds) {
               const current = rows.get(runId);
-              if (!current || resolveSubagentChildAuthorityError(current)) {
+              if (!current || resolveSubagentChildAuthority(current).status !== "verified") {
                 continue;
               }
               const entry = structuredClone(current);

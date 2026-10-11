@@ -8,6 +8,8 @@ import { loadSessionEntryByKey } from "../announce/subagent-announce-delivery.ru
 import {
   matchesSubagentChildSessionOwner,
   resolveSubagentChildAgentId,
+  resolveSubagentChildAuthority,
+  warnLegacySubagentAuthority,
 } from "./subagent-child-owner-match.js";
 import {
   ensureDeliveryState,
@@ -122,10 +124,11 @@ export const startSubagentAnnounceCleanupFlow = (
 ): boolean => {
   const params = context.options;
   const publishedEntry = getCurrentSubagentRunOwner(params.runs, observedEntry);
-  if (!publishedEntry || !resolveSubagentChildAgentId(publishedEntry)) {
+  if (!publishedEntry || resolveSubagentChildAuthority(publishedEntry).status === "mismatch") {
     return false;
   }
   let entry = publishedEntry;
+  warnLegacySubagentAuthority(entry, params.warn);
   let runId = entry.runId;
   const runtimeKey = getSubagentRunRuntimeKey(observedEntry);
   if (entry.killReconciliation) {
@@ -264,7 +267,10 @@ export const startSubagentAnnounceCleanupFlow = (
         const canDelete = await prepareChildSessionEffects();
         if (canDelete && !currentSession) {
           await suppressChildSessionEffects();
-        } else if (canDelete && (!sessionId || !lifecycleRevision)) {
+        } else if (
+          canDelete &&
+          resolveSubagentChildAuthority(entry, currentSession).status !== "verified"
+        ) {
           // Without both lifecycle identities, key-only deletion could remove
           // a successor that reused this child session after cleanup yielded.
           await suppressChildSessionEffects();

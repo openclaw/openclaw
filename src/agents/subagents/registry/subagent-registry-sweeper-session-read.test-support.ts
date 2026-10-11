@@ -37,58 +37,51 @@ export function registerSubagentSweepRetainedAuthorityTests(
   recoverRow: ReturnType<typeof vi.fn>,
   killSessionEntry: { current: Awaited<ReturnType<typeof loadSubagentSessionEntry>> },
 ) {
-  it.each(["owner", "incarnation"] as const)(
-    "retains unresolved child %s across recovery, archival, collector, and delivery cleanup",
-    async (missing) => {
-      recoverRow.mockResolvedValue({ status: "ignored" });
-      const harness = createHarness({});
-      harness.runs.clear();
-      const now = Date.now();
-      const records = [
-        run(),
-        { ...run(), execution: { status: "interrupted" as const } },
-        archivedRun(),
-        archivedRun({
-          collect: true,
-          groupId: "retained-group",
-          collectorCompletion: { status: "done" },
-        }),
-        archivedRun({
-          archiveAtMs: undefined,
-          spawnMode: "session",
-          cleanupCompletedAt: now - 10 * 60_000,
-        }),
-        archivedRun({
-          delivery: {
-            status: "suspended",
-            suspendedReason: "expiry",
-            suspendedAt: now - 8 * 24 * 60 * 60_000,
-          },
-        }),
-      ];
-      for (const [index, entry] of records.entries()) {
-        entry.runId = `unresolved-${index}`;
-        if (missing === "owner") {
-          entry.childSessionKey = "global";
-          entry.childAgentId = undefined;
-        } else {
-          entry.childSessionIdentity = undefined;
-        }
-        harness.runs.set(entry.runId, entry);
-      }
-      const before = structuredClone(harness.runs);
+  it("retains unresolved child owner across recovery, archival, collector, and delivery cleanup", async () => {
+    recoverRow.mockResolvedValue({ status: "ignored" });
+    const harness = createHarness({});
+    harness.runs.clear();
+    const now = Date.now();
+    const records = [
+      run(),
+      { ...run(), execution: { status: "interrupted" as const } },
+      archivedRun(),
+      archivedRun({
+        collect: true,
+        groupId: "retained-group",
+        collectorCompletion: { status: "done" },
+      }),
+      archivedRun({
+        archiveAtMs: undefined,
+        spawnMode: "session",
+        cleanupCompletedAt: now - 10 * 60_000,
+      }),
+      archivedRun({
+        delivery: {
+          status: "suspended",
+          suspendedReason: "expiry",
+          suspendedAt: now - 8 * 24 * 60 * 60_000,
+        },
+      }),
+    ];
+    for (const [index, entry] of records.entries()) {
+      entry.runId = `unresolved-${index}`;
+      entry.childSessionKey = "global";
+      entry.childAgentId = undefined;
+      harness.runs.set(entry.runId, entry);
+    }
+    const before = structuredClone(harness.runs);
 
-      await harness.sweeper.sweepOnce();
-      await harness.sweeper.sweepOnce();
+    await harness.sweeper.sweepOnce();
+    await harness.sweeper.sweepOnce();
 
-      expect(harness.runs).toEqual(before);
-      expect(recoverRow).not.toHaveBeenCalled();
-      expect(harness.callGateway).not.toHaveBeenCalled();
-      expect(harness.completeSubagentRunWithRecovery).not.toHaveBeenCalled();
-      expect(harness.completeCleanupBookkeeping).not.toHaveBeenCalled();
-      expect(harness.notifyContextEngineSubagentEnded).not.toHaveBeenCalled();
-    },
-  );
+    expect(harness.runs).toEqual(before);
+    expect(recoverRow).not.toHaveBeenCalled();
+    expect(harness.callGateway).not.toHaveBeenCalled();
+    expect(harness.completeSubagentRunWithRecovery).not.toHaveBeenCalled();
+    expect(harness.completeCleanupBookkeeping).not.toHaveBeenCalled();
+    expect(harness.notifyContextEngineSubagentEnded).not.toHaveBeenCalled();
+  });
 
   it.each([
     { kind: "archive", missing: undefined, suppressed: true },
@@ -153,8 +146,7 @@ export function registerSubagentSweepRetainedAuthorityTests(
         };
         const before = await readPersisted();
         expect(before).toMatchObject({ runId: entry.runId, attachmentId });
-        const shouldRetire =
-          missing !== "owner" && missing !== "incarnation" && (suppressed || !missing);
+        const shouldRetire = missing !== "owner";
         try {
           await harness.sweeper.sweepOnce();
           if (launch && shouldRetire) {

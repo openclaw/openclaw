@@ -52,7 +52,33 @@ import {
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const fixture = useSubagentControlFixture();
-const { cfgWithSessionStore, writeSessionStoreFixture } = useSubagentControlSessionStores();
+const { cfgWithSessionStore, writeSessionStoreFixture: writeSessionStore } =
+  useSubagentControlSessionStores();
+
+function withFixtureRevision<Entry extends { sessionId?: string; lifecycleRevision?: string }>(
+  entry: Entry,
+): Entry {
+  return entry.sessionId && !Object.hasOwn(entry, "lifecycleRevision")
+    ? { ...entry, lifecycleRevision: `${entry.sessionId}-revision` }
+    : entry;
+}
+
+function writeSessionStoreFixture(label: string, store: Record<string, unknown>) {
+  return writeSessionStore(
+    label,
+    Object.fromEntries(
+      Object.entries(store).map(([key, entry]) => [
+        key,
+        entry &&
+        typeof entry === "object" &&
+        "sessionId" in entry &&
+        typeof entry.sessionId === "string"
+          ? withFixtureRevision(entry)
+          : entry,
+      ]),
+    ),
+  );
+}
 
 type ControlRuntime = typeof import("./subagent-control.runtime.js");
 
@@ -123,6 +149,9 @@ async function addRun(overrides: SubagentRunRecordOverrides) {
     createdAt: Date.now() - 5_000,
     startedAt: Date.now() - 4_000,
     ...overrides,
+    ...(overrides.childSessionIdentity
+      ? { childSessionIdentity: withFixtureRevision(overrides.childSessionIdentity) }
+      : {}),
   });
   return subagentRuns.get(overrides.runId)!;
 }
@@ -459,7 +488,10 @@ describe("killSubagentRunAdmin", () => {
     },
   ])("$name", async ({ suffix, task, completed }) => {
     const childSessionKey = `agent:main:subagent:${suffix}`;
-    const current: SessionEntry = { sessionId: `sess-${suffix}`, updatedAt: Date.now() };
+    const current: SessionEntry = withFixtureRevision({
+      sessionId: `sess-${suffix}`,
+      updatedAt: Date.now(),
+    });
     const storePath = await writeSession(`admin-kill-${suffix}`, childSessionKey, current);
     const input = createSubagentRunRecord({
       runId: `run-${suffix}`,

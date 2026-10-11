@@ -8,7 +8,7 @@ import {
   getSessionWorkAdmissionRelease,
   isSessionWorkAdmissionActive,
 } from "../../../sessions/session-lifecycle-admission.js";
-import { resolveSubagentChildAuthorityError } from "./subagent-child-owner-match.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
   isRetiredSubagentExecution,
@@ -44,7 +44,7 @@ export async function loadSubagentRecoverySession(params: {
   retained?: Extract<RestartRecoveryResult, { status: "handled" }>["retained"];
 } | null> {
   const sessionKey = params.entry.childSessionKey.trim();
-  if (resolveSubagentChildAuthorityError(params.entry)) {
+  if (resolveSubagentChildAuthority(params.entry).status === "mismatch") {
     return null;
   }
   const { agentId, storePath } = resolveSubagentChildSessionOwner(params.entry, getRuntimeConfig());
@@ -66,18 +66,13 @@ export async function loadSubagentRecoverySession(params: {
       };
     },
   );
-  const original = params.entry.childSessionIdentity;
-  if (
-    sessionEntry &&
-    (sessionEntry.sessionId !== original?.sessionId ||
-      sessionEntry.lifecycleRevision !== original?.lifecycleRevision)
-  ) {
-    throw new Error(
-      "Subagent original session incarnation is unresolved or changed. No child work was changed. Inspect the retained record and original execution evidence before retrying.",
-    );
+  const authority = resolveSubagentChildAuthority(params.entry, sessionEntry);
+  if (authority.status === "mismatch") {
+    throw new Error(authority.error);
   }
   const retained = retainSessionOwner(storePath, sessionKey, sessionEntry?.sessionId);
   if (
+    authority.status === "legacy-unverified" ||
     retained ||
     params.entry.execution.restartRecovery ||
     sessionEntry?.abortedLastRun === true ||

@@ -58,7 +58,7 @@ export function registerCancellationReconciliationTests({
       const earlierDeadline = source === "earlier deadline";
       mocks.entries = {
         [childSessionKey]: {
-          ...(earlierDeadline ? {} : { lifecycleRevision: "revision-stable-cancellation" }),
+          lifecycleRevision: "revision-stable-cancellation",
           sessionId: "sess-stable-cancellation",
           updatedAt: now,
           status: earlierDeadline ? "killed" : "done",
@@ -72,7 +72,7 @@ export function registerCancellationReconciliationTests({
           childSessionKey,
           childSessionIdentity: {
             sessionId: "sess-stable-cancellation",
-            ...(earlierDeadline ? {} : { lifecycleRevision: "revision-stable-cancellation" }),
+            lifecycleRevision: "revision-stable-cancellation",
           },
           task: "preserve authoritative cancellation outcome",
           killReconciliation: { killedAt, taskCancellationAccepted: true },
@@ -142,6 +142,7 @@ export function registerCancellationReconciliationTests({
     mocks.entries = {
       [childSessionKey]: {
         sessionId: "sess-cancelled-during-sweep-capture",
+        lifecycleRevision: "revision-cancelled-during-sweep-capture",
         updatedAt: completedAt,
         status: "done",
         startedAt,
@@ -158,7 +159,10 @@ export function registerCancellationReconciliationTests({
       makeKilledRun(killedAt, {
         runId,
         childSessionKey,
-        childSessionIdentity: { sessionId: "sess-cancelled-during-sweep-capture" },
+        childSessionIdentity: {
+          sessionId: "sess-cancelled-during-sweep-capture",
+          lifecycleRevision: "revision-cancelled-during-sweep-capture",
+        },
         task: "cancel during result capture",
         expectsCompletionMessage: false,
         createdAt: startedAt,
@@ -212,6 +216,7 @@ export function registerCancellationReconciliationTests({
     mocks.entries = {
       [childSessionKey]: {
         sessionId: "sess-yielded-before-kill",
+        lifecycleRevision: "revision-yielded-before-kill",
         updatedAt: completedAt,
         status: "done",
         startedAt,
@@ -221,7 +226,10 @@ export function registerCancellationReconciliationTests({
     await mod.addSubagentRunForTests({
       runId,
       childSessionKey,
-      childSessionIdentity: { sessionId: "sess-yielded-before-kill" },
+      childSessionIdentity: {
+        sessionId: "sess-yielded-before-kill",
+        lifecycleRevision: "revision-yielded-before-kill",
+      },
       task: "complete between yield and kill",
       expectsCompletionMessage: false,
       createdAt: startedAt,
@@ -266,7 +274,10 @@ export function registerCancellationReconciliationTests({
       makeKilledRun(killedAt, {
         runId,
         childSessionKey,
-        childSessionIdentity: { sessionId: "sess-requester-stop-suppressed" },
+        childSessionIdentity: {
+          sessionId: "sess-requester-stop-suppressed",
+          lifecycleRevision: "revision-requester-stop-suppressed",
+        },
         task: "do not replay cancellation",
         expectsCompletionMessage: true,
         createdAt: startedAt,
@@ -295,6 +306,7 @@ export function registerCancellationReconciliationTests({
       mocks.entries = {
         [childSessionKey]: {
           sessionId: "sess-reused",
+          lifecycleRevision: "revision-reused",
           updatedAt: endedAt,
           status: "done",
           endedAt,
@@ -330,7 +342,7 @@ export function registerCancellationReconciliationTests({
         makeKilledRun(killedAt, {
           runId,
           childSessionKey,
-          childSessionIdentity: { sessionId: "sess-reused" },
+          childSessionIdentity: { sessionId: "sess-reused", lifecycleRevision: "revision-reused" },
           task: "old generation",
           createdAt: oldStartedAt,
           startedAt: oldStartedAt,
@@ -356,7 +368,7 @@ export function registerCancellationReconciliationTests({
       await mod.addSubagentRunForTests({
         runId: newRunId,
         childSessionKey,
-        childSessionIdentity: { sessionId: "sess-reused" },
+        childSessionIdentity: { sessionId: "sess-reused", lifecycleRevision: "revision-reused" },
         task: "new generation",
         createdAt: newStartedAt,
         startedAt: newStartedAt,

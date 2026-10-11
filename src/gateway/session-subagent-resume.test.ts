@@ -146,7 +146,6 @@ it.each(["agent:main:subagent:resume-child", "agent:main:dashboard:resume-child"
 );
 
 it.each([
-  { original: undefined, current: "successor-incarnation" },
   { original: "original-incarnation", current: "successor-incarnation" },
   { original: "original-incarnation", current: undefined },
 ])(
@@ -167,6 +166,60 @@ it.each([
     expect(subagentRuns.has(nextRunId)).toBe(false);
     expect(subagentRuns.get(previousRunId)).toBe(state.entry);
     expect(loadSubagentRegistryFromSqlite().get(previousRunId)).toEqual(state.entry);
+  },
+);
+
+it.each(["identity", "revision"] as const)(
+  "resumes and delivers a restored legacy task without its original %s",
+  async (missing) => {
+    const state = await arrangePausedChild(undefined, "original-incarnation");
+    await updateRun(previousRunId, (draft) => {
+      if (missing === "identity") {
+        delete draft.childSessionIdentity;
+      } else {
+        delete draft.childSessionIdentity!.lifecycleRevision;
+      }
+    });
+    await restoreSubagentRunsFromDisk({ runs: subagentRuns });
+    await fixture.settle();
+    const originalIdentity = subagentRuns.get(previousRunId)?.childSessionIdentity;
+    const resume = bindParentSubagentResume({
+      ...state,
+      childSessionId: sessionId,
+      childLifecycleRevision: "original-incarnation",
+    });
+    const announce = fixture.announce.mockResolvedValue("delivered");
+    const adopt = await state.prepare({ resume });
+    await expect(adopt()).resolves.toBe(previousRunId);
+    expect(subagentRuns.get(nextRunId)).toMatchObject({
+      taskRunId: previousRunId,
+      requesterSessionKey: parent,
+      execution: { suppressSessionEffects: true },
+    });
+    expect(subagentRuns.get(nextRunId)?.childSessionIdentity).toEqual(originalIdentity);
+    emitAgentEvent({
+      runId: nextRunId,
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        endedAt: Date.now(),
+        terminalReply: { disposition: "visible", text: "The legacy task is complete." },
+      },
+    });
+    await fixture.settle();
+    expect(subagentRuns.get(nextRunId)?.execution).toMatchObject({
+      status: "terminal",
+      outcome: { status: "ok" },
+    });
+    expect(announce).toHaveBeenCalledWith(
+      expect.objectContaining({
+        childRunId: nextRunId,
+        requesterSessionKey: parent,
+        roundOneReply: "The legacy task is complete.",
+      }),
+    );
+    expect(subagentRuns.get(nextRunId)?.cleanupCompletedAt).toBeDefined();
+    expect(fixture.cleanup).not.toHaveBeenCalled();
   },
 );
 
@@ -210,7 +263,8 @@ it.each(["selection", "admission"] as const)(
 it.each(["resume", "cancel"] as const)(
   "preserves %s for retained release-era tasks without store provenance",
   async (action) => {
-    const state = await arrangePausedChild();
+    const lifecycleRevision = "original-incarnation";
+    const state = await arrangePausedChild(undefined, lifecycleRevision);
     const storePath = state.entry.controllerStorePath!;
     // v2026.9.5 registration persisted neither physical-store field.
     await updateRun(previousRunId, (draft) => {
@@ -223,7 +277,11 @@ it.each(["resume", "cancel"] as const)(
     await fixture.settle();
     expect(shouldResumeParentSubagent(state)).toBe(false);
     if (action === "resume") {
-      const resume = bindParentSubagentResume({ ...state, childSessionId: sessionId });
+      const resume = bindParentSubagentResume({
+        ...state,
+        childSessionId: sessionId,
+        childLifecycleRevision: lifecycleRevision,
+      });
       const adopt = await state.prepare({ resume });
       await expect(adopt()).resolves.toBe(previousRunId);
       expect(subagentRuns.get(nextRunId)?.taskRunId).toBe(previousRunId);

@@ -142,6 +142,7 @@ it.each(["abort", "interruption", "replacement", "already terminal"] as const)(
     const { sessionKey, sessionId, runId, storePath, context } = await seedExecutionTarget(
       "accepted-stop",
       "retain the selected cancellation outcome",
+      "accepted-stop-revision",
     );
     const registration = registerChatAbortController({
       chatAbortControllers: context.chatAbortControllers,
@@ -250,6 +251,7 @@ it.each(["declined", "throws"] as const)(
     const { sessionKey, sessionId, runId, context } = await seedExecutionTarget(
       "callback-stop",
       "retain callback cancellation until raw disposal settles",
+      "callback-stop-revision",
     );
     const registration = registerChatAbortController({
       chatAbortControllers: context.chatAbortControllers,
@@ -315,6 +317,7 @@ it("joins an execution registered while its accepted Stop awaits kill-claim pers
     await seedExecutionTarget(
       "late-execution-stop",
       "join the exact execution that accepts cancellation",
+      "late-execution-stop-revision",
     );
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   const io = { emitAcceptance: vi.fn(), emitFinal: vi.fn() };

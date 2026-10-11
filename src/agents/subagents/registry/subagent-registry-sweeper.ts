@@ -13,7 +13,10 @@ import {
   blockSubagentCompletionDelivery,
   reconcileRetiredSubagentCancellation,
 } from "../completion/subagent-completion-admission.store.js";
-import { resolveSubagentChildAuthorityError } from "./subagent-child-owner-match.js";
+import {
+  resolveSubagentChildAuthority,
+  warnLegacySubagentAuthority,
+} from "./subagent-child-owner-match.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
@@ -224,7 +227,7 @@ export function createSubagentRegistrySweeper(params: {
       const cleanupIdentities = new Map<object, FrozenSessionIdentity | undefined>();
       for (const [, entry] of runEntries) {
         if (
-          resolveSubagentChildAuthorityError(entry) ||
+          resolveSubagentChildAuthority(entry).status === "mismatch" ||
           typeof entry.execution.endedAt !== "number" ||
           isRestoredQueuedFailureSettlementClaimed(entry) ||
           entry.requesterSettleWake ||
@@ -252,9 +255,10 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
         let entry: SubagentRunRecord = selected;
-        if (resolveSubagentChildAuthorityError(entry)) {
+        if (resolveSubagentChildAuthority(entry).status === "mismatch") {
           continue;
         }
+        warnLegacySubagentAuthority(entry, params.warn);
         if (isRestoredQueuedFailureSettlementClaimed(entry)) {
           // The restored FIFO callback owns this row until durable settlement.
           continue;
@@ -554,7 +558,7 @@ export function createSubagentRegistrySweeper(params: {
         if (
           groupEntries.some(
             ([, candidate]) =>
-              resolveSubagentChildAuthorityError(candidate) ||
+              resolveSubagentChildAuthority(candidate).status === "mismatch" ||
               !isCollectorArchiveReady(candidate, now) ||
               !cleanupIdentities.has(getSubagentRunRuntimeKey(candidate)) ||
               (!shouldSuppressSubagentRecoverySessionEffects(candidate) &&

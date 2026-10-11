@@ -47,6 +47,7 @@ it.for([
       agentId: "main",
       sessionKey: childKey,
       defaultSessionId: sessionId,
+      lifecycleRevision: `${sessionId}-revision`,
     });
     await registerSubagentRun({
       runId,
@@ -393,6 +394,7 @@ it("joins a pending session publication before a collector terminal commit", asy
     agentId: "main",
     sessionKey: childKey,
     defaultSessionId: sessionId,
+    lifecycleRevision: `${sessionId}-revision`,
   });
   await registerSubagentRun({
     runId,

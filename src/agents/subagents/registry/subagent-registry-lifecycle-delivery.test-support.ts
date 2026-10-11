@@ -178,6 +178,7 @@ export function registerLifecycleDeliveryReceiptCases({
 
   it("delivers a restored legacy completion without mutating its unbound child session", async () => {
     const entry = createRunEntry({
+      runId: "legacy-completion-without-identity",
       childSessionIdentity: undefined,
       expectsCompletionMessage: true,
     });

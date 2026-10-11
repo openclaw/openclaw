@@ -7,7 +7,7 @@ import { formatErrorMessage } from "../../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
-import { resolveSubagentChildAuthorityError } from "./subagent-child-owner-match.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { captureSubagentCommands } from "./subagent-control-commands.js";
 import { mutateSubagentRunForKill } from "./subagent-control-kill-runtime.js";
 import {
@@ -596,7 +596,7 @@ export async function killSubagentRunAdmin(
   const entry =
     selected &&
     selected.childSessionKey === targetSessionKey &&
-    resolveSubagentChildAuthorityError(selected)
+    resolveSubagentChildAuthority(selected).status !== "verified"
       ? selected
       : getLatestOwnedSubagentRun(targetSessionKey, params.agentId, params.cfg);
   if (!entry) {
@@ -613,15 +613,15 @@ export async function killSubagentRunAdmin(
     return publish({ found: false as const, killed: false as const });
   }
 
-  const authorityError = resolveSubagentChildAuthorityError(entry);
-  if (authorityError) {
+  const authority = resolveSubagentChildAuthority(entry);
+  if (authority.status !== "verified") {
     return publish({
       found: true,
       killed: false,
       cascadeKilled: 0,
       runId: entry.runId,
       sessionKey: entry.childSessionKey,
-      error: authorityError,
+      error: authority.error,
     });
   }
 

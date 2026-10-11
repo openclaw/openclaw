@@ -444,7 +444,7 @@ describe("subagent registry seam flow", () => {
 
   registerRestartDrainCompletionSettlementTest({ getRegistry: () => mod, mocks, findRequesterRun });
 
-  registerQueuedCollectorLaunchSettlementTest({ getRegistry: () => mod });
+  registerQueuedCollectorLaunchSettlementTest({ getRegistry: () => mod, mocks });
 
   it("records early structured output through the child session identity", async () => {
     const childSessionKey = "agent:main:subagent:early-structured-output";
@@ -1527,10 +1527,15 @@ describe("subagent registry seam flow", () => {
       } else {
         mockPendingAgentWait();
       }
+      const sessionEntry = createSessionEntry({
+        sessionId: "sess-pending-timeout",
+        lifecycleRevision: "revision-pending-timeout",
+      });
+      mocks.entries["agent:main:subagent:pending-timeout"] = sessionEntry;
       await mod.registerSubagentRun({
         runId,
         childSessionKey: "agent:main:subagent:pending-timeout",
-        sessionEntry: { sessionId: "sess-pending-timeout" },
+        sessionEntry,
         task: "settle pending timeout grace",
       });
       const lifecycleHandler = getLifecycleHandler();
@@ -2088,11 +2093,16 @@ describe("subagent registry seam flow", () => {
   it("defers the killed hook until the provisional result reconciles", async () => {
     mockPendingAgentWait();
     mockEndedHooks();
+    const sessionEntry = createSessionEntry({
+      sessionId: "sess-killed",
+      lifecycleRevision: "revision-killed",
+    });
+    mocks.entries["agent:main:subagent:killed"] = sessionEntry;
 
     await mod.registerSubagentRun({
       runId: "run-killed-init",
       childSessionKey: "agent:main:subagent:killed",
-      sessionEntry: { sessionId: "sess-killed" },
+      sessionEntry,
       requesterOrigin: { channel: "quietchat", accountId: "acct-1" },
       task: "kill after init",
       expectsCompletionMessage: false,
@@ -2145,7 +2155,10 @@ describe("subagent registry seam flow", () => {
     await mod.addSubagentRunForTests({
       runId: "run-interrupted",
       childSessionKey: "agent:main:subagent:interrupted",
-      childSessionIdentity: { sessionId: "sess-interrupted" },
+      childSessionIdentity: {
+        sessionId: "sess-interrupted",
+        lifecycleRevision: "revision-interrupted",
+      },
       controllerSessionKey: "agent:main:main",
       requesterOrigin: { channel: "quietchat", accountId: "acct-interrupted" },
       task: "recover interrupted subagent",
@@ -2284,7 +2297,7 @@ describe("subagent registry seam flow", () => {
         childSessionKey,
         childSessionIdentity: {
           sessionId: `session-child-${kind}`,
-          ...(kind === "archive" ? { lifecycleRevision: "revision-child-archive" } : {}),
+          lifecycleRevision: `revision-child-${kind}`,
         },
         controllerSessionKey: "agent:main:session:parent",
         requesterSessionKey: "agent:main:session:parent",

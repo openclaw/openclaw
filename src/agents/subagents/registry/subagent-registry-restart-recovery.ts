@@ -7,7 +7,10 @@ import {
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { isSessionWorkAdmissionActive } from "../../../sessions/session-lifecycle-admission.js";
-import { resolveSubagentChildAuthorityError } from "./subagent-child-owner-match.js";
+import {
+  resolveSubagentChildAuthority,
+  warnLegacySubagentAuthority,
+} from "./subagent-child-owner-match.js";
 import {
   getSubagentRunsForRequesterSession,
   getSubagentRunsForChildSession,
@@ -30,15 +33,16 @@ export async function recoverInterruptedSubagentRow(
   params: RestartRecoveryParams,
 ): Promise<RestartRecoveryResult> {
   const { entry, runId } = params;
-  const authorityError = resolveSubagentChildAuthorityError(entry);
-  if (authorityError) {
+  const authority = resolveSubagentChildAuthority(entry);
+  if (authority.status === "mismatch") {
     params.warn("retained subagent record cannot be recovered", {
       runId,
       childSessionKey: entry.childSessionKey,
-      error: new Error(authorityError),
+      error: new Error(authority.error),
     });
     return { status: "deferred" };
   }
+  warnLegacySubagentAuthority(entry, params.warn);
   let expectedObservation = entry;
   const childSessionKey = entry.childSessionKey.trim();
   const lifecycleGeneration = agentEvents.getAgentEventLifecycleGeneration();
@@ -86,6 +90,7 @@ export async function recoverInterruptedSubagentRow(
     if ((!session && !replayTerminal) || !isCurrent()) {
       return { status: "deferred" };
     }
+    const legacy = authority.status === "legacy-unverified";
     if (!replayTerminal && session?.retained?.isCurrent()) {
       return { status: "handled", retained: session.retained };
     }
@@ -224,7 +229,7 @@ export async function recoverInterruptedSubagentRow(
           }
         : {}),
     };
-    if (!replayTerminal && !(await sessionEffects.isCurrent())) {
+    if (!legacy && !replayTerminal && !(await sessionEffects.isCurrent())) {
       return { status: "handled" };
     }
     if (!isCurrent()) {
@@ -233,7 +238,9 @@ export async function recoverInterruptedSubagentRow(
     if (
       !replayTerminal &&
       sessionEntry?.lifecycleRunId &&
-      ownsSubagentSessionExecution(entry, sessionEntry) &&
+      (legacy
+        ? sessionEntry.lifecycleRunId === runId
+        : ownsSubagentSessionExecution(entry, sessionEntry)) &&
       resolveCompletionFromSessionEntry(sessionEntry, Date.now(), {
         notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
       })
@@ -242,6 +249,7 @@ export async function recoverInterruptedSubagentRow(
     }
     const receipt = entry.execution.restartRecovery;
     if (
+      !legacy &&
       !replayTerminal &&
       !receipt &&
       sessionEntry?.abortedLastRun !== true &&
@@ -252,6 +260,7 @@ export async function recoverInterruptedSubagentRow(
     // Old launch receipts are evidence of uncertain effects, never permission
     // to replay a child. The requester decides whether to continue its history.
     const suppressSessionEffects =
+      legacy ||
       currentRead?.kind === "missing" ||
       (receipt !== undefined && !isRestartRecoveryLifecycleCurrent(receipt)) ||
       (sessionEntry?.lifecycleRunId !== undefined &&
@@ -266,7 +275,7 @@ export async function recoverInterruptedSubagentRow(
       if (!isCurrent() || (!replayTerminal && hasPendingRequesterSettleWake())) {
         return false;
       }
-      if (!replayTerminal) {
+      if (!legacy && !replayTerminal) {
         try {
           sessionEffects.assertHostCurrent();
         } catch {
@@ -281,13 +290,13 @@ export async function recoverInterruptedSubagentRow(
         isHostCurrent: isRecoveryHostCurrent,
         prepare: async () =>
           isRecoveryHostCurrent() &&
-          (replayTerminal || (await sessionEffects.isCurrent())) &&
+          (legacy || replayTerminal || (await sessionEffects.isCurrent())) &&
           isRecoveryHostCurrent(),
         onPublished: (published) => {
           expectedObservation = published;
         },
       },
-      sessionEffects,
+      sessionEffects: legacy ? undefined : sessionEffects,
       error:
         terminalError ??
         "Subagent execution was interrupted by a Gateway restart. " +

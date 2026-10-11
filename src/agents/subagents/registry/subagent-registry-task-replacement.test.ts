@@ -655,13 +655,17 @@ it("admits a child follow-up while its predecessor's browser cleanup is still pe
     agentId: "main",
     sessionKey: childSessionKey,
     defaultSessionId: "held-browser-cleanup-session",
+    lifecycleRevision: "held-browser-cleanup-revision",
   });
   try {
     await registerSubagentRun({
       runId: "browser-cleanup-predecessor",
       childSessionKey,
       childAgentId: "main",
-      sessionEntry: { sessionId: "held-browser-cleanup-session" },
+      sessionEntry: {
+        sessionId: "held-browser-cleanup-session",
+        lifecycleRevision: "held-browser-cleanup-revision",
+      },
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       task: "Finish browser work",

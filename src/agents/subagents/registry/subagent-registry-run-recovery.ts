@@ -13,7 +13,11 @@ import { runWithGatewayDetachedWorkContinuation } from "../../../process/gateway
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import { replaceRequesterCronAuthorityEntry } from "../requester-cron-authority.js";
-import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
+import {
+  matchesSubagentChildSessionOwner,
+  resolveSubagentChildAuthority,
+  warnLegacySubagentAuthority,
+} from "./subagent-child-owner-match.js";
 import {
   clearDeliveryState,
   normalizeSubagentRunState,
@@ -385,11 +389,16 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
             requesterSettleWake: sourceRequesterSettleWake
               ? remapRequesterSettleWake(sourceRequesterSettleWake)
               : undefined,
-            execution: absorbed?.execution ?? {
-              status: "running",
-              startedAt: now,
-              lifecycleGeneration,
-              transcriptTarget: replaceParams.transcriptTarget,
+            execution: {
+              ...(absorbed?.execution ?? {
+                status: "running",
+                startedAt: now,
+                lifecycleGeneration,
+                transcriptTarget: replaceParams.transcriptTarget,
+              }),
+              ...(resolveSubagentChildAuthority(absorbed ?? source).status === "legacy-unverified"
+                ? { suppressSessionEffects: true }
+                : {}),
             },
             swarmLaunchPending: false,
             completion: {
@@ -496,6 +505,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     }
     const source = replacement.source;
     const next = publishedNext ?? replacement.next;
+    warnLegacySubagentAuthority(source, log.warn);
     if (!isSameSubagentRunOwner(this.options.runs.get(nextRunId), next)) {
       return true;
     }
@@ -516,6 +526,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
         void safeRemoveAttachmentsDir(source);
       }
       if (
+        resolveSubagentChildAuthority(source).status === "verified" &&
         source.execution.transcriptTarget &&
         source.execution.transcriptTarget !== next.execution.transcriptTarget
       ) {

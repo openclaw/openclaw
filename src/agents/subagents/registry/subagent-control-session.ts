@@ -22,6 +22,7 @@ import {
 } from "../../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWriteAdmission } from "../../../state/openclaw-agent-write-admission.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -73,10 +74,10 @@ export async function prepareSubagentKillSession(
         }
         const entry = read.value;
         if (
-          !original?.sessionId ||
-          (entry &&
-            (entry.sessionId !== original.sessionId ||
-              entry.lifecycleRevision !== original.lifecycleRevision))
+          resolveSubagentChildAuthority(
+            { childSessionKey: sessionKey, childAgentId: agentId, childSessionIdentity: original },
+            entry,
+          ).status !== "verified"
         ) {
           throw new Error(
             "Subagent original session incarnation is unresolved or changed; no child work was changed.",
@@ -84,8 +85,17 @@ export async function prepareSubagentKillSession(
         }
         if (
           selected?.sessionId &&
-          (entry?.sessionId !== selected.sessionId ||
-            entry?.lifecycleRevision !== selected.expectedLifecycleRevision)
+          resolveSubagentChildAuthority(
+            {
+              childSessionKey: sessionKey,
+              childAgentId: agentId,
+              childSessionIdentity: {
+                sessionId: selected.sessionId,
+                lifecycleRevision: selected.expectedLifecycleRevision,
+              },
+            },
+            entry ?? null,
+          ).status !== "verified"
         ) {
           throw new Error("Subagent session changed during cancellation preparation");
         }

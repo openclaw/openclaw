@@ -233,9 +233,11 @@ absent; conflicting or malformed ownership stays unresolved. No DDL, new column,
 schema-version bump, or automatic backfill accompanies this runtime repair.
 Current configuration locates a known owner's store; it does not identify the
 original owner. Unknown-owner records remain unchanged and ineligible for ordinary
-cleanup. A known owner's exact-run completion can still settle and deliver without
-an original session identity; child-session mutations remain suppressed and the
-missing identity is not backfilled.
+cleanup. Historical records with resolvable child and requester owners but no
+original session identity or lifecycle revision are legacy-unverified. Requester
+settlement, delivery, bookkeeping, and authorized resume remain available, while
+child-session mutations are suppressed. Conflicting recorded identities remain
+mismatches; missing identity is not backfilled.
 
 Same-version rollback is not a guarantee that older writers preserve this
 contract. A codec round trip does not prove existing-row replacement or writable

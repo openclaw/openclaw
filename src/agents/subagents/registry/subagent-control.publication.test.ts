@@ -69,6 +69,7 @@ it("revalidates the session after held publication preparation permits retiremen
     agentId: "main",
     sessionKey: rootKey,
     defaultSessionId: "prepared-publication-session",
+    lifecycleRevision: "prepared-publication-revision",
   };
   const storePath = await writeSubagentSessionEntry(target);
   await registerSubagentRun({
@@ -244,6 +245,7 @@ it.each([
         agentId: "main",
         sessionKey,
         defaultSessionId: `${runId}-session`,
+        lifecycleRevision: `${runId}-revision`,
       });
       await registerSubagentRun({
         runId,

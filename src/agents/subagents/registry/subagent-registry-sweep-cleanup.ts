@@ -8,7 +8,7 @@ import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-requ
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import {
   resolveSubagentChildAgentId,
-  resolveSubagentChildAuthorityError,
+  resolveSubagentChildAuthority,
 } from "./subagent-child-owner-match.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
@@ -77,9 +77,8 @@ export function createSubagentSweepReadScope(
 export type FrozenSessionIdentity = { sessionId: string; lifecycleRevision: string };
 
 export function freezeSessionIdentity(entry: SubagentRunRecord): FrozenSessionIdentity | undefined {
-  const sessionId = entry.childSessionIdentity?.sessionId?.trim();
-  const lifecycleRevision = entry.childSessionIdentity?.lifecycleRevision?.trim();
-  return sessionId && lifecycleRevision ? { sessionId, lifecycleRevision } : undefined;
+  const authority = resolveSubagentChildAuthority(entry);
+  return authority.status === "verified" ? authority.sessionIdentity : undefined;
 }
 
 export const sweptContext = (entry: SubagentRunRecord) => ({
@@ -109,7 +108,7 @@ export function isCleanupCurrent(
 ): current is SubagentRunRecord {
   return (
     current !== undefined &&
-    !resolveSubagentChildAuthorityError(current) &&
+    resolveSubagentChildAuthority(current).status !== "mismatch" &&
     isSameSubagentRunOwner(current, expected) &&
     current.execution.status === expected.execution.status &&
     current.execution.endedAt === expected.execution.endedAt &&

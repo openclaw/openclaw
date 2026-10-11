@@ -327,7 +327,7 @@ export function registerDirectSessionCleanupAuthorityTests({
     expect(controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
     await join();
 
-    expect(sessionRead).toHaveBeenCalledOnce();
+    expect(sessionRead).not.toHaveBeenCalled();
     expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
     expect(finalPostimage?.execution.suppressSessionEffects).toBe(true);
     expect(runs.has(entry.runId)).toBe(false);

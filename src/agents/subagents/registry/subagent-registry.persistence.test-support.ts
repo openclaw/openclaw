@@ -315,7 +315,7 @@ export function registerSubagentRegistrationPersistenceTests({
   getRegistry: () => SubagentRegistryHarness;
   mocks: Pick<
     ReturnType<typeof createSubagentRegistryMockState>,
-    "callGateway" | "persistRegistryRows"
+    "callGateway" | "persistRegistryRows" | "entries"
   >;
   mockPendingAgentWait: () => void;
   findRequesterRun: (runId: string) => SubagentRunRecord | undefined;
@@ -448,10 +448,16 @@ export function registerSubagentRegistrationPersistenceTests({
     const mod = getRegistry();
     mockPendingAgentWait();
     const runId = "run-kill-persist-failure";
+    const sessionEntry = {
+      sessionId: "sess-kill-persist-failure",
+      lifecycleRevision: "revision-kill-persist-failure",
+      updatedAt: 1,
+    };
+    mocks.entries["agent:main:subagent:kill-persist-failure"] = sessionEntry;
     await mod.registerSubagentRun({
       runId,
       childSessionKey: "agent:main:subagent:kill-persist-failure",
-      sessionEntry: { sessionId: "sess-kill-persist-failure" },
+      sessionEntry,
       task: "keep kill state atomic",
     });
     mocks.persistRegistryRows.mockImplementationOnce(() => {

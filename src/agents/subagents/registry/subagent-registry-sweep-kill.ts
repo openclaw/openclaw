@@ -8,7 +8,7 @@ import {
 } from "../../../sessions/session-lifecycle-admission.js";
 import {
   matchesSubagentChildSessionOwner,
-  resolveSubagentChildAuthorityError,
+  resolveSubagentChildAuthority,
 } from "./subagent-child-owner-match.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
@@ -65,7 +65,7 @@ export async function reconcileDurableSubagentKillIntent(params: {
   warn: (message: string, meta?: Record<string, unknown>) => void;
 }): Promise<boolean> {
   const killIntent = params.entry.killIntent;
-  if (!killIntent || resolveSubagentChildAuthorityError(params.entry)) {
+  if (!killIntent || resolveSubagentChildAuthority(params.entry).status !== "verified") {
     return false;
   }
   if (!isSameSubagentRunOwner(params.runs.get(params.runId), params.entry)) {
@@ -231,7 +231,7 @@ export async function reconcileProvisionalSubagentKill(params: {
 }): Promise<boolean> {
   const { entry, now, runId, runs } = params;
   const killReconciliation = entry.killReconciliation;
-  if (!killReconciliation || resolveSubagentChildAuthorityError(entry)) {
+  if (!killReconciliation || resolveSubagentChildAuthority(entry).status !== "verified") {
     return false;
   }
   // The child-session index stays current across awaits. Re-read it at each

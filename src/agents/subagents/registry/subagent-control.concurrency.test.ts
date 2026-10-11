@@ -41,6 +41,7 @@ it("does not transfer a selected task cancellation to an admitted follow-up gene
     agentId: "main",
     sessionKey,
     defaultSessionId: sessionId,
+    lifecycleRevision: `${sessionId}-revision`,
   });
   await registerSubagentRun({
     runId: "selected-original",
@@ -115,6 +116,7 @@ it.each(["before interruption", "after interruption", "after abort"] as const)(
       agentId: "main",
       sessionKey,
       defaultSessionId: sessionId,
+      lifecycleRevision: `${sessionId}-revision`,
     });
     await registerSubagentRun({
       runId,
@@ -226,6 +228,7 @@ it.each([
       agentId: "main",
       sessionKey,
       defaultSessionId: sessionId,
+      lifecycleRevision: `${sessionId}-revision`,
     });
     await registerSubagentRun({
       runId,
@@ -392,6 +395,7 @@ it("admin cancellation interrupts every sibling before waiting for any sibling t
       agentId: "main",
       sessionKey: sessionKey(id),
       defaultSessionId: `${id}-session`,
+      lifecycleRevision: `${id}-revision`,
     });
     await registerSubagentRun({
       runId: id,
@@ -558,6 +562,7 @@ it("keeps a late descendant queued when registered before capacity release on an
       agentId: "main",
       sessionKey: key(id),
       defaultSessionId: `${id}-session`,
+      lifecycleRevision: `${id}-revision`,
     });
     if (id !== "g") {
       await register(id);

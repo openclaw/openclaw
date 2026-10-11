@@ -15,7 +15,10 @@ import {
   clearPublishedSwarmCollectorOutput,
   updateSwarmCollectorCompletion,
 } from "../swarm/swarm-collector.js";
-import { resolveSubagentChildAgentId } from "./subagent-child-owner-match.js";
+import {
+  resolveSubagentChildAuthority,
+  warnLegacySubagentAuthority,
+} from "./subagent-child-owner-match.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
   prepareSubagentKillSession,
@@ -138,7 +141,7 @@ export async function completeSubagentRunAttempt(
     ? getCurrentSubagentRunOwner(params.runs, completeParams.expectedEntry)
     : params.runs.get(completeParams.runId);
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
-  if (!selectedOwner || !resolveSubagentChildAgentId(selectedOwner)) {
+  if (!selectedOwner || resolveSubagentChildAuthority(selectedOwner).status === "mismatch") {
     return;
   }
   let releaseCompletionLock: (() => void) | undefined = await context.acquireTerminalCompletionLock(
@@ -151,14 +154,7 @@ export async function completeSubagentRunAttempt(
     throw new SubagentRegistryMutationRejectedError("Subagent terminal execution changed");
   }
   try {
-    if (!selected.childSessionIdentity?.sessionId) {
-      params.warn(
-        "Subagent completion lacks its original session identity; child session effects are suppressed.",
-        {
-          runId: selected.runId,
-        },
-      );
-    }
+    warnLegacySubagentAuthority(selected, params.warn);
     const assertCurrent = () => {
       assertSubagentRegistryWriteSourceCurrent(stateContext);
       if (
@@ -189,7 +185,7 @@ export async function completeSubagentRunAttempt(
     if (
       selected.collect &&
       !selected.collectorCompletion &&
-      selected.childSessionIdentity?.sessionId
+      resolveSubagentChildAuthority(selected).status === "verified"
     ) {
       collectorSession = await prepareSubagentKillSession(
         params.getRuntimeConfig(),
@@ -375,7 +371,9 @@ function planTerminalCompletion(
   if (
     !recoveryRequested &&
     (entry.terminalOwner === "interrupted-recovery" ||
-      entry.execution.suppressSessionEffects === true) &&
+      (entry.execution.suppressSessionEffects === true &&
+        (entry.execution.status === "terminal" ||
+          resolveSubagentChildAuthority(entry).status !== "legacy-unverified"))) &&
     entry.killIntent === undefined
   ) {
     // Restart recovery already persisted the terminal winner for this exact
@@ -489,7 +487,7 @@ function planTerminalCompletion(
       entry.killIntent = undefined;
       if (
         killOwnsCurrentLifecycle &&
-        entry.childSessionIdentity?.sessionId &&
+        resolveSubagentChildAuthority(entry).status === "verified" &&
         entry.execution.suppressSessionEffects !== true
       ) {
         suppressSessionEffects = false;

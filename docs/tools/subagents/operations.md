@@ -180,9 +180,13 @@ work. Bulk cancellation reports unresolved members and continues independently
 authorized siblings. Inspect the retained run and original execution evidence;
 do not bind it to whichever session currently occupies the same key. Unresolved
 child-session cleanup obligations are not guessed after ordinary cleanup deadlines.
-For a known owner, an exact-run completion still settles and reaches its requester
-when a historical record lacks the original session identity. OpenClaw records a
-warning and suppresses child-session mutations rather than losing the result.
+Child authority has three states: verified, legacy-unverified, or mismatch.
+Legacy-unverified records have resolvable child and requester owners but lack the
+original session identity or lifecycle revision. They can settle, deliver,
+finish cleanup bookkeeping, and resume under the authorized requester. OpenClaw
+warns once per retained run and suppresses child-session mutations, including
+deletion, reset, and transcript cleanup. Missing historical identity is never
+backfilled. A conflicting recorded identity remains a mismatch, not a legacy exception.
 
 Registry child lookups use recorded ownership when agents share a raw key.
 Terminal events and session timing updates use that same child owner.

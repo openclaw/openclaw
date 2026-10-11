@@ -1550,6 +1550,45 @@ describe("subagent registry lifecycle hardening", () => {
     expect(beforeWrite).toHaveBeenCalledOnce();
   });
 
+  it.each(["provider", "yield"] as const)(
+    "keeps a cleaned legacy recovery winner after a late %s result",
+    async (source) => {
+      const entry = createRunEntry({ childSessionIdentity: undefined });
+      const beforeWrite = vi.fn();
+      const controller = createLifecycleController({ entry, beforeWrite });
+      const join = observeRootWork();
+      await controller.completeSubagentRun(makeInterruptedSubagentCompletion(entry));
+      await finishCleanup(controller, readLifecycleRun(entry), {
+        preserveTranscript: true,
+        skipRequesterSettleWake: true,
+      });
+      await join();
+      const recovered = structuredClone(readLifecycleRun(entry));
+      const writes = beforeWrite.mock.calls.length;
+      expect(recovered.terminalOwner).toBeUndefined();
+      expect(recovered.execution.suppressSessionEffects).toBe(true);
+      expect(recovered.cleanupCompletedAt).toBe(5_000);
+
+      if (source === "provider") {
+        await completeRun(controller, entry, { endedAt: 5_001 });
+      } else {
+        const lateYield = structuredClone(recovered);
+        expect(markSubagentRunPausedAfterYield({ entry: lateYield, endedAt: 5_001 })).toBe(false);
+        expect(lateYield).toEqual(recovered);
+      }
+      expect(readLifecycleRun(entry)).toEqual(recovered);
+      expect(beforeWrite).toHaveBeenCalledTimes(writes);
+    },
+  );
+
+  it("keeps an already-paused legacy yield idempotent", () => {
+    const entry = createRunEntry({ childSessionIdentity: undefined });
+    expect(markSubagentRunPausedAfterYield({ entry, endedAt: 4_000 })).toBe(true);
+    const paused = structuredClone(entry);
+    markSubagentRunPausedAfterYield({ entry, endedAt: 4_000 });
+    expect(entry).toEqual(paused);
+  });
+
   it.each([
     ["provisional", { killReconciliation: { killedAt: 4_000 } }],
     ["stable", {}],
@@ -2029,7 +2068,11 @@ describe("subagent registry lifecycle hardening", () => {
   );
 
   it("rejects a yield after direct delete cleanup has been dispatched", async () => {
-    const entry = createRunEntry({ cleanup: "delete", expectsCompletionMessage: false });
+    const entry = createRunEntry({
+      cleanup: "delete",
+      expectsCompletionMessage: false,
+      childSessionIdentity: { ...childSessionIdentity },
+    });
     const runs = new Map([[entry.runId, entry]]);
     let releaseDelete: (() => void) | undefined;
     gatewayMocks.callGateway.mockImplementation((opts) => {

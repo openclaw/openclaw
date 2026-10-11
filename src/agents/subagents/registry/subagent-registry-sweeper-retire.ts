@@ -2,7 +2,7 @@ import { removeInternalSessionEffectsSession } from "../../internal-session-effe
 import {
   matchesSubagentChildSessionOwner,
   resolveSubagentChildAgentId,
-  resolveSubagentChildAuthorityError,
+  resolveSubagentChildAuthority,
 } from "./subagent-child-owner-match.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import {
@@ -28,7 +28,7 @@ export async function retireSupersededSubagentRun(params: {
   const transcriptTarget = params.entry.execution.transcriptTarget;
   const canRetire = (current: SubagentRunRecord | undefined) =>
     current !== undefined &&
-    !resolveSubagentChildAuthorityError(current) &&
+    resolveSubagentChildAuthority(current).status !== "mismatch" &&
     isSameSubagentRunOwner(current, params.entry) &&
     current.attachmentId === params.entry.attachmentId &&
     current.cleanup === params.entry.cleanup &&

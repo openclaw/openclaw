@@ -70,7 +70,7 @@ function run(overrides: Partial<SubagentRunRecordOverrides> = {}): SubagentRunRe
   return createSubagentRunRecord({
     runId: "original-run",
     childSessionKey,
-    childSessionIdentity: { sessionId: "session-id" },
+    childSessionIdentity: { sessionId: "session-id", lifecycleRevision: "session-revision" },
     requesterSessionKey: "agent:main:main",
     requesterDisplayKey: "main",
     requesterOrigin: { channel: "qa-channel", to: "qa-requester", accountId: "default" },
@@ -110,6 +110,7 @@ export const restartRecoveryTestHarness = {
     mocks.entries = {
       [childSessionKey]: {
         sessionId: "session-id",
+        lifecycleRevision: "session-revision",
         updatedAt: Date.now(),
         abortedLastRun: true,
       },

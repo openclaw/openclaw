@@ -15,7 +15,7 @@ import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-w
 import { holdQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import {
   resolveSubagentChildAgentId,
-  resolveSubagentChildAuthorityError,
+  resolveSubagentChildAuthority,
 } from "./subagent-child-owner-match.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
@@ -136,8 +136,8 @@ export async function withSubagentKillScope<T>(
     const controller = owner ? { ...owner } : undefined;
     for (const snapshot of runs) {
       assertCurrent();
-      const authorityError = resolveSubagentChildAuthorityError(snapshot);
-      if (authorityError) {
+      const authority = resolveSubagentChildAuthority(snapshot);
+      if (authority.status !== "verified") {
         if (
           !unresolvedRunIds.has(snapshot.runId) &&
           (!controller ||
@@ -153,7 +153,7 @@ export async function withSubagentKillScope<T>(
             canTraverse: () => false,
             prepareRead: () => undefined,
             children: [],
-            errors: new Set([authorityError]),
+            errors: new Set([authority.error]),
             discoveryFailed: true,
           });
         }

@@ -68,6 +68,7 @@ it("cancelling a watched main/global child preserves the other agent's work", as
     { agentId: owner, storePath: childStorePath, sessionKey: "global" },
     {
       sessionId: childId,
+      lifecycleRevision: `${childId}-revision`,
       updatedAt: Date.now(),
       spawnedBy: parentKey,
       parentSessionKey: parentKey,
@@ -227,6 +228,7 @@ async function prepareWatchedRawChildren() {
       { agentId, storePath, sessionKey: "global" },
       {
         sessionId: `${agentId}-global`,
+        lifecycleRevision: `${agentId}-global-revision`,
         updatedAt: Date.now(),
         spawnedBy: parentKey,
         parentSessionKey: parentKey,
@@ -669,7 +671,7 @@ it.each(["registration", "execution target"] as const)(
         cascadeKilled: 0,
         error: expect.stringContaining(
           identitySource === "registration"
-            ? "original session incarnation is unresolved or changed"
+            ? "original session incarnation is unresolved"
             : "session changed during cancellation preparation",
         ),
       });

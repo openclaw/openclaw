@@ -11,6 +11,7 @@ import type {
   FollowupCompletionOwner,
   FollowupSuccessor,
 } from "../../agents/subagents/completion/session-followup-completion.types.js";
+import { resolveSubagentChildAuthority } from "../../agents/subagents/registry/subagent-child-owner-match.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry-read.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -219,13 +220,11 @@ export function resolveRegisteredSubagentTimeoutSeconds(params: {
   const registeredRun = params.sessionKey
     ? getLatestLiveSubagentRunByChildSessionKey(params.sessionKey, undefined, params.agentId)
     : undefined;
-  const registeredSession = registeredRun?.childSessionIdentity;
   // Admission may adopt a replacement; retained rows must match its final identity.
   const inherits =
     registeredRun &&
     !registeredRun.execution.suppressSessionEffects &&
-    registeredSession?.sessionId === params.admittedSessionId &&
-    registeredSession.sessionId === params.admittedSessionEntry?.sessionId &&
-    registeredSession.lifecycleRevision === params.admittedSessionEntry.lifecycleRevision;
+    params.admittedSessionEntry?.sessionId === params.admittedSessionId &&
+    resolveSubagentChildAuthority(registeredRun, params.admittedSessionEntry).status === "verified";
   return inherits ? (registeredRun.runTimeoutSeconds ?? 0) : undefined;
 }
