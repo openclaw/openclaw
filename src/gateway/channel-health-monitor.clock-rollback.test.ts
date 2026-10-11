@@ -69,7 +69,9 @@ describe("channel-health-monitor clock rollback", () => {
     clock.setTime(STARTED_AT - 60_000 + CHECK_INTERVAL_MS);
     await clock.wake();
 
-    expect(manager.startChannel).toHaveBeenCalledWith("discord", "default");
+    expect(manager.startChannel).toHaveBeenCalledWith("discord", "default", {
+      reason: "health-monitor",
+    });
     monitor.stop();
   });
 

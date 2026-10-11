@@ -486,11 +486,9 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
             aria-label={t("activityFeed.searchPlaceholder")}
             value={props.filters.query}
             placeholder={t("activityFeed.searchPlaceholder")}
-            onInput={(event: Event) => {
-              if (event.currentTarget instanceof HTMLInputElement) {
-                props.onFiltersChange({ ...props.filters, query: event.currentTarget.value });
-              }
-            }}
+            onInput={(event) =>
+              props.onFiltersChange({ ...props.filters, query: event.currentTarget.value })
+            }
           />
         </label>
         <SettingsSegmented

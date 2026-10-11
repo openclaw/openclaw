@@ -18,6 +18,7 @@ import { formatGatewayChannelsStatusLines } from "../commands/channels/status.ru
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime-context.js";
 import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
+import { createMainThreadStallMonitor } from "../infra/main-thread-stall.js";
 import { tryReadSecretFileSync } from "../infra/secret-file.js";
 import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsystem.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
@@ -62,6 +63,7 @@ import {
   type TestAccount,
 } from "./server-channels.test-support.js";
 import { AUTH_NONE, createTestGatewayServer } from "./server-http.test-harness.js";
+import { createGatewayStartupTrace } from "./server-startup-trace.js";
 import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
 
 const hoisted = vi.hoisted(() => {
@@ -3125,6 +3127,54 @@ describe("server-channels auto restart", () => {
     expect(readAccount(manager)?.running).not.toBe(true);
   });
 
+  it("does not attribute later Discord gateway callbacks to account startup", async () => {
+    let now = 0;
+    const monitor = createMainThreadStallMonitor(() => now);
+    const gatewayEvent = createDeferred();
+    const eventHandled = createDeferred();
+    const started = createDeferred();
+    const startAccount = vi.fn(async ({ abortSignal }: ChannelGatewayContext<TestAccount>) => {
+      started.resolve();
+      await gatewayEvent.promise;
+      now += 1_928;
+      eventHandled.resolve();
+      await waitForAbort(abortSignal);
+    });
+    const log = createSubsystemLogger("gateway/stall-test");
+    const info = vi.spyOn(log, "info");
+    const trace = createGatewayStartupTrace(log);
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createChannelManager({
+      scheduler: createTestGatewayScheduler(),
+      getRuntimeConfig: () => ({}),
+      getPluginRegistry: requireActivePluginChannelRegistry,
+      channelLogs: { discord: log },
+      channelRuntimeEnvs: {},
+      startupTrace: trace,
+    });
+    createdManagers.push({ channelIds: ["discord"], manager });
+    try {
+      await manager.startChannels();
+      await started.promise;
+      await flushMicrotasks();
+      gatewayEvent.resolve();
+      await eventHandled.promise;
+      expect(startAccount).toHaveBeenCalledTimes(1);
+      expect(info.mock.calls.filter(([message]) => message.includes("starting account"))).toEqual([
+        ["[default] starting account (reason: startup)"],
+      ]);
+      expect(monitor.drain()).toEqual({
+        stalls: [{ elapsedMs: 1_928, task: "unattributed", taskMs: 1_928 }],
+        dropped: 0,
+      });
+    } finally {
+      monitor.stop();
+      trace.close();
+      info.mockRestore();
+      await manager.stopChannel("discord");
+    }
+  });
+
   it("prunes only credential owners and account state for inactive channel plugins", async () => {
     installTestRegistry(
       ...(["discord", "slack"] as const).map((channelId) =>
@@ -3272,7 +3322,9 @@ describe("server-channels auto restart", () => {
     try {
       await vi.advanceTimersByTimeAsync(2);
       await monitor.waitForIdle();
-      expect(restart).toHaveBeenCalledExactlyOnceWith("discord", "healthy");
+      expect(restart).toHaveBeenCalledExactlyOnceWith("discord", "healthy", {
+        reason: "health-monitor",
+      });
       expect(startAccount).toHaveBeenCalledTimes(2);
       expect(resolveAccount.mock.calls.map(([, accountId]) => accountId)).toEqual([
         "healthy",
