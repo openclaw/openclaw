@@ -94,15 +94,31 @@ const PRESENCE_REPLAY_SAFE_ACTIONS = new Set(["list", "person", "device"]);
 
 const READ_ONLY_SHELL_COMMANDS = new Set([
   "cat",
+  "df",
+  "diff",
+  "du",
   "grep",
   "head",
+  "id",
   "ls",
+  "md5",
+  "md5sum",
+  "ps",
   "pwd",
+  "realpath",
   "rg",
+  "sha256sum",
+  "shasum",
   "stat",
   "tail",
+  "uname",
+  "uptime",
   "wc",
+  "which",
+  "whoami",
 ]);
+
+const READ_ONLY_GIT_SUBCOMMANDS = new Set(["diff", "log", "rev-parse", "show", "status"]);
 
 const READ_ONLY_GH_PR_SUBCOMMANDS = new Set(["checks", "diff", "list", "status", "view"]);
 const READ_ONLY_GH_ISSUE_SUBCOMMANDS = new Set(["list", "status", "view"]);
@@ -153,6 +169,16 @@ function tokenizeReadOnlyShellCommands(command: string): string[][] | undefined 
       commands.push(tokens);
       tokens = [];
       continue;
+    }
+    // A word that is exactly ~ or starts with ~/ only names the home directory.
+    // ~user, ~+ and a ~ later in a word stay unclassified.
+    if (!quote && char === "~" && !tokenStarted) {
+      const next = command[index + 1];
+      if (next === undefined || next === "/" || /\s/.test(next)) {
+        current += char;
+        tokenStarted = true;
+        continue;
+      }
     }
     // Quoted regex syntax is literal, not a shell pipeline or glob. Double quotes
     // still expand substitutions; keep those and all escape syntax unclassified.
@@ -264,6 +290,25 @@ function isReadOnlyGhCommand(tokens: readonly string[]): boolean {
   return false;
 }
 
+function isReadOnlyGitCommand(tokens: readonly string[]): boolean {
+  // The subcommand must come first: global options such as -c and --exec-path
+  // can run programs. --output writes a file and --ext-diff runs a helper.
+  return (
+    READ_ONLY_GIT_SUBCOMMANDS.has(tokens[1] ?? "") &&
+    !tokens.slice(2).some((token) => token.startsWith("--output") || token === "--ext-diff")
+  );
+}
+
+function isReadOnlyDateCommand(tokens: readonly string[]): boolean {
+  // A bare operand sets the clock, as do -s and -f; allow only output formats and UTC.
+  return tokens.slice(1).every((token) => token.startsWith("+") || token === "-u");
+}
+
+function isReadOnlyHostnameCommand(tokens: readonly string[]): boolean {
+  // A bare operand and -F set the host name.
+  return tokens.slice(1).every((token) => token === "-s" || token === "-f");
+}
+
 function isReadOnlyFindCommand(tokens: readonly string[]): boolean {
   // Only known inspection predicates. Never admit -exec, -delete, -fprint,
   // platform extensions, or an unknown action by assuming it is harmless.
@@ -318,6 +363,15 @@ function isReadOnlyShellTokens(tokens: readonly string[]): boolean {
   }
   if (executable === "gh") {
     return isReadOnlyGhCommand(tokens);
+  }
+  if (executable === "git") {
+    return isReadOnlyGitCommand(tokens);
+  }
+  if (executable === "date") {
+    return isReadOnlyDateCommand(tokens);
+  }
+  if (executable === "hostname") {
+    return isReadOnlyHostnameCommand(tokens);
   }
   return false;
 }

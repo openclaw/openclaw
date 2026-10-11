@@ -222,6 +222,8 @@ describe("client voice confirmation", () => {
   it.each([
     "ls -la",
     "grep -n TODO README.md",
+    "git status --short",
+    "df -h ~",
     "rg -n 'token|8123|http|secret' notes.md",
     "find . -maxdepth 1 -type f | wc -l && find . -maxdepth 1 -type f ! -name '.*' | wc -l",
   ])("does not require confirmation for a classified read-only shell command: %s", (command) => {
