@@ -423,7 +423,20 @@ describe("runMessageAction host-media authority", () => {
       vi.clearAllMocks();
       vi.unstubAllEnvs();
     });
-    it("uses requester session channel policy for host-media reads", async () => {
+    it.each([
+      [
+        "uses requester session channel policy for host-media reads",
+        "id:trusted-user",
+        "requesterSenderId",
+        "trusted-user",
+      ],
+      [
+        "uses requester username policy for host-media reads",
+        "username:alice_u",
+        "requesterSenderUsername",
+        "alice_u",
+      ],
+    ] as const)("%s", async (_name, policyKey, requesterField, requesterValue) => {
       const handlePolicyCheckedAction = registerPolicyPlugin();
 
       await runMessageAction({
@@ -437,7 +450,7 @@ describe("runMessageAction host-media authority", () => {
               groups: {
                 ops: {
                   toolsBySender: {
-                    "id:trusted-user": {
+                    [policyKey]: {
                       deny: ["read"],
                     },
                   },
@@ -453,46 +466,7 @@ describe("runMessageAction host-media authority", () => {
           message: "hello",
           media: "/tmp/host.png",
         },
-        requesterSenderId: "trusted-user",
-        sessionKey: "agent:alpha:requestchat:group:ops",
-        dryRun: false,
-      });
-
-      const mediaAccess = readMediaAccess(readFirstPluginCall(handlePolicyCheckedAction));
-      expect(mediaAccess.readFile).toBeUndefined();
-    });
-
-    it("uses requester username policy for host-media reads", async () => {
-      const handlePolicyCheckedAction = registerPolicyPlugin();
-
-      await runMessageAction({
-        cfg: {
-          tools: { allow: ["read"] },
-          channels: {
-            policydest: {
-              enabled: true,
-            },
-            requestchat: {
-              groups: {
-                ops: {
-                  toolsBySender: {
-                    "username:alice_u": {
-                      deny: ["read"],
-                    },
-                  },
-                },
-              },
-            },
-          },
-        } as OpenClawConfig,
-        action: "send",
-        params: {
-          channel: "policydest",
-          target: "oc_123",
-          message: "hello",
-          media: "/tmp/host.png",
-        },
-        requesterSenderUsername: "alice_u",
+        [requesterField]: requesterValue,
         sessionKey: "agent:alpha:requestchat:group:ops",
         dryRun: false,
       });
