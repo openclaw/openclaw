@@ -120,17 +120,9 @@ const buildQuerySuggestions = (query: string, options: UsageFilterOptions): Quer
   if (!trimmed) {
     return [];
   }
-  const tokens = extractQueryTerms(trimmed).map((term) => term.raw);
-  const lastQueryWord = tokens.at(-1) ?? "";
-  const [rawKey, rawValue] = lastQueryWord.includes(":")
-    ? [
-        lastQueryWord.slice(0, lastQueryWord.indexOf(":")),
-        lastQueryWord.slice(lastQueryWord.indexOf(":") + 1),
-      ]
-    : ["", ""];
-
-  const key = normalizeLowercaseStringOrEmpty(rawKey);
-  const value = normalizeLowercaseStringOrEmpty(rawValue);
+  const term = extractQueryTerms(trimmed).at(-1);
+  const key = normalizeLowercaseStringOrEmpty(term?.key);
+  const value = normalizeLowercaseStringOrEmpty(term?.value);
 
   if (!key) {
     return [

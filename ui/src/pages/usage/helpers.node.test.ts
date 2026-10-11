@@ -9,7 +9,7 @@ describe("usage-helpers", () => {
     );
     expect(terms).toEqual([
       { key: "agent", value: "main", raw: "agent:main" },
-      { key: "model", value: "gpt-5.2", raw: "model:gpt-5.2" },
+      { key: "model", value: "gpt-5.2", raw: '"model:gpt-5.2"' },
       { key: "label", value: "Team Planning", raw: 'label:"Team Planning"' },
       { value: "free phrase", raw: '"free phrase"' },
       { key: "has", value: "errors", raw: "has:errors" },

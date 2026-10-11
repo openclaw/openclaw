@@ -116,7 +116,7 @@ export const extractQueryTerms = (query: string): UsageQueryTerm[] => {
     if (idx > 0) {
       const key = cleaned.slice(0, idx);
       const value = cleaned.slice(idx + 1).replace(/^"(.*)"$/u, "$1");
-      return { key, value, raw: cleaned };
+      return { key, value, raw: token };
     }
     return { value: cleaned, raw: token };
   });
