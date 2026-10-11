@@ -297,7 +297,7 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
     expect(f.onFallback).not.toHaveBeenCalled();
     expect(f.execute).toHaveBeenCalledOnce();
     expect(requests).toHaveLength(4);
-    expect(f.onModelRequest).toHaveBeenCalledTimes(4);
+    // Each boundary observes the request V2 prices, the compaction, then the checkpoint request.
     expect(
       f.onModelRequest.mock.calls.map(
         ([, context]) =>
@@ -305,7 +305,7 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
             (message) => message.role === "assistant" && message.providerReplay,
           ).length,
       ),
-    ).toEqual([0, 1, 1, 2]);
+    ).toEqual([0, 0, 1, 1, 1, 2]);
     const [firstCompact, firstNormal, secondCompact, secondNormal] = requests;
     if (!firstCompact || !firstNormal || !secondCompact || !secondNormal) {
       throw new Error("Expected compaction and continuation at both boundaries");
@@ -359,6 +359,49 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
     expect(reopened.execute).not.toHaveBeenCalled();
   });
 
+  it("prices a matching measured prefix once before deciding to compact", async () => {
+    const f = await fixture(SessionManager.inMemory(), false);
+    // Mirrors the mid-turn admission contract: a measured 15,000-token request with
+    // long unchanged instructions plus a 12,000-character tool result fits 24,576.
+    const boundary = createChatGPTV2CompactionBoundary({
+      ...f.boundaryParams,
+      contextTokenBudget: 32_768,
+      reserveTokens: 8_192,
+    });
+    const context = {
+      systemPrompt: "Keep these instructions. ".repeat(2_200),
+      messages: [
+        { role: "user" as const, content: "read the report", timestamp: 1 },
+        createAssistant(
+          model,
+          [{ type: "toolCall", id: "read-report", name: "read", arguments: {} }],
+          "toolUse",
+          15_000,
+        ),
+        {
+          role: "toolResult" as const,
+          toolCallId: "read-report",
+          toolName: "read",
+          content: [{ type: "text" as const, text: "r".repeat(12_000) }],
+          isError: false,
+          timestamp: 2,
+        },
+      ],
+    };
+    const anchor = { requestIndex: 1, messageCount: 2, contextTokens: 15_000 };
+    await expect(
+      boundary(
+        f.session.agent.streamFn,
+        { ...model, contextWindow: 32_768 },
+        context,
+        { sessionId: f.session.sessionId },
+        anchor,
+      ),
+    ).resolves.toBeUndefined();
+    expect(requests).toHaveLength(0);
+    expect(f.onFallback).not.toHaveBeenCalled();
+  });
+
   it("compacts through a provider stream that dispatches after returning", async () => {
     const f = await fixture(SessionManager.inMemory(), true, { asyncProvider: true });
     await f.submit();
@@ -379,8 +422,14 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
     async ({ userTokens, fits, nativeProvider }) => {
       const manager = SessionManager.inMemory();
       manager.appendMessage({ role: "user", content: "中".repeat(userTokens), timestamp: 1 });
+      // Covered history pushes the request over budget; only retained users must fit after.
       manager.appendMessage(
-        createAssistant(model, [{ type: "text", text: "old detail" }], "stop", 60_000),
+        createAssistant(
+          model,
+          [{ type: "text", text: "Old detail. ".repeat(5_000) }],
+          "stop",
+          60_000,
+        ),
       );
       const f = await fixture(manager, false, { nativeProvider });
       const warn = vi.spyOn(log, "warn");

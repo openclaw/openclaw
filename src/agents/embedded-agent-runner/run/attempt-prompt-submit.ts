@@ -16,6 +16,7 @@ import {
   declarePromptHistoryRewrite,
   recordAggregateTruncation,
 } from "../prompt-cache-observability.js";
+import type { MeasuredRequestContext } from "../prompt-cache-request-observer.js";
 import { updateActiveEmbeddedRunSnapshot } from "../runs.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { truncateOversizedToolResultsInMessages } from "../tool-result-truncation.js";
@@ -96,7 +97,10 @@ export async function submitEmbeddedAttemptPrompt(input: {
     | undefined;
   /** Observes only the first admitted foreground dispatch, not preflight/compaction. */
   onPrimaryModelRequest?: (tools: NonNullable<Parameters<StreamFn>[1]["tools"]>) => void;
-  onModelRequest?: (model: Parameters<StreamFn>[0], context: Parameters<StreamFn>[1]) => void;
+  onModelRequest?: (
+    model: Parameters<StreamFn>[0],
+    context: Parameters<StreamFn>[1],
+  ) => MeasuredRequestContext | undefined;
   onSteeringAcknowledged: () => void;
   persistToolResultProjections: () => Promise<void>;
   prependContext?: string;
@@ -222,6 +226,11 @@ export async function submitEmbeddedAttemptPrompt(input: {
         const { tools, systemPrompt } = readRestoredContext();
         requestContext = { ...requestContext, tools, systemPrompt };
       }
+      // Observe before V2 decides: only this observation can anchor the request's
+      // measured prefix. A checkpoint request is observed again as its own request.
+      const requestAnchor = foregroundRequest
+        ? input.onModelRequest?.(model, requestContext)
+        : undefined;
       if (foregroundRequest && input.compactBeforeRequest) {
         const checkpoint = await input.compactBeforeRequest(
           (compactionModel, compactionContext, compactionOptions) => {
@@ -231,6 +240,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
           model,
           requestContext,
           options,
+          requestAnchor,
         );
         assertRequestCurrent();
         if (checkpoint) {
@@ -241,10 +251,8 @@ export async function submitEmbeddedAttemptPrompt(input: {
             ...requestContext,
             messages: [...requestContext.messages, checkpoint],
           };
+          input.onModelRequest?.(model, requestContext);
         }
-      }
-      if (foregroundRequest) {
-        input.onModelRequest?.(model, requestContext);
       }
       if (foregroundRequest && !primaryRequestObserved) {
         primaryRequestObserved = true;

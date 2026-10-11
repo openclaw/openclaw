@@ -19,11 +19,12 @@ import { makeZeroUsageSnapshot, normalizeUsage } from "../../usage.js";
 import type { runCompactionHooks, runPostCompactionSideEffects } from "../compaction-hooks.js";
 import { compactWithSafetyTimeout } from "../compaction-safety-timeout.js";
 import { log } from "../logger.js";
+import type { MeasuredRequestContext } from "../prompt-cache-request-observer.js";
 import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import {
   estimateLlmBoundaryTokenPressure,
   estimateToolSchemaTokenPressure,
-  shouldPreemptivelyCompactBeforePrompt,
+  resolveProjectedRequestPressure,
 } from "./preemptive-compaction.js";
 
 /** Only the native ChatGPT request path owns V2; proxies keep their existing policy. */
@@ -76,9 +77,10 @@ export function createChatGPTV2CompactionBoundary(params: {
   model: Model,
   context: Context,
   options: Parameters<StreamFn>[2],
+  requestAnchor?: MeasuredRequestContext,
 ) => Promise<AssistantMessage | undefined> {
   let failed = false;
-  return async (streamFn, model, context, options) => {
+  return async (streamFn, model, context, options, requestAnchor) => {
     if (!usesNativeOpenAICodexResponsesBackend(model) || params.session.isCompacting) {
       return undefined;
     }
@@ -88,20 +90,19 @@ export function createChatGPTV2CompactionBoundary(params: {
       params.assertActive();
     };
     assertActive();
-    const pressure = shouldPreemptivelyCompactBeforePrompt({
-      messages: context.messages,
-      systemPrompt: context.systemPrompt,
-      prompt: "",
+    // Same accounting as the mid-turn precheck this boundary replaces: a matching
+    // measured predecessor prices the unchanged prefix once; otherwise stay conservative.
+    const outgoing = resolveProjectedRequestPressure({
+      context,
+      previousRequest: requestAnchor,
       contextTokenBudget: params.contextTokenBudget,
       reserveTokens: params.reserveTokens,
-      toolSchemaTokens: estimateToolSchemaTokenPressure(context.tools),
       replay: {
         model,
         sessionId: requestOptions.sessionId,
         authProfileId: requestOptions.authProfileId,
       },
     });
-    const outgoing = pressure.compactionReplay ?? pressure;
     if (outgoing.route === "fits") {
       return undefined;
     }
