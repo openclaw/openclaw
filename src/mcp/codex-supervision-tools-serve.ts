@@ -119,6 +119,6 @@ export async function serveCodexSupervisionToolsMcp(): Promise<void> {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   serveCodexSupervisionToolsMcp().catch((error: unknown) => {
     process.stderr.write(`codex-supervisor-serve: ${formatErrorMessage(error)}\n`);
-    process.exit(1);
+    process.exitCode = 1;
   });
 }

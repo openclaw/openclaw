@@ -3,7 +3,7 @@ import {
   defineStableChannelIngressIdentity,
   type ChannelIngressEventInput,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import { resolveCommandAuthorization } from "openclaw/plugin-sdk/command-auth-native";
+import { resolveCommandAuthorizationAsync } from "openclaw/plugin-sdk/command-auth-native";
 import type { DmPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeAllowFrom, type NormalizedAllowFrom } from "./bot-access.js";
 import { isTelegramCommandsAllowFromConfigured } from "./bot/helpers.js";
@@ -135,9 +135,9 @@ export async function resolveTelegramCommandIngressAuthorization(params: {
   hasControlCommand?: boolean;
   modeWhenAccessGroupsOff?: "allow" | "deny" | "configured";
   includeDmAllowForGroupCommands?: boolean;
-  ownerContext?: Parameters<typeof resolveCommandAuthorization>[0]["ctx"];
+  ownerContext?: Parameters<typeof resolveCommandAuthorizationAsync>[0]["ctx"];
 }) {
-  const ownerAccess = resolveCommandAuthorization({
+  const ownerAccess = await resolveCommandAuthorizationAsync({
     cfg: params.cfg,
     ctx: params.ownerContext ?? {
       Provider: "telegram",
