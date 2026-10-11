@@ -6,5 +6,4 @@ export { resolveConversationLabel } from "openclaw/plugin-sdk/conversation-runti
 export { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 export { finalizeInboundContext, resolveChunkMode } from "openclaw/plugin-sdk/reply-runtime";
 export { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-export { recordDeliveredCommandExchange } from "openclaw/plugin-sdk/session-transcript-runtime";
 export { deliverSlackSlashReplies, sanitizeSlackMonitorReplyPayload } from "./replies.js";

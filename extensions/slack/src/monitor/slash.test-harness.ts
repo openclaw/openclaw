@@ -14,7 +14,6 @@ const mocks = vi.hoisted(() => ({
   resolveConversationLabelMock: vi.fn(),
   recordSessionMetaFromInboundMock: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
   resolveStorePathMock: vi.fn(),
-  recordDeliveredCommandExchangeMock: vi.fn(async () => ({ ok: true })),
   deliverSlackSlashRepliesMock: vi.fn<(params: unknown) => Promise<unknown>>(async (params) => {
     const delivery = params as {
       replies?: unknown[];
@@ -29,7 +28,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./slash-dispatch.runtime.js", async (importOriginal) => {
   return {
     ...(await importOriginal<typeof import("./slash-dispatch.runtime.js")>()),
-    recordDeliveredCommandExchange: mocks.recordDeliveredCommandExchangeMock,
     deliverSlackSlashReplies: (params: unknown) => mocks.deliverSlackSlashRepliesMock(params),
     dispatchChannelInboundTurn: async (plan: {
       cfg: unknown;
@@ -105,7 +103,6 @@ type SlashHarnessMocks = {
   recordSessionMetaFromInboundMock: AsyncMock;
   resolveStorePathMock: ReturnType<typeof vi.fn>;
   deliverSlackSlashRepliesMock: AsyncMock;
-  recordDeliveredCommandExchangeMock: typeof mocks.recordDeliveredCommandExchangeMock;
 };
 
 export function getSlackSlashMocks(): SlashHarnessMocks {
@@ -116,7 +113,6 @@ export function resetSlackSlashMocks() {
   installSlackTestRuntime();
   mocks.dispatchMock.mockReset().mockResolvedValue({ counts: { final: 1, tool: 0, block: 0 } });
   mocks.turnPlanMock.mockReset();
-  mocks.recordDeliveredCommandExchangeMock.mockClear();
   mocks.readAllowFromStoreMock.mockReset().mockResolvedValue([]);
   mocks.upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
   mocks.resolveAgentRouteMock.mockReset().mockReturnValue({

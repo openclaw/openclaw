@@ -1,11 +1,7 @@
-import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import { recordDeliveredCommandExchange } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import type { MattermostPost } from "./client.js";
-import type {
-  MattermostInteractiveButtonInput,
-  MattermostInteractionResponse,
-} from "./interactions.js";
+import type { MattermostInteractionResponse } from "./interactions.js";
 import {
   buildMattermostAllowedModelRefs,
   parseMattermostModelPickerContext,
@@ -116,8 +112,7 @@ export function createMattermostModelPickerInteractionHandler(
       agentId: eventPlan.route.agentId,
       sessionKey: eventPlan.thread.sessionKey,
     };
-    const sessionEntry = await getSessionEntryAsync({
-      agentId: modelSessionRoute.agentId,
+    const sessionEntry = getSessionEntry({
       storePath: resolveStorePath(cfg.session?.store, { agentId: modelSessionRoute.agentId }),
       sessionKey: modelSessionRoute.sessionKey,
       readConsistency: "latest",
@@ -125,31 +120,13 @@ export function createMattermostModelPickerInteractionHandler(
     const data = await buildPreparedModelsProviderData(cfg, eventPlan.route.agentId, {
       sessionEntry,
     });
-    const updatePickerPost = async (
-      message: string,
-      buttons?: MattermostInteractiveButtonInput[][],
-    ) => {
-      const text = [data.refreshWarning, message].filter(Boolean).join("\n\n");
-      const response = await updateModelPickerPost({
+    const updatePickerPost = (message: string, buttons?: Array<unknown>) =>
+      updateModelPickerPost({
         channelId: params.payload.channel_id,
         postId: params.payload.post_id,
-        message: text,
+        message: [data.refreshWarning, message].filter(Boolean).join("\n\n"),
         buttons,
       });
-      await recordDeliveredCommandExchange({
-        config: cfg,
-        ...modelSessionRoute,
-        expectedSessionId: sessionEntry?.sessionId,
-        commandText: pickerCommandText,
-        commandId: `mattermost:${account.accountId}:${params.payload.channel_id}:${params.payload.post_id}:${params.payload.user_id}:${pickerCommandText}:${"page" in pickerState ? pickerState.page : 1}`,
-        replyId: "picker-update",
-        replyText: [
-          text,
-          ...(buttons ?? []).map((row) => row.map((button) => button.text).join(", ")),
-        ].join("\n"),
-      });
-      return response;
-    };
     if (data.providers.length === 0) {
       return await updatePickerPost("No models available.");
     }

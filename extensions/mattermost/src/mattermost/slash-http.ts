@@ -7,8 +7,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
-import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import { recordDeliveredCommandExchange } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ResolvedMattermostAccount } from "../mattermost/accounts.js";
 import { getMattermostRuntime } from "../runtime.js";
@@ -689,10 +688,9 @@ async function handleSlashCommandAsync(params: {
       : `Mattermost message in ${roomLabel} from ${senderName}`;
 
   const to = kind === "direct" ? `user:${senderId}` : `channel:${channelId}`;
-  const messageSid = triggerId ?? `slash-${Date.now()}`;
   const pickerEntry = resolveMattermostModelPickerEntry(commandText);
   if (pickerEntry) {
-    const sessionEntry = await getSessionEntryAsync({
+    const sessionEntry = getSessionEntry({
       storePath: resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
       sessionKey: route.sessionKey,
       readConsistency: "latest",
@@ -704,16 +702,6 @@ async function handleSlashCommandAsync(params: {
         [data.refreshWarning, "No models available."].filter(Boolean).join("\n\n"),
         { cfg, accountId: account.accountId },
       );
-      await recordDeliveredCommandExchange({
-        config: cfg,
-        agentId: route.agentId,
-        sessionKey: route.sessionKey,
-        expectedSessionId: sessionEntry?.sessionId,
-        commandText,
-        commandId: `mattermost:${account.accountId}:${channelId}:${messageSid}`,
-        replyId: "model-picker",
-        replyText: [data.refreshWarning, "No models available."].filter(Boolean).join("\n\n"),
-      });
       return;
     }
 
@@ -739,22 +727,6 @@ async function handleSlashCommandAsync(params: {
       [data.refreshWarning, view.text].filter(Boolean).join("\n\n"),
       { cfg, accountId: account.accountId, buttons: view.buttons },
     );
-    await recordDeliveredCommandExchange({
-      config: cfg,
-      agentId: route.agentId,
-      sessionKey: route.sessionKey,
-      expectedSessionId: sessionEntry?.sessionId,
-      commandText,
-      commandId: `mattermost:${account.accountId}:${channelId}:${messageSid}`,
-      replyId: "model-picker",
-      replyText: [
-        data.refreshWarning,
-        view.text,
-        ...view.buttons.map((row) => row.map((button) => button.text).join(", ")),
-      ]
-        .filter(Boolean)
-        .join("\n"),
-    });
     runtime.log?.(`delivered model picker to ${to}`);
     return;
   }

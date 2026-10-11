@@ -9,15 +9,10 @@ const mocks = vi.hoisted(() => ({
   dispatch: vi.fn(),
   parseContext: vi.fn(),
   runDetachedWebhookWork: vi.fn(),
-  recordDeliveredCommandExchange: vi.fn(async () => ({ ok: true })),
 }));
 
 vi.mock("openclaw/plugin-sdk/webhook-request-guards", () => ({
   runDetachedWebhookWork: mocks.runDetachedWebhookWork,
-}));
-
-vi.mock("openclaw/plugin-sdk/session-transcript-runtime", () => ({
-  recordDeliveredCommandExchange: mocks.recordDeliveredCommandExchange,
 }));
 
 vi.mock("./model-picker.js", async (importOriginal) => ({
@@ -193,19 +188,6 @@ describe("Mattermost model-picker interaction dispatch", () => {
             ? "Select a model"
             : "Select a provider";
         expect(sent?.message).toContain(visibleText);
-        expect(mocks.recordDeliveredCommandExchange).toHaveBeenCalledWith(
-          expect.objectContaining({
-            sessionKey: "agent:main:mm",
-            commandText:
-              action === "select"
-                ? "/model openai/gpt-5.4"
-                : action === "list"
-                  ? "/models openai"
-                  : "/models",
-            commandId: expect.stringMatching(/^mattermost:default:channel-1:/),
-            replyText: expect.stringContaining(visibleText),
-          }),
-        );
         expect(sent?.message.includes("Some models could not be refreshed.")).toBe(
           refreshWarning !== undefined,
         );
@@ -245,13 +227,6 @@ describe("Mattermost model-picker interaction dispatch", () => {
       expect(JSON.stringify(sent?.buttons)).toContain('"model":"gpt-5.4"');
       expect(updateModelPickerPost).toHaveBeenCalledOnce();
       expect(order).toEqual(["load", "detach", "update"]);
-      expect(mocks.recordDeliveredCommandExchange).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionKey: "agent:main:mm",
-          commandText: "/model openai/gpt-5.4",
-          replyText: expect.stringContaining("Select a model to switch immediately."),
-        }),
-      );
     },
   );
 });

@@ -615,7 +615,6 @@ export function createSlackCommandHandler(params: {
           catalog: menuModelCatalog,
         });
         if (menu) {
-          const route = menuRoute ?? (await resolveSlashRoute());
           const commandLabel = commandDefinition.nativeName ?? commandDefinition.key;
           const title = formatCommandArgMenuTitle({ command: commandDefinition, menu });
           const blocks = buildSlackCommandArgMenuBlocks({
@@ -633,20 +632,6 @@ export function createSlackCommandHandler(params: {
             blocks,
             response_type: "ephemeral",
           });
-          const commandId = p.eventTs ?? command.trigger_id;
-          if (commandId) {
-            const { recordDeliveredCommandExchange } = await loadSlashDispatchRuntime();
-            await recordDeliveredCommandExchange({
-              config: cfg,
-              agentId: route.agentId,
-              sessionKey: route.sessionKey,
-              assertCurrent: isCurrentSession,
-              commandText: prompt,
-              commandId: `slack:${account.accountId}:${routeTarget.peerId}:${commandId}`,
-              replyId: "argument-menu",
-              replyText: `${title}\n${menu.choices.map((choice) => choice.label).join(", ")}`,
-            });
-          }
           return false;
         }
       }

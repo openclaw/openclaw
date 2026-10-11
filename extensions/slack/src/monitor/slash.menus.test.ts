@@ -297,15 +297,6 @@ describe("Slack native command argument menus", () => {
     const element = actions.elements?.[0];
     expect(element?.type).toBe(type);
     expect(element).toHaveProperty("confirm");
-    expect(getSlackSlashMocks().recordDeliveredCommandExchangeMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "session:1",
-        commandText: `/${name}`,
-        commandId: expect.stringMatching(/^slack:/),
-        replyId: "argument-menu",
-        replyText: expect.stringContaining(firstCallPayload(respond, "menu").text),
-      }),
-    );
     if (type === "button") {
       expect(element?.action_id).toBe("openclaw_cmdarg_0_0");
       expect(actions.elements?.[1]?.action_id).toBe("openclaw_cmdarg_0_1");
