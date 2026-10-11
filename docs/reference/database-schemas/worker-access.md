@@ -2202,10 +2202,9 @@ Planning stays outside transactions; transaction and commit grants recheck curre
 authority and transaction-local session facts. Pending-input custody and committed
 view/identity publication remain with their existing owners. Acknowledged replies
 survive later authority or projection failures without replay, and reconciliation
-uses the actor's existing compute composition. Static notes prepare redacted bytes
-before dispatch and refuse changed secret-registry revisions or logging patterns
-using in-memory facts inside grants. Re-preparation remains outside the transaction;
-even an unrelated registry revision change refuses the captured write.
+uses the actor's existing compute composition. Static notes preserve their text
+without secret masking; secret-registry revisions and logging patterns do not
+invalidate prepared transcript writes.
 
 The internal composition entry point is inactive. Production still selects the
 host owner; P7d must install the actor binding and remove the retained native
@@ -5437,7 +5436,7 @@ This read-only cutover changes no schema, admission, stored bytes, or update beh
 SessionManager's awaited persistence family uses its existing SQLite writer
 domain for file-backed transcripts, including user and custom messages,
 `beforeFreshMessageCommit`, metadata, compaction, and branch/leaf mutations.
-The host retains extension hooks, redaction, and
+The host retains extension hooks, structural preparation, and
 tool-result custody; the worker validates the prepared parent, appends the exact
 storage bytes, and returns the committed version and any required view reload.
 The manager adopts that receipt before publishing pending-tool changes. Each

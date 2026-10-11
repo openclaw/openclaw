@@ -309,9 +309,10 @@ guidance for listing valid keys, and an empty or whitespace-only `--session-key`
 is rejected. Without a key, an empty selection prints
 `No sessions found.` and exits successfully, including with `--follow`.
 
-The progress view is intentionally conservative: prompt text, tool arguments,
-and tool result bodies are not printed. Tool calls show the tool name;
-tool results show status such as `ok`, `error`, or `done`;
+The progress view omits prompt text and tool result bodies. Tool calls show the
+tool name and serialized arguments, without secret masking; this output can
+contain credentials, so review it before copying or sharing. Tool results show
+status such as `ok`, `error`, or `done`;
 model completion lines show provider/model and terminal status. Provider failures
 and turns without delivery show `error`; cancellation shows `aborted`, timeouts
 show `timeout`, and successful completions (including delivered partial replies)

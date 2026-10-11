@@ -1370,11 +1370,9 @@ maintenance, exports, and SQLite writers keep their existing capacity. No schema
 stored format, or update migration changes are required.
 Session exports read events, statistics, and session
 classification from one read-only SQLite snapshot, then prepare text and
-provenance off the Gateway thread. The caller carries its current exact-secret
-redaction snapshot and rejects results prepared against an obsolete registry.
-Reset-recall metadata crosses the worker boundary with the prepared content.
-If secret registration invalidates both preparation attempts, the export rejects
-for retry instead of reading SQLite on the Gateway thread. Failed index rebuilds
+provenance off the Gateway thread. Conversation and tool text retain their stored
+content without secret masking. Reset-recall metadata crosses the worker boundary
+with the prepared content. Failed index rebuilds
 preserve the published index and retained retry state.
 Chunk preparation from captured session text uses the existing local workspace
 queue without a durable write lease. File and multimodal preparation retain that

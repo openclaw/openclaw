@@ -240,7 +240,7 @@ applicable policy also requires fresh publication admission.
 
     `await api.runtime.gateway.readSessionFacts({ sessionKeys })` reads at most
     40 sessions and returns typed `{ sessions, warnings? }` data. Each session
-    includes its key, identity, agent, bounded redacted title and message preview,
+    includes its key, identity, agent, bounded title and message preview without secret masking,
     run state (`active`, `idle`, or `failed`), optional observer digest
     (health, headline, assessment, revision), pull-request numbers and states,
     archive state, and last activity time. The message preview is capped at
