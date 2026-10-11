@@ -44,30 +44,14 @@ import {
   registerNativeHookRelay,
   resolveNativeHookRelayDeferredToolApproval,
 } from "./native-hook-relay.js";
-import { clearNativeHookRelaysForTests } from "./native-hook-relay.test-support.js";
+import {
+  clearNativeHookRelaysForTests,
+  createNativeHookRelayPermissionRequestFixture as createPermissionRequestFixture,
+} from "./native-hook-relay.test-support.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-native-relay-policy-");
 
 const NATIVE_HOOK_RELAY_EXEC_PREFIX = process.platform === "win32" ? "" : "exec ";
-
-function createPermissionRequestFixture(
-  relayId: string,
-  toolUseId: string,
-  toolInput: Record<string, unknown> = { command: "git status" },
-): Parameters<typeof invokeNativeHookRelay>[0] {
-  return {
-    provider: "codex",
-    relayId,
-    event: "permission_request",
-    rawPayload: {
-      hook_event_name: "PermissionRequest",
-      cwd: "/repo",
-      tool_name: "Bash",
-      tool_use_id: toolUseId,
-      tool_input: toolInput,
-    },
-  };
-}
 
 function registerRelay(overrides: Partial<Parameters<typeof registerNativeHookRelay>[0]> = {}) {
   return registerNativeHookRelay({
