@@ -98,7 +98,7 @@ describe("registerTelegramNativeCommands /login", () => {
 
   it("delivers the core provider menu and its method continuation without starting login", async () => {
     const loginFlow = vi.fn();
-    const { handler, nativeCommandCallbackDispatcher } = registerLoginCommand({
+    const { handler, nativeCommandCallbackDispatcher } = await registerLoginCommand({
       cfg: { commands: { native: true, ownerAllowFrom: ["200"] } },
       loginFlow,
     });
@@ -153,7 +153,7 @@ describe("registerTelegramNativeCommands /login", () => {
       loginCompleted = true;
       return createLoginResult("openai:codex");
     });
-    const { handler, sendMessage } = registerLoginCommand({
+    const { handler, sendMessage } = await registerLoginCommand({
       cfg: createOwnerLoginConfig(),
       loginFlow,
     });
@@ -205,7 +205,7 @@ describe("registerTelegramNativeCommands /login", () => {
       await finishLogin.promise;
       return createLoginResult("openai:codex");
     });
-    const { nativeCommandCallbackDispatcher, sendMessage } = registerLoginCommand({
+    const { nativeCommandCallbackDispatcher, sendMessage } = await registerLoginCommand({
       cfg: createOwnerLoginConfig(),
       loginFlow,
     });
@@ -267,7 +267,7 @@ describe("registerTelegramNativeCommands /login", () => {
       await params.prompter.note("URL: https://auth.openai.com/codex/device\nCode: SECRET");
       return createLoginResult("openai:codex");
     });
-    const { handler, sendMessage } = registerLoginCommand({
+    const { handler, sendMessage } = await registerLoginCommand({
       cfg: createOwnerLoginConfig(),
       loginFlow,
       allowFrom: ["200"],
@@ -291,7 +291,7 @@ describe("registerTelegramNativeCommands /login", () => {
       authRefresh: "refreshed",
       profiles: [],
     }));
-    const { handler, sendMessage } = registerLoginCommand({
+    const { handler, sendMessage } = await registerLoginCommand({
       cfg: {
         commands: {
           native: true,
@@ -322,7 +322,7 @@ describe("registerTelegramNativeCommands /login", () => {
       await deferred.promise;
       return createLoginResult("openai:codex");
     });
-    const { handler, sendMessage } = registerLoginCommand({
+    const { handler, sendMessage } = await registerLoginCommand({
       cfg: createOwnerLoginConfig(),
       loginFlow,
     });
@@ -367,7 +367,7 @@ describe("registerTelegramNativeCommands /login", () => {
         settled += 1;
       }
     });
-    const { handler, sendMessage } = registerLoginCommand({
+    const { handler, sendMessage } = await registerLoginCommand({
       cfg: createOwnerLoginConfig(),
       loginFlow,
       allowFrom: ["200", "201"],
@@ -415,7 +415,7 @@ describe("registerTelegramNativeCommands /login", () => {
       persist();
       return createLoginResult("openai:codex");
     });
-    const { handler, sendMessage } = registerLoginCommand({
+    const { handler, sendMessage } = await registerLoginCommand({
       cfg,
       loginFlow,
       getRuntimeConfig: () => currentConfig,
@@ -458,7 +458,7 @@ describe("registerTelegramNativeCommands /login", () => {
       },
     );
     const loginFlow = vi.fn<TelegramLoginFlow>(async () => createLoginResult("openai:saved"));
-    const { handler, sendMessage } = registerLoginCommand({ cfg: { commands }, loginFlow });
+    const { handler, sendMessage } = await registerLoginCommand({ cfg: { commands }, loginFlow });
 
     await handler(createPrivateCommandContext({ match: "codex", userId: 200 }));
 
@@ -472,7 +472,7 @@ describe("registerTelegramNativeCommands /login", () => {
     const loginFlow = vi.fn(async () => {
       throw new Error("device-code request failed");
     });
-    const { handler, sendMessage } = registerLoginCommand({
+    const { handler, sendMessage } = await registerLoginCommand({
       cfg: createOwnerLoginConfig(),
       loginFlow,
     });
@@ -496,7 +496,7 @@ describe("registerTelegramNativeCommands /login", () => {
       await params.prompter.deviceCode?.({ title: "Codex login", code: "SUCCESS-CODE" });
       return createLoginResult("openai:codex");
     });
-    const { handler, sendMessage } = registerLoginCommand({
+    const { handler, sendMessage } = await registerLoginCommand({
       cfg: createOwnerLoginConfig(),
       loginFlow,
       runtime,
@@ -545,7 +545,7 @@ describe("registerTelegramNativeCommands /login", () => {
         loginSettled = true;
       }
     });
-    const { handler, sendMessage } = registerLoginCommand({
+    const { handler, sendMessage } = await registerLoginCommand({
       cfg: createOwnerLoginConfig(),
       loginFlow,
       abortSignal: shutdown.signal,
@@ -566,7 +566,7 @@ describe("registerTelegramNativeCommands /login", () => {
       await finishLogin.promise;
       return createLoginResult("openai:codex");
     });
-    const { accountId, handler, sendMessage, sendMessageTelegram } = registerLoginCommand({
+    const { accountId, handler, sendMessage, sendMessageTelegram } = await registerLoginCommand({
       cfg: createOwnerLoginConfig(),
       loginFlow,
     });
@@ -590,7 +590,7 @@ describe("registerTelegramNativeCommands /login", () => {
       sessionDirs.make(),
       loginSessionMocks,
     );
-    const { handler } = registerLoginCommand({
+    const { handler } = await registerLoginCommand({
       accountId: "default",
       cfg: createOwnerLoginConfig(),
       loginFlow: vi.fn<TelegramLoginFlow>(async () => createLoginResult("openai:saved")),
@@ -620,7 +620,7 @@ describe("registerTelegramNativeCommands /login", () => {
       await finishLogin.promise;
       return createLoginResult("openai:new-owner@example.com");
     });
-    const { handler, sendMessage } = registerLoginCommand({
+    const { handler, sendMessage } = await registerLoginCommand({
       accountId: "default",
       cfg: {
         commands: { native: true, ownerAllowFrom: ["200"] },
@@ -677,7 +677,7 @@ describe("registerTelegramNativeCommands /login", () => {
       await finishLogin.promise;
       return createLoginResult("openai:login-profile");
     });
-    const { handler, sendMessage } = registerLoginCommand({
+    const { handler, sendMessage } = await registerLoginCommand({
       accountId: "default",
       cfg: {
         commands: { native: true, ownerAllowFrom: ["200"] },
@@ -732,7 +732,7 @@ describe("registerTelegramNativeCommands /login", () => {
       const runModelsAuthLoginFlow = vi.fn<TelegramLoginFlow>(async () =>
         createLoginResult("openai:new-owner@example.com", authRefresh),
       );
-      const { handler, sendMessage } = registerLoginCommand({
+      const { handler, sendMessage } = await registerLoginCommand({
         accountId: "default",
         cfg: {
           commands: { native: true, ownerAllowFrom: ["200"] },
@@ -782,7 +782,7 @@ describe("registerTelegramNativeCommands /login", () => {
     const runModelsAuthLoginFlow = vi.fn<TelegramLoginFlow>(async () =>
       createLoginResult("openai:owner@example.com"),
     );
-    const { handler, sendMessage } = registerLoginCommand({
+    const { handler, sendMessage } = await registerLoginCommand({
       accountId: "default",
       cfg: {
         commands: { native: true, ownerAllowFrom: ["200"] },
