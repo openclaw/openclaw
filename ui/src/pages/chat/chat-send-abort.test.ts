@@ -138,6 +138,7 @@ describe("handleAbortChat", () => {
       const host = makeChatHost({
         requestHandlers: {
           "chat.abort": { aborted: true },
+          "sessions.abort": { status: "aborted" },
         },
         chatRunId: "run-main",
         chatMessage: message,
@@ -146,10 +147,11 @@ describe("handleAbortChat", () => {
 
       await handleSendChat(host);
 
-      expect(host.request).toHaveBeenCalledWith("chat.abort", {
-        runId: "run-main",
-        sessionKey: "agent:main",
+      expect(host.request).toHaveBeenCalledWith("sessions.abort", {
+        key: "agent:main",
+        clearQueued: true,
       });
+      expect(host.request).not.toHaveBeenCalledWith("chat.abort", expect.anything());
       expect(host.chatMessage).toBe("");
     },
   );
