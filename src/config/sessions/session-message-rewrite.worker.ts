@@ -435,15 +435,17 @@ export function applySessionTranscriptEvent<T>(
     }
     const candidate: SessionTranscriptEventCommitted = {
       kind: "session-transcript-event",
+      appended: false,
       projectionNeedsReconcile: false,
     };
-    appendTranscriptEventInTransaction(database, input.scope, event, {
-      eventJson: input.eventJson,
-      scheduleProjectionReconcile: false,
-      onProjectionReconcileNeeded: () => {
-        candidate.projectionNeedsReconcile = true;
-      },
-    });
+    candidate.appended =
+      appendTranscriptEventInTransaction(database, input.scope, event, {
+        eventJson: input.eventJson,
+        scheduleProjectionReconcile: false,
+        onProjectionReconcileNeeded: () => {
+          candidate.projectionNeedsReconcile = true;
+        },
+      }) !== false;
     if (input.fence) {
       assertLockedTranscriptWriteAllowed(database, input.scope, input.fence);
     }

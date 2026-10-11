@@ -83,30 +83,25 @@ export async function withSessionActor<T>(
   const options = toDatabaseOptions(scope);
   const database = { ...options, path: resolveOpenClawAgentSqlitePath(options) };
   const identity = readDatabasePathIdentitySync(database.path);
-  let target: SessionActorTarget | undefined;
-  if (identity.key.startsWith("file:")) {
-    target = {
-      database: {
-        kind: "file",
-        physicalIdentity: identity.key.slice("file:".length),
-        birthtime: identity.birthtime,
-        nativeLocation: identity.canonicalPath,
-      },
-      sessionKey: scope.sessionKey,
-    };
-  } else {
-    const { captureNativeIncognitoSessionActorTarget } =
-      await import("./session-actor-native-incognito.js");
-    lifetime.assertCurrent();
-    target = captureNativeIncognitoSessionActorTarget({ database, sessionKey: scope.sessionKey });
-  }
-  if (!target) {
+  if (!identity.key.startsWith("file:")) {
     return undefined;
   }
+  const target: SessionActorTarget = {
+    database: {
+      kind: "file",
+      physicalIdentity: identity.key.slice("file:".length),
+      birthtime: identity.birthtime,
+      nativeLocation: identity.canonicalPath,
+    },
+    sessionKey: scope.sessionKey,
+  };
   const actor = await createSessionActorFactory({
     ...database,
-    path: target.database.kind === "file" ? identity.canonicalPath : database.path,
+    path: identity.canonicalPath,
   }).acquire(target, lifetime);
+  if ("kind" in actor && actor.kind === "not-actor-owned") {
+    return undefined;
+  }
   try {
     return await consume(actor);
   } finally {

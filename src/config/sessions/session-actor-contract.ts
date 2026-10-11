@@ -29,7 +29,6 @@ import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type {
-  SessionActorNativeIncognitoIdentity,
   SessionActorTarget,
   SessionActorVersion,
   SessionActorLifetime,

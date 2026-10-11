@@ -11,20 +11,8 @@ import type {
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
-/** Physical identity is a locator, never run, placement, or permission authority. */
-export type SessionActorNativeIncognitoIdentity = Readonly<{
-  kind: "native-incognito";
-  agentId: string;
-  nativeLocation: string;
-  /** The already-open native connection's incarnation, never a new memory owner. */
-  incarnation: string;
-}>;
-
 export type SessionActorTarget = Readonly<{
-  database:
-    | AgentDatabaseExecutionFileIdentity
-    | AgentDatabaseIncognitoIdentity
-    | SessionActorNativeIncognitoIdentity;
+  database: AgentDatabaseExecutionFileIdentity | AgentDatabaseIncognitoIdentity;
   sessionKey: string;
 }>;
 

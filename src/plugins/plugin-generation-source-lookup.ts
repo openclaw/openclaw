@@ -51,10 +51,15 @@ type SourceCustody = {
   sourceDigest: string;
 };
 export type PluginSourceCustodyFork = Pick<SourceCustody, "source" | "files">;
-type SourceRoot = { rootDir: string; sourceRoot: string; entryFile?: string; entry?: string };
+type SourceRoot = {
+  rootDir: string;
+  sourceRoot: string;
+  entryFiles?: readonly string[];
+  entries?: readonly string[];
+};
 type PluginGenerationCaptureArguments = [
   rootDir: string,
-  entryFile?: string,
+  entryFile?: string | readonly string[],
   execute?: <V>(run: () => V) => V,
   moduleSource?: (filename: string) => string,
   nativeRecovery?: PluginNativeRecovery,
@@ -116,7 +121,12 @@ export function createPluginGenerationCapture<
     if (custody.closed) {
       throw new Error("Plugin source custody has been closed");
     }
-    const key = JSON.stringify([path.resolve(rootDir), entryFile && path.resolve(entryFile)]);
+    const key = JSON.stringify([
+      path.resolve(rootDir),
+      typeof entryFile === "string"
+        ? path.resolve(entryFile)
+        : entryFile?.map((file) => path.resolve(file)),
+    ]);
     let retained = custody.sources.get(key);
     if (retained) {
       try {
@@ -168,12 +178,12 @@ export function createPluginGenerationCapture<
 export function assertPluginSourceRootCurrent({
   rootDir,
   sourceRoot,
-  entryFile,
-  entry,
+  entryFiles,
+  entries,
 }: SourceRoot): void {
   if (
     fs.realpathSync(rootDir) !== sourceRoot ||
-    (entryFile && fs.realpathSync(entryFile) !== entry)
+    entryFiles?.some((file, index) => fs.realpathSync(file) !== entries?.[index])
   ) {
     throw new Error("Plugin source root changed after capture");
   }
@@ -236,7 +246,7 @@ function resolveModuleTarget(resolved: string | undefined): string | undefined {
 /** Record source and dependency facts where recovery detaches them from instance lifetime. */
 export function createPluginSourceFacts(
   rootDir: string,
-  entryFile: string | undefined,
+  entryFiles: readonly string[] | undefined,
   dependencyLookupBoundary: Parameters<typeof createPluginDependencyResolver>[0],
   captureForCustody: boolean,
 ) {
@@ -307,18 +317,18 @@ export function createPluginSourceFacts(
     },
     captureCustody({
       sourceRoot,
-      entry,
+      entries,
       sourceDigest,
       capture,
     }: {
       sourceRoot: string;
-      entry?: string;
+      entries?: readonly string[];
       sourceDigest: string;
       capture: () => PluginRecoverySource;
     }): SourceCustody {
       const retainedFiles = structuredClone(files);
       const assertCurrent = createRetainedSourceVerification(
-        { rootDir, sourceRoot, entryFile, entry },
+        { rootDir, sourceRoot, entryFiles, entries },
         [...retainedFiles.values(), ...structuredClone(directories).values()],
         structuredClone([...dependencies.values()]),
         structuredClone([...moduleLookups.values()]),

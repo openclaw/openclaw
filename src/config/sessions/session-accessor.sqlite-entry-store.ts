@@ -9,7 +9,11 @@ import {
   withoutSqliteDatabaseWriteScope,
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
-import { readSqliteNativeMutationRevision } from "../../infra/sqlite-schema-facts.js";
+import {
+  getSqliteReadScopeRevision,
+  readSqliteNativeMutationRevision,
+  type SqliteReadScopeRevision,
+} from "../../infra/sqlite-schema-facts.js";
 import { getChildLogger } from "../../logging/logger.js";
 import { communicationEntryBinding } from "../../sessions/communication-admission.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
@@ -23,6 +27,7 @@ import {
   upsertConversationIdentities,
 } from "./session-accessor.sqlite-conversation.js";
 import { commitSqliteSessionDeletion } from "./session-accessor.sqlite-deletion.js";
+import { projectSessionEntryCacheUpdate } from "./session-accessor.sqlite-entry-cache-projection.js";
 import {
   publishSessionEntryCacheInvalidation,
   trackSessionEntryCacheWrite,
@@ -100,6 +105,30 @@ export {
   readSessionEntrySelectionSnapshot,
   readUnchangedLifecycleTargetSnapshot,
 } from "./session-accessor.sqlite-entry-snapshot.js";
+
+const writtenEntryPostimages = new WeakMap<
+  SessionEntry,
+  {
+    database: OpenClawAgentDatabase["db"];
+    sessionKey: string;
+    revision: SqliteReadScopeRevision;
+    entry: SessionEntry;
+  }
+>();
+
+/** Only the exact writer result can lend its persisted projection before another mutation. */
+export function readWrittenSessionEntryPostimage(
+  database: OpenClawAgentDatabase,
+  sessionKey: string,
+  written: SessionEntry,
+): SessionEntry | undefined {
+  const postimage = writtenEntryPostimages.get(written);
+  return postimage?.database === database.db &&
+    postimage.sessionKey === sessionKey &&
+    postimage.revision === getSqliteReadScopeRevision(database.db)
+    ? postimage.entry
+    : undefined;
+}
 
 export function resolveLifecyclePrimaryEntry(
   database: Pick<OpenClawAgentDatabase, "agentId" | "db">,
@@ -372,6 +401,8 @@ export function writeSessionEntry(
     providerReviewMutation?: boolean;
     /** Canonical row revalidated in this write transaction; null proves absence. */
     canonicalPreviousEntry?: SessionEntry | null;
+    /** Participant facts were acquired at this native revision, not borrowed from a CAS snapshot. */
+    canonicalPreviousEntryRevision?: SqliteReadScopeRevision;
     /** Raw canonical columns from the same transaction, for exact no-op comparison. */
     canonicalPreviousRow?: ResolvedSessionEntryRow["row"];
     canonicalPreviousWindow?: SessionEntryWindowFacts;
@@ -387,6 +418,7 @@ export function writeSessionEntry(
   if (actor && sessionKey !== actor.hot.target.sessionKey) {
     throw new Error("Session actor cannot write a lookup sibling");
   }
+  const inputRevision = getSqliteReadScopeRevision(database.db);
   if (!options.allowStoredAliases) {
     assertCanonicalSessionKeyWrite(sessionKey);
     assertCanonicalSessionEntryLineageWrite(entry);
@@ -417,6 +449,19 @@ export function writeSessionEntry(
   const canonicalPreviousRow =
     options.canonicalPreviousRow ?? actor?.entryRows.get(sessionKey)?.row ?? canonicalRead?.row;
   const mutationRevision = readSqliteNativeMutationRevision(database.db);
+  const previousRevision =
+    options.canonicalPreviousEntry === undefined
+      ? getSqliteReadScopeRevision(database.db)
+      : options.canonicalPreviousEntryRevision === inputRevision
+        ? inputRevision
+        : undefined;
+  if (
+    canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId &&
+    canonicalPreviousEntry.lifecycleRevision === normalizedEntry.lifecycleRevision &&
+    canonicalPreviousEntry.compactionQualityDegraded
+  ) {
+    normalizedEntry = { ...normalizedEntry, compactionQualityDegraded: true };
+  }
   if (!options.providerReviewMutation && !options.allowStoredAliases) {
     // Bookkeeping can carry a stale snapshot; only the review owner may clear its pause.
     normalizedEntry = {
@@ -592,6 +637,10 @@ export function writeSessionEntry(
         prepared: options.canonicalPreviousWindow,
       });
       const queries = getSessionEntryWriteQueries(database.db);
+      // Serialization hooks must not certify side-table facts they changed while preparing bytes.
+      const sideMetadataUnchanged =
+        previousRevision !== undefined &&
+        previousRevision === getSqliteReadScopeRevision(database.db);
       // Native guards or serialization hooks may have changed the row after acquisition.
       const writeNode =
         nodeChanged || readSqliteNativeMutationRevision(database.db) !== mutationRevision;
@@ -633,7 +682,7 @@ export function writeSessionEntry(
           updatedAt,
         });
       }
-      return { writeGeneration, window };
+      return { writeGeneration, window, sideMetadataUnchanged };
     },
   );
   if (
@@ -655,6 +704,7 @@ export function writeSessionEntry(
         }),
       entryJson: persisted.entryJson,
       snapshotEntry: canonicalEntry,
+      snapshots: persisted.snapshotsChanged ? persisted.snapshots : undefined,
       sideMetadata: structuredClone({
         owner: canonicalPreviousEntry?.owner,
         participants: canonicalPreviousEntry?.participants,
@@ -710,6 +760,29 @@ export function writeSessionEntry(
             ? actor.window.session_key
             : written.window.row.session_key,
       };
+    }
+  }
+  const revision = getSqliteReadScopeRevision(database.db);
+  if (!options.allowStoredAliases && written.sideMetadataUnchanged && revision) {
+    const postimage = projectSessionEntryCacheUpdate(
+      persisted.entryJson,
+      structuredClone({
+        owner: canonicalPreviousEntry?.owner,
+        ...(canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId
+          ? {
+              participants: canonicalPreviousEntry.participants,
+              participantCount: canonicalPreviousEntry.participantCount,
+            }
+          : {}),
+      }),
+    );
+    if (postimage) {
+      writtenEntryPostimages.set(normalizedEntry, {
+        database: database.db,
+        sessionKey,
+        revision,
+        entry: postimage,
+      });
     }
   }
   return normalizedEntry;

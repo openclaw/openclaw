@@ -1,6 +1,5 @@
 // Owns the published index state and the isolated lifetime of shadow reindex work.
 import { AsyncLocalStorage } from "node:async_hooks";
-import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import {
@@ -47,11 +46,8 @@ import type {
   MemoryPublicationResult,
   MemoryPublicationState,
 } from "./manager-publication-task.js";
-import {
-  memoryEmbeddingCacheBatches,
-  memoryPublicationBatches,
-  memoryPublicationHeader,
-} from "./manager-publication-transfer.js";
+import { memoryEmbeddingCacheFitsInline } from "./manager-publication-transfer.js";
+import { publishMemoryEmbeddingCache, publishMemorySource } from "./manager-publication.js";
 import {
   assertMemoryShadowIdentity,
   readMemoryShadowIdentity,
@@ -63,7 +59,10 @@ import type { loadMemorySourceFileState } from "./manager-source-state.js";
 type PublicationScope = Pick<SqliteWorkerStore<MemoryPublicationOperations>, "execute">;
 const log = createSubsystemLogger("memory");
 type PublicationWorker = {
-  store: Pick<OpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>, "run" | "close">;
+  store: Pick<
+    OpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>,
+    "execute" | "run" | "close"
+  >;
   busyTimeoutMs: number;
 };
 
@@ -330,6 +329,13 @@ export class MemoryIndexDatabase {
       }
       return {
         store: {
+          execute: <Key extends keyof MemoryPublicationOperations>(
+            command: { type: Key; input: MemoryPublicationOperations[Key]["input"] },
+            assertCurrent: () => void,
+          ) =>
+            runSqliteWorkerStoreWrite(store, (scope) => scope.execute(command), assertCurrent, [
+              filename,
+            ]),
           run: <T>(operation: (scope: PublicationScope) => Promise<T>, assertCurrent: () => void) =>
             runSqliteWorkerStoreWrite(store, operation, assertCurrent, [filename]),
           close: () => store.close(),
@@ -345,15 +351,15 @@ export class MemoryIndexDatabase {
     return this.publicationWorker;
   }
 
-  private runPublication<T>(
-    operation: (scope: PublicationScope) => Promise<T>,
+  private withPublicationWorker<T>(
+    operation: (store: PublicationWorker["store"]) => Promise<T>,
     assertCurrent: () => void,
   ): Promise<T> {
     const run = async () => {
       assertCurrent();
       try {
         const worker = await this.getPublicationWorker();
-        return await worker.store.run(operation, assertCurrent);
+        return await operation(worker.store);
       } catch (error) {
         const [cleanup] = await Promise.allSettled([this.closePublicationWorker()]);
         if (cleanup.status === "rejected") {
@@ -367,6 +373,26 @@ export class MemoryIndexDatabase {
       }
     };
     return this.isShadow ? this.withPrivateAccess(run, { nativeWriter: true }) : run();
+  }
+
+  private runPublication<T>(
+    operation: (scope: PublicationScope) => Promise<T>,
+    assertCurrent: () => void,
+  ): Promise<T> {
+    return this.withPublicationWorker(
+      (store) => store.run(operation, assertCurrent),
+      assertCurrent,
+    );
+  }
+
+  private executePublication<Key extends keyof MemoryPublicationOperations>(
+    command: { type: Key; input: MemoryPublicationOperations[Key]["input"] },
+    assertCurrent: () => void,
+  ): Promise<MemoryPublicationOperations[Key]["output"]> {
+    return this.withPublicationWorker(
+      (store) => store.execute(command, assertCurrent),
+      assertCurrent,
+    );
   }
 
   private async retryPublication<T>(
@@ -402,7 +428,7 @@ export class MemoryIndexDatabase {
     command: { type: Key; input: MemoryPublicationOperations[Key]["input"] },
     assertCurrent: () => void,
   ): Promise<MemoryPublicationOperations[Key]["output"]> {
-    return this.runPublication((scope) => scope.execute(command), assertCurrent);
+    return this.executePublication(command, assertCurrent);
   }
 
   admitSchema(input: MemoryPublicationOperations["schema.admit"]["input"]): Promise<void> {
@@ -449,10 +475,7 @@ export class MemoryIndexDatabase {
         query,
       );
     } else {
-      rows = await this.runPublication(
-        (scope) => scope.execute({ type: "source.state", input: query }),
-        assertCurrent,
-      );
+      rows = await this.executePublication({ type: "source.state", input: query }, assertCurrent);
     }
     assertCurrent();
     return rows;
@@ -463,10 +486,7 @@ export class MemoryIndexDatabase {
     // Each failed BEGIN releases admission before retry; successful batches yield at the caller.
     return (
       (await this.retryPublication(() =>
-        this.runPublication(
-          (scope) => scope.execute({ type: "cache.prune", input: { maxEntries } }),
-          assertCurrent,
-        ),
+        this.executePublication({ type: "cache.prune", input: { maxEntries } }, assertCurrent),
       )) ?? false
     );
   }
@@ -477,49 +497,18 @@ export class MemoryIndexDatabase {
     prepareRevision: () => number | undefined,
     invalidate: () => void,
   ): Promise<boolean | undefined> {
-    return this.runPublication(async (scope) => {
-      // This callback owns the original writer turn before inspecting generation facts.
-      const expectedRevision = prepareRevision();
-      if (expectedRevision === undefined) {
-        return undefined;
-      }
-      const prepare = async () => prepareRevision() !== undefined;
-      if (mutation.kind === "clear") {
-        try {
-          return await this.retryPublication(
-            () =>
-              scope.execute({
-                type: "cache.clear",
-                input: { identities: mutation.identities, expectedRevision },
-              }),
-            prepare,
-          );
-        } finally {
-          // The vector-space conflict is already known, even if clearing loses its reply.
-          invalidate();
-        }
-      }
-      const operation = randomUUID();
-      await scope.execute({
-        type: "cache.stage.start",
-        input: { operation, header: mutation.header, rows: mutation.entries.length },
+    const publish = (scope: PublicationScope) =>
+      publishMemoryEmbeddingCache({
+        scope,
+        mutation,
+        prepareRevision,
+        invalidate,
+        retry: (run, prepare) => this.retryPublication(run, prepare),
       });
-      for (const fragments of memoryEmbeddingCacheBatches(mutation.entries)) {
-        await scope.execute({ type: "stage.append", input: { operation, fragments } });
-      }
-      const current = await this.retryPublication(
-        () => scope.execute({ type: "cache.write", input: { operation, expectedRevision } }),
-        prepare,
-      );
-      if (current === undefined) {
-        await scope.execute({ type: "stage.discard", input: { operation } });
-      }
-      if (current === false) {
-        // Publish generation invalidation before releasing this writer turn.
-        invalidate();
-      }
-      return current;
-    }, assertCurrent);
+    return mutation.kind === "clear" ||
+      memoryEmbeddingCacheFitsInline(mutation.header, mutation.entries)
+      ? publish({ execute: (command) => this.executePublication(command, assertCurrent) })
+      : this.runPublication(publish, assertCurrent);
   }
 
   async replaceSource(
@@ -527,36 +516,17 @@ export class MemoryIndexDatabase {
     assertCurrent: () => void,
     prepare: () => Promise<boolean>,
   ) {
-    const run = () =>
-      this.runPublication(async (scope) => {
-        const operation = randomUUID();
-        const { header, rows } = memoryPublicationHeader(replacement);
-        await scope.execute({
-          type: "stage.start",
-          input: { operation, header, rows },
-        });
-        for (const fragments of memoryPublicationBatches(replacement)) {
-          await scope.execute({ type: "stage.append", input: { operation, fragments } });
-        }
-        const result = await this.retryPublication(
-          () =>
-            scope.execute({
-              type: "source.replace",
-              input: { operation, state: this.publicationState() },
-            }),
-          prepare,
-        );
-        if (this.isShadow) {
-          assertCurrent();
-        }
-        // Thrown failures close the Worker through runPublication. A further
-        // command on that failed scope could hide the original write outcome.
-        if (result === undefined) {
-          await scope.execute({ type: "stage.discard", input: { operation } });
-        }
-        return result;
-      }, assertCurrent);
-    return this.withSourceMutation(run);
+    return this.withSourceMutation(() =>
+      publishMemorySource({
+        replacement,
+        state: () => this.publicationState(),
+        execute: (command) => this.executePublication(command, assertCurrent),
+        run: (operation) => this.runPublication(operation, assertCurrent),
+        retry: (run, prepareRetry) => this.retryPublication(run, prepareRetry),
+        prepare,
+        assertPublished: this.isShadow ? assertCurrent : undefined,
+      }),
+    );
   }
 
   async deleteSource(

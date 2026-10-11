@@ -99,14 +99,10 @@ export function createSessionActorWorker(
         ? current.physicalIdentity === requested.physicalIdentity &&
           current.birthtime === requested.birthtime &&
           current.nativeLocation === requested.nativeLocation
-        : current.kind === "native-incognito" && requested.kind === "native-incognito"
-          ? current.incarnation === requested.incarnation &&
-            current.agentId === requested.agentId &&
-            current.nativeLocation === requested.nativeLocation
-          : current.kind === "ephemeral" &&
-            requested.kind === "ephemeral" &&
-            current.handle === requested.handle &&
-            current.incarnation === requested.incarnation;
+        : current.kind === "ephemeral" &&
+          requested.kind === "ephemeral" &&
+          current.handle === requested.handle &&
+          current.incarnation === requested.incarnation;
     if (closed || !matches) {
       throw new Error("Session actor lost its physical database owner");
     }

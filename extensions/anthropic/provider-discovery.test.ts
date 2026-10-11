@@ -1,15 +1,19 @@
 import { afterEach, expect, it, vi } from "vitest";
 
-const { probeClaudeCliAuthStatus } = vi.hoisted(() => ({
+const { probeClaudeCliAuthStatus, discoverClaudeCliModels } = vi.hoisted(() => ({
   probeClaudeCliAuthStatus: vi.fn(),
+  discoverClaudeCliModels: vi.fn(),
 }));
 vi.mock("./cli-auth-seam.js", () => ({ probeClaudeCliAuthStatus }));
+// mock-isolation: Generation tests must not spawn the installed Claude CLI or read native login.
+vi.mock("./cli-model-discovery.js", () => ({ discoverClaudeCliModels }));
 
 import provider from "./provider-discovery.js";
 
 afterEach(() => {
   vi.useRealTimers();
   probeClaudeCliAuthStatus.mockReset();
+  discoverClaudeCliModels.mockReset();
 });
 
 it("prepares native availability once for a 632-workspace roster", async () => {
@@ -106,4 +110,46 @@ it("joins one probe per cancellation scope and preserves a surviving capture", a
   expect(probeClaudeCliAuthStatus).toHaveBeenCalledTimes(2);
   await expect(prepare(cancelled.signal)).rejects.toBe(reason);
   expect(probeClaudeCliAuthStatus).toHaveBeenCalledTimes(2);
+});
+
+it("publishes the native menu once per discovery generation, never static membership", async () => {
+  const config = {};
+  const env = {};
+  const signal = new AbortController().signal;
+  const ctx = {
+    config,
+    env,
+    signal,
+    resolveProviderAuth: () => ({
+      apiKey: undefined,
+      mode: "none" as const,
+      source: "none" as const,
+    }),
+    resolveProviderApiKey: () => ({ apiKey: undefined }),
+  };
+  const row = {
+    id: "claude-new-native",
+    name: "Native",
+    reasoning: true,
+    input: ["text" as const],
+    maxTokens: 100,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    thinkingLevelMap: { low: "low", max: "max" },
+  };
+  probeClaudeCliAuthStatus.mockResolvedValue({ status: "available" });
+  discoverClaudeCliModels.mockResolvedValueOnce([row]).mockResolvedValueOnce([]);
+  const first = await provider.catalog!.run(ctx);
+  expect(first).toMatchObject({
+    providers: { "claude-cli": { models: [row] } },
+    outcomes: [{ provider: "claude-cli", status: "ready", listedModelIds: [row.id] }],
+  });
+  expect(await provider.catalog!.run(ctx)).toEqual(first);
+  expect(discoverClaudeCliModels).toHaveBeenCalledOnce();
+  expect(
+    await provider.catalog!.run({ ...ctx, signal: new AbortController().signal }),
+  ).toMatchObject({
+    providers: { "claude-cli": { models: [] } },
+    outcomes: [{ status: "ready", listedModelIds: [] }],
+  });
+  expect(discoverClaudeCliModels).toHaveBeenCalledTimes(2);
 });

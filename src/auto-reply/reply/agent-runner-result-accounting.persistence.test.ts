@@ -14,11 +14,14 @@ import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
 import {
   closeOpenClawAgentDatabasesAsync,
+  getOpenClawAgentDatabaseIfOpen,
   isOpenClawAgentDatabaseOpen,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import { getReplyPayloadMetadata, isReplyPayloadTerminalContent } from "../reply-payload.js";
+import { recordTurnCompaction } from "./agent-runner-compaction-accounting.js";
 import {
   agentAccountingPersistenceDiagnostic as diagnostic,
   createAgentAccountingPersistenceFixture,
@@ -132,6 +135,50 @@ it.each([
     });
   },
 );
+
+it("keeps native incognito accounting and final custody on the retained memory owner", async () => {
+  const root = tempDirs.make("openclaw-native-completion-");
+  const env = { OPENCLAW_STATE_DIR: root };
+  const nativePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
+  const options = { agentId: "main", env, path: nativePath };
+  const owner = openOpenClawAgentDatabase(options);
+  try {
+    const fixture = await createAgentAccountingPersistenceFixture({
+      storePath: nativePath,
+      root,
+      fixtureId: ++fixtureSequence,
+      registerOperation: (operation) => operations.push(operation),
+    });
+    fixture.context.execution.result.meta.agentMeta = {
+      sessionId: fixture.sessionId,
+      provider: diagnostic.provider,
+      model: diagnostic.model,
+      usage: { input: 120, output: 8 },
+    };
+    const result = await finalizeReplyAgentRun(fixture.context);
+    expect(result).toMatchObject({ text: "done" });
+    const final = Array.isArray(result) ? result[0] : result;
+    const completion = final && getReplyPayloadMetadata(final)?.pendingFinalDeliveryCompletion;
+    expect(completion).toMatchObject({
+      sessionId: fixture.sessionId,
+      sessionKey: fixture.context.sessionKey,
+      storePath: nativePath,
+    });
+    expect(fixture.read()).toMatchObject({
+      inputTokens: 120,
+      outputTokens: 8,
+      pendingFinalDelivery: {
+        intentId: completion?.intentId,
+        text: "done",
+        deliveries: [{ id: completion?.deliveryId, state: "prepared" }],
+      },
+    });
+    expect(getOpenClawAgentDatabaseIfOpen(options)).toBe(owner);
+    expect(fs.existsSync(nativePath)).toBe(false);
+  } finally {
+    await disposeOpenClawAgentDatabaseByPath(nativePath);
+  }
+});
 
 it("publishes a prepared final only after its worker completion commits without host transactions", async () => {
   const fixture = await createFixture();
@@ -552,6 +599,32 @@ it("accounts a completed compaction before an empty heartbeat skips reply prepar
     totalTokensFresh: true,
   });
   expect(fixture.read()?.pendingFinalDelivery).toBeUndefined();
+});
+
+describe.each(["ordinary", "followup"] as const)("%s byte-compaction accounting", (lane) => {
+  it.each([false, true])(
+    "preserves suppression unless host history changed (%s)",
+    async (hostCompactionCommitted) => {
+      const fixture = await createFixture();
+      const latch = { activeBytes: 60_000, sessionId: fixture.sessionId, maxBytes: 50_000 };
+      await fixture.replace({
+        ...fixture.context.activeSessionEntry!,
+        transcriptByteCompactionLatch: latch,
+      });
+      const compaction = fixture.recordCompaction({ currentContextTokens: 40 });
+      const fact = compaction.durable[0]!;
+      compaction.durable = [];
+      recordTurnCompaction(compaction, { ...fact, hostCompactionCommitted });
+      // A later native fact from the same writer must retain the prior host rewrite.
+      recordTurnCompaction(compaction, fact);
+
+      await fixture.account(lane, { compactionCount: 2, usage: { input: 120 } });
+
+      expect(fixture.read()?.transcriptByteCompactionLatch).toEqual(
+        hostCompactionCommitted ? undefined : latch,
+      );
+    },
+  );
 });
 
 it.each([

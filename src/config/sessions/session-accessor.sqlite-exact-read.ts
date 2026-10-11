@@ -89,6 +89,7 @@ export function resolveSessionEntry(
     onReadSource?: (source: CapturedSessionEntryReadSource) => void;
     onReadError?: (error: unknown, database: OpenClawAgentDatabase["db"]) => never;
     readFacts?: SessionEntryFactReader;
+    capturedDatabase?: Parameters<SessionEntryFactReader>[0];
   } = {},
 ): ResolvedSqliteSessionEntry {
   // A prepared reader retains its physical locator; rediscovery would escape that custody.
@@ -171,15 +172,16 @@ export function resolveSessionEntry(
     };
   };
   if (options.readOnly) {
-    const result = withOpenClawAgentDatabaseReadOnly(
-      (database) =>
-        options.readFacts
-          ? read(database)
-          : readWithCanonicalSessionReaderContinuation(database, options.continuation, () =>
-              read(database),
-            ),
-      toDatabaseOptions(resolved),
-    );
+    const readOnly = (database: Parameters<SessionEntryFactReader>[0]) =>
+      options.readFacts
+        ? read(database)
+        : readWithCanonicalSessionReaderContinuation(database, options.continuation, () =>
+            read(database),
+          );
+    if (options.capturedDatabase) {
+      return readOnly(options.capturedDatabase);
+    }
+    const result = withOpenClawAgentDatabaseReadOnly(readOnly, toDatabaseOptions(resolved));
     return result.found
       ? result.value
       : { existing: undefined, legacyKeys: [], normalizedKey: resolved.sessionKey };
@@ -217,6 +219,7 @@ export function loadSessionEntryReadOnlyResultInScope(
   continuation?: CanonicalSessionReaderContinuation,
   onReadSource?: (source: CapturedSessionEntryReadSource) => void,
   readFacts?: SessionEntryFactReader,
+  capturedDatabase?: Parameters<SessionEntryFactReader>[0],
 ): Result<SessionEntry | undefined, unknown> {
   try {
     return ok(
@@ -227,6 +230,7 @@ export function loadSessionEntryReadOnlyResultInScope(
         continuation,
         onReadSource,
         readFacts,
+        capturedDatabase,
         onReadError(error, database) {
           throw new SessionEntryDataReadError(error, database);
         },
