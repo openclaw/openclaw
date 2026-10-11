@@ -14,6 +14,8 @@ export type { JSX } from "@solidjs/web";
 type LegacyAttributes<T extends HTMLElement> = JSX.HTMLAttributes<T> & JSX.Properties<T>;
 type Tooltip = HTMLElementTagNameMap["openclaw-tooltip"];
 
+type ElementProperties<T> = { [Key in keyof T as `prop:${string & Key}`]?: T[Key] };
+
 declare module "@solidjs/web" {
   namespace JSX {
     interface EventHandlersElement<T> {
@@ -72,6 +74,15 @@ declare module "@solidjs/web" {
         "open-on-click"?: boolean;
         "auto-size"?: boolean;
       };
+      "openclaw-viewer-facepile": HTMLAttributes<
+        HTMLElementTagNameMap["openclaw-viewer-facepile"]
+      > &
+        ElementProperties<
+          Pick<
+            HTMLElementTagNameMap["openclaw-viewer-facepile"],
+            "staticParticipants" | "totalCount" | "maxVisible" | "personActivity"
+          >
+        >;
       "openclaw-agent-row-chip": HTMLAttributes<HTMLElement> & {
         "prop:agentId"?: string;
       };
@@ -96,7 +107,9 @@ declare module "@solidjs/web" {
             WaDropdownItem,
             "value" | "type" | "variant" | "disabled" | "checked" | "href" | "target" | "rel"
           >
-        >;
+        > & {
+          "onSubmenu-opening"?: (event: CustomEvent<{ item: HTMLElement }>) => void;
+        };
       "wa-popover": LegacyAttributes<WaPopover> &
         Partial<Pick<WaPopover, "for" | "placement">> & {
           distance?: number | `${number}`;

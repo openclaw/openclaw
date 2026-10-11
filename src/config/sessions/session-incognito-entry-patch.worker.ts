@@ -103,7 +103,7 @@ export function createIncognitoEntryPatchWorker(
           if (predicate.matches) {
             const mutation = applySessionEntryPatchInDatabase(database, {
               ...input,
-              readSnapshot: (owner) => readSessionEntryPatchSnapshot(owner, selection),
+              readSnapshot: (owner) => readSessionEntryPatchSnapshot(owner, selection, true),
               options: {
                 consumePendingReset: input.consumePendingReset,
                 providerReviewMutation: input.providerReviewMutation,
