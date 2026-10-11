@@ -424,7 +424,7 @@ suite.define(() => {
     }
   });
 
-  it("revalidates an open group route when its defaults or identity change", async () => {
+  it("refreshes loaded group defaults and identity on explicit route revalidation", async () => {
     const initialCwd = "/home/peter/client-work";
     const refreshedCwd = "/home/peter/refreshed-client-work";
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
@@ -454,6 +454,7 @@ suite.define(() => {
         const app = document.querySelector("openclaw-app") as HTMLElement & {
           runtime?: {
             context: {
+              revalidate: (route: string) => Promise<unknown>;
               sessions: {
                 groupsUpdate: (
                   name: string,
@@ -467,6 +468,7 @@ suite.define(() => {
           cwd,
           worktree: false,
         });
+        await app.runtime?.context.revalidate("new-session");
       }, refreshedCwd);
 
       await expect.poll(() => project.textContent()).toContain("refreshed-client-work");
@@ -481,6 +483,7 @@ suite.define(() => {
         const app = document.querySelector("openclaw-app") as HTMLElement & {
           runtime?: {
             context: {
+              revalidate: (route: string) => Promise<unknown>;
               sessions: {
                 groupsRename: (from: string, to: string) => Promise<unknown>;
               };
@@ -488,6 +491,7 @@ suite.define(() => {
           };
         };
         await app.runtime?.context.sessions.groupsRename("Client work", "Customer work");
+        await app.runtime?.context.revalidate("new-session");
       });
 
       const unavailable = page.locator(".new-session-page__catalog-unavailable");
@@ -502,7 +506,7 @@ suite.define(() => {
     }
   });
 
-  it("fails an open group route closed while remote catalog invalidation is unresolved", async () => {
+  it("recovers an open group route after remote catalog invalidation settles", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -533,31 +537,47 @@ suite.define(() => {
       // stale earlier request.
       const groupListsBeforeInvalidation = (await gateway.getRequests("sessions.groups.list"))
         .length;
+      const defaultsBeforeInvalidation = (await gateway.getRequests("sessions.groups.defaults"))
+        .length;
+      await gateway.deferNext("sessions.groups.defaults");
       await gateway.deferNext("sessions.groups.list");
       await gateway.emitGatewayEvent("sessions.changed", { reason: "groups" });
       await gateway.waitForRequest("sessions.groups.list", { after: groupListsBeforeInvalidation });
-      await expect.poll(() => start.isDisabled()).toBe(true);
       await expect
-        .poll(() => page.locator(".new-session-page__catalog-unavailable button").isDisabled())
-        .toBe(true);
-      const groupListsBeforeReject = (await gateway.getRequests("sessions.groups.list")).length;
-      await gateway.deferNext("sessions.groups.list");
-      await gateway.rejectDeferred("sessions.groups.list", {
-        code: "UNAVAILABLE",
-        message: "catalog reload failed",
-      });
-      await gateway.waitForRequest("sessions.groups.list", { after: groupListsBeforeReject });
-      await expect
-        .poll(() => page.locator(".new-session-page__catalog-unavailable").textContent())
-        .toContain("This session target is unavailable.");
-      await expect.poll(() => start.isDisabled()).toBe(true);
-      await expect
-        .poll(() => page.locator(".new-session-page__catalog-unavailable button").isDisabled())
-        .toBe(true);
+        .poll(() => page.locator(".new-session-page__message").inputValue())
+        .toBe("wait for fresh defaults");
 
       await gateway.resolveDeferred("sessions.groups.list", {
         groups: [{ name: "Client work", position: 0 }],
       });
+      await gateway.waitForRequest("sessions.groups.defaults", {
+        after: defaultsBeforeInvalidation,
+      });
+      await gateway.resolveDeferred("sessions.groups.defaults", {
+        defaults: [
+          { name: "Client work", cwd: "/home/peter/refreshed-client-work", worktree: false },
+        ],
+      });
+      await page.evaluate(async () => {
+        const app = document.querySelector("openclaw-app") as HTMLElement & {
+          runtime?: {
+            context: {
+              revalidate: (route: string) => Promise<unknown>;
+            };
+          };
+        };
+        await app.runtime?.context.revalidate("new-session");
+      });
+      await expect
+        .poll(() =>
+          page
+            .locator("#new-session-project-trigger .new-session-page__trigger-label")
+            .textContent(),
+        )
+        .toContain("refreshed-client-work");
+      await expect
+        .poll(() => page.locator(".new-session-page__message").inputValue())
+        .toBe("wait for fresh defaults");
       await expect.poll(() => start.isEnabled()).toBe(true);
     } finally {
       await context.close();
