@@ -38,7 +38,7 @@ import {
 import { readChatSendReplyPayload } from "./chat-send-command-replies.js";
 import {
   createChatSendDispatchErrorLifecycle,
-  formatReturnedAgentErrors,
+  resolveReturnedAgentErrorMessage,
 } from "./chat-send-dispatch-errors.js";
 import {
   finalizeAcceptedChatSendMessageInjection,
@@ -549,14 +549,12 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
             ? runtimeFailed
             : returnedAgentErrorPayloads.length > 0 &&
               (agentRunStarted || !isInternalTextSlashCommandTurn);
-          const returnedAgentErrorMessage =
-            runtimeOutcome?.error ??
-            (formatReturnedAgentErrors(
-              returnedAgentErrorPayloads
-                .map((payload) => payload.text?.trim())
-                .filter((text): text is string => Boolean(text)),
-            ) ||
-              (runtimeFailed ? "agent run failed" : undefined));
+          const returnedAgentErrorMessage = resolveReturnedAgentErrorMessage({
+            runtimeError: runtimeOutcome?.error,
+            returnedPayloads: returnedAgentErrorPayloads,
+            dispatchResult,
+            runtimeFailed,
+          });
           if (
             !userTurnRecorder.hasPersisted() &&
             !userTurnRecorder.isBlocked() &&

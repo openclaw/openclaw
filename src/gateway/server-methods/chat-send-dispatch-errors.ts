@@ -3,6 +3,8 @@ import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-ag
 import { describeFailoverError } from "../../agents/failover-error.js";
 import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
 import { DispatchSessionRefreshRequiredError } from "../../auto-reply/reply/dispatch-session-refresh-error.js";
+import type { ReplyPayload } from "../../auto-reply/types.js";
+import { readAgentRunTerminalError } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { SessionGoalOperationError } from "../../config/sessions/goals-operations.js";
 import { clearAgentRunContext, getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { resolveStateContentionPresentation } from "../../sessions/session-run-error-presentation.js";
@@ -30,9 +32,26 @@ import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
-export function formatReturnedAgentErrors(messages: string[]): string | undefined {
+export function resolveReturnedAgentErrorMessage(params: {
+  runtimeError?: string;
+  returnedPayloads: readonly ReplyPayload[];
+  dispatchResult: unknown;
+  runtimeFailed: boolean;
+}): string | undefined {
+  if (params.runtimeError !== undefined) {
+    return params.runtimeError;
+  }
+  const messages = params.returnedPayloads
+    .map((payload) => payload.text?.trim())
+    .filter((text): text is string => Boolean(text));
   const [primary, ...additional] = [...new Set(messages)];
-  if (!primary || additional.length === 0) {
+  if (!primary) {
+    return (
+      readAgentRunTerminalError(params.dispatchResult) ||
+      (params.runtimeFailed ? "agent run failed" : undefined)
+    );
+  }
+  if (additional.length === 0) {
     return primary;
   }
   if (additional.length === 1) {

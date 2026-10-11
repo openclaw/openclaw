@@ -684,9 +684,19 @@ describe("Codex app inventory across physical process restart", () => {
       const previousBinding = f.readBinding();
       f.process.faults.activeInheritedMcp = true;
       const boundary = f.calls.length;
-      await expect(f.process.run()).rejects.toThrow(
-        "restricted-tool-surface MCP attestation found active server inherited",
-      );
+      await expect(f.process.run()).rejects.toMatchObject({
+        name: "CodexThreadPolicyHandoffError",
+        outcome: "not-written",
+        phase: "tool-attestation",
+        userMessage: expect.stringContaining(
+          "could not confirm this session's current tool policy",
+        ),
+        cause: expect.objectContaining({
+          message: expect.stringContaining(
+            "restricted-tool-surface MCP attestation found active server inherited",
+          ),
+        }),
+      });
       expect(f.readBinding()).toEqual(previousBinding);
       expect(f.process.subscribedThreads.has(f.first.threadId)).toBe(false);
       expect(f.process.loadedThreads.has(f.first.threadId)).toBe(true);
@@ -713,6 +723,7 @@ describe("Codex app inventory across physical process restart", () => {
     const entered = createDeferred<void>();
     const release = createDeferred<void>();
     const replacementId = "00000000-0000-4000-8000-000000000099";
+    const admissionCancellation = new Error("admission cancelled");
     f.process.faults.beforeInventory = async () => {
       f.process.faults.beforeInventory = undefined;
       entered.resolve();
@@ -723,12 +734,19 @@ describe("Codex app inventory across physical process restart", () => {
     };
     const boundary = f.calls.length;
     const pending = f.process.run();
-    const rejected = expect(pending).rejects.toThrow(
-      fault === "abort" ? "admission cancelled" : "Codex thread binding changed",
-    );
+    const rejected =
+      fault === "abort"
+        ? expect(pending).rejects.toMatchObject({
+            name: "CodexThreadPolicyHandoffError",
+            outcome: "not-written",
+            phase: "tool-attestation",
+            message: expect.not.stringContaining(admissionCancellation.message),
+            cause: admissionCancellation,
+          })
+        : expect(pending).rejects.toThrow("Codex thread binding changed");
     await entered.promise;
     if (fault === "abort") {
-      f.process.abort.abort(new Error("admission cancelled"));
+      f.process.abort.abort(admissionCancellation);
     }
     release.resolve();
     await rejected;

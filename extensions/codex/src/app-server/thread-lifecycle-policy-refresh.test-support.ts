@@ -1,6 +1,7 @@
 import path from "node:path";
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { expect, it } from "vitest";
+import { CodexAppServerUnsafeSubscriptionError } from "./attempt-client-cleanup.js";
 import { retainCodexAppServerLiveThread } from "./client-runtime.js";
 import { CodexAppServerRpcError } from "./client.js";
 import type { RpcRequest } from "./protocol.js";
@@ -115,7 +116,15 @@ export function registerThreadPolicyRefreshTests({
             name: "CodexThreadPolicyHandoffError",
             scope: undefined,
             outcome: fault === "retirement failure" ? "unknown" : "not-written",
+            phase: fault === "retirement failure" ? "policy-write" : "native-unload",
+            userMessage:
+              fault === "retirement failure"
+                ? "Codex could not complete this session's policy write. The policy write outcome is unknown and will not be replayed. The conversation is preserved; reconnect this session before retrying."
+                : "Codex did not confirm unloading its previous configuration. The conversation is preserved; reconnect this session before retrying.",
           });
+          await expect(run).rejects.not.toThrow(
+            /policy flush failed|client retirement failed|competing/,
+          );
           expect(await readCodexAppServerBinding(sessionFile)).toEqual(before);
           expect(requests.filter(({ method }) => method === "thread/resume")).toHaveLength(1);
           expect(requests.filter(({ method }) => method === "thread/inject_items")).toHaveLength(
@@ -146,18 +155,27 @@ export function registerThreadPolicyRefreshTests({
   );
 
   it.each([
-    { nativeStatus: "idle", transport: "websocket" as const },
-    { nativeStatus: "systemError", transport: "stdio" as const },
-    { nativeStatus: "active", transport: "stdio" as const },
+    { nativeStatus: "idle", transport: "websocket" as const, fault: "none" },
+    { nativeStatus: "systemError", transport: "stdio" as const, fault: "none" },
+    { nativeStatus: "active", transport: "stdio" as const, fault: "none" },
+    ...["canceled", "revoked", "cleanup"].map((fault) => ({
+      nativeStatus: "idle",
+      transport: "stdio" as const,
+      fault,
+    })),
   ])(
-    "keeps ordinary warm configuration honest over $transport across $nativeStatus",
-    async ({ nativeStatus, transport }) => {
+    "keeps ordinary warm configuration honest over $transport across $nativeStatus ($fault)",
+    async ({ nativeStatus, transport, fault }) => {
       const developerInstructions = "replacement policy";
       const sessionFile = path.join(tempDir, "ordinary-warm-policy.jsonl");
       const workspaceDir = path.join(tempDir, "workspace");
       const threadId = "ordinary-warm-policy";
       const response = threadStartResult(threadId);
       const methods: string[] = [];
+      const controller = new AbortController();
+      const rejection = new Error(`policy release ${fault}`);
+      let revoked = false;
+      let retirements = 0;
       let subscribed = true;
       const wire = await createLeasedLifecycleWireClient(
         path.join(tempDir, "agent"),
@@ -186,6 +204,16 @@ export function registerThreadPolicyRefreshTests({
             return { thread: { ...response.thread, status: { type: nativeStatus } } };
           }
           if (request.method === "thread/unsubscribe") {
+            if (fault === "canceled") {
+              controller.abort(rejection);
+            } else if (fault === "revoked") {
+              revoked = true;
+            } else if (fault === "cleanup") {
+              throw new CodexAppServerRpcError(
+                { code: -32603, message: "private cleanup diagnostic" },
+                request.method,
+              );
+            }
             subscribed = false;
             return { status: "unsubscribed" };
           }
@@ -206,7 +234,19 @@ export function registerThreadPolicyRefreshTests({
         dynamicTools: [],
         appServer: createThreadLifecycleAppServerOptions(),
         userMcpServersEnabled: false,
-        signal: new AbortController().signal,
+        signal: controller.signal,
+        assertCurrent: () => {
+          if (revoked) {
+            throw rejection;
+          }
+        },
+        ...(fault !== "none"
+          ? {
+              abandonClient: async () => {
+                retirements++;
+              },
+            }
+          : {}),
       };
       try {
         const first = await startOrResumeThread({
@@ -219,7 +259,27 @@ export function registerThreadPolicyRefreshTests({
           undefined,
           first.liveThreadConfigFingerprint,
         );
+        const before = await readCodexAppServerBinding(sessionFile);
         const resume = startOrResumeThread({ ...common, developerInstructions });
+        if (fault !== "none") {
+          if (fault === "cleanup") {
+            await expect(resume).rejects.toMatchObject({
+              name: "CodexThreadPolicyHandoffError",
+              phase: "subscription-release",
+              outcome: "not-written",
+              cause: expect.any(CodexAppServerUnsafeSubscriptionError),
+              userMessage: expect.stringContaining("releasing this session's subscription"),
+            });
+          } else {
+            await expect(resume).rejects.toBe(rejection);
+          }
+          expect(await readCodexAppServerBinding(sessionFile)).toEqual(before);
+          expect(retirements).toBe(fault === "cleanup" ? 1 : 0);
+          expect(methods.filter((method) => method === "thread/unsubscribe")).toHaveLength(1);
+          expect(methods).not.toContain("thread/resume");
+          expect(methods).not.toContain("thread/inject_items");
+          return;
+        }
         if (nativeStatus === "active") {
           await expect(resume).rejects.toThrow("Codex session became active in another runner");
           expect(methods).toEqual([
