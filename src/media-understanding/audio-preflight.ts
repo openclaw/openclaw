@@ -35,6 +35,7 @@ export async function transcribeFirstAudio(params: {
     return undefined;
   }
 
+  const attachmentMedia = normalizeMediaFacts(ctx.media);
   const firstAudio = normalizeMediaAttachments(ctx).find(
     (att) => isAudioAttachment(att) && !att.alreadyTranscribed,
   );
@@ -79,7 +80,7 @@ export async function transcribeFirstAudio(params: {
       return undefined;
     }
 
-    if (audioConfig?.echoTranscript) {
+    if (audioConfig?.echoTranscript && attachmentMedia[firstAudio.index]?.source !== "quote") {
       await sendTranscriptEcho({
         ctx,
         cfg,

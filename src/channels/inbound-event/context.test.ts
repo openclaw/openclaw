@@ -786,6 +786,23 @@ describe("finalizeChannelInboundContext supplemental media resolution", () => {
     });
   });
 
+  it.each([false, true])("retains quote media provenance with lazy resolution=%s", async (lazy) => {
+    const quoted = [{ path: "/tmp/quoted.ogg", contentType: "audio/ogg" }];
+    const ctx = await buildChannelInboundEventContext({
+      ...createBaseContextParams({
+        media: [{ path: "/tmp/current.ogg", contentType: "audio/ogg" }],
+        supplemental: { quote: { media: lazy ? async () => quoted : quoted } },
+      }),
+      resolveSupplementalMedia: true,
+    });
+
+    expect(ctx.media?.map(({ path, source }) => ({ path, source }))).toEqual([
+      { path: "/tmp/current.ogg", source: undefined },
+      { path: "/tmp/quoted.ogg", source: "quote" },
+    ]);
+    expect(quoted[0]).not.toHaveProperty("source");
+  });
+
   it("preserves self-authored quote text without loading its media by default", async () => {
     const media = vi.fn(async () => [{ path: "/tmp/reply.png", contentType: "image/png" }]);
     const result = await finalizeChannelInboundContext({

@@ -79,6 +79,7 @@ function normalizeStructuredMediaEntryForTranscript(
     ...(height ? { height } : {}),
     ...(media.transcribed === true ? { transcribed: true } : {}),
     ...(messageId ? { messageId } : {}),
+    ...(media.source === "quote" ? { source: "quote" } : {}),
     ...(workspaceDir ? { workspaceDir } : {}),
     ...(media.hydrationSuppressed === true ? { hydrationSuppressed: true } : {}),
   };
@@ -117,6 +118,9 @@ export function buildPersistedUserTurnMediaInputsFromFields(
     }
     if (fact.origin) {
       media.origin = fact.origin;
+    }
+    if (fact.source === "quote") {
+      media.source = "quote";
     }
     if (fact.sizeBytes !== undefined) {
       media.sizeBytes = fact.sizeBytes;
