@@ -331,10 +331,7 @@ describe("memory index", () => {
     );
     await manager.sync({ reason: "test" });
 
-    const fields = manager as unknown as {
-      db: DatabaseSync;
-    };
-    const insertChunk = fields.db.prepare(
+    const insertChunk = openOpenClawAgentDatabase({ agentId: "main" }).db.prepare(
       "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     );
     for (let index = 0; index < 4096; index += 1) {

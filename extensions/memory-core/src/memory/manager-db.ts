@@ -220,14 +220,8 @@ export function openMemoryDatabaseAtPath(
 }
 
 function openUninitializedMemoryDatabase(allowExtension: boolean) {
-  const database = openNodeSqliteDatabase(":memory:", { allowExtension });
-  try {
-    database.exec("PRAGMA query_only = ON");
-    return { db: database, release: () => database.close(), hasIndex: false };
-  } catch (error) {
-    database.close();
-    throw error;
-  }
+  const database = openNodeSqliteDatabase(":memory:", { readOnly: true, allowExtension });
+  return { db: database, release: () => database.close(), hasIndex: false };
 }
 
 /** Open an existing memory index through the agent database query-only owner. */
@@ -236,7 +230,10 @@ export function openMemoryDatabaseReadOnlyAtPath(
   allowExtension: boolean,
   agentId: string,
 ) {
-  const opened = openOpenClawAgentDatabaseReadOnly({ agentId, path: dbPath }, { allowExtension });
+  const opened = openOpenClawAgentDatabaseReadOnly(
+    { agentId, path: dbPath },
+    { allowExtension, lifecycle: "agent" },
+  );
   if (!opened.found) {
     if (opened.reason === "database-missing") {
       return openUninitializedMemoryDatabase(allowExtension);

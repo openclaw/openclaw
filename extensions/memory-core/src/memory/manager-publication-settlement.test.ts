@@ -17,14 +17,11 @@ import { expect, it } from "vitest";
 import { readMemoryDatabaseRevision } from "./manager-db-kernel.js";
 import { memoryPublicationFaultEntrypoint } from "./manager-publication-fault-entrypoint.test-support.js";
 import type { PublicationFaultInput } from "./manager-publication-fault.test-support.js";
-import type {
-  MemoryPublicationConnection,
-  MemoryPublicationOperations,
-} from "./manager-publication-task.js";
-import { readMemoryShadowIdentity } from "./manager-shadow-task.js";
+import type { MemoryPublicationOperations } from "./manager-publication-task.js";
+import { readMemoryShadowIdentity, type MemoryShadowConnection } from "./manager-shadow-task.js";
 
-function publicationPragmas(db: DatabaseSync): MemoryPublicationConnection["pragmas"] {
-  const read = (name: keyof MemoryPublicationConnection["pragmas"]): number => {
+function publicationPragmas(db: DatabaseSync): MemoryShadowConnection["pragmas"] {
+  const read = (name: keyof MemoryShadowConnection["pragmas"]): number => {
     const row = db.prepare("PRAGMA " + name).get();
     const value = row?.[name] ?? row?.timeout;
     if (typeof value !== "number" || !Number.isSafeInteger(value)) {

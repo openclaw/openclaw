@@ -1,4 +1,5 @@
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { serialize } from "node:v8";
 import {
   encodeMemoryEmbedding,
@@ -26,12 +27,17 @@ import type {
 } from "./manager-source-index-kernel.js";
 
 const owners: MemoryIndexDatabase[] = [];
-const backends: ReturnType<typeof openExistingSqliteWorkerBackend>[] = [];
+const fixtureWriters = new Map<MemoryIndexDatabase, DatabaseSync>();
+const backends: Awaited<ReturnType<typeof openExistingSqliteWorkerBackend>>[] = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     for (const backend of backends.splice(0)) {
       await backend.close();
     }
+    for (const writer of fixtureWriters.values()) {
+      writer.close();
+    }
+    fixtureWriters.clear();
     for (const owner of owners.splice(0)) {
       await owner.closeShadow();
     }
@@ -39,26 +45,35 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-function createOwner() {
-  const owner = MemoryIndexDatabase.openShadow(
+async function createOwner() {
+  const owner = await MemoryIndexDatabase.openShadow(
     path.join(tempDirs.make("memory-publication-transfer-"), "index # é.sqlite"),
     false,
   );
   owners.push(owner);
-  const schema = ensureMemoryIndexSchema({ db: owner.db, cacheEnabled: false, ftsEnabled: true });
-  expect(schema.ftsAvailable).toBe(true);
-  owner.fts.enabled = true;
-  owner.fts.available = true;
+  await owner.admitSchema({ cacheEnabled: false, ftsEnabled: true });
+  expect(owner.fts.available).toBe(true);
   return owner;
 }
 
-function createBackend(
+function fixtureWriter(owner: MemoryIndexDatabase): DatabaseSync {
+  let writer = fixtureWriters.get(owner);
+  if (!writer) {
+    writer = new DatabaseSync(owner.db.location()!);
+    writer.exec("PRAGMA busy_timeout = 5000");
+    fixtureWriters.set(owner, writer);
+  }
+  return writer;
+}
+
+async function createBackend(
   owner: MemoryIndexDatabase,
   admit?: (stage: "transaction" | "commit") => void,
 ) {
   const filename = owner.db.location()!;
+  const writer = fixtureWriter(owner);
   const readPragma = (name: string) => {
-    const row = owner.db.prepare(`PRAGMA ${name}`).get();
+    const row = writer.prepare(`PRAGMA ${name}`).get();
     return Number(row?.[name] ?? row?.timeout);
   };
   const input = {
@@ -72,8 +87,8 @@ function createBackend(
     },
   };
   const backend = admit
-    ? bindSqliteWorkerBackend(input, { databasePath: filename, database: owner.db, admit })
-    : openExistingSqliteWorkerBackend(input, { databasePath: filename });
+    ? bindSqliteWorkerBackend(input, { databasePath: filename, database: writer, admit })
+    : await openExistingSqliteWorkerBackend(input, { databasePath: filename });
   backends.push(backend);
   return backend;
 }
@@ -114,15 +129,93 @@ function replacement(text = "Violetmarker transfer text"): MemorySourceIndexRepl
 describe("bounded memory publication transfer", () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it("avoids unused connection work for scalar publications", () => {
+    const filename = path.join(tempDirs.make("memory-publication-input-"), "index.sqlite");
+    const db = new DatabaseSync(filename);
+    try {
+      ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
+      db.exec("CREATE TABLE chunks_vec (id TEXT)");
+      const sql = vi.spyOn(db, "exec");
+      const reads = vi.spyOn(db, "prepare");
+      const bind = () =>
+        bindSqliteWorkerBackend(
+          { kind: "agent" },
+          { databasePath: filename, database: db, admit: () => undefined },
+        );
+      const state = {
+        vector: { enabled: false, available: false },
+        fts: { enabled: false, available: false },
+      };
+      const scalar = bind();
+      expect(scalar.execute({ type: "vector.retireLegacy", input: { state } })).toEqual({
+        ok: true,
+        value: true,
+      });
+      expect(
+        scalar.execute({
+          type: "vector.retireLegacy",
+          input: { state: { ...state, extensionPath: path.join(filename, "missing-vec") } },
+        }),
+      ).toEqual({ ok: true, value: false });
+      expect(
+        reads.mock.calls.filter(([statement]) =>
+          /^PRAGMA (synchronous|journal_size_limit|checkpoint_fullfsync)$/u.test(statement),
+        ),
+      ).toEqual([]);
+      expect(scalar.execute({ type: "connection.inspect", input: undefined })).toEqual({
+        fileIdentity: readMemoryShadowIdentity(filename),
+        pragmas: {
+          busy_timeout: expect.any(Number),
+          synchronous: expect.any(Number),
+          foreign_keys: expect.any(Number),
+          journal_size_limit: expect.any(Number),
+          checkpoint_fullfsync: expect.any(Number),
+        },
+      });
+      scalar.close();
+      expect(
+        sql.mock.calls.filter(([statement]) => /memory_publication_input/u.test(statement)),
+      ).toEqual([]);
+      expect(db.prepare("SELECT name FROM sqlite_master WHERE name = 'chunks_vec'").all()).toEqual(
+        [],
+      );
+
+      const staged = bind();
+      const input = replacement("staged text survives scalar cleanup");
+      const { chunks, embeddings: _embeddings, ...header } = input;
+      staged.execute({
+        type: "stage.start",
+        input: { operation: "staged", header, rows: chunks.length },
+      });
+      for (const fragments of memoryPublicationBatches(input)) {
+        staged.execute({ type: "stage.append", input: { operation: "staged", fragments } });
+      }
+      expect(
+        staged.execute({ type: "source.replace", input: { operation: "staged", state } }),
+      ).toMatchObject({ ok: true });
+      staged.close();
+      expect(db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
+        { text: "staged text survives scalar cleanup" },
+      ]);
+      expect(
+        db
+          .prepare("SELECT name FROM sqlite_temp_master WHERE name = 'memory_publication_input'")
+          .all(),
+      ).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
   it.each(["success", "begin", "write", "transaction", "commit"] as const)(
     "restores publication timeout once through %s settlement",
-    (fault) => {
-      const owner = createOwner();
-      const db = owner.db;
+    async (fault) => {
+      const owner = await createOwner();
+      const db = fixtureWriter(owner);
       db.exec(`INSERT INTO memory_index_sources(path, source, hash, mtime, size)
         VALUES ('sessions/current', 'sessions', 'old', 1, 1)`);
       const stages: string[] = [];
-      const backend = createBackend(owner, (stage) => {
+      const backend = await createBackend(owner, (stage) => {
         stages.push(stage);
         expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
         if (fault === stage) {
@@ -170,13 +263,13 @@ describe("bounded memory publication transfer", () => {
     },
   );
 
-  it.each([1, 2])("retains publication restoration failures (%i attempts)", (failures) => {
-    const owner = createOwner();
-    const db = owner.db;
+  it.each([1, 2])("retains publication restoration failures (%i attempts)", async (failures) => {
+    const owner = await createOwner();
+    const db = fixtureWriter(owner);
     db.exec(`INSERT INTO memory_index_sources(path, source, hash, mtime, size)
       VALUES ('sessions/current', 'sessions', 'old', 1, 1)`);
     const admit = vi.fn();
-    const backend = createBackend(owner, admit);
+    const backend = await createBackend(owner, admit);
     const nativeExec = db.exec.bind(db);
     let attempts = 0;
     const failure = new Error("timeout restoration refused");
@@ -213,8 +306,8 @@ describe("bounded memory publication transfer", () => {
     }
   });
 
-  it("opens keyword publication when SQLite extension loading is unavailable", () => {
-    const owner = createOwner();
+  it("opens keyword publication when SQLite extension loading is unavailable", async () => {
+    const owner = await createOwner();
     vi.spyOn(sqliteWorkerRuntime, "supportsNodeSqliteExtensionLoading").mockReturnValue(false);
     const open = sqliteWorkerRuntime.openNodeSqliteDatabase;
     vi.spyOn(sqliteWorkerRuntime, "openNodeSqliteDatabase").mockImplementation(
@@ -225,7 +318,7 @@ describe("bounded memory publication transfer", () => {
         return open(location, options);
       },
     );
-    const backend = createBackend(owner);
+    const backend = await createBackend(owner);
     const { chunks, embeddings: _embeddings, ...header } = replacement();
     backend.execute({
       type: "stage.start",
@@ -239,7 +332,7 @@ describe("bounded memory publication transfer", () => {
   });
 
   it("publishes and deletes keyword data with an unavailable configured extension", async () => {
-    const owner = createOwner();
+    const owner = await createOwner();
     owner.vector.enabled = true;
     owner.vector.available = false;
     owner.vector.extensionPath = path.join(path.dirname(owner.db.location()!), "missing-vec");
@@ -261,7 +354,7 @@ describe("bounded memory publication transfer", () => {
     ).toBe(true);
     expect(matches()).toEqual([]);
 
-    const shadow = createOwner();
+    const shadow = await createOwner();
     await shadow.replaceSource(input, assertCurrent, async () => true);
     await shadow.closePublicationWorker();
     const sourcePath = shadow.db.location()!;
@@ -282,7 +375,7 @@ describe("bounded memory publication transfer", () => {
   });
 
   it("preserves extension load failures when vector publication requires the extension", async () => {
-    const owner = createOwner();
+    const owner = await createOwner();
     owner.vector.enabled = true;
     owner.vector.available = true;
     owner.vector.extensionPath = path.join(path.dirname(owner.db.location()!), "missing-vec");
@@ -299,7 +392,8 @@ describe("bounded memory publication transfer", () => {
   it.each([false, true])(
     "preserves the failed publication outcome (close failure: %s)",
     async (failClose) => {
-      const owner = createOwner();
+      const owner = await createOwner();
+      await owner.closePublicationWorker();
       const original = Object.assign(new Error("publication result unavailable"), {
         code: "outcome-unknown",
       });
@@ -371,8 +465,8 @@ describe("bounded memory publication transfer", () => {
   );
 
   it("discards declined preparation and reuses its healthy publication owner", async () => {
-    const owner = createOwner();
     const open = vi.spyOn(sqliteRuntime, "openSqliteWorkerStore");
+    const owner = await createOwner();
     await expect(
       owner.replaceSource(
         replacement("declined"),
@@ -393,7 +487,7 @@ describe("bounded memory publication transfer", () => {
   });
 
   it("roundtrips an oversized Unicode record and its metadata through the native publication owner", async () => {
-    const owner = createOwner();
+    const owner = await createOwner();
     // Non-BMP text spans many fragment boundaries, including pairs whose halves
     // could otherwise be separately converted to UTF-8 by SQLite TEXT bindings.
     const text = "a" + "😀".repeat(160_000) + '\n漢字 e\u0301 "quoted" \\ tail Violetmarker';
@@ -471,16 +565,17 @@ describe("bounded memory publication transfer", () => {
   });
 
   it("roundtrips an over-message cache vector while enforcing revision, tombstone, and capacity fences", async () => {
-    const owner = createOwner();
-    ensureMemoryIndexSchema({ db: owner.db, cacheEnabled: true, ftsEnabled: true });
-    ensureMemorySessionTombstones(owner.db);
+    const owner = await createOwner();
+    const writer = fixtureWriter(owner);
+    ensureMemoryIndexSchema({ db: writer, cacheEnabled: true, ftsEnabled: true });
+    ensureMemorySessionTombstones(writer);
     const header = {
       agentId: "main",
       provider: { id: "transfer-provider", model: "transfer-model" },
       providerKey: "transfer-key",
       maxEntries: 2,
     };
-    const insert = owner.db.prepare(`INSERT INTO memory_embedding_cache
+    const insert = writer.prepare(`INSERT INTO memory_embedding_cache
       (provider, model, provider_key, hash, embedding, dims, updated_at)
       VALUES (?, ?, ?, ?, ?, 1, 1)`);
     for (const hash of ["old-a", "old-b"]) {
@@ -496,7 +591,7 @@ describe("bounded memory publication transfer", () => {
       owner.db.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all();
     const before = readRows();
     const staleRevision = readMemoryDatabaseRevision(owner.db);
-    owner.db.exec("UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1");
+    writer.exec("UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1");
     const outcomes: Array<boolean | undefined> = [];
     const assertCurrent = () => undefined;
     outcomes.push(
@@ -519,7 +614,7 @@ describe("bounded memory publication transfer", () => {
     expect(outcomes).toEqual([false]);
     expect(readRows()).toEqual(before);
 
-    owner.db
+    writer
       .prepare(`INSERT INTO memory_session_tombstones
       (session_id, agent_id, reason, created_at) VALUES ('forgotten', 'main', 'forgotten', 1)`)
       .run();
@@ -622,9 +717,9 @@ describe("bounded memory publication transfer", () => {
 
   it.each(["incomplete", "out-of-order", "wrong-operation"] as const)(
     "rejects %s input before source mutation",
-    (fault) => {
-      const owner = createOwner();
-      const backend = createBackend(owner);
+    async (fault) => {
+      const owner = await createOwner();
+      const backend = await createBackend(owner);
       const { chunks, embeddings: _embeddings, ...header } = replacement();
       backend.execute({
         type: "stage.start",

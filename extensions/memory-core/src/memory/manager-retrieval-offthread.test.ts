@@ -3,7 +3,10 @@ import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
-import { createManagerIndexFixture } from "./manager-index.test-support.js";
+import {
+  createManagerIndexFixture,
+  memoryIndexFixtureWriter,
+} from "./manager-index.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 const benchmark = process.env.OPENCLAW_MEMORY_RETRIEVAL_BENCH === "1";
@@ -133,7 +136,7 @@ describe("memory retrieval thread ownership", () => {
     await manager.sync({ reason: "test" });
     expect(manager.status().fts?.available).toBe(true);
     const db = (manager as unknown as { db: DatabaseSync }).db;
-    seedCorpus(db, benchmark ? 50_000 : 64);
+    seedCorpus(memoryIndexFixtureWriter(manager), benchmark ? 50_000 : 64);
     const date = vi.spyOn(Date, "now").mockReturnValue(now);
     const operations = [
       {

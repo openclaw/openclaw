@@ -69,9 +69,9 @@ function observePublicationLifetime(events: string[]) {
       });
       return execution;
     });
-  const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStore;
+  const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
   const publication = vi
-    .spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStore")
+    .spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2")
     .mockImplementation(async (...args) => {
       const store = await open(...args);
       events.push("publication");

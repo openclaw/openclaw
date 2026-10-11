@@ -12,7 +12,7 @@ import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   sqliteStringSet,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 
 export type MemorySourceFileStateRow = {
   path: string;

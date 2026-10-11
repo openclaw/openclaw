@@ -36,12 +36,9 @@ import {
   type MemoryIndexMeta,
   type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
-import {
-  MEMORY_INDEX_META_KEY as META_KEY,
-  readMemoryIndexMetadata,
-} from "./manager-retrieval-read.js";
+import { readMemoryIndexMetadata } from "./manager-retrieval-read.js";
 import { MemorySyncOutcomeLedger } from "./manager-sync-outcome.js";
-import { memoryTableExists, requiresMemoryVectorRebuild } from "./manager-vector-rebuild-state.js";
+import { requiresMemoryVectorRebuild } from "./manager-vector-rebuild-state.js";
 import type { MemoryCoreRuntimeHost } from "./runtime-host.js";
 import { buildMemorySourceFilter } from "./source-filter.js";
 
@@ -79,7 +76,6 @@ export type MemoryReindexRetryState = {
   sessionsDirtyFiles: Set<string>;
 };
 
-const LEGACY_VECTOR_TABLE = "chunks_vec";
 const VECTOR_LOAD_TIMEOUT_MS = 30_000;
 const log = createSubsystemLogger("memory");
 
@@ -420,6 +416,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
 
   protected resetVectorState(): void {
     this.database.vectorReady = null;
+    this.database.ensuredVectorDimensions = undefined;
     this.vector.available = null;
     this.vector.semanticAvailable = undefined;
     this.vector.loadError = undefined;
@@ -455,19 +452,30 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
       log.warn(`sqlite-vec unavailable: ${message}`);
       return false;
     }
-    if (ready && typeof dimensions === "number" && dimensions > 0) {
-      // Another process may have published a vectorless index while this
-      // connection retained the previous dimensions in memory.
-      await this.withDatabaseWrite(() => {
-        const persistedMeta = this.readMeta();
-        if (persistedMeta && persistedMeta.vectorDims !== this.vector.dims) {
-          this.vector.dims = persistedMeta.vectorDims;
-        }
-        this.ensureVectorTable(dimensions);
-        if (persistedMeta && !persistedMeta.vectorDims && !this.hasIndexedChunks()) {
-          this.writeMeta({ ...persistedMeta, vectorDims: dimensions });
-        }
-      });
+    if (
+      ready &&
+      typeof dimensions === "number" &&
+      dimensions > 0 &&
+      this.database.ensuredVectorDimensions !== dimensions
+    ) {
+      const database = this.database;
+      await database.updateIndexStructure(
+        {
+          type: "vector.ensure",
+          input: {
+            dimensions,
+            currentDimensions: this.vector.dims,
+            state: {
+              vector: this.vector,
+              fts: this.fts,
+              extensionPath: this.vector.extensionPath,
+            },
+          },
+        },
+        () => this.assertDatabaseMutationCurrent(database),
+      );
+      database.ensuredVectorDimensions = dimensions;
+      this.vector.dims = dimensions;
     }
     return ready;
   }
@@ -502,9 +510,22 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
         this.markConfiguredSourcesForFullReindex();
         return false;
       }
+      const database = this.database;
       if (
-        !this.database.readOnly &&
-        (await this.withDatabaseWrite(() => this.dropVectorTable(LEGACY_VECTOR_TABLE)))
+        !database.readOnly &&
+        (await database.updateIndexStructure(
+          {
+            type: "vector.retireLegacy",
+            input: {
+              state: {
+                vector: this.vector,
+                fts: this.fts,
+                extensionPath: this.vector.extensionPath,
+              },
+            },
+          },
+          () => this.assertDatabaseMutationCurrent(database),
+        ))
       ) {
         // A broad dirty sync can skip unchanged files whose source hashes were
         // migrated. Force the next sync to republish the derived vector rows.
@@ -546,38 +567,6 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     }
   }
 
-  private ensureVectorTable(dimensions: number): void {
-    if (this.vector.dims === dimensions && memoryTableExists(this.db, VECTOR_TABLE)) {
-      return;
-    }
-    if (!this.dropVectorTable()) {
-      throw new Error(`Failed to reset ${VECTOR_TABLE} before rebuilding vector dimensions`);
-    }
-    this.db.exec(
-      `CREATE VIRTUAL TABLE IF NOT EXISTS ${VECTOR_TABLE} USING vec0(\n` +
-        `  id TEXT PRIMARY KEY,\n` +
-        `  embedding FLOAT[${dimensions}]\n` +
-        `)`,
-    );
-    this.vector.dims = dimensions;
-  }
-
-  private dropVectorTable(
-    tableName: typeof VECTOR_TABLE | typeof LEGACY_VECTOR_TABLE = VECTOR_TABLE,
-  ): boolean {
-    const legacy = tableName === LEGACY_VECTOR_TABLE;
-    if (legacy && !memoryTableExists(this.db, tableName)) {
-      return false;
-    }
-    try {
-      this.db.exec(`DROP TABLE ${legacy ? "" : "IF EXISTS "}${tableName}`);
-      return true;
-    } catch (err) {
-      log.debug(`Failed to drop ${tableName}: ${formatErrorMessage(err)}`);
-      return false;
-    }
-  }
-
   protected buildSourceFilter(
     alias?: string,
     sourcesOverride?: MemorySource[],
@@ -595,16 +584,15 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     return meta;
   }
 
-  protected writeMeta(meta: MemoryIndexMeta) {
+  protected async writeMeta(meta: MemoryIndexMeta): Promise<void> {
     const value = JSON.stringify(meta);
     if (this.database.lastMetaSerialized === value) {
       return;
     }
-    this.db
-      .prepare(
-        `INSERT INTO memory_index_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
-      )
-      .run(META_KEY, value);
-    this.database.lastMetaSerialized = value;
+    const database = this.database;
+    await database.updateIndexStructure({ type: "meta.write", input: { meta } }, () =>
+      this.assertDatabaseMutationCurrent(database),
+    );
+    database.lastMetaSerialized = value;
   }
 }

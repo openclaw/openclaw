@@ -152,7 +152,7 @@ describe("session startup catch-up", () => {
         provenance: { kind: "internal_system", sourceTool: "cron" },
       },
     });
-    const harness = new SessionStartupCatchupHarness([]);
+    const harness = await SessionStartupCatchupHarness.create([]);
     await expect(harness.markStartupDirtyFiles()).resolves.toEqual([]);
     expect(harness.isSessionsDirty()).toBe(false);
 
@@ -166,7 +166,7 @@ describe("session startup catch-up", () => {
 
   it("marks stale indexed session files dirty and schedules catch-up sync", async () => {
     const session = await writeSqliteSession();
-    const harness = new SessionStartupCatchupHarness([
+    const harness = await SessionStartupCatchupHarness.create([
       {
         path: session.corpusPath,
         hash: "old-hash",
@@ -182,7 +182,7 @@ describe("session startup catch-up", () => {
   });
 
   it("schedules a full retry when invalidated sessions no longer exist", async () => {
-    const harness = new SessionStartupCatchupHarness([]);
+    const harness = await SessionStartupCatchupHarness.create([]);
     harness.markFullSessionRetry();
 
     await expect(harness.catchUp()).resolves.toEqual([]);
@@ -191,7 +191,7 @@ describe("session startup catch-up", () => {
 
   it("prunes indexed sessions that are absent from the live corpus", async () => {
     const stalePath = "sessions/main/deleted.jsonl";
-    const harness = new SessionStartupCatchupHarness(
+    const harness = await SessionStartupCatchupHarness.create(
       [{ path: stalePath, hash: "stale-hash", mtime: 10, size: 20 }],
       true,
     );
@@ -208,7 +208,7 @@ describe("session startup catch-up", () => {
 
   it("preserves indexed sessions when corpus enumeration fails", async () => {
     const stalePath = "sessions/main/preserved.jsonl";
-    const harness = new SessionStartupCatchupHarness(
+    const harness = await SessionStartupCatchupHarness.create(
       [{ path: stalePath, hash: "preserved-hash", mtime: 10, size: 20 }],
       true,
     );
@@ -237,7 +237,7 @@ describe("session startup catch-up", () => {
 
   it("retries transient session transcript reads during session indexing", async () => {
     const session = await writeSessionFile("thread.jsonl.deleted.2026-02-16T22-27-33.000Z");
-    const harness = new SessionStartupCatchupHarness([]);
+    const harness = await SessionStartupCatchupHarness.create([]);
 
     const realOpen = fs.open;
     let attempts = 0;
@@ -274,7 +274,7 @@ describe("session startup catch-up", () => {
 
   it("can mark startup catch-up files without scheduling background sync", async () => {
     const session = await writeSqliteSession();
-    const harness = new SessionStartupCatchupHarness([
+    const harness = await SessionStartupCatchupHarness.create([
       {
         path: session.corpusPath,
         hash: "old-hash",
@@ -301,7 +301,7 @@ describe("session startup catch-up", () => {
     if (!state) {
       throw new Error("expected SQLite transcript state");
     }
-    const harness = new SessionStartupCatchupHarness([
+    const harness = await SessionStartupCatchupHarness.create([
       {
         path: state.path,
         hash: `sqlite:${state.revisionMs}:current-hash`,
@@ -318,12 +318,12 @@ describe("session startup catch-up", () => {
 
   it("leaves unchanged indexed session files clean", async () => {
     const session = await writeSessionFile("thread.jsonl.deleted.2026-08-09T00-00-00.000Z");
-    const discovery = new SessionStartupCatchupHarness([]);
+    const discovery = await SessionStartupCatchupHarness.create([]);
     const [corpusPath] = await discovery.getCorpusPathsForTest();
     if (!corpusPath) {
       throw new Error("expected session transcript corpus path");
     }
-    const harness = new SessionStartupCatchupHarness([
+    const harness = await SessionStartupCatchupHarness.create([
       {
         path: corpusPath,
         hash: "current-hash",
@@ -352,7 +352,7 @@ describe("session startup catch-up", () => {
     const rolledBack = await fs.stat(replacement.filePath);
     expect(rolledBack.mtimeMs).toBeLessThan(original.mtimeMs);
 
-    const harness = new SessionStartupCatchupHarness(
+    const harness = await SessionStartupCatchupHarness.create(
       [
         {
           path: originalEntry.path,
@@ -388,7 +388,7 @@ describe("session startup catch-up", () => {
     }
     expect(restoredEntry.hash).toBe(originalEntry.hash);
 
-    const harness = new SessionStartupCatchupHarness(
+    const harness = await SessionStartupCatchupHarness.create(
       [
         {
           path: originalEntry.path,
@@ -432,7 +432,7 @@ describe("session startup catch-up", () => {
     if (!state) {
       throw new Error("expected SQLite transcript state");
     }
-    const harness = new SessionStartupCatchupHarness(
+    const harness = await SessionStartupCatchupHarness.create(
       [
         {
           path: state.path,
@@ -465,7 +465,7 @@ describe("session startup catch-up", () => {
     if (!entry) {
       throw new Error("expected SQLite transcript entry");
     }
-    const harness = new SessionStartupCatchupHarness(
+    const harness = await SessionStartupCatchupHarness.create(
       [
         {
           path: entry.path,
@@ -537,7 +537,7 @@ describe("session startup catch-up", () => {
 
   it.each(cacheBoundSyncs)("bounds the embedding cache on a %s sync", async (_label, params) => {
     await writeSqliteSession();
-    const harness = new SessionStartupCatchupHarness([]);
+    const harness = await SessionStartupCatchupHarness.create([]);
 
     await harness.runSyncForTest(params);
 
@@ -546,7 +546,7 @@ describe("session startup catch-up", () => {
 
   it("does not fall back to full session sync when identity targets normalize away", async () => {
     await writeSessionFile("thread.jsonl");
-    const harness = new SessionStartupCatchupHarness([]);
+    const harness = await SessionStartupCatchupHarness.create([]);
 
     await harness.runSyncForTest({
       reason: "queued-sessions",
@@ -558,7 +558,7 @@ describe("session startup catch-up", () => {
 
   it("does not fall back to full session sync for malformed identity session ids", async () => {
     await writeSessionFile("thread.jsonl");
-    const harness = new SessionStartupCatchupHarness([]);
+    const harness = await SessionStartupCatchupHarness.create([]);
 
     await harness.runSyncForTest({
       reason: "queued-sessions",
@@ -569,7 +569,7 @@ describe("session startup catch-up", () => {
   });
 
   it("skips corpus preflight when an ordinary sync has no session work", async () => {
-    const harness = new SessionStartupCatchupHarness([]);
+    const harness = await SessionStartupCatchupHarness.create([]);
 
     await harness.runSyncForTest({ reason: "session-delta" });
 
@@ -584,7 +584,7 @@ describe("session startup catch-up", () => {
       sessionKey: "agent:main:chat:custom",
       content: "custom store target",
     });
-    const harness = new SessionStartupCatchupHarness([]);
+    const harness = await SessionStartupCatchupHarness.create([]);
     harness.addPendingSessionTarget({
       agentId: "main",
       sessionId: "custom-thread",
@@ -613,7 +613,7 @@ describe("session startup catch-up", () => {
       content: "replacement store target",
     });
     await configureTestSessionStore(session.storePath);
-    const harness = new SessionStartupCatchupHarness([]);
+    const harness = await SessionStartupCatchupHarness.create([]);
     harness.afterNextCorpusListForTest(async () => {
       await configureTestSessionStore(replacement.storePath);
     });
@@ -644,7 +644,7 @@ describe("session startup catch-up", () => {
       role: "assistant",
       content: "Internal cron output that must stay out.",
     });
-    const harness = new SessionStartupCatchupHarness([]);
+    const harness = await SessionStartupCatchupHarness.create([]);
 
     await harness.runSyncForTest({
       reason: "targeted-generated-session",
@@ -663,7 +663,7 @@ describe("session startup catch-up", () => {
 
   it("queues transcript update identity without requiring a session file", async () => {
     vi.useFakeTimers();
-    const harness = new SessionStartupCatchupHarness([]);
+    const harness = await SessionStartupCatchupHarness.create([]);
     harness.startTranscriptListener();
 
     try {
@@ -686,7 +686,7 @@ describe("session startup catch-up", () => {
   it("indexes a persisted SQLite append through the real transcript listener", async () => {
     vi.useFakeTimers();
     const session = await writeSqliteSession();
-    const harness = new SessionStartupCatchupHarness([], true, true);
+    const harness = await SessionStartupCatchupHarness.create([], true, true);
     const turnContext = new AsyncLocalStorage<string>();
     const pendingInputContext = new AsyncLocalStorage<string>();
     turnContext.run("opening turn", () => harness.startTranscriptListener());
@@ -737,7 +737,7 @@ describe("session startup catch-up", () => {
   it("indexes a real SQLite delete archive through the transcript listener", async () => {
     vi.useFakeTimers();
     const session = await writeSqliteSession({ content: "lifecycle archive memory" });
-    const harness = new SessionStartupCatchupHarness([], true, true);
+    const harness = await SessionStartupCatchupHarness.create([], true, true);
     harness.startTranscriptListener();
 
     try {
@@ -769,7 +769,7 @@ describe("session startup catch-up", () => {
   it("ignores live file notifications without an identity target", async () => {
     vi.useFakeTimers();
     const session = await writeSessionFile("thread.jsonl");
-    const harness = new SessionStartupCatchupHarness([]);
+    const harness = await SessionStartupCatchupHarness.create([]);
     harness.startTranscriptListener();
 
     emitSessionTranscriptUpdate({
@@ -788,7 +788,7 @@ describe("session startup catch-up", () => {
     async (reason) => {
       vi.useFakeTimers();
       const session = await writeSessionFile(`thread.jsonl.${reason}.2026-06-23T10-00-00.000Z`);
-      const harness = new SessionStartupCatchupHarness([], true);
+      const harness = await SessionStartupCatchupHarness.create([], true);
       harness.startTranscriptListener();
 
       try {
@@ -823,7 +823,7 @@ describe("session startup catch-up", () => {
   ])("ignores non-corpus session artifact updates for %s", async (fileName) => {
     vi.useFakeTimers();
     const session = await writeSessionFile(fileName);
-    const harness = new SessionStartupCatchupHarness([], true);
+    const harness = await SessionStartupCatchupHarness.create([], true);
     harness.startTranscriptListener();
 
     try {
@@ -843,7 +843,7 @@ describe("session startup catch-up", () => {
     vi.useFakeTimers();
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
     const missingPath = path.join(sessionsDir, "missing.jsonl.reset.2026-06-23T10-00-00.000Z");
-    const harness = new SessionStartupCatchupHarness([], true);
+    const harness = await SessionStartupCatchupHarness.create([], true);
     harness.startTranscriptListener();
 
     try {

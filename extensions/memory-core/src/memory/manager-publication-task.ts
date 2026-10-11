@@ -1,6 +1,6 @@
 import type { ensureMemoryIndexSchema } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import type { loadMemoryEmbeddingCache } from "./manager-embedding-cache.js";
-import type { MemoryIndexProviderIdentity } from "./manager-reindex-state.js";
+import type { MemoryIndexMeta, MemoryIndexProviderIdentity } from "./manager-reindex-state.js";
 import type { MemoryShadowConnection, MemoryShadowFailure } from "./manager-shadow-task.js";
 import type { MemorySourceIndexHeader } from "./manager-source-index-kernel.js";
 import type {
@@ -8,7 +8,7 @@ import type {
   refreshMemorySessionSourceState,
 } from "./manager-source-state.js";
 
-export type MemoryPublicationConnection = MemoryShadowConnection;
+export type MemoryPublicationConnection = MemoryShadowConnection | { kind: "agent" };
 export type MemoryPublicationState = {
   vector: { enabled: boolean; available: boolean | null };
   fts: { enabled: boolean; available: boolean };
@@ -33,6 +33,19 @@ export type MemoryPublicationResult<T> =
   | { ok: true; value: T }
   | { ok: false; error: MemoryShadowFailure; entered: boolean; committed: boolean };
 export type MemoryPublicationOperations = {
+  "connection.inspect": { input: undefined; output: MemoryShadowConnection };
+  "meta.write": {
+    input: { meta: MemoryIndexMeta };
+    output: MemoryPublicationResult<void>;
+  };
+  "vector.ensure": {
+    input: { dimensions: number; currentDimensions?: number; state: MemoryPublicationState };
+    output: MemoryPublicationResult<void>;
+  };
+  "vector.retireLegacy": {
+    input: { state: MemoryPublicationState };
+    output: MemoryPublicationResult<boolean>;
+  };
   "schema.admit": {
     input: Pick<
       Parameters<typeof ensureMemoryIndexSchema>[0],
