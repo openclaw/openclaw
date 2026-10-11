@@ -76,9 +76,9 @@ import { withPersonalAuthProfileStore, type PersonalAuthProfileStore } from "./p
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import {
   ensureAuthProfileStoreWithoutExternalProfilesAsync,
+  resolvePersistedAuthProfileOwnerAgentDirAsync,
   updateAuthProfileStoreWithLock,
 } from "./store-runtime.js";
-import { resolvePersistedAuthProfileOwnerAgentDir } from "./store.js";
 import type { AuthProfileStore, OAuthCredential, OAuthCredentials } from "./types.js";
 import { runAuthProfileUsage } from "./usage-lifecycle.js";
 
@@ -304,7 +304,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     const personalProfile = isUserModelAuthProfileId(params.profileId);
     const ownerAgentDir = personalProfile
       ? undefined
-      : resolvePersistedAuthProfileOwnerAgentDir(params);
+      : await resolvePersistedAuthProfileOwnerAgentDirAsync(params);
     const authPath =
       params.personalStore?.databasePath ??
       (ownerAgentDir

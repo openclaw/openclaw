@@ -25,6 +25,7 @@ export const AUTH_ASYNC_COMPAT_RECORD = {
     "openclaw/plugin-sdk/provider-auth-runtime resolveProviderAuthProfileMetadata",
     "openclaw/plugin-sdk/agent-runtime ensureAuthProfileStore",
     "openclaw/plugin-sdk/agent-runtime loadAuthProfileStoreWithoutExternalProfiles",
+    "openclaw/plugin-sdk/agent-runtime findPersistedAuthProfileCredential",
     "openclaw/plugin-sdk/agent-runtime resolvePersistedAuthProfileOwnerAgentDir",
     "openclaw/plugin-sdk/agent-harness-runtime resolveModelAuthMode",
     "openclaw/plugin-sdk/models-provider-runtime formatModelsAvailableHeader",

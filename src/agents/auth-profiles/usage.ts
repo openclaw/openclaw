@@ -32,9 +32,10 @@ import {
 } from "./state-observation.js";
 import {
   loadAuthProfileStoreWithoutExternalProfilesAsync,
+  resolvePersistedAuthProfileOwnerAgentDirAsync,
   updateAuthProfileStoreWithLock,
 } from "./store-runtime.js";
-import { applyScopedAuthReadThrough, resolvePersistedAuthProfileOwnerAgentDir } from "./store.js";
+import { applyScopedAuthReadThrough } from "./store.js";
 import type {
   AuthProfileBlockedSource,
   AuthProfileCredential,
@@ -93,7 +94,7 @@ async function updateOwnedAuthProfileUsage(
   const updated = await updateAuthProfileStoreWithLock({
     ...update,
     profileId,
-    agentDir: resolvePersistedAuthProfileOwnerAgentDir({
+    agentDir: await resolvePersistedAuthProfileOwnerAgentDirAsync({
       agentDir: update.agentDir,
       profileId,
     }),
@@ -437,7 +438,7 @@ export async function maybeReprobeWhamBlockedProfiles(params: {
       if (!isWhamOAuthProfile(profile)) {
         return undefined;
       }
-      const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
+      const ownerAgentDir = await resolvePersistedAuthProfileOwnerAgentDirAsync({
         agentDir: params.agentDir,
         profileId,
       });
