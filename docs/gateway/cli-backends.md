@@ -358,7 +358,10 @@ Claude user turns against the full local text, including any literal quote of th
 note. If that does not match, it ignores one exact context note for comparison, so
 the same turn appears once. Stored OpenClaw and native transcript text remains
 unchanged. For unmatched imported user turns, chat history removes generated
-resume notes and queued system-event prefixes from the display copy only.
+resume notes, historical requester guidance, and queued system-event prefixes
+from the display copy only. Historical requester guidance is recognized by its
+complete generated prefix; matching canonical user text and later quoted
+guidance remain unchanged.
 Recognized runtime prompts, such as default heartbeat, exec-completion, restart
 recovery, and native compaction prompts, are hidden rather than shown as human
 messages. Matching canonical user turns and quoted text in later content blocks
