@@ -1,57 +1,59 @@
-// The existing outbox owns state and admission; load its dispatch algorithm only when intent is queued.
 import { sleepWithAbort } from "@openclaw/retry";
 import type { BackgroundPreference } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import type { ConfigPatchAck } from "../lib/config/config-gateway-operations.ts";
+import { showToast } from "../lib/toast.ts";
+import { readConfirmedPrefs, publishConfirmedPrefs } from "./server-prefs-confirmation.ts";
+import { foldSidebarEntriesBase, hasSidebarOrderIntent } from "./server-prefs-intent.ts";
 import {
-  invalidateProfileAppearanceReads,
-  loadProfileAppearancePrefs,
-  recordProfileAppearanceCommit,
   resolveProfileAppearancePrefs,
   resolveProfileAppearanceProfileId,
+  invalidateProfileAppearanceReads,
+  recordProfileAppearanceCommit,
 } from "./server-prefs-profile.ts";
 import {
-  extractServerUiPrefs,
-  isAppearancePref,
-  prefValuesEqual,
+  refreshProfileAppearancePrefs,
+  loadProfileAppearancePrefs,
+} from "./server-prefs-reconcile.ts";
+import {
   SYNCED_PREF_KEYS,
   SYNCED_PREFS,
+  prefValuesEqual,
+  clearSidebarEntriesMetadata,
   type ServerUiPrefs,
-  type SyncedPrefKey,
 } from "./server-prefs-state.ts";
+import type { ServerUiPrefsSync, ServerUiPrefsWriter } from "./server-prefs-sync-contract.ts";
 import {
-  LAST_SEEN_KEY,
-  parseStoredPrefs,
-  readStorage,
-  writeStorage,
-} from "./server-prefs-storage.ts";
-import {
-  refreshProfileAppearancePrefs,
-  type ServerUiPrefsOutbox,
-  type ServerUiPrefsWriter,
-} from "./server-prefs.ts";
+  selectProfileUiPrefs,
+  removePendingUiPrefsBatch,
+  serverUiPrefsCommittedSnapshot,
+} from "./server-prefs-write-batch.ts";
+import type { UiSettings } from "./settings-contract.ts";
 import { invalidateUserPreferences } from "./user-prefs-cache.ts";
 
+// Operation-only code: the synchronous preference owner retains its outbox and
+// all generation/authority facts, exposed live across every awaited boundary.
 export async function drainPendingPrefs(
-  outbox: ServerUiPrefsOutbox,
+  sync: ServerUiPrefsSync,
   writer: ServerUiPrefsWriter,
   epoch: number,
 ): Promise<void> {
-  while (outbox.pendingPrefs) {
-    if (outbox.pushWriter !== writer || outbox.pushEpoch !== epoch) {
+  const isCurrent = () => sync.pushWriter === writer && sync.pushEpoch === epoch;
+  while (sync.pendingPrefs) {
+    if (!isCurrent()) {
       return;
     }
-    outbox.reconcilePersistedPendingPrefs();
-    if (!outbox.pendingPrefs) {
+    sync.reconcilePersistedPendingPrefs();
+    if (!sync.pendingPrefs) {
       return;
     }
     const localOnlyKeys = SYNCED_PREF_KEYS.filter(
       (key) =>
-        outbox.pendingPrefs?.[key] !== undefined &&
+        sync.pendingPrefs?.[key] !== undefined &&
         (SYNCED_PREFS[key].configSync === false ||
           (key === "theme" &&
-            typeof outbox.pendingPrefs.theme === "string" &&
-            outbox.pendingPrefs.theme.includes("/"))) &&
-        !(outbox.pushProfileId && outbox.pushCanWrite),
+            typeof sync.pendingPrefs.theme === "string" &&
+            sync.pendingPrefs.theme.includes("/"))) &&
+        !(sync.pushProfileId && sync.pushCanWrite),
     );
     if (localOnlyKeys.length) {
       if (!writer.state.connected) {
@@ -59,76 +61,81 @@ export async function drainPendingPrefs(
       }
       // Profile-only preferences must never fall through to config.patch,
       // including intent queued before this connection's identity was known.
-      outbox.cancelPendingKeys(outbox.pendingScope, localOnlyKeys);
-      outbox.updateRetainedLocalKeys(outbox.pendingScope, localOnlyKeys, true);
-      outbox.pushAfterCommit?.({ needsRefresh: false, retainedLocal: true });
+      sync.cancelPendingKeys(sync.pendingScope, localOnlyKeys);
+      sync.updateRetainedLocalKeys(sync.pendingScope, localOnlyKeys, true);
+      sync.pushAfterCommit?.({ needsRefresh: false, retainedLocal: true });
       continue;
     }
-    if (outbox.pushProfileId && outbox.pendingPrefs.theme === "custom") {
+    if (sync.pushProfileId && sync.pendingPrefs.theme === "custom") {
       // Offline-queued custom theme reaching a profile connection: browser-local
       // by contract, so retain it here instead of syncing it to the profile.
-      outbox.cancelPendingKeys(outbox.pendingScope, ["theme"]);
-      outbox.updateRetainedLocalKeys(outbox.pendingScope, ["theme"], true);
+      sync.cancelPendingKeys(sync.pendingScope, ["theme"]);
+      sync.updateRetainedLocalKeys(sync.pendingScope, ["theme"], true);
       continue;
     }
-    const profileBatch: ServerUiPrefs = {};
-    if (outbox.pushProfileId && outbox.pushCanWrite) {
-      for (const key of SYNCED_PREF_KEYS) {
-        if (isAppearancePref(key) && Object.hasOwn(outbox.pendingPrefs, key)) {
-          Object.assign(profileBatch, { [key]: outbox.pendingPrefs[key] });
-        }
-      }
-    }
+    const profileBatch =
+      sync.pushProfileId && sync.pushCanWrite ? selectProfileUiPrefs(sync.pendingPrefs) : {};
     const useProfile = Object.keys(profileBatch).length > 0;
-    let batch = useProfile ? profileBatch : { ...outbox.pendingPrefs };
-    if (useProfile && batch.background !== undefined && Object.keys(batch).length > 1) {
-      // Background has its own CAS boundary. A conflict must not reject unrelated
-      // palette/font intent, so acknowledge the other preferences first.
-      const { background: _background, ...themeBatch } = batch;
-      batch = themeBatch;
+    let batch = useProfile ? profileBatch : { ...sync.pendingPrefs };
+    if (!useProfile) {
+      clearSidebarEntriesMetadata(batch);
+      delete batch.navigationConfirmation;
     }
-    const afterCommit = outbox.pushAfterCommit;
-    const client = writer.state.client;
-    const profileId = outbox.pushProfileId;
-    const gatewayScope = client?.gatewayUrl ?? "";
-    const isCurrent = () =>
-      outbox.pushWriter === writer &&
-      outbox.pushEpoch === epoch &&
-      writer.state.client === client &&
+    if (!Object.keys(batch).length) {
+      sync.pendingPrefs = null;
+      sync.writePendingStorage(null);
+      sync.publishPreferenceWrites();
+      return;
+    }
+    if (useProfile && batch.background !== undefined && Object.keys(batch).length > 1) {
+      // Background CAS conflicts must not reject or strand unrelated intent.
+      const { background: _background, ...otherPrefs } = batch;
+      batch = otherPrefs;
+    }
+    const afterCommit = sync.pushAfterCommit;
+    const capturedClient = writer.state.client;
+    const profileId = sync.pushProfileId;
+    const gatewayScope = capturedClient?.gatewayUrl ?? "";
+    const profileIsCurrent = () =>
+      isCurrent() &&
+      writer.state.client === capturedClient &&
       writer.state.connected &&
       resolveProfileAppearanceProfileId(gatewayScope) === profileId;
-    if (useProfile && !isCurrent()) {
+    if (useProfile && !profileIsCurrent()) {
       return;
     }
     let expectedBackground: BackgroundPreference | null | undefined;
-    if (useProfile && batch.background !== undefined && client && profileId) {
-      if (!isCurrent() || !outbox.pushCanWrite) {
+    if (useProfile && batch.background !== undefined && capturedClient && profileId) {
+      if (!sync.pushCanWrite) {
         return;
       }
       let profile = resolveProfileAppearancePrefs(gatewayScope, profileId);
       if (!profile) {
-        // A boot mirror is not a CAS baseline. Load the authoritative profile, then
-        // revalidate identity, connection, and newest intent before any write.
-        invalidateUserPreferences(client);
+        invalidateUserPreferences(capturedClient);
         try {
           if (
-            !(await loadProfileAppearancePrefs(client, profileId, gatewayScope)) ||
-            !isCurrent()
+            !(await loadProfileAppearancePrefs(capturedClient, profileId, gatewayScope, {
+              configObject: writer.state.configSnapshot?.config,
+              canMigrate: false,
+              isCurrent: profileIsCurrent,
+            })) ||
+            !profileIsCurrent()
           ) {
             return;
           }
         } catch (error) {
-          if (isCurrent() && batchIsCurrent(outbox, batch)) {
-            outbox.recordPreferenceWriteFailures(
-              outbox.pendingScope,
+          if (profileIsCurrent() && sync.batchIsCurrent(batch)) {
+            sync.recordPreferenceWriteFailures(
+              sync.pendingScope,
               { background: batch.background },
               error,
             );
-            outbox.publishPreferenceWrites();
+            sync.publishPreferenceWrites();
           }
           return;
         }
-        if (!batchIsCurrent(outbox, batch)) {
+        sync.reconcilePersistedPendingPrefs();
+        if (!sync.batchIsCurrent(batch)) {
           continue;
         }
         profile = resolveProfileAppearancePrefs(gatewayScope, profileId);
@@ -138,245 +145,414 @@ export async function drainPendingPrefs(
       }
       expectedBackground = profile.background ?? null;
     }
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      if (
-        outbox.pushWriter !== writer ||
-        outbox.pushEpoch !== epoch ||
-        (useProfile && !isCurrent())
-      ) {
+    const navigationReceipt =
+      batch.sidebarEntries !== undefined || batch.navigationScope !== undefined;
+    // Until this exact write is acknowledged, storage must retain the aggregate
+    // intent for unknown-ack reloads. Only locally composed successors may then
+    // observe its additions; remote adoption or an independent edit detaches it.
+    let acknowledgedBase = batch.sidebarEntries;
+    let composed = false;
+    let reordered = false;
+    const compose: ServerUiPrefsSync["composeSidebar"] = (pending, next) => {
+      if (!next.sidebarEntries) {
         return;
       }
-      if (useProfile && writer.state.client) {
-        invalidateProfileAppearanceReads();
-        invalidateUserPreferences(writer.state.client);
-      }
-      const result = useProfile
-        ? await import("./server-prefs-profile-runtime.ts").then(
-            ({ writeProfileAppearancePrefs }) =>
-              writeProfileAppearancePrefs(
-                client,
-                batch,
-                isCurrent() && outbox.pushCanWrite && batchIsCurrent(outbox, batch),
-                expectedBackground,
-              ),
-          )
-        : await writer.runExternalMutation(
-            (configClient) =>
-              // ui.prefs is a deliberately narrow hashless LWW surface enforced by
-              // hasHashlessPatchLwwStructure in the gateway. Serialization still
-              // matters: a pending whole-config save must commit before this merge.
-              configClient.request<ConfigPatchAck>("config.patch", {
-                raw: JSON.stringify({ ui: { prefs: batch } }),
-                ...(batch.sidebarEntries !== undefined
-                  ? { replacePaths: ["ui.prefs.sidebarEntries"] }
-                  : {}),
-                note: "control-ui prefs sync",
-              }),
-            {
-              waitForWritesResumed: true,
-              configWriteAck: (ack) => ack,
-              canDispatch: () => {
-                if (writer.canPatch === false) {
-                  return false;
-                }
-                outbox.reconcilePersistedPendingPrefs();
-                if (batchIsCurrent(outbox, batch)) {
-                  return true;
-                }
-                outbox.drainRequested = Boolean(outbox.pendingPrefs);
-                return false;
-              },
-              dispatchError: "Access changed before preferences could sync.",
-            },
-          );
       if (
-        outbox.pushWriter !== writer ||
-        outbox.pushEpoch !== epoch ||
-        (useProfile && !isCurrent())
+        !pending?.sidebarEntries ||
+        !prefValuesEqual(next.sidebarEntriesBase, pending.sidebarEntries)
       ) {
+        sync.composeSidebar = null;
         return;
       }
-      const dispatchedBatch = "batch" in result ? result.batch : batch;
-      if (result.ok) {
-        if (useProfile) {
+      acknowledgedBase = foldSidebarEntriesBase(
+        acknowledgedBase!,
+        pending.sidebarEntries,
+        next.sidebarEntries,
+      );
+      composed = true;
+      reordered ||= hasSidebarOrderIntent(next);
+    };
+    if (acknowledgedBase) {
+      sync.composeSidebar = compose;
+    }
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        if (!isCurrent() || (useProfile && !profileIsCurrent())) {
+          return;
+        }
+        if (useProfile && writer.state.client) {
           invalidateProfileAppearanceReads();
+          invalidateUserPreferences(writer.state.client);
         }
-        for (const key of SYNCED_PREF_KEYS) {
-          if (!Object.hasOwn(dispatchedBatch, key)) {
-            continue;
+        let lastSeenAtDispatch: ServerUiPrefs = {};
+        const result = useProfile
+          ? await import("./server-prefs-profile-runtime.ts").then(
+              ({ writeProfileAppearancePrefs }) =>
+                writeProfileAppearancePrefs(
+                  writer.state.client,
+                  batch,
+                  () => {
+                    if (
+                      !profileIsCurrent() ||
+                      writer.state.client !== capturedClient ||
+                      !writer.state.connected ||
+                      !sync.pushCanWrite
+                    ) {
+                      return false;
+                    }
+                    sync.reconcilePersistedPendingPrefs();
+                    if (sync.batchIsCurrent(batch)) {
+                      if (navigationReceipt) {
+                        lastSeenAtDispatch = readConfirmedPrefs(sync, sync.pendingScope) ?? {};
+                      }
+                      return true;
+                    }
+                    sync.drainRequested = Boolean(sync.pendingPrefs);
+                    return false;
+                  },
+                  profileId,
+                  expectedBackground,
+                ),
+            )
+          : await writer.runExternalMutation(
+              (client) =>
+                // ui.prefs is a deliberately narrow hashless LWW surface enforced by
+                // hasHashlessPatchLwwStructure in the gateway. Serialization still
+                // matters: a pending whole-config save must commit before this merge.
+                client.request<ConfigPatchAck>("config.patch", {
+                  raw: JSON.stringify({ ui: { prefs: batch } }),
+                  note: "control-ui prefs sync",
+                }),
+              {
+                waitForWritesResumed: true,
+                configWriteAck: (ack) => ack,
+                canDispatch: () => {
+                  if (
+                    !isCurrent() ||
+                    writer.state.client !== capturedClient ||
+                    writer.canPatch === false
+                  ) {
+                    return false;
+                  }
+                  sync.reconcilePersistedPendingPrefs();
+                  if (sync.batchIsCurrent(batch)) {
+                    return true;
+                  }
+                  sync.drainRequested = Boolean(sync.pendingPrefs);
+                  return false;
+                },
+                dispatchError: "Access changed before preferences could sync.",
+              },
+            );
+        if (!isCurrent() || (useProfile && !profileIsCurrent())) {
+          return;
+        }
+        sync.reconcilePersistedPendingPrefs();
+        const dispatchedBatch = "batch" in result ? result.batch : batch;
+        // RPC sub-batches omit browser metadata; acknowledge the complete original intent.
+        const acknowledgedBatch = Object.hasOwn(dispatchedBatch, "sidebarEntries")
+          ? {
+              ...dispatchedBatch,
+              sidebarEntriesBase: batch.sidebarEntriesBase,
+              sidebarEntriesOrder: batch.sidebarEntriesOrder,
+            }
+          : dispatchedBatch;
+        if (result.ok) {
+          if (useProfile) {
+            invalidateProfileAppearanceReads();
           }
-          const failures = outbox.preferenceWriteFailures.get(outbox.pendingScope);
-          if (prefValuesEqual(failures?.get(key)?.value, dispatchedBatch[key])) {
-            failures?.delete(key);
-          }
-        }
-        removeBatch(outbox, dispatchedBatch);
-        const lastSeen = parseStoredPrefs(readStorage(LAST_SEEN_KEY, outbox.pendingScope)) ?? {};
-        const nextLastSeen = { ...lastSeen, ...dispatchedBatch };
-        if (useProfile && outbox.pushProfileId) {
-          recordProfileAppearanceCommit(
-            writer.state.client?.gatewayUrl ?? "",
-            outbox.pushProfileId,
-            dispatchedBatch,
-          );
-        }
-        if (useProfile) {
-          const configPrefs = extractServerUiPrefs(writer.state.configSnapshot?.config);
           for (const key of SYNCED_PREF_KEYS) {
             if (!Object.hasOwn(dispatchedBatch, key)) {
               continue;
             }
-            if (dispatchedBatch[key] === null) {
-              if (configPrefs[key] === undefined) {
-                delete nextLastSeen[key];
-              } else {
-                Object.assign(nextLastSeen, { [key]: configPrefs[key] });
+            const failures = sync.preferenceWriteFailures.get(sync.pendingScope);
+            if (prefValuesEqual(failures?.get(key)?.value, dispatchedBatch[key])) {
+              failures?.delete(key);
+            }
+          }
+          const committedBatch =
+            "committedBatch" in result
+              ? (result.committedBatch ?? dispatchedBatch)
+              : dispatchedBatch;
+          let lastSeen = readConfirmedPrefs(sync, sync.pendingScope) ?? {};
+          if (
+            navigationReceipt &&
+            capturedClient &&
+            writer.state.client === capturedClient &&
+            writer.state.connected &&
+            sync.pushCanWrite &&
+            profileId &&
+            (["sidebarEntries", "navigationScope"] as const).some(
+              (key) =>
+                Object.hasOwn(committedBatch, key) &&
+                sync.pendingPrefs &&
+                Object.hasOwn(sync.pendingPrefs, key) &&
+                lastSeen.navigationConfirmation?.[key] !==
+                  lastSeenAtDispatch.navigationConfirmation?.[key] &&
+                !prefValuesEqual(lastSeen[key], committedBatch[key]),
+            )
+          ) {
+            // users.prefs has no server revision: an identical read before this commit
+            // and an ABA read after it have indistinguishable receipts. Only this raced,
+            // still-owned ACK needs a fresh read; ordinary/settled ACKs never reread.
+            const beforeRead = lastSeen.navigationConfirmation;
+            const configObject = writer.state.configSnapshot?.config;
+            invalidateUserPreferences(capturedClient);
+            try {
+              await refreshProfileAppearancePrefs({
+                client: capturedClient,
+                profileId,
+                scope: capturedClient.gatewayUrl,
+                configObject,
+                onApplied: () => undefined,
+                isCurrent: () => {
+                  if (
+                    !isCurrent() ||
+                    writer.state.client !== capturedClient ||
+                    !writer.state.connected ||
+                    !sync.pushCanWrite ||
+                    writer.state.configSnapshot?.config !== configObject
+                  ) {
+                    return false;
+                  }
+                  const confirmation = readConfirmedPrefs(
+                    sync,
+                    sync.pendingScope,
+                  )?.navigationConfirmation;
+                  return (["sidebarEntries", "navigationScope"] as const).every(
+                    (key) => confirmation?.[key] === beforeRead?.[key],
+                  );
+                },
+              });
+            } catch {
+              // A failed observation cannot replace the most recent confirmed snapshot.
+            }
+            if (!isCurrent() || writer.state.client !== capturedClient) {
+              return;
+            }
+            sync.reconcilePersistedPendingPrefs();
+            lastSeen = readConfirmedPrefs(sync, sync.pendingScope) ?? {};
+          }
+          const profilePrefs = useProfile
+            ? resolveProfileAppearancePrefs(
+                writer.state.client?.gatewayUrl ?? "",
+                sync.pushProfileId,
+              )
+            : null;
+          const publication = { ...committedBatch };
+          let superseded = false;
+          const confirmedNavigation: ServerUiPrefs = {};
+          const latestNavigation: Partial<Pick<UiSettings, "sidebarEntries" | "navigationScope">> =
+            {};
+          if (navigationReceipt) {
+            for (const key of ["sidebarEntries", "navigationScope"] as const) {
+              // Shared lastSeen is already-confirmed profile-only navigation. Keep the
+              // local read cache aligned so a later reconcile cannot roll it backward.
+              const confirmed = SYNCED_PREFS[key].extract(lastSeen[key]);
+              if (profilePrefs && confirmed !== undefined) {
+                Object.assign(confirmedNavigation, { [key]: confirmed });
+              }
+              if (!Object.hasOwn(publication, key)) {
+                continue;
+              }
+              const held = sync.pendingPrefs && Object.hasOwn(sync.pendingPrefs, key);
+              const newer =
+                (lastSeen.navigationConfirmation?.[key] !==
+                  lastSeenAtDispatch.navigationConfirmation?.[key] ||
+                  !prefValuesEqual(lastSeen[key], lastSeenAtDispatch[key])) &&
+                !prefValuesEqual(lastSeen[key], committedBatch[key]);
+              if (!held || newer) {
+                // Clearing an outbox may mean a sibling settled or the user cancelled,
+                // not permission for this older receipt to publish its committed value.
+                delete publication[key];
+                superseded = true;
+                if (held && newer && confirmed !== undefined) {
+                  Object.assign(latestNavigation, { [key]: confirmed });
+                }
               }
             }
           }
-          outbox.lastReconciledConfigObject = null;
-        }
-        writeStorage(LAST_SEEN_KEY, outbox.pendingScope, JSON.stringify(nextLastSeen));
-        outbox.mergePendingIntoStorage(dispatchedBatch);
-        outbox.publishPreferenceWrites();
-        outbox.clearConflictRedrain();
-        if (outbox.pushWriter !== writer || outbox.pushEpoch !== epoch) {
-          return;
+          if (useProfile && profileId) {
+            recordProfileAppearanceCommit(gatewayScope, profileId, confirmedNavigation);
+          }
+          if (
+            composed &&
+            sync.composeSidebar === compose &&
+            sync.pendingPrefs?.sidebarEntries &&
+            acknowledgedBatch.sidebarEntries
+          ) {
+            sync.pendingPrefs.sidebarEntriesBase = acknowledgedBase!;
+            sync.pendingPrefs.sidebarEntriesOrder = reordered || undefined;
+            // A remove/readd can equal the original pair but is still newer intent.
+            delete acknowledgedBatch.sidebarEntries;
+            clearSidebarEntriesMetadata(acknowledgedBatch);
+          }
+          sync.pendingPrefs = removePendingUiPrefsBatch(
+            sync.pendingPrefs,
+            acknowledgedBatch,
+            sync.pendingPersistedKeys,
+          );
+          if (useProfile && profileId) {
+            recordProfileAppearanceCommit(gatewayScope, profileId, publication);
+          }
+          const nextLastSeen = serverUiPrefsCommittedSnapshot(
+            lastSeen,
+            publication,
+            profilePrefs,
+            writer.state.configSnapshot?.config,
+          );
+          if (useProfile && !superseded) {
+            sync.lastReconciledConfigObject = null;
+          }
+          if (publication.sidebarEntries) {
+            latestNavigation.sidebarEntries = publication.sidebarEntries;
+          }
+          for (const key of ["sidebarEntries", "navigationScope"] as const) {
+            if (sync.pendingPrefs && Object.hasOwn(sync.pendingPrefs, key)) {
+              delete latestNavigation[key];
+            }
+          }
+          if (Object.keys(latestNavigation).length) {
+            sync.applyServerPrefsPatch(latestNavigation);
+          }
+          if (Object.keys(publication).length) {
+            publishConfirmedPrefs(
+              sync,
+              sync.pendingScope,
+              nextLastSeen,
+              SYNCED_PREF_KEYS.filter((key) => Object.hasOwn(publication, key)),
+            );
+          }
+          sync.mergePendingIntoStorage(acknowledgedBatch);
+          sync.publishPreferenceWrites();
+          sync.clearConflictRedrain();
+          if (!isCurrent()) {
+            return;
+          }
+          if (
+            !superseded &&
+            result.refresh.ok &&
+            afterCommit &&
+            sync.lastReconciledScope === sync.pendingScope
+          ) {
+            // The authoritative refresh published while pending intent still
+            // shadowed this batch. Re-evaluate that same snapshot after cleanup
+            // so a concurrent server value wins without another config.get.
+            sync.lastReconciledConfigObject = null;
+          }
+          if (!superseded) {
+            afterCommit?.({ needsRefresh: !result.refresh.ok });
+          }
+          if (!isCurrent()) {
+            return;
+          }
+          break;
         }
         if (
-          result.refresh.ok &&
-          afterCommit &&
-          outbox.lastReconciledScope === outbox.pendingScope
+          result.reason === "conflict" &&
+          useProfile &&
+          dispatchedBatch.background !== undefined &&
+          capturedClient &&
+          profileId
         ) {
-          // The authoritative refresh published while pending intent still
-          // shadowed this batch. Re-evaluate that same snapshot after cleanup
-          // so a concurrent server value wins without another config.get.
-          outbox.lastReconciledConfigObject = null;
+          // An old selection must never rebase over a newer upload/None. Keep the
+          // newest local intent as a visible failure requiring explicit retry.
+          const value =
+            sync.pendingPrefs && Object.hasOwn(sync.pendingPrefs, "background")
+              ? sync.pendingPrefs.background
+              : dispatchedBatch.background;
+          sync.cancelPendingKeys(sync.pendingScope, ["background"]);
+          sync.recordPreferenceWriteFailures(
+            sync.pendingScope,
+            { background: value },
+            "Background changed elsewhere. Review the latest selection, then retry your change.",
+            true,
+          );
+          sync.updateRetainedLocalKeys(sync.pendingScope, ["background"], true);
+          sync.publishPreferenceWrites();
+          invalidateProfileAppearanceReads(true);
+          invalidateUserPreferences(capturedClient);
+          await refreshProfileAppearancePrefs({
+            client: capturedClient,
+            profileId,
+            scope: gatewayScope,
+            configObject: writer.state.configSnapshot?.config,
+            onApplied: () => undefined,
+            isCurrent: profileIsCurrent,
+          }).catch(() => false);
+          if (profileIsCurrent()) {
+            afterCommit?.({ needsRefresh: false, retainedLocal: true });
+          }
+          if (!profileIsCurrent()) {
+            return;
+          }
+          break;
         }
-        afterCommit?.({ needsRefresh: !result.refresh.ok });
-        if (outbox.pushWriter !== writer || outbox.pushEpoch !== epoch) {
+        if (result.reason === "conflict" && attempt === 0) {
+          await sleepWithAbort(250);
+          continue;
+        }
+        if (result.reason === "conflict") {
+          sync.scheduleConflictRedrain(writer, epoch);
           return;
         }
-        break;
-      }
-      if (
-        result.reason === "conflict" &&
-        useProfile &&
-        dispatchedBatch.background !== undefined &&
-        client &&
-        profileId
-      ) {
-        // Do not rebase an old selection over a newer upload/None. Preserve the
-        // latest local intent as a visible failure and require an explicit retry.
-        const value =
-          outbox.pendingPrefs && Object.hasOwn(outbox.pendingPrefs, "background")
-            ? outbox.pendingPrefs.background
-            : dispatchedBatch.background;
-        outbox.cancelPendingKeys(outbox.pendingScope, ["background"]);
-        outbox.recordPreferenceWriteFailures(
-          outbox.pendingScope,
-          { background: value },
-          "Background changed elsewhere. Review the latest selection, then retry your change.",
-          true,
-        );
-        outbox.updateRetainedLocalKeys(outbox.pendingScope, ["background"], true);
-        outbox.publishPreferenceWrites();
-        invalidateProfileAppearanceReads(true);
-        invalidateUserPreferences(client);
-        await refreshProfileAppearancePrefs({
-          client,
-          profileId,
-          scope: gatewayScope,
-          configObject: writer.state.configSnapshot?.config,
-          onApplied: () => undefined,
-        }).catch(() => false);
-        if (isCurrent()) {
-          afterCommit?.({ needsRefresh: false, retainedLocal: true });
+        if (result.reason === "error" || result.reason === "rejected") {
+          const failed = Object.fromEntries(
+            SYNCED_PREF_KEYS.filter(
+              (key) =>
+                Object.hasOwn(dispatchedBatch, key) &&
+                sync.pendingPrefs &&
+                Object.hasOwn(sync.pendingPrefs, key) &&
+                prefValuesEqual(sync.pendingPrefs[key], dispatchedBatch[key]),
+            ).map((key) => [key, dispatchedBatch[key]]),
+          );
+          sync.recordPreferenceWriteFailures(
+            sync.pendingScope,
+            failed,
+            result.error,
+            result.reason === "rejected",
+          );
+          const localPins = SYNCED_PREFS.sidebarEntries.extract(failed.sidebarEntries);
+          if (result.reason === "rejected" && localPins && sync.batchIsCurrent(acknowledgedBatch)) {
+            // Preserve the choice in the existing profile mirror before retiring its
+            // unwritable outbox entry; other preferences must still be allowed to drain.
+            sync.applyServerPrefsPatch({ sidebarEntries: localPins });
+            sync.updateRetainedLocalKeys(sync.pendingScope, ["sidebarEntries"], true);
+            showToast({ message: result.error });
+          }
+          sync.publishPreferenceWrites();
         }
-        if (!isCurrent()) {
+        if (
+          result.reason === "unavailable" &&
+          writer.state.connected &&
+          !sync.batchIsCurrent(dispatchedBatch)
+        ) {
+          break;
+        }
+        if (
+          result.reason === "error" ||
+          result.reason === "unavailable" ||
+          result.reason === "suspended"
+        ) {
           return;
         }
-        // Only background needs explicit retry. Continue unrelated intent after
-        // rechecking retirement across both the refresh and the commit callback.
+        // Definitive viewer-scope or validation rejections degrade to device-local state.
+        // LAST_SEEN still owns the authoritative server value per key, so identical
+        // refreshes and reloads preserve this local edit; only a server delta replaces it.
+        sync.pendingPrefs = removePendingUiPrefsBatch(
+          sync.pendingPrefs,
+          acknowledgedBatch,
+          sync.pendingPersistedKeys,
+        );
+        sync.mergePendingIntoStorage(acknowledgedBatch);
+        sync.publishPreferenceWrites();
+        afterCommit?.({ needsRefresh: false, retainedLocal: true });
         break;
       }
-      if (result.reason === "conflict" && attempt === 0) {
-        await sleepWithAbort(250);
-        continue;
+    } finally {
+      if (sync.composeSidebar === compose) {
+        sync.composeSidebar = null;
       }
-      if (result.reason === "conflict") {
-        outbox.scheduleConflictRedrain(writer, epoch);
-        return;
-      }
-      if (result.reason === "error" || result.reason === "rejected") {
-        const failed = Object.fromEntries(
-          SYNCED_PREF_KEYS.filter(
-            (key) =>
-              Object.hasOwn(dispatchedBatch, key) &&
-              prefValuesEqual(outbox.pendingPrefs?.[key], dispatchedBatch[key]),
-          ).map((key) => [key, dispatchedBatch[key]]),
-        );
-        outbox.recordPreferenceWriteFailures(
-          outbox.pendingScope,
-          failed,
-          result.error,
-          result.reason === "rejected",
-        );
-        outbox.publishPreferenceWrites();
-      }
-      if (
-        result.reason === "unavailable" &&
-        writer.state.connected &&
-        !batchIsCurrent(outbox, dispatchedBatch)
-      ) {
-        // A newer edit can supersede this batch while its lazy transport loads.
-        // Drain that intent now rather than leaving it pending until reconnect.
-        break;
-      }
-      if (
-        result.reason === "error" ||
-        result.reason === "unavailable" ||
-        result.reason === "suspended"
-      ) {
-        return;
-      }
-      // Definitive viewer-scope or validation rejections degrade to device-local state.
-      // LAST_SEEN still owns the authoritative server value per key, so identical
-      // refreshes and reloads preserve this local edit; only a server delta replaces it.
-      removeBatch(outbox, dispatchedBatch);
-      outbox.mergePendingIntoStorage(dispatchedBatch);
-      afterCommit?.({ needsRefresh: false, retainedLocal: true });
-      // A rejected theme must not strand independent background intent.
-      break;
     }
-  }
-}
-
-function batchIsCurrent(outbox: ServerUiPrefsOutbox, batch: ServerUiPrefs): boolean {
-  const current = outbox.pendingPrefs;
-  return Boolean(
-    current &&
-    // Preserve invalid persisted keys too, until the server can reject the complete batch.
-    // SAFETY: Keys only index same-key comparisons; the assertion grants no validation or authority.
-    (Object.keys(batch) as SyncedPrefKey[]).every(
-      (key) => Object.hasOwn(current, key) && prefValuesEqual(current[key], batch[key]),
-    ),
-  );
-}
-
-function removeBatch(outbox: ServerUiPrefsOutbox, batch: ServerUiPrefs): void {
-  if (!outbox.pendingPrefs) {
-    return;
-  }
-  // Unknown persisted keys must also be removed after rejection, or the drain cannot settle.
-  // SAFETY: Keys only index exact matching records/set entries; they are not treated as valid prefs.
-  for (const key of Object.keys(batch) as SyncedPrefKey[]) {
-    if (prefValuesEqual(outbox.pendingPrefs[key], batch[key])) {
-      delete outbox.pendingPrefs[key];
-      outbox.pendingPersistedKeys.delete(key);
-    }
-  }
-  if (!Object.keys(outbox.pendingPrefs).length) {
-    outbox.pendingPrefs = null;
   }
 }

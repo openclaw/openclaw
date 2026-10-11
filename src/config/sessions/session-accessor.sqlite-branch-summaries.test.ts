@@ -23,7 +23,7 @@ import {
   readSessionBranchSummariesInWorker,
 } from "./session-accessor.sqlite-branches.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type { SessionBranchListResult } from "./session-accessor.types.js";
 import { prepareTranscriptPayload } from "./transcript-payload.js";
 

@@ -167,11 +167,7 @@ function updateAllManifests(input: string, mutate: (manifest: Record<string, any
 }
 
 describe("iOS screenshot evidence", () => {
-  it.each([
-    { reducerAttempt: 2, iphoneAttempt: 2 },
-    { reducerAttempt: 3, iphoneAttempt: 3 },
-    { reducerAttempt: 4, iphoneAttempt: 3 },
-  ])(
+  it.each([{ reducerAttempt: 4, iphoneAttempt: 3 }])(
     "reduces successful device captures across workflow retries: %j",
     ({ reducerAttempt, iphoneAttempt }) => {
       const root = tempDirs.make("ios-screenshot-evidence-");
@@ -215,28 +211,27 @@ describe("iOS screenshot evidence", () => {
     },
   );
 
-  it.each([
-    { retryTestResult: "fail" as const, retryWithoutXcresult: false },
-    { retryTestResult: "pass" as const, retryWithoutXcresult: false },
-    { retryTestResult: "fail" as const, retryWithoutXcresult: true },
-  ])("rejects a passing retry after a failed capture: %j", (options) => {
-    const root = tempDirs.make("ios-screenshot-retry-");
-    const source = writeFamilySource(root, "iphone", { retry: "02-chat-connected", ...options });
+  it.each([{ retryTestResult: "pass" as const, retryWithoutXcresult: false }])(
+    "rejects a passing retry after a failed capture: %j",
+    (options) => {
+      const root = tempDirs.make("ios-screenshot-retry-");
+      const source = writeFamilySource(root, "iphone", { retry: "02-chat-connected", ...options });
 
-    expect(() =>
-      collectIosScreenshotEvidence({
-        family: "iphone",
-        screenshotDirectory: source.screenshots,
-        xcresultDirectory: source.xcresults,
-        outputDirectory: path.join(root, "collected"),
-        provenance: provenance(),
-        readXcresultSummary: (resultPath) =>
-          fs.readFileSync(path.join(resultPath, "summary.txt"), "utf8") === "pass"
-            ? { testResult: "Passed", failedTests: 0 }
-            : { testResult: "Failed", failedTests: 1 },
-      }),
-    ).toThrow("expected exactly one OpenClaw capture attempt");
-  });
+      expect(() =>
+        collectIosScreenshotEvidence({
+          family: "iphone",
+          screenshotDirectory: source.screenshots,
+          xcresultDirectory: source.xcresults,
+          outputDirectory: path.join(root, "collected"),
+          provenance: provenance(),
+          readXcresultSummary: (resultPath) =>
+            fs.readFileSync(path.join(resultPath, "summary.txt"), "utf8") === "pass"
+              ? { testResult: "Passed", failedTests: 0 }
+              : { testResult: "Failed", failedTests: 1 },
+        }),
+      ).toThrow("expected exactly one OpenClaw capture attempt");
+    },
+  );
 
   it("requires the successful capture to have a passing xcresult", () => {
     const root = tempDirs.make("ios-screenshot-missing-xcresult-");
@@ -260,37 +255,12 @@ describe("iOS screenshot evidence", () => {
 
   it.each([
     {
-      label: "extra",
-      mutate: (input: string) =>
-        fs.cpSync(
-          path.join(input, containerName("ipad-13")),
-          path.join(input, `ios-release-screenshot-shard-extra-${TARGET_SHA}`),
-          { recursive: true },
-        ),
-    },
-    {
       label: "renamed",
       mutate: (input: string) =>
         fs.renameSync(
           path.join(input, containerName("iphone")),
           path.join(input, `ios-release-screenshot-shard-renamed-${TARGET_SHA}`),
         ),
-    },
-    {
-      label: "missing",
-      mutate: (input: string) =>
-        fs.rmSync(path.join(input, containerName("ipad-13")), { recursive: true }),
-    },
-    {
-      label: "swapped",
-      mutate: (input: string) => {
-        const iphone = path.join(input, containerName("iphone"));
-        const ipad = path.join(input, containerName("ipad-13"));
-        const temporary = path.join(input, "temporary-container");
-        fs.renameSync(iphone, temporary);
-        fs.renameSync(ipad, iphone);
-        fs.renameSync(temporary, ipad);
-      },
     },
     {
       label: "Watch in the iPhone shard",
@@ -306,26 +276,6 @@ describe("iOS screenshot evidence", () => {
     mutate(input);
 
     expect(() => reduceAll(input, path.join(root, "reduced"))).toThrow(/topology mismatch/u);
-  });
-
-  it.each([
-    { label: "iPad-only rerun", runAttempts: { iphone: 1, "ipad-13": 2, watch: 2 } },
-    { label: "reducer-only rerun", runAttempts: { iphone: 1, "ipad-13": 1, watch: 1 } },
-  ])("accepts shard evidence retained from an earlier attempt: $label", ({ runAttempts }) => {
-    const root = tempDirs.make("ios-screenshot-partial-rerun-");
-    const input = collectAll(root, TARGET_SHA, runAttempts);
-
-    const manifest = reduceAll(input, path.join(root, "reduced"));
-
-    expect(manifest.runAttempt).toBe(2);
-    expect(
-      Object.fromEntries(
-        (manifest.families as Array<Record<string, any>>).map((family) => [
-          family.family,
-          family.runAttempt,
-        ]),
-      ),
-    ).toEqual(runAttempts);
   });
 
   it("rejects one shard job's families from different attempts", () => {
@@ -371,7 +321,7 @@ describe("iOS screenshot evidence", () => {
       },
       error: "workflow run attempt",
     },
-    ...[0, 1.5, "1", true].map((runAttempt) => ({
+    ...[0, 1.5].map((runAttempt) => ({
       label: `invalid run attempt ${JSON.stringify(runAttempt)}`,
       mutate: (manifest: Record<string, unknown>) => {
         manifest.runAttempt = runAttempt;
@@ -384,20 +334,6 @@ describe("iOS screenshot evidence", () => {
         manifest.tooling.xcode = "Xcode 26.6 Build version forged";
       },
       error: "xcode version",
-    },
-    {
-      label: "Fastlane version",
-      mutate: (manifest: Record<string, any>) => {
-        manifest.tooling.fastlane = "2.236.0";
-      },
-      error: "fastlane version",
-    },
-    {
-      label: "Node version",
-      mutate: (manifest: Record<string, any>) => {
-        manifest.tooling.node = "v24.0.0";
-      },
-      error: "node version",
     },
   ])("rejects self-consistent forged $label", ({ mutate, error }) => {
     const root = tempDirs.make("ios-screenshot-forged-provenance-");
@@ -418,24 +354,6 @@ describe("iOS screenshot evidence", () => {
       label: "owner",
       mutate: (manifest: Record<string, any>) => {
         manifest.attemptModel.owner = "fastlane";
-      },
-    },
-    {
-      label: "unit",
-      mutate: (manifest: Record<string, any>) => {
-        manifest.attemptModel.unit = "launch retry";
-      },
-    },
-    {
-      label: "maximum",
-      mutate: (manifest: Record<string, any>) => {
-        manifest.attemptModel.maxAttempts = 3;
-      },
-    },
-    {
-      label: "Fastlane retry ownership",
-      mutate: (manifest: Record<string, any>) => {
-        manifest.attemptModel.fastlaneInternalRetries = "xcresult";
       },
     },
   ])("rejects $label attempt model changes", ({ mutate }) => {

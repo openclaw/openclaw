@@ -9,6 +9,11 @@ sidebarTitle: "Config"
 
 Non-interactive helpers for `openclaw.json`: get/set/patch/unset a value by path, print the schema, validate, or print the active file path. Run `openclaw config` with no subcommand to open the same guided wizard as `openclaw configure`.
 
+`config set`, `config patch`, and `config unset` require the local Gateway to be
+stopped. These commands hold exclusive state ownership while publishing the file
+and its database metadata. Stop the Gateway through its service owner, wait for
+it to exit, then rerun the command.
+
 <Note>
 When `OPENCLAW_CONFIG_READONLY=1` or `OPENCLAW_NIX_MODE=1`, OpenClaw treats `openclaw.json` as immutable. Read-only commands (`config get`, `config file`, `config schema`, `config validate`) still work; config writers refuse.
 </Note>
@@ -99,7 +104,7 @@ openclaw config set 'agents.entries.work.tools.exec.node' "node-id-or-name"
 
 Prefer `agents.entries.<id>` paths for agent edits. The legacy `agents.list[0]`
 syntax and whole-list inputs still work with `set`, `patch`, and `unset`; writes
-persist the canonical keyed roster. Indexed edits use the current roster order.
+persist the current keyed roster. Indexed edits use the current roster order.
 Within a batch, a submitted list keeps its order across subsequent keyed edits,
 including when agent IDs are numeric strings. Existing roster-deletion and
 `$include` ownership protections still apply.

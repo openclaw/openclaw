@@ -56,6 +56,7 @@ describe("hybrid project ranking", () => {
         vectorScore: 0.8,
         textScore: 0,
         score: index < 100 ? 1.15 : 0.9,
+        eligibilityScore: index < 100 ? 1.15 : 0.9,
         projectKey: index < 100 ? `active-${index}` : `foreign-${index}`,
         importance: undefined,
         triggers: undefined,

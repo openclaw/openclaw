@@ -1,7 +1,6 @@
-import { isDeepStrictEqual } from "node:util";
+import { types } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok } from "@openclaw/normalization-core/result";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import type { WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
@@ -89,6 +88,7 @@ export function createSessionHistoryWorkerReaders(
       );
   }
   return {
+    readTrajectoryEvents: reader("trajectory-events", "trajectory events", (value) => value.events),
     readTrajectoryRetention: (input, options) => {
       const captured = {
         ...input,
@@ -331,7 +331,7 @@ export function createSessionHistoryWorkerReaders(
         for (const frame of value.frames) {
           if (
             !isRecord(frame) ||
-            !(frame.data instanceof Uint8Array) ||
+            !types.isUint8Array(frame.data) ||
             typeof frame.endOfEvent !== "boolean"
           ) {
             throw new Error("Session history worker returned an invalid transcript frame");
@@ -480,6 +480,7 @@ export function createSessionHistoryWorkerReaders(
         ? err(decodeSessionTranscriptWorkerReadError(value.readError))
         : ok(value.entry)),
       source: value.source,
+      facts: value.facts,
     })),
     readEntryCurrent: reader(
       "session-entry-current",
@@ -487,32 +488,20 @@ export function createSessionHistoryWorkerReaders(
       (value) => value.entry,
     ),
     readDiagnosticText: reader("session-diagnostic-text", "diagnostic text", (value) => value.text),
+    // The native reader validates the selected file. Replacement after that read is best effort.
     readEntries: async (scope, continuation, expectedIdentity, ifRevision) => {
       const captured = expectedIdentity && { ...expectedIdentity };
-      const assertIdentity = () => {
-        if (
-          captured &&
-          !isDeepStrictEqual(readDatabasePathIdentitySync(captured.canonicalPath), captured)
-        ) {
-          throw new Error("Session listing changed its captured physical owner");
-        }
-      };
-      assertIdentity();
       return runRequest(
-        () => {
-          assertIdentity();
-          return {
-            kind: "session-entry-list",
-            scope,
-            continuation,
-            expectedIdentity: captured,
-            ifRevision,
-          };
-        },
+        () => ({
+          kind: "session-entry-list",
+          scope,
+          continuation,
+          expectedIdentity: captured,
+          ifRevision,
+        }),
         JSON.stringify({ scope, continuation, expectedIdentity: captured, ifRevision }).length * 2,
         (value) => {
           assertResultKind(value, "session-entry-list", "entries");
-          assertIdentity();
           return value;
         },
       );

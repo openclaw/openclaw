@@ -201,7 +201,7 @@ describe("AppSidebar session mutation feedback", () => {
     expect(menu.querySelector(actionSelector)).toBeNull();
   });
 
-  it("offers undo after inline archiving and restores a pinned active session without navigating", async () => {
+  it("offers archive undo without altering the active session's personal pin or navigation", async () => {
     const { gateway, harness, sidebar } = await mountMutationHarness();
     const setSessionKey = vi.fn();
     (gateway.gateway as { setSessionKey: (key: string) => void }).setSessionKey = setSessionKey;
@@ -211,7 +211,7 @@ describe("AppSidebar session mutation feedback", () => {
     if (!archivedRow) {
       throw new Error("expected archive row");
     }
-    archivedRow.pinned = true;
+    sidebar.sidebarEntries = [`session:${archivedKey}`];
     harness.publishList({ result: state.result, agentId: state.agentId });
     gateway.publish({ sessionKey: archivedRow.key });
     sidebar.sessionKey = archivedRow.key;
@@ -257,7 +257,7 @@ describe("AppSidebar session mutation feedback", () => {
     expect(harness.patch).toHaveBeenNthCalledWith(
       2,
       archivedRow.key,
-      { archived: false, pinned: true },
+      { archived: false },
       {
         agentId: "main",
         expectedSessionId: `session:${archivedRow.key}`,
@@ -265,6 +265,7 @@ describe("AppSidebar session mutation feedback", () => {
       },
     );
     expect(harness.patchMany).not.toHaveBeenCalled();
+    expect(sidebar.sidebarEntries).toEqual([`session:${archivedKey}`]);
     expect(navigate).not.toHaveBeenCalled();
   });
 
@@ -309,12 +310,8 @@ describe("AppSidebar session mutation feedback", () => {
 
     const menu = await openSessionMenu(sidebar, row.key);
     await waitForFast(() => expect(menu.textContent).toContain("Bob"));
-    expect(menuItemLabels(menu)).not.toContain("Assign to…");
-    const settings = menuItem(menu, "Session settings");
-    expect(menuItemLabels(settings).filter((label) => label.startsWith("Assign to"))).toEqual([
-      "Assign to…",
-    ]);
-    const assignmentMenu = menuItem(settings, "Assign to…");
+    expect(menuItemLabels(menu)).toContain("Assign to…");
+    const assignmentMenu = menuItem(menu, "Assign to…");
     expect(
       Array.from(
         assignmentMenu?.querySelectorAll<HTMLElement>('wa-dropdown-item[slot="submenu"]') ?? [],
@@ -342,6 +339,7 @@ describe("AppSidebar session mutation feedback", () => {
     });
 
     const selfMenu = await openSessionMenu(sidebar, row.key);
+    await waitForFast(() => expect(menuItemLabels(selfMenu)).toContain("Assign to…"));
     const selfItem = selfMenu.querySelector<HTMLElement>(
       ':scope > wa-dropdown > wa-dropdown-item wa-dropdown-item[slot="submenu"][value="assign-owner:human:profile-ada"]',
     );
@@ -562,7 +560,7 @@ describe("AppSidebar session mutation feedback", () => {
     const pending = deferred<ReturnType<typeof successfulSessionPatch>>();
     harness.patch.mockImplementationOnce(() => pending.promise);
     const menu = await openSessionMenu(sidebar, "agent:main:a");
-    menu.querySelector<HTMLButtonElement>('[data-shortcut="p"]')?.click();
+    menu.querySelector<HTMLButtonElement>('[data-shortcut="u"]')?.click();
     await waitForFast(() => expect(harness.patch).toHaveBeenCalledOnce());
 
     gateway.publish({ phase: "reconnecting" });

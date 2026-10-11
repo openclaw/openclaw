@@ -9,7 +9,7 @@ import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../packages/gate
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
-import { completeWorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
+import { parseWorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
 import type { NodeWorkerWorkspaceExecInput } from "../worker/node-workspace-protocol.js";
 import {
   buildWorkerProcessTurn,
@@ -245,7 +245,10 @@ describe("node worker environment lifetime", () => {
       const encodePoll = () =>
         serializeWorkerProcessInput(
           buildWorkerProcessTurn(
-            completeWorkerLaunchDescriptor(poll.descriptor, TEST_WORKER_ENDPOINT),
+            parseWorkerLaunchDescriptor({
+              ...poll.descriptor,
+              connectionEndpoint: TEST_WORKER_ENDPOINT,
+            }),
           ),
         );
       poll.descriptor.assignment.systemPrompt += "x".repeat(

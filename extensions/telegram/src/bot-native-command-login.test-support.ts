@@ -9,7 +9,7 @@ import { readConfigFileSnapshotForWrite } from "openclaw/plugin-sdk/config-mutat
 import type { ModelsAuthLoginFlowResult } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import type { patchSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import type { prepareSessionEntryPatch } from "openclaw/plugin-sdk/session-store-runtime";
 import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { expect, type Mock, vi } from "vitest";
@@ -52,7 +52,7 @@ export async function prepareTelegramLoginSessionStore(
   mocks: {
     getSessionEntry: ReturnType<typeof vi.fn>;
     resolveStorePath: ReturnType<typeof vi.fn>;
-    patchSessionEntry: Mock<typeof patchSessionEntry>;
+    prepareSessionEntryPatch: Mock<typeof prepareSessionEntryPatch>;
   },
 ) {
   const store = await vi.importActual<typeof import("openclaw/plugin-sdk/session-store-runtime")>(
@@ -73,11 +73,11 @@ export async function prepareTelegramLoginSessionStore(
   );
   mocks.resolveStorePath.mockReturnValue(scope.storePath);
   const queries: string[] = [];
-  mocks.patchSessionEntry.mockImplementationOnce(
-    async (write: Parameters<typeof store.patchSessionEntry>[0]) => {
+  mocks.prepareSessionEntryPatch.mockImplementationOnce(
+    async (write: Parameters<typeof store.prepareSessionEntryPatch>[0]) => {
       const sql = observeHostDataSql();
       try {
-        return await store.patchSessionEntry(write);
+        return await store.prepareSessionEntryPatch(write);
       } finally {
         queries.push(...sql.queries);
         sql.restore();

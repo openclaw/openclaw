@@ -185,7 +185,7 @@ export const registerTelegramNativeCommands = ({
   const syncTelegramMenuCommands =
     telegramDeps.syncTelegramMenuCommands ?? syncTelegramMenuCommandsRuntime;
   // Telegram only limits menu entries; hidden commands remain callable.
-  syncTelegramMenuCommands({
+  void syncTelegramMenuCommands({
     bot,
     runtime,
     commandsToRegister,

@@ -11,7 +11,7 @@ vi.mock("./embeddings-remote-fetch.js", () => ({
 
 import { createRemoteEmbeddingProvider } from "./embeddings-remote-provider.js";
 
-function createProvider(batchQueryInputs?: boolean) {
+function createProvider(batchQueryInputs?: boolean, maxInputsPerRequest?: number) {
   return createRemoteEmbeddingProvider({
     id: "fixture",
     client: {
@@ -21,6 +21,7 @@ function createProvider(batchQueryInputs?: boolean) {
     },
     errorPrefix: "fixture embeddings failed",
     batchQueryInputs,
+    maxInputsPerRequest,
   });
 }
 
@@ -70,5 +71,10 @@ describe("remote embedding provider request grouping", () => {
       "first",
       "second",
     ]);
+  });
+
+  it("exposes the declared per-request input cap on the provider", () => {
+    expect(createProvider(undefined, 2048).maxInputsPerRequest).toBe(2048);
+    expect(createProvider().maxInputsPerRequest).toBeUndefined();
   });
 });

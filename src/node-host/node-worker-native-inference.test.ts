@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { completeWorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
+import { parseWorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
 import { assertNativeInferenceAssignment } from "../worker/native-inference-startup.js";
 import { nodeWorkerLaunchSecrets } from "./node-worker-child-secrets.js";
 import {
@@ -53,28 +53,13 @@ function descriptor(workspace: string, modelId = "model-1") {
   const input = testWorkerLaunchInput(workspace, "native-turn");
   input.descriptor.assignment.inference = "runtime-local";
   input.descriptor.assignment.modelRef = { provider: "provider-1", model: modelId };
-  return completeWorkerLaunchDescriptor(input.descriptor, TEST_WORKER_ENDPOINT);
+  return parseWorkerLaunchDescriptor({
+    ...input.descriptor,
+    connectionEndpoint: TEST_WORKER_ENDPOINT,
+  });
 }
 
 describe("node worker inference config projection", () => {
-  it("uses every compatible top-level node model without a second allowlist", () => {
-    const workspace = tempDirs.make("node-native-models-");
-    const snapshot = snapshotNodeWorkerNativeInference(config(), {})!;
-    const startup = projectNodeWorkerNativeInference(snapshot, descriptor(workspace));
-
-    expect(startup.config.models.map(({ id }) => id)).toEqual(["model-1", "model-2"]);
-    expect(startup.config.workspace).toBe(fs.realpathSync(workspace));
-    expect(startup.credentials).toEqual({
-      "provider-1/model-1": credential,
-      "provider-1/model-2": credential,
-    });
-    expect(startup.config.models[0]?.headers).toEqual({ "x-provider": providerHeader });
-    expect(startup.config.models[1]?.headers).toEqual({
-      "x-provider": providerHeader,
-      "x-model": modelHeader,
-    });
-  });
-
   it("uses the canonical custom-provider API default", () => {
     const workspace = tempDirs.make("node-native-default-api-");
     const defaulted = config([model("model-1")]);

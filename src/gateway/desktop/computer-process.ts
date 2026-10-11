@@ -116,9 +116,6 @@ export function startComputerHostProcess(params: {
   };
   const fail = (error: Error) => {
     failure ??= error;
-    active = false;
-    ready.reject(error);
-    pending.rejectAll(error);
     void close().catch(() => {});
   };
   const failWhileOpen = (error: unknown) => {
@@ -204,9 +201,6 @@ export function startComputerHostProcess(params: {
       sessionKey?: string;
     }) {
       await ready.promise;
-      assertActive();
-      request.assertCurrent();
-      request.signal?.throwIfAborted();
       const id = randomUUID();
       let timedOut = false;
       const cancel = () => {

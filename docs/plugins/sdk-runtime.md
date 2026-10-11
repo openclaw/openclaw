@@ -91,6 +91,15 @@ adds no public capability or deprecation. Plugins must still use the owning
 runtime operation and its live authority checks: a prior receipt or cached row
 does not certify raw-handle writers, foreign changes, or a later effect.
 
+The Gateway context's GitHub publication service has V2 request methods with
+required host-owned requester capabilities, plus awaited deferral and reporting
+methods. Forward those capabilities intact and await committed results before
+releasing request resources. Released opaque-requester and synchronous lifecycle
+methods remain deprecated compatibility routes; actual use shares one warning
+budget per plugin and publication family. See
+[GitHub publication migration](/plugins/sdk-migration/how-to-migrate#await-github-publication-operations)
+for the method mapping, callback ordering, and next-major removal contract.
+
 Use `createPluginRuntimeStore` to store the runtime reference for use outside the `register` callback:
 
 <Steps>
@@ -238,8 +247,10 @@ registry, so a retained plugin sees replacement providers after a reload.
 Use it when installing timers, watchers, and listeners, and again when delivering
 each background callback. Keep the runner with the resource that owns it; an old
 manager must not look up a replacement plugin instance. Return asynchronous work
-from the callback so the instance can drain it. Its completion remains independent
-of disposal cleanup, so resource cleanup can safely await it. New calls reject after admission
+from the callback so the instance retains it until it settles. Disposal does not
+wait for this work before running `onDispose`, so cleanup can stop the work and
+safely await it; module teardown still waits for it to settle, and work that
+outlives the cleanup budget is force-retired like other calls. New calls reject after admission
 closes; already admitted host cleanup retains its teardown authority. The runner
 does not schedule work or cancel native resources: release those in the existing
 cleanup owner. Like the other instance lifecycle fields, it can be absent on an
@@ -324,14 +335,15 @@ deny an ordinary read or grant effect authority. A changed token invalidates eve
 derived cache that depends on that database, including caches in sibling plugin
 instances. The helper does not observe writes by other processes.
 
-First-party runtime callers can use `withOpenClawAgentDatabaseRuntime` from the
-same subpath to admit cold agent storage in its existing executor before
-receiving a native handle. The operation callback still runs on the caller;
-dispatch its database work through the existing store worker. Its authority
-callback runs inside worker grants and must not read the same database or do
-blocking work. Put same-database predicates in the worker transaction. The
-released `withOpenClawAgentDatabaseAsync` retains native admission for arbitrary
-synchronous SDK guards, including its post-integrity, pre-repair checkpoint.
+First-party runtime callers use `openOpenClawAgentSqliteWorkerStoreV2` from the
+same subpath to admit cold agent storage without receiving a writable native
+handle. Its required live authority runs inside worker grants and must not read
+the same database or do blocking work. Put same-database predicates in the paired
+worker transaction. Explicit `prepare()` owns creation; `executeExisting` keeps
+missing storage absent. The deprecated `withOpenClawAgentDatabaseRuntime` and
+`withOpenClawAgentDatabaseAsync` retain their native callbacks and admission
+ordering, including the latter's post-integrity, pre-repair checkpoint, until
+the next Plugin SDK major. Awaiting those callbacks does not move SQL off-thread.
 
 Transcript assertion composition preserves prepared source checks independently
 of opaque SDK callbacks. Cold restoration can recheck those prepared components

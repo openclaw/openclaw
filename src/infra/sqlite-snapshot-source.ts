@@ -3,10 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import {
-  createRetainedOperation,
-  type RetainedOperation,
-} from "@openclaw/worker-runtime/lifecycle";
+import { mapRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import {
   artifactPreservingReads,
   isArtifactPreservingStateRead,
@@ -24,7 +21,6 @@ import {
 } from "./sqlite-readonly-location-cleanup.js";
 import type {
   PreparedSqliteReadOnlyLocation,
-  RetainedPreparedSqliteReadOnlyLocation,
   RetainedSqliteSnapshotPreparation,
 } from "./sqlite-readonly-location.types.js";
 import {
@@ -142,109 +138,31 @@ export function startSqliteReadOnlyLocationAsync(
   return startSingleFlightSqliteSnapshot(
     pathname,
     `${preserveSourceArtifacts ? "worker-sync" : "worker-async"}:${requireCleanup ? "strict" : "best-effort"}:async-token${expectedSourceIdentity ? `:${JSON.stringify(expectedSourceIdentity)}` : ""}`,
-    (flightSignal, recordCleanupFailure) =>
+    (flightSignal) =>
       runInContext(() => {
-        let task: ReturnType<typeof staging.start> | undefined;
-        let prepared:
-          | (PreparedSqliteReadOnlyLocation & RetainedPreparedSqliteReadOnlyLocation)
-          | undefined;
-        let cleanup: RetainedOperation<boolean> | undefined;
-        const retained = createRetainedOperation<
-          PreparedSqliteReadOnlyLocation & RetainedPreparedSqliteReadOnlyLocation
-        >(() =>
-          runInContext(() => {
-            if (retained.operation.read().status !== "pending") {
-              return;
-            }
-            if (!task) {
-              return;
-            }
-            try {
-              task.service();
-              const outcome = task.read();
-              if (outcome.status === "pending") {
-                return;
-              }
-              if (outcome.status === "rejected") {
-                if (
-                  outcome.error instanceof SqliteSnapshotCleanupError ||
-                  outcome.error instanceof AggregateError
-                ) {
-                  recordCleanupFailure(outcome.error);
-                  throw outcome.error;
-                }
-                flightSignal.throwIfAborted();
-                throw outcome.error;
-              }
-              if (outcome.value.type !== "prepared") {
-                throw new Error(
-                  "SQLite snapshot producer returned an allocation without its prepared location",
-                );
-              }
-              prepared ??= adoptRetainedPreparedLocation(
-                outcome.value.location,
-                outcome.value.directory,
-                requireCleanup,
-              );
-              if (flightSignal.aborted) {
-                if (!cleanup) {
-                  cleanup = prepared.startCleanup();
-                  void cleanup.result.then(service, service);
-                }
-                cleanup.service();
-                const removed = cleanup.read();
-                if (removed.status === "pending") {
-                  return;
-                }
-                if (removed.status === "rejected" || !removed.value) {
-                  const error =
-                    removed.status === "rejected"
-                      ? removed.error
-                      : new SqliteSnapshotCleanupError(
-                          `SQLite snapshot cleanup failed: ${prepared.cleanupRoot}`,
-                        );
-                  recordCleanupFailure(error);
-                  throw error;
-                }
-                flightSignal.throwIfAborted();
-              }
-              retained.resolve(prepared);
-            } catch (error) {
-              retained.reject(error);
-            }
-          }),
-        );
-        const service = () => retained.operation.service();
-        try {
-          task = staging.start(
-            {
-              type: "prepare",
-              root,
-              pathname,
-              allowLegacyWorker: false,
-              preserveSourceArtifacts,
-              expectedSourceIdentity,
-              deadlineOwnedByCaller,
-              launch: { env, cwd, transport: { kind: "native" } },
-            },
-            flightSignal,
-          );
-          void task.result.then(service, service);
-        } catch (error) {
-          retained.reject(error);
-        }
-        return {
-          ...retained.operation,
-          startClose(): RetainedOperation<void> {
-            const original = task;
-            if (original) {
-              return runInContext(() => original.startClose());
-            }
-            // A synchronous staging admission refusal accepted no request or native work.
-            const closed = createRetainedOperation<void>(() => {});
-            closed.resolve(undefined);
-            return closed.operation;
+        const task = staging.start(
+          {
+            type: "prepare",
+            root,
+            pathname,
+            allowLegacyWorker: false,
+            preserveSourceArtifacts,
+            expectedSourceIdentity,
+            deadlineOwnedByCaller,
+            launch: { env, cwd, transport: { kind: "native" } },
           },
+          flightSignal,
+        );
+        return {
+          ...mapRetainedOperation(task, (reply) => {
+            if (reply.type !== "prepared") {
+              throw new Error(
+                "SQLite snapshot producer returned an allocation without its prepared location",
+              );
+            }
+            return adoptRetainedPreparedLocation(reply.location, reply.directory, requireCleanup);
+          }),
+          startClose: () => task.startClose(),
         };
       }),
     signal,

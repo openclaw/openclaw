@@ -80,7 +80,6 @@ export function createAgentDatabaseMaintenanceOwner(context: {
       const prepared = kernel.prepareSessionMaintenanceInWorker({
         kind: "maintenance-plan",
         input: input.input,
-        ageOwner: input.ageOwner,
         ageChanges: input.ageChanges,
         databaseOptions: context.databaseOptions,
       });

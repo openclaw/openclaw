@@ -616,6 +616,7 @@ describe("failed update recovery restart", () => {
       expect(recorded.origin.nextAction).not.toContain("gateway stopped");
       expect(recorded.origin.nextAction).not.toContain("remains stopped");
       expect(recorded.origin.nextAction).toContain("triage");
+      expect(recorded.origin.nextAction).toContain("update repair");
       expect(recorded.verification).toMatchObject({ serviceRunning: true, pid });
       expect(recorded.verification.runningVersion).toBe(version);
       expect(mocks.printResult.mock.lastCall?.[2]).toEqual({
@@ -624,6 +625,7 @@ describe("failed update recovery restart", () => {
       const report = renderUpdateRunReport(recorded).markdown;
       expect(report).toContain("readyz-unhealthy");
       expect(report).toContain("triage");
+      expect(report).toContain("update repair");
       expect(report).not.toContain("remains stopped");
       expect(renderUpdateRunNotice(recorded, "finished")).toBe(
         "⚠️ OpenClaw couldn't finish updating.\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",

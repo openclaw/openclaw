@@ -24,7 +24,7 @@ import type {
 } from "./bot-message-dispatch.types.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
 import type { DraftLaneState } from "./lane-delivery-text-deliverer.js";
-import { TelegramRequestNotStartedError } from "./network-errors.js";
+import { hasTelegramNetworkErrorCode, TelegramRequestNotStartedError } from "./network-errors.js";
 import { renderTelegramProgressDraftPreview } from "./progress-draft-preview.js";
 import { editMessageTelegram } from "./send.js";
 
@@ -160,10 +160,9 @@ export async function settleFailedFinalDelivery(turn: Turn): Promise<void> {
   ) {
     return;
   }
-  const text =
-    turn.finalDeliveryNotDispatched && !turn.previewLifecycle.finalDelivered
-      ? "I couldn't send the reply to Telegram. Check OpenClaw chat history for the answer and the Gateway logs for the delivery error."
-      : "I couldn't confirm the reply reached Telegram. Check OpenClaw chat history for the answer before retrying the task.";
+  const text = hasTelegramNetworkErrorCode(turn.finalDeliveryError)
+    ? "I couldn't deliver my reply because of a network problem. Please ask again."
+    : "I couldn't deliver my reply. Please ask again.";
   const stream = turn.answerLane.stream;
   const messageId = stream?.messageId();
   if (

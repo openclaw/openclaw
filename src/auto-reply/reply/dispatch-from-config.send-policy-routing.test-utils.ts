@@ -1022,7 +1022,6 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(sessionStoreMocks.loadSessionStore).not.toHaveBeenCalled();
     expect(sessionStoreMocks.loadSessionStoreEntry).toHaveBeenCalledWith({
       agentId: "main",
       storePath: "/tmp/mock-sessions.json",

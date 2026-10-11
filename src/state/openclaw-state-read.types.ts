@@ -193,7 +193,7 @@ export type OpenClawStateReadCommand =
   | { type: "deliveryQueue.outbound"; id?: string; mode: "pending" | "unfinished" }
   | { type: "config.snapshot.read" }
   | { type: "claws.packageOwnership"; agentId?: string; includeInstalls: boolean }
-  | { type: "doctor.gatewayOwnerLease.read" }
+  | { type: "gatewayOwnerLease.read"; schemaMaintenance: boolean }
   | AcpSessionReadCommand
   | SqliteWorkerCommand<McpOAuthReadOnlyOperations>
   | { type: "conversationBindings.inspect"; conversation: ConversationRef }
@@ -267,7 +267,6 @@ export type OpenClawStateReadCommand =
     }
   | { type: "githubPublication.sharedObservation"; input: SharedGitHubPublicationReadInput }
   | { type: "githubPublication.request"; requestId: string }
-  | { type: "githubRepository.request"; requestId: string }
   | { type: "githubPublication.knownPullRequestUrls"; input: GitHubPublicationReceiptTarget }
   | {
       type: "githubRepository.knownPullRequestUrls";
@@ -286,6 +285,8 @@ export type OpenClawStateReadCommand =
   | { type: "workerPlacements.changeSnapshot"; profileIds?: string[] }
   | { type: "nodeHost.config" }
   | { type: "tts.prefsPath" }
+  | { type: "voicewake.triggers" }
+  | { type: "voicewake.routing" }
   | { type: "operator.channelPolicy" }
   | { type: "preparedPoolPresence.read" }
   | {
@@ -336,7 +337,7 @@ export type OpenClawStateReadResult =
       packageRefs: PersistedClawPackageRef[];
       orphanWorkspace: ClawOrphanWorkspace | undefined;
     }
-  | { type: "doctor.gatewayOwnerLease.read"; lease: GatewayOwnerLeaseIdentity | undefined }
+  | { type: "gatewayOwnerLease.read"; lease: GatewayOwnerLeaseIdentity | undefined }
   | { type: "preparedPoolPresence.read"; demand: PreparedPoolPresenceDemand | undefined }
   | {
       type: "tui.lastSession.read";
@@ -413,10 +414,6 @@ export type OpenClawStateReadResult =
   | {
       type: "githubPublication.request";
       row: GitHubPublicationRow | undefined;
-    }
-  | {
-      type: "githubRepository.request";
-      row: RepositoryGitHubPublicationRow | undefined;
     }
   | {
       type: "githubPublication.knownPullRequestUrls";
@@ -577,7 +574,12 @@ export type OpenClawStateReadResult =
       placements: WorkerSessionPlacementChangeSnapshot[];
     }
   | {
-      type: "nodeHost.config" | "operator.channelPolicy" | "tts.prefsPath";
+      type:
+        | "nodeHost.config"
+        | "operator.channelPolicy"
+        | "tts.prefsPath"
+        | "voicewake.triggers"
+        | "voicewake.routing";
       row: ConfigMachineStateRow | undefined;
     }
   | {

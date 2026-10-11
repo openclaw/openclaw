@@ -53,9 +53,11 @@ vi.mock("../openclaw-tools.js", () => ({
 }));
 // mock-isolation: Observe node-only execution without assembling unrelated coding tools.
 vi.mock("../agent-tools.js", () => ({
-  createOpenClawCodingToolsAsync: async ({ exec }: { exec?: { host?: string; node?: string } }) => [
-    executionTool(exec),
-  ],
+  createOpenClawCodingToolsInternalAsync: async ({
+    exec,
+  }: {
+    exec?: { host?: string; node?: string };
+  }) => [executionTool(exec)],
 }));
 vi.mock("../bash-tools.js", () => ({ createExecTool: executionTool }));
 vi.mock("../tools/gateway.js", () => ({

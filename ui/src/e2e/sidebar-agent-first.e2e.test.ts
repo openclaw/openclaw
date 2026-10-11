@@ -134,9 +134,10 @@ suite.define(() => {
           const group = sidebar.locator('[data-agent-group="main"]');
           const parent = group.locator('[data-session-key="agent:main:parent"]');
           await parent.waitFor({ state: "visible" });
+          // The saved list width includes shell borders; the rail adds its own 52px slot.
           expect(
-            await sidebar.evaluate((el) => el.parentElement?.getBoundingClientRect().width),
-          ).toBe(width);
+            await page.locator(".shell-nav").evaluate((el) => el.getBoundingClientRect().width),
+          ).toBe(width + 52);
           const workspaceName = sidebar.locator(
             ".sidebar-workspace-header .sidebar-agent-card__name-text",
           );

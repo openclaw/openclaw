@@ -107,8 +107,14 @@ it.each(["sync", "async"] as const)(
     fs.utimesSync(stagingRoot, sentinel, sentinel);
     const stagingMtime = fs.statSync(stagingRoot).mtimeMs;
     expect(await read()).toEqual([pending]);
-    const loaded = mode === "sync" ? options.io.loadConfig() : await options.io.loadConfigAsync();
-    expect(loaded.gateway?.mode).toBe("local");
+    const mainSql = mode === "async" ? observeMainThreadSql() : undefined;
+    try {
+      const loaded = mode === "sync" ? options.io.loadConfig() : await options.io.loadConfigAsync();
+      expect(loaded.gateway?.mode).toBe("local");
+      mainSql?.expectIdle();
+    } finally {
+      mainSql?.restore();
+    }
     await recordDeferredPluginMigrations({
       env: options.env,
       pending: [{ ...pending, reason: "Changed obligation" }],

@@ -285,32 +285,23 @@ export function parseHeredocMarker(
   let value = "";
   let quote: '"' | "'" | undefined;
   for (; index < command.length; index += 1) {
-    const char = command[index] ?? "";
-    if (quote) {
-      if (char === quote) {
-        quote = undefined;
-        continue;
-      }
-      if (quote === '"' && char === "\\" && index + 1 < command.length) {
-        index += 1;
-        value += command[index] ?? "";
-        continue;
-      }
-      value += char;
+    let char = command[index] ?? "";
+    if (quote && char === quote) {
+      quote = undefined;
       continue;
     }
-
-    if (/[\r\n;&|<>]/u.test(char) || whitespace.test(char)) {
-      break;
+    if (!quote) {
+      if (/[\r\n;&|<>]/u.test(char) || whitespace.test(char)) {
+        break;
+      }
+      if (char === "'" || char === '"') {
+        quote = char;
+        continue;
+      }
     }
-    if (char === "'" || char === '"') {
-      quote = char;
-      continue;
-    }
-    if (char === "\\" && index + 1 < command.length) {
+    if (quote !== "'" && char === "\\" && index + 1 < command.length) {
       index += 1;
-      value += command[index] ?? "";
-      continue;
+      char = command[index] ?? "";
     }
     value += char;
   }
@@ -617,12 +608,8 @@ export function stripShellPreamble(command: string): PreambleResult {
     // Only scan top-level separators so quoted strings and nested shell fragments stay intact in
     // the command fragment that display code will summarize.
     scanTopLevelChars(rest, (char, idx) => {
-      if (char === "&" && rest[idx + 1] === "&") {
-        first = { index: idx, length: 2 };
-        return false;
-      }
-      if (char === "|" && rest[idx + 1] === "|") {
-        first = { index: idx, length: 2, isOr: true };
+      if ((char === "&" || char === "|") && rest[idx + 1] === char) {
+        first = { index: idx, length: 2, isOr: char === "|" };
         return false;
       }
       if (char === ";" || char === "\n") {

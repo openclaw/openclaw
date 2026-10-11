@@ -1,4 +1,10 @@
+import { vi } from "vitest";
 import { installSafeLocalStorageForTesting } from "./storage.ts";
+
+if (typeof document !== "undefined" && !("__vitest_browser__" in globalThis)) {
+  // mock-isolation: JSDOM rendering tests assume admission; the real browser gate has E2E coverage.
+  vi.doMock("../app/boot-capabilities.ts", () => ({ unsupportedControlUiBrowser: false }));
+}
 
 // Lit emits a one-time dev-mode warning in test builds. Pre-mark it as issued
 // so broad UI suites stay signal-heavy instead of repeating the same console.warn.

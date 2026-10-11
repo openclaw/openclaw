@@ -14,6 +14,7 @@ import {
 import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
 import type { FollowupRun } from "./queue.js";
 import { resolveReplyRunTrigger } from "./reply-turn-kind.js";
+import { getReplySystemEventContext } from "./system-event-session-key.js";
 
 export function resolveModelFallbackOptions(
   run: FollowupRun["run"],
@@ -104,6 +105,8 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
     preparedRunAdmission: params.preparedRunAdmission,
     messageActionTurnCapability: params.messageActionTurnCapability,
     trigger: resolveReplyRunTrigger(turn),
+    heartbeatEventQueueSessionKey: getReplySystemEventContext(turn.opts)
+      ?.heartbeatEventQueueSessionKey,
     lane: params.runLane,
     fastModeStartedAtMs: params.fastModeStartedAtMs,
     fastModeAutoProgressState: params.fastModeAutoProgressState,

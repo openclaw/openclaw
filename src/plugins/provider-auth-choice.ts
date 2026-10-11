@@ -20,7 +20,10 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import { enablePluginWithCapabilityConsent } from "./enable.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
-import { applyProviderAuthConfigPatch } from "./provider-auth-choice-helpers.js";
+import {
+  applyProviderAuthConfigPatch,
+  restoreAgentsDefaultsModel,
+} from "./provider-auth-choice-helpers.js";
 import { resolveManifestProviderAuthChoice } from "./provider-auth-choices.js";
 import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
 import { runProviderPluginAuthMethodUnpersisted } from "./provider-auth-method.js";
@@ -84,25 +87,9 @@ function restoreConfiguredPrimaryModel(
   nextConfig: OpenClawConfig,
   originalConfig: OpenClawConfig,
 ): OpenClawConfig {
-  const originalModel = originalConfig.agents?.defaults?.model;
-  const nextAgents = nextConfig.agents;
-  const nextDefaults = nextAgents?.defaults;
-  if (!nextDefaults) {
-    return nextConfig;
-  }
-  const defaults = { ...nextDefaults };
-  if (originalModel === undefined) {
-    delete defaults.model;
-  } else {
-    defaults.model = originalModel;
-  }
-  return {
-    ...nextConfig,
-    agents: {
-      ...nextAgents,
-      defaults,
-    },
-  };
+  return nextConfig.agents?.defaults
+    ? restoreAgentsDefaultsModel(nextConfig, originalConfig.agents?.defaults?.model)
+    : nextConfig;
 }
 
 function resolveConfiguredDefaultModelPrimary(cfg: OpenClawConfig): string | undefined {

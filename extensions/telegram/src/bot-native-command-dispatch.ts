@@ -27,7 +27,7 @@ import {
   resolveTelegramMessageThreadSpec,
 } from "./bot/helpers.js";
 import {
-  inspectTelegramConversationRoute,
+  inspectTelegramConversationRouteAsync,
   resolveTelegramTargetSession,
   touchTelegramConversationRoute,
 } from "./conversation-route.js";
@@ -96,6 +96,11 @@ export type TelegramCommandDispatch = TelegramCommandExecutorParams &
     nativeCommandRuntime: TelegramNativeCommandRuntime;
     deliveryOptions: DeliveryBaseOptions;
     loadDeliveryRuntime: () => Promise<TelegramNativeCommandDeliveryRuntime>;
+    recordDeliveredReply: (
+      commandText: string,
+      replyText: string,
+      replyId: string,
+    ) => Promise<void>;
   };
 
 export async function resolveTelegramNativeCommandThreadContext(params: {
@@ -144,7 +149,7 @@ async function resolveTelegramCommandAuth(params: {
     await resolveTelegramNativeCommandThreadContext({ msg, bot });
   const senderId = msg.from?.id ? String(msg.from.id) : "";
   const scopedConfig = params.resolveTelegramGroupConfig(chatId, threadSpec.id, cfg);
-  const inspectedRoute = inspectTelegramConversationRoute({
+  const inspectedRoute = await inspectTelegramConversationRouteAsync({
     cfg,
     accountId,
     chatId,
@@ -406,6 +411,16 @@ export async function prepareTelegramCommandDispatch(
     linkPreview: runtimeTelegramCfg.linkPreview,
     richMessages,
   };
+  const storePath = nativeCommandRuntime.resolveStorePath(runtimeCfg.session?.store, {
+    agentId: route.agentId,
+  });
+  let transcriptSessionId = (
+    await nativeCommandRuntime.getSessionEntryAsync({
+      agentId: route.agentId,
+      sessionKey: auth.targetSessionKey,
+      storePath,
+    })
+  )?.sessionId;
   return {
     ...params,
     telegramDeps,
@@ -415,5 +430,23 @@ export async function prepareTelegramCommandDispatch(
     nativeCommandRuntime,
     deliveryOptions,
     loadDeliveryRuntime: loadTelegramNativeCommandDeliveryRuntime,
+    recordDeliveredReply: async (commandText, replyText, replyId) => {
+      const result = await nativeCommandRuntime.recordDeliveredCommandExchange({
+        config: runtimeCfg,
+        agentId: route.agentId,
+        sessionKey: auth.targetSessionKey,
+        expectedSessionId: transcriptSessionId,
+        assertCurrent: auth.assertOwnerCurrent,
+        commandText,
+        replyText,
+        commandId: `telegram:${route.accountId}:${auth.chatId}:${params.msg.message_id}`,
+        replyId,
+      });
+      if (result.ok) {
+        transcriptSessionId = result.target.sessionId;
+      } else {
+        logVerbose(`telegram command transcript skipped: ${result.reason}`);
+      }
+    },
   };
 }

@@ -260,6 +260,31 @@ describe("PortalsPage", () => {
     expect(source.request).toHaveBeenCalledTimes(finalReads);
   });
 
+  it("keeps polling the selected environment after a previous target fails", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const retired = createDeferred<EnvironmentSummary>();
+    let replacement: EnvironmentSummary = { id: "new-machine", type: "worker", status: "starting" };
+    const source = createContext(["environments.status"], async (_method, params) =>
+      params.environmentId === "old-machine" ? retired.promise : replacement,
+    );
+    const page = await mountPage(source.context, undefined, "old-machine");
+    page.requestedEnvironmentId = replacement.id;
+    await page.updateComplete;
+    await vi.waitFor(() => expect(source.request).toHaveBeenCalledTimes(2));
+    await source.request.mock.results[1]?.value;
+    await vi.waitFor(() => expect(page.textContent).toContain("Starting your machine"));
+
+    retired.reject(new Error("Previous machine failed"));
+    await retired.promise.catch(() => undefined);
+    await page.updateComplete;
+    expect(page.textContent).not.toContain("Previous machine failed");
+
+    replacement = { ...replacement, status: "available" };
+    await vi.advanceTimersByTimeAsync(2_000);
+    await page.updateComplete;
+    expect(page.textContent).toContain("Waiting for your application");
+  });
+
   it("opens the requested portal in the sidebar and never substitutes another app", async () => {
     const selected = { ...portal, id: "selected-app", title: "Selected app", path: "/selected" };
     let portals = [portal, selected];
@@ -320,6 +345,48 @@ describe("PortalsPage", () => {
       expect(source.request).toHaveBeenLastCalledWith("portal.list", {});
       expect(page.querySelector(".portals-rail__title")?.textContent).toBe("Seeded app");
       expect(page.querySelector("iframe")?.getAttribute("src")).toBe(portal.url);
+    },
+  );
+
+  it.each(["success", "failure"] as const)(
+    "keeps a replacement portal close locked after the old request's %s",
+    async (outcome) => {
+      const retired = createDeferred<{ closed: boolean }>();
+      const current = createDeferred<{ closed: boolean }>();
+      const source = createContext(["portal.list", "portal.close"], async (method) =>
+        method === "portal.list" ? { portals: [portal] } : retired.promise,
+      );
+      const replacement = createContext(["portal.list", "portal.close"], async (method) =>
+        method === "portal.list" ? { portals: [portal] } : current.promise,
+      );
+      const page = await mountPage(source.context);
+      const closeButton = () => page.querySelector<HTMLButtonElement>(".portals-preview__close")!;
+      await vi.waitFor(() => expect(closeButton()).not.toBeNull());
+      closeButton().click();
+      await vi.waitFor(() => expect(closeButton().disabled).toBe(true));
+      source.updateSnapshot({ client: replacement.context.gateway.snapshot.client });
+      await vi.waitFor(() => expect(closeButton()?.disabled).toBe(false));
+      closeButton().click();
+      await vi.waitFor(() => expect(closeButton().disabled).toBe(true));
+      try {
+        if (outcome === "success") {
+          retired.resolve({ closed: true });
+        } else {
+          retired.reject(new Error("Retired close failed"));
+        }
+        await retired.promise.catch(() => undefined);
+        await page.updateComplete;
+        expect(closeButton().disabled).toBe(true);
+        expect(page.textContent).not.toContain("Retired close failed");
+        closeButton().click();
+        expect(
+          replacement.request.mock.calls.filter(([method]) => method === "portal.close"),
+        ).toHaveLength(1);
+      } finally {
+        current.resolve({ closed: true });
+        await current.promise;
+      }
+      await vi.waitFor(() => expect(closeButton().disabled).toBe(false));
     },
   );
 

@@ -89,20 +89,12 @@ export function requireChatSessionAction(
   host: ChatCommandHost,
   action: "abort" | "compact" | "reset",
 ): boolean {
-  const access = readChatSessionActionAccess(
-    currentSessionAccessSnapshot(host),
-    Boolean(host.chatRunId),
-    {
-      session: host.sessionsResult?.sessions.find((row) =>
-        visibleSessionMatches(
-          host,
-          row.key,
-          row.agentId ?? host.sessionsResultAgentId ?? undefined,
-        ),
-      ),
-      sessionAbortable: host.chatRunSessionAbortable === true,
-    },
-  )[action];
+  // Typed Stop is session-scoped, so it needs sessions.abort even while a run is local.
+  const access = readChatSessionActionAccess(currentSessionAccessSnapshot(host), false, {
+    session: host.sessionsResult?.sessions.find((row) =>
+      visibleSessionMatches(host, row.key, row.agentId ?? host.sessionsResultAgentId ?? undefined),
+    ),
+  })[action];
   if (access.allowed) {
     return true;
   }
@@ -317,7 +309,7 @@ export async function dispatchChatSlashCommand(
       if (!requireChatSessionAction(host, "abort")) {
         return "failed";
       }
-      await handleAbortChat(host);
+      await handleAbortChat(host, { scope: "session" });
       return "completed";
     case "new":
       if (!host.createChatSession) {

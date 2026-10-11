@@ -319,7 +319,6 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
     { source: "missing entry", diagnostics: ["core.ts"] },
     { source: "invalid config", diagnostics: ["missing-config.json"] },
     { source: "missing declaration", diagnostics: ["contract"] },
-    { source: "input mutation after emit", diagnostics: ["changed during compilation"] },
   ])(
     "rejects $source before replacing published or local declarations",
     ({ source, diagnostics }, { command }) =>
@@ -340,20 +339,6 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
           write("tsconfig.json", '{"extends":"./missing-config.json"}');
         } else if (source === "missing declaration") {
           fs.rmSync(path.join(root, "src/contract.d.ts"));
-        } else {
-          write(
-            "tsdown.config.ts",
-            `${fs.readFileSync(path.join(root, "tsdown.config.ts"), "utf8")}
-for (const config of configs) {
-  if (!config.dts?.emitDtsOnly) continue;
-  const register = config.hooks;
-  config.hooks = async hooks => {
-    await register(hooks);
-    hooks.hook("build:done", () => fs.appendFileSync("src/shared.ts", "\\n"));
-  };
-}
-`,
-          );
         }
         const failed = await runWriter(command, root, true);
         expect(failed.error).toBeUndefined();

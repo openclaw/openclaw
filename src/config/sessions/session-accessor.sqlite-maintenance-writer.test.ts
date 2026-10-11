@@ -22,7 +22,6 @@ import {
   loadTranscriptEventsSync,
   patchSessionEntryCore,
   replaceSessionEntrySync,
-  replaceTranscriptEventsSync,
 } from "./session-accessor.js";
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
 import {
@@ -32,6 +31,7 @@ import {
 import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
 import { finalizeSessionMaintenanceInDatabase } from "./session-accessor.sqlite-maintenance-transaction.js";
 import * as maintenance from "./session-accessor.sqlite-maintenance.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import {
   prepareSessionMaintenancePreservation,

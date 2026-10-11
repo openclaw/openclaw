@@ -157,6 +157,7 @@ export type TelegramDeliveryStateSlice = {
   resolveCurrentTurnTranscriptFinal: () => Promise<CurrentTurnTranscriptFinal | undefined>;
   transcriptMirrorSequence: number;
   transcriptMirrorTurnId: string;
+  transcriptMirrorRunId?: string;
   implicitQuoteReplyTargetId: string | undefined;
   currentMessageIdForQuoteReply: string | undefined;
 };
@@ -174,7 +175,7 @@ export type TelegramDispatchTurn = TelegramDispatchTurnConfig &
   TelegramDeliveryStateSlice &
   TelegramReplyStateSlice & {
     finalDispatchClaimed: boolean;
-    finalDeliveryNotDispatched?: boolean;
+    finalDeliveryError?: unknown;
     agentRunFailed?: boolean;
     sendPolicyDenied?: boolean;
     noVisibleReplyFallbackEligible: boolean;

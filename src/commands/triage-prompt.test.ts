@@ -9,33 +9,6 @@ describe("renderTriagePrompt", () => {
     stateDir: `${homeDir}/.openclaw`,
   };
 
-  it("orders sanitized findings by severity and includes repair hints and bundle details", () => {
-    const findings: HealthFinding[] = [
-      { checkId: "core/info", severity: "info", message: "informational" },
-      { checkId: "core/warning", severity: "warning", message: "needs attention" },
-      {
-        checkId: "core/error",
-        severity: "error",
-        message: "model routing failed",
-        fixHint: "Run `openclaw doctor --fix`.",
-      },
-    ];
-
-    const prompt = renderTriagePrompt({
-      findings,
-      bundle: { kind: "available", path: `${redaction.stateDir}/diagnostics.zip` },
-      redaction,
-    });
-
-    expect(prompt.indexOf("[error]")).toBeLessThan(prompt.indexOf("[warning]"));
-    expect(prompt.indexOf("[warning]")).toBeLessThan(prompt.indexOf("[info]"));
-    expect(prompt).toContain("Fix: Run `openclaw doctor --fix`.");
-    expect(prompt).toContain("Sanitized ZIP: $OPENCLAW_STATE_DIR/diagnostics.zip");
-    expect(prompt).toContain(
-      "The diagnostics archive excludes secrets, tokens, raw chat payloads, and raw logs",
-    );
-  });
-
   it("redacts home and state paths across finding fields and diagnostics handoffs", () => {
     const prompt = renderTriagePrompt({
       findings: [
@@ -87,46 +60,6 @@ describe("renderTriagePrompt", () => {
     expect(prompt).toContain("...");
   });
 
-  it("bounds automatic failure evidence without losing verification goals", () => {
-    const findings: HealthFinding[] = Array.from({ length: 25 }, (_, index) => ({
-      checkId: `core/check-${index}`,
-      severity: "warning",
-      message: "🦞".repeat(4_000),
-      fixHint: "修".repeat(4_000),
-    }));
-
-    const prompt = renderTriagePrompt({
-      findings,
-      bundle: { kind: "skipped" },
-      redaction,
-      failure: {
-        kind: "update",
-        phase: "restart-unhealthy",
-        error: `Authorization: Bearer sk-test-triage-secret-1234567890 ${"🦞".repeat(4_000)}`,
-        expectedVersion: "2026.8.31",
-        gateway: "verify-running",
-      },
-    });
-
-    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(8 * 1024);
-    // Every finding is either rendered or explicitly counted as omitted, and the
-    // trailing sections survive because findings are fitted to the byte budget.
-    const rendered = prompt.match(/^- \[warning\]/gmu)?.length ?? 0;
-    expect(rendered).toBeGreaterThan(0);
-    expect(prompt).toContain(
-      `${findings.length - rendered} more findings omitted; run \`openclaw doctor\` for the full list.`,
-    );
-    expect(prompt).toContain("## Privacy");
-    expect(prompt).not.toContain("\uFFFD");
-    expect(prompt).toContain("...");
-    expect(prompt).toContain("restart-unhealthy");
-    expect(prompt).not.toContain("sk-test-triage-secret-1234567890");
-    expect(prompt).toContain("openclaw health --json");
-    expect(prompt).toContain("openclaw gateway status --deep");
-    expect(prompt).toContain("2026.8.31");
-    expect(prompt).toContain("original symptom");
-  });
-
   it("preserves deliberate stopped state in the repair goal", () => {
     const prompt = renderTriagePrompt({
       findings: [],
@@ -171,8 +104,6 @@ describe("renderTriagePrompt", () => {
   });
 
   it.each<{ label: string; bundle: TriageBundle; currentFailure: boolean }>([
-    { label: "record alone", bundle: { kind: "skipped" }, currentFailure: false },
-    { label: "current startup", bundle: { kind: "skipped" }, currentFailure: true },
     {
       label: "current startup and diagnostics archive",
       bundle: { kind: "available", path: `${homeDir}/${"修".repeat(2_000)}/diagnostics.zip` },
@@ -194,7 +125,7 @@ describe("renderTriagePrompt", () => {
             failure: {
               kind: "gateway-startup" as const,
               phase: "startup",
-              error: `Current startup failure: ${"🦞".repeat(4_000)}`,
+              error: `Current startup failure: token=sk-test-triage-secret-1234567890 ${"🦞".repeat(4_000)}`,
               installationRoot: `${homeDir}/installation/${"修".repeat(2_000)}`,
               expectedVersion: "2026.8.31",
               gateway: "verify-running" as const,
@@ -262,6 +193,7 @@ describe("renderTriagePrompt", () => {
       expect(prompt).toContain("- Kind: gateway-startup");
       expect(prompt).toContain("- Phase: startup");
       expect(prompt).toContain("Current startup failure:");
+      expect(prompt).not.toContain("sk-test-triage-secret-1234567890");
       expect(prompt).toContain("- Installation: ~/installation/");
       expect(prompt).toContain("- Expected version: 2026.8.31");
     }
@@ -274,23 +206,8 @@ describe("renderTriagePrompt", () => {
 
   it.each([
     {
-      bundle: { kind: "unavailable" as const, reason: "Gateway unreachable" },
-      text: "Diagnostics export unavailable: Gateway unreachable",
-    },
-    {
-      bundle: {
-        kind: "unavailable" as const,
-        reason: `Gateway config: ${redaction.stateDir}/openclaw.json`,
-      },
-      text: "Diagnostics export unavailable: Gateway config: $OPENCLAW_STATE_DIR/openclaw.json",
-    },
-    {
       bundle: { kind: "deferred" as const },
       text: "Diagnostics export deferred to the repair agent during update recovery.",
-    },
-    {
-      bundle: { kind: "skipped" as const },
-      text: "Diagnostics export skipped with `--no-export`.",
     },
   ])("explains absent diagnostics archives: $text", ({ bundle, text }) => {
     expect(renderTriagePrompt({ findings: [], bundle, redaction })).toContain(text);

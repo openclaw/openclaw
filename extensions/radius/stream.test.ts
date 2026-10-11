@@ -130,6 +130,9 @@ describe("Radius native message transport", () => {
     for await (const event of stream) {
       if (event.type === "toolcall_delta") {
         observed.push(event.delta);
+        expect(event.partial.content[event.contentIndex]).toMatchObject({
+          partialJson: observed.join(""),
+        });
       }
     }
     expect(observed).toEqual(deltas);
@@ -139,6 +142,7 @@ describe("Radius native message transport", () => {
       stopReason: "toolUse",
       content: [{ type: "toolCall", arguments: toolArguments }],
     });
+    expect((await stream.result()).content[0]).not.toHaveProperty("partialJson");
   });
 
   it.each(["\n\n", ""])(
@@ -356,6 +360,9 @@ describe("Radius native message transport", () => {
       stopReason: "error",
       errorMessage: expect.stringContaining(error),
     });
+    for (const block of (await stream.result()).content) {
+      expect(block).not.toHaveProperty("partialJson");
+    }
   });
 
   it("cancels an open response promptly when the caller aborts", async () => {

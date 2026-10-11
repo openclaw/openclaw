@@ -11,6 +11,7 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { serveWorkerTasks } from "../infra/worker-task-server.js";
 import type { Model } from "../llm/types.js";
 import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
+import { withHandedOffCodexClientVersion } from "../plugin-sdk/codex-client-version-handoff.internal.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -53,6 +54,7 @@ import { preserveResolvedSecretBackedCredentials } from "./auth-profiles/store.j
 import { prepareModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import { modelCatalogRouteVariantKey, modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
+import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import { resolveImplicitProviderDiscoveryScope } from "./models-config.providers.discovery-scope.js";
 import { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
@@ -61,7 +63,6 @@ import {
   fingerprintPreparedModelCatalogPluginContext,
   fingerprintPreparedModelWorkerRequest,
 } from "./prepared-model-catalog-fingerprints.js";
-import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./prepared-model-catalog-worker.js";
 import type { PreparedModelCatalogWorkerData } from "./prepared-model-catalog-worker.pool.js";
 import type {
   PreparedModelCatalogWorkerInput,
@@ -568,6 +569,7 @@ function isWorkerRequest(value: unknown): value is PreparedModelWorkerRequest {
     isRecord(value.clawInstallSchemaVersions) &&
     typeof value.clawInstallSchemaVersions.path === "string" &&
     isRecord(value.clawInstallSchemaVersions.snapshot) &&
+    (value.codexClientVersion === undefined || typeof value.codexClientVersion === "string") &&
     ((value.kind === "catalog" &&
       (value.refresh === undefined || typeof value.refresh === "boolean") &&
       (value.providerIds === undefined || isStringArray(value.providerIds))) ||
@@ -618,27 +620,32 @@ if (parentPort) {
             const work = new AsyncWorkScope();
             const result = await withWorkerAuthProfileWrites(value.input.env, work, () =>
               withClawInstallSchemaVersionFacts(request.clawInstallSchemaVersions, () =>
-                work.run(() =>
-                  runCatalogRequest(
-                    value,
-                    request,
-                    work,
-                    async () => {
-                      if (previous?.fingerprint === fingerprint) {
-                        return previous.prepared;
-                      }
-                      return (attempted = await prepareWorkerGeneration(value));
-                    },
-                    async () => {
-                      // Admission can outlast a refresh on slow filesystems; only completed
-                      // generation preparation starts the provider-discovery deadline.
-                      stopProgress();
-                      const response = await channel?.request(null);
-                      response?.consumed();
-                      if (response && response.input !== true) {
-                        throw new Error("prepared model catalog request retired before discovery");
-                      }
-                    },
+                // Never select a Codex binary here; report the parent's decision.
+                withHandedOffCodexClientVersion(request.codexClientVersion, () =>
+                  work.run(() =>
+                    runCatalogRequest(
+                      value,
+                      request,
+                      work,
+                      async () => {
+                        if (previous?.fingerprint === fingerprint) {
+                          return previous.prepared;
+                        }
+                        return (attempted = await prepareWorkerGeneration(value));
+                      },
+                      async () => {
+                        // Admission can outlast a refresh on slow filesystems; only completed
+                        // generation preparation starts the provider-discovery deadline.
+                        stopProgress();
+                        const response = await channel?.request(null);
+                        response?.consumed();
+                        if (response && response.input !== true) {
+                          throw new Error(
+                            "prepared model catalog request retired before discovery",
+                          );
+                        }
+                      },
+                    ),
                   ),
                 ),
               ),

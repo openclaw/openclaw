@@ -499,23 +499,16 @@ export async function leaseMcpAppModelContextForSessionTurn(params: {
     return undefined;
   }
   const modelContext = leases.flatMap((lease) => lease.modelContext);
+  const applyToLeases = (operation: "assertCurrent" | "commit" | "rollback") => () => {
+    for (const lease of leases) {
+      lease[operation]();
+    }
+  };
   return {
     project: (imageOffset: number) => projectMcpAppModelContextInput(modelContext, imageOffset),
-    assertCurrent: () => {
-      for (const lease of leases) {
-        lease.assertCurrent();
-      }
-    },
-    commit: () => {
-      for (const lease of leases) {
-        lease.commit();
-      }
-    },
-    rollback: () => {
-      for (const lease of leases) {
-        lease.rollback();
-      }
-    },
+    assertCurrent: applyToLeases("assertCurrent"),
+    commit: applyToLeases("commit"),
+    rollback: applyToLeases("rollback"),
   };
 }
 

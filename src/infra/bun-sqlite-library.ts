@@ -191,15 +191,18 @@ function createSelector() {
               "/opt/local/lib/libsqlite3.dylib",
             ]),
           ];
+    const unusable: string[] = [];
     for (const path of candidates) {
       let probe: LibraryProbe;
+      let present = true;
       try {
         // dlopen decides loadability: Apple's SQLite lives in the dyld shared cache with no
         // file on disk, so a stat-first check would hide its real defect (OMIT_LOAD_EXTENSION).
         try {
           probe = probeLibrary(path);
         } catch (error) {
-          throw existsSync(path) ? error : new Error("missing file", { cause: error });
+          present = existsSync(path);
+          throw present ? error : new Error("missing file", { cause: error });
         }
         if (!isSqliteWalResetSafeVersion(probe.version)) {
           throw new Error(`SQLite version ${probe.version} below the WAL safety floor`);
@@ -209,6 +212,10 @@ function createSelector() {
         }
       } catch (error) {
         if (override === undefined) {
+          // Absent candidates are ordinary; present ones explain the refusal below.
+          if (present) {
+            unusable.push(`${path} (${error instanceof Error ? error.message : String(error)})`);
+          }
           continue;
         }
         failure = selectionError(path, error);
@@ -231,8 +238,15 @@ function createSelector() {
       };
       return selection;
     }
-    selection = { source: "runtime" };
-    return selection;
+    // Bun's macOS runtime library is Apple's patched system SQLite. Its read-only
+    // connections fail same-process RESERVED locks and sidecar-less WAL opens.
+    failure = new Error(
+      `No supported SQLite library for Bun on macOS (${process.arch})` +
+        (unusable.length > 0 ? `; unusable: ${unusable.join(", ")}` : "") +
+        ". Apple's system SQLite fails OpenClaw's read-only database connections. " +
+        `Install one with brew install sqlite, or set OPENCLAW_SQLITE_LIBRARY to a libsqlite3.dylib built for ${process.arch}.`,
+    );
+    throw failure;
   };
 }
 

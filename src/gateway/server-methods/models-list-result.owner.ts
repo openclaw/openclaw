@@ -8,6 +8,7 @@ import { PreparedModelRuntimeOwnerNotPublishedError } from "../../agents/prepare
 import { preparedModelRuntimeConfigsMatch } from "../../agents/prepared-model-runtime.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   withCurrentReadAuthority,
@@ -118,7 +119,8 @@ export async function resolveModelsListOwner({
     throw new Error("Model catalog omitted its published snapshot");
   }
   const sourceOwner = publishedOwner ?? ownerSnapshot;
-  const cfg = sourceOwner?.config ?? initialConfig;
+  // Routing consumes one runtime/source pair instead of reprojecting it for every model.
+  const cfg = captureRuntimeConfig(sourceOwner?.config ?? initialConfig);
   const agentId = sourceOwner?.agentId ?? initialAgentId;
   const workspaceDir =
     sourceOwner?.workspaceDir ??
