@@ -13,20 +13,50 @@ export type PanelTabStripParams<T extends PanelTabStripTab = PanelTabStripTab> =
 
 type LegacyInputs = Omit<LegacyPanelTabStripParams, "renderContent">;
 
+function shallowEqual(left: object, right: object) {
+  const entries = Object.entries<unknown>(left);
+  return (
+    entries.length === Object.keys(right).length &&
+    entries.every(([key, value]) => Object.is(value, Reflect.get(right, key)))
+  );
+}
+
 /** Preserve the originating Lit event/ref receiver inside the owned leaf roots. */
 class RenderHostParamsDirective extends Directive {
+  private host?: object;
+  private params?: LegacyPanelTabStripParams;
+  private renderContent?: LegacyPanelTabStripParams["renderContent"];
+
   render(params: LegacyInputs) {
     return params;
   }
 
   override update(part: Part, [params]: [LegacyInputs]): LegacyPanelTabStripParams {
     const host = part.options?.host;
-    return {
-      ...params,
-      renderContent: (value: unknown, container: HTMLElement) => {
+    if (!this.renderContent || this.host !== host) {
+      this.host = host;
+      this.renderContent = (value, container) => {
         renderLit(value ?? nothing, container, { host });
-      },
+      };
+    }
+    const previousTabs = this.params?.tabs;
+    const tabs = params.tabs.map((tab, index) => {
+      const previous = previousTabs?.[index];
+      return previous && shallowEqual(previous, tab) ? previous : tab;
+    });
+    const next = {
+      ...params,
+      tabs:
+        previousTabs?.length === tabs.length &&
+        tabs.every((tab, index) => tab === previousTabs[index])
+          ? previousTabs
+          : tabs,
+      renderContent: this.renderContent,
     };
+    if (!this.params || !shallowEqual(this.params, next)) {
+      this.params = next;
+    }
+    return this.params;
   }
 }
 

@@ -46,6 +46,26 @@ type ComponentProps<Props, Methods> = Partial<Props> &
     children?: JSX.Element;
   };
 
+const pendingUpdates = new Set<() => void>();
+let pendingCommit: Promise<boolean> | undefined;
+
+function scheduleUpdate(update: () => void): Promise<boolean> {
+  pendingUpdates.add(update);
+  return (pendingCommit ??= Promise.resolve().then(() => {
+    try {
+      for (const commit of pendingUpdates) {
+        pendingUpdates.delete(commit);
+        commit();
+      }
+    } finally {
+      pendingCommit = undefined;
+    }
+    // All Lit property commits share one drain, before their updateComplete reactions.
+    flush();
+    return true;
+  }));
+}
+
 /** Interim tag owner: delete with the last Lit caller at the Solid cutover. */
 export function defineSolidBridge<Props extends object, Methods extends object = object>(
   tag: string,
@@ -70,14 +90,14 @@ export function defineSolidBridge<Props extends object, Methods extends object =
     static observedAttributes = [...attributes.keys()];
     #values = new Map(properties.map(([key, property]) => [key, property.default]));
     #upgraded = new Map<string, unknown>();
-    #notify?: () => void;
+    #publish = new Map<string, () => void>();
+    #changed = new Set<string>();
     #dispose?: () => void;
     #unsubscribe?: () => void;
     #application?: ApplicationContext;
     #mountedApplication?: ApplicationContext;
     #content?: DocumentFragment;
     #start?: Comment;
-    #pending?: Promise<boolean>;
     #solidOwned = false;
     #host: SolidBridgeElement<Props, Methods>;
 
@@ -110,7 +130,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
     }
 
     get updateComplete(): Promise<boolean> {
-      return this.#pending ?? Promise.resolve(true);
+      return pendingCommit ?? Promise.resolve(true);
     }
 
     #write(key: string, value: unknown) {
@@ -131,8 +151,12 @@ export function defineSolidBridge<Props extends object, Methods extends object =
           throw new TypeError(`Cannot reflect non-primitive bridge property ${key}`);
         }
       }
-      this.#notify?.();
-      void this.#commit();
+      if (this.#solidOwned) {
+        this.#publish.get(key)?.();
+      } else {
+        this.#changed.add(key);
+        void this.#commit();
+      }
     }
 
     attributeChangedCallback(name: string, _old: string | null, value: string | null) {
@@ -203,23 +227,24 @@ export function defineSolidBridge<Props extends object, Methods extends object =
     }
 
     #commit() {
-      return (this.#pending ??= Promise.resolve().then(() => {
-        this.#pending = undefined;
-        if (this.isConnected && !this.#solidOwned) {
-          if (this.#dispose && this.#application !== this.#mountedApplication) {
-            this.#disposeRoot();
-            this.connectedCallback();
-          }
-          if (!this.#dispose) {
-            runWithOwner(null, () => this.#mount());
-          }
-        }
-        // Queued during Lit's property commit, before its updateComplete reactions.
-        // Never flush reentrantly from a Solid render/effect callback.
-        flush();
-        return true;
-      }));
+      return scheduleUpdate(this.#update);
     }
+
+    #update = () => {
+      if (this.isConnected && !this.#solidOwned) {
+        if (this.#dispose && this.#application !== this.#mountedApplication) {
+          this.#disposeRoot();
+          this.connectedCallback();
+        }
+        if (!this.#dispose) {
+          runWithOwner(null, () => this.#mount());
+        }
+        for (const key of this.#changed) {
+          this.#publish.get(key)?.();
+        }
+        this.#changed.clear();
+      }
+    };
 
     #mount(children?: () => JSX.Element) {
       let source: JSX.Element;
@@ -237,9 +262,6 @@ export function defineSolidBridge<Props extends object, Methods extends object =
       this.#mountedApplication = this.#application;
       const layout = !this.#solidOwned ? shellLayoutOwnerForHost(this) : undefined;
       const view = () => {
-        // Solid-owned hosts publish property updates while their parent renders.
-        const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-        this.#notify = () => setRevision((value) => value + 1);
         const props = {
           ...defaults,
           get children() {
@@ -247,11 +269,14 @@ export function defineSolidBridge<Props extends object, Methods extends object =
           },
         };
         for (const [key] of properties) {
+          // Wrap callable values so Solid treats callbacks as data, not computations.
+          const [value, setValue] = createSignal(
+            { value: this.#values.get(key) },
+            { ownedWrite: true, equals: (left, right) => Object.is(left.value, right.value) },
+          );
+          this.#publish.set(key, () => setValue({ value: this.#values.get(key) }));
           Object.defineProperty(props, key, {
-            get: () => {
-              revision();
-              return this.#values.get(key);
-            },
+            get: () => value().value,
           });
         }
         // Provider child memos must not subscribe to component setup reads.
@@ -284,7 +309,8 @@ export function defineSolidBridge<Props extends object, Methods extends object =
     }
 
     #disposeRoot() {
-      this.#notify = undefined;
+      this.#publish.clear();
+      this.#changed.clear();
       this.#unsubscribe?.();
       this.#unsubscribe = undefined;
       const outlet = this.#start?.parentNode;

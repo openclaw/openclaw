@@ -1,4 +1,4 @@
-import { Show, createEffect, createMemo, onCleanup } from "solid-js";
+import { Show, createEffect, createMemo, mapArray, merge, onCleanup } from "solid-js";
 import { defineSolidBridge } from "../lit/solid-bridge.ts";
 import { PanelTabStrip } from "./panel-tab-strip-solid.tsx";
 import type {
@@ -10,13 +10,14 @@ import type {
 function LitContent(props: { value: unknown; renderContent: PanelTabStripContentRenderer }) {
   let container!: HTMLSpanElement;
   let renderContent: PanelTabStripContentRenderer | undefined;
-  createEffect(
-    () => ({ value: props.value, renderContent: props.renderContent }),
-    (content) => {
-      renderContent = content.renderContent;
-      renderContent(content.value, container);
-    },
-  );
+  const content = createMemo(() => ({ value: props.value, renderContent: props.renderContent }), {
+    equals: (before, after) =>
+      before.value === after.value && before.renderContent === after.renderContent,
+  });
+  createEffect(content, (next) => {
+    renderContent = next.renderContent;
+    renderContent(next.value, container);
+  });
   onCleanup(() => {
     renderContent?.(undefined, container);
   });
@@ -31,14 +32,17 @@ function LitContent(props: { value: unknown; renderContent: PanelTabStripContent
 }
 
 function LegacyPanelTabStrip(props: { params: LegacyPanelTabStripParams }) {
-  const tabs = createMemo(() =>
-    props.params.tabs.map((tab) => ({
-      ...tab,
-      icon:
-        tab.icon === undefined ? undefined : (
-          <LitContent value={tab.icon} renderContent={props.params.renderContent} />
-        ),
-    })),
+  const tabs = mapArray(
+    () => props.params.tabs,
+    (tab) => {
+      const icon = <LitContent value={tab().icon} renderContent={props.params.renderContent} />;
+      return merge(tab, {
+        get icon() {
+          return tab().icon === undefined ? undefined : icon;
+        },
+      });
+    },
+    { keyed: (tab) => tab.id },
   );
   // Keep interactive caller content in the same Lit root across tab updates.
   const newControl = (
