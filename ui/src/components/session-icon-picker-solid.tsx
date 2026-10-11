@@ -37,7 +37,7 @@ type AppearancePickerProps = {
   onApply: (event: Event) => void;
 };
 
-export function AppearancePicker(props: AppearancePickerProps) {
+function AppearancePicker(props: AppearancePickerProps) {
   const accepted = () => {
     const normalized = normalizeSessionIconValue(props.customIconValue);
     return (

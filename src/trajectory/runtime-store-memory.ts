@@ -1,4 +1,5 @@
 import type { SessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import type { SerializedTrajectoryEvent } from "./runtime-store.contract.js";
 import type { TrajectoryEvent } from "./types.js";
 
 /** The runtime owns opt-in; this sink only queues its already-approved bounded events. */
@@ -17,7 +18,7 @@ export function createMemoryTrajectoryRuntimeSink(
   if (actor.snapshot(authority)?.entry?.sessionId !== params.sessionId) {
     return null;
   }
-  let pending = new Map<TrajectoryEvent, number>();
+  let pending = new Map<SerializedTrajectoryEvent, number>();
   let queuedBytes = 0;
   let discardPrevious = false;
   let flushing: Promise<void> | undefined;
@@ -86,8 +87,7 @@ export function createMemoryTrajectoryRuntimeSink(
     },
     write(event: TrajectoryEvent, line: string) {
       const bytes = Buffer.byteLength(line) + 1;
-      queuedBytes -= pending.get(event) ?? 0;
-      pending.set(event, bytes);
+      pending.set({ runId: event.runId, ts: event.ts, line }, bytes);
       queuedBytes += bytes;
       trim();
       if (!flushing && !backgroundFailed && (pending.size >= 32 || queuedBytes >= 256 * 1024)) {

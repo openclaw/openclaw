@@ -89,9 +89,9 @@ export async function patchSessionActorEntry(
             throw new Error("Session entry mutation was cancelled");
           }
           if (isRecord(publication) && publication.kind === "session.entry.sources") {
-            // SAFETY: The paired entry kernel emits this typed domain publication.
             acceptSessionSourceValidation(
               source,
+              // SAFETY: The entry guard publishes its typed validateSources result under this kind.
               publication.validation as SessionSourceValidation,
             );
           }

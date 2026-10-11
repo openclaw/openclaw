@@ -45,7 +45,7 @@ type WorkerDb = Pick<
   | "worker_transcript_commit_heads"
 >;
 type Row = Selectable<WorkerEnvironments>;
-type RowWithFallbackPorts = Row & { ssh_fallback_ports_json: string };
+type RowWithFallbackPort = Row & { ssh_fallback_port: number | null };
 type CredentialRow = Selectable<WorkerEnvironmentCredentials>;
 function teardownTerminalStateFrom(
   value: string | null,
@@ -157,29 +157,32 @@ export function json(value: unknown): string {
 }
 export const queryWorkerEnvironmentStore = (db: DatabaseSync) => getNodeSqliteKysely<WorkerDb>(db);
 function environmentRows(db: DatabaseSync) {
+  // Double precision preserves validation of oversized ports without PostgreSQL REAL rounding.
   return queryWorkerEnvironmentStore(db)
     .selectFrom("worker_environments")
+    .leftJoin(
+      "worker_environment_ssh_fallback_ports as ports",
+      "ports.environment_id",
+      "worker_environments.environment_id",
+    )
     .selectAll("worker_environments")
     .select((eb) =>
-      eb
-        .selectFrom("worker_environment_ssh_fallback_ports")
-        .select(({ fn }) =>
-          fn.agg<string>("json_group_array", ["port"]).orderBy("position").as("ports"),
-        )
-        .whereRef(
-          "worker_environment_ssh_fallback_ports.environment_id",
-          "=",
-          "worker_environments.environment_id",
-        )
-        .$asScalar()
-        .as("ssh_fallback_ports_json"),
-    );
+      eb.cast<number | null>("ports.port", "double precision").as("ssh_fallback_port"),
+    )
+    .orderBy("worker_environments.created_at_ms")
+    .orderBy("worker_environments.environment_id")
+    .orderBy("ports.position");
 }
-function recordsFromRows(rows: readonly RowWithFallbackPorts[]): WorkerEnvironmentRecord[] {
-  return rows.map((row) =>
-    // SAFETY: SQLite aggregates the numeric port column; endpointFrom validates the decoded ports.
-    decodeWorkerEnvironmentRow(row, JSON.parse(row.ssh_fallback_ports_json) as number[]),
-  );
+function recordsFromRows(rows: readonly RowWithFallbackPort[]): WorkerEnvironmentRecord[] {
+  const groups = new Map<string, { row: Row; ports: number[] }>();
+  for (const row of rows) {
+    const group = groups.get(row.environment_id) ?? { row, ports: new Array<number>() };
+    if (row.ssh_fallback_port !== null) {
+      group.ports.push(row.ssh_fallback_port);
+    }
+    groups.set(row.environment_id, group);
+  }
+  return Array.from(groups.values(), ({ row, ports }) => decodeWorkerEnvironmentRow(row, ports));
 }
 export function findWorkerEnvironment(db: DatabaseSync, environmentId: string) {
   const rows = executeSqliteQuerySync(
@@ -206,13 +209,7 @@ export function getRequiredWorkerEnvironment(db: DatabaseSync, environmentId: st
   return record;
 }
 export function listRows(db: DatabaseSync): WorkerEnvironmentRecord[] {
-  const rows = executeSqliteQuerySync(
-    db,
-    environmentRows(db)
-      .orderBy("worker_environments.created_at_ms")
-      .orderBy("worker_environments.environment_id"),
-  ).rows;
-  return recordsFromRows(rows);
+  return recordsFromRows(executeSqliteQuerySync(db, environmentRows(db)).rows);
 }
 
 /** Prepared inside the owning transaction; absent rows are explicit deletion facts. */

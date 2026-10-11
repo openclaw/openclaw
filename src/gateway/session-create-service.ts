@@ -28,7 +28,6 @@ import {
   createSessionEntryWithTranscript,
   type SessionEntryCreateWithTranscriptOptions,
   loadExactSessionEntryFromStoreReadOnly,
-  resolveSessionEntryAccessTarget,
 } from "../config/sessions/session-accessor.js";
 import { runWithSessionEntryCreationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import type { SessionEntryCreationOperation } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
@@ -102,7 +101,10 @@ import type {
   GatewaySessionCommitResult,
   PreparedGatewaySessionLifecycle,
 } from "./session-create-service.types.js";
-import { readSessionCreateTarget } from "./session-create-target.js";
+import {
+  readRequestedSessionCreateTarget,
+  readSessionCreateTarget,
+} from "./session-create-target.js";
 import { resolveSessionCreateVisibility } from "./session-create-visibility.js";
 import {
   prepareGatewaySessionLifecycleTargets,
@@ -235,16 +237,8 @@ export async function createGatewaySession(
   if (params.initialEntry?.pluginOwnerId && !authorizedPluginCreation) {
     return invalidSessionRequest("trusted plugin session owner is not authorized");
   }
-  // Capture the requested incarnation before worker discovery yields to authority preparation.
-  const initialTargetEntry = explicitTargetKey
-    ? getSessionActorStorageBinding({ sessionKey: explicitTargetKey, agentId })
-      ? loadGatewaySessionEntryReadOnly(explicitTargetKey, { agentId }, params.cfg).entry
-      : resolveSessionEntryAccessTarget({
-          cfg: params.cfg,
-          sessionKey: explicitTargetKey,
-          agentId,
-        }).entry
-    : undefined;
+  const explicitTarget = await readRequestedSessionCreateTarget(params, agentId, explicitTargetKey);
+  const initialTargetEntry = explicitTarget?.entry;
   if (
     explicitTargetKey &&
     isAgentHarnessSessionKey(explicitTargetKey) &&
@@ -318,12 +312,14 @@ export async function createGatewaySession(
   }
 
   const targetSessionKey = explicitTargetKey ?? buildDashboardSessionKey(agentId, { incognito });
-  const target = await resolveGatewaySessionStoreTargetInWorker({
-    cfg: params.cfg,
-    key: targetSessionKey,
-    agentId,
-    assertActive: commitGuard,
-  });
+  const target =
+    explicitTarget ??
+    (await resolveGatewaySessionStoreTargetInWorker({
+      cfg: params.cfg,
+      key: targetSessionKey,
+      agentId,
+      assertActive: commitGuard,
+    }));
   const initializingSessionFailure = () =>
     unavailableSessionRequest(
       `Session ${target.canonicalKey} is still initializing; retry creation later.`,

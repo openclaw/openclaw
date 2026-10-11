@@ -109,7 +109,7 @@ export function prepareMemoryPendingInputStore(
                   isRecord(publication) &&
                   publication.kind === "pending-input-settlement-custody"
                 ) {
-                  // The memory pending owner supplies the same bounded custody grant.
+                  // SAFETY: The memory pending owner publishes its typed custody grant under this kind.
                   committedFacts = publication as PendingInputCustodyGrant;
                   guard(stage, committedFacts);
                 }

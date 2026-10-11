@@ -148,12 +148,28 @@ function createIncognitoSessionDeadlineOwner(params: {
   };
 }
 
-/** Production acquisition remains native until every incognito caller moves together. */
-export function startIncognitoSessionLifetime(params: {
+type IncognitoSessionLifetimeParams = {
   context: GatewayRequestContext;
   logWarning: (message: string) => void;
   scheduler: GatewayScheduler;
-}): GatewayPostReadySidecarHandle {
+};
+
+/** Observe existing owners only; production acquisition remains native until cutover. */
+export function startIncognitoSessionLifetime(
+  params: IncognitoSessionLifetimeParams,
+): GatewayPostReadySidecarHandle {
+  const native = startNativeIncognitoSessionLifetime(params);
+  const memory = startIncognitoActorsSessionLifetime(params);
+  return {
+    async stop() {
+      await Promise.all([native.stop(), memory.stop()]);
+    },
+  };
+}
+
+function startNativeIncognitoSessionLifetime(
+  params: IncognitoSessionLifetimeParams,
+): GatewayPostReadySidecarHandle {
   const owner = createIncognitoSessionDeadlineOwner({
     ...params,
     async deleteSession(deadline, assertCurrent) {
@@ -247,8 +263,7 @@ export function startIncognitoSessionLifetime(params: {
 type MemoryOwner = ReturnType<typeof createMemorySessionActorOwner>;
 type MemoryDeadline = Omit<IncognitoSessionDeadline, "source">;
 
-/** Inactive until acquisition selects the memory backend for every incognito consumer. */
-export function startIncognitoActorSessionLifetime(params: {
+function startIncognitoActorSessionLifetime(params: {
   owner: MemoryOwner;
   scheduler: GatewayScheduler;
   logWarning: (message: string) => void;
@@ -359,17 +374,10 @@ export function startIncognitoActorSessionLifetime(params: {
   };
 }
 
-/** Existing memory owners only; native production keeps startIncognitoSessionLifetime. */
-export function startIncognitoActorsSessionLifetime(params: {
-  context: GatewayRequestContext;
-  scheduler: GatewayScheduler;
-  logWarning: (message: string) => void;
-  env?: NodeJS.ProcessEnv;
-}): GatewayPostReadySidecarHandle {
-  const env = {
-    ...(params.env ?? process.env),
-    OPENCLAW_STATE_DIR: resolveStateDir(params.env ?? process.env),
-  };
+function startIncognitoActorsSessionLifetime(
+  params: IncognitoSessionLifetimeParams,
+): GatewayPostReadySidecarHandle {
+  const env = { ...process.env, OPENCLAW_STATE_DIR: resolveStateDir() };
   const retained = new Map<MemoryOwner, GatewayPostReadySidecarHandle>();
   const stopping = new Set<Promise<void>>();
   const retire = (owner: MemoryOwner, sidecar: GatewayPostReadySidecarHandle) => {

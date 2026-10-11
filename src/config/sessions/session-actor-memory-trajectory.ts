@@ -61,8 +61,8 @@ export function readSessionActorMemoryTrajectoryRows(
         : tail === undefined
           ? rows.slice(0, limit)
           : rows.slice(-limit);
-  // These bytes were serialized from the typed trajectory writer, never external input.
   return selected.map((row) => ({
+    // SAFETY: Append retains the trajectory writer's serialized event bytes unchanged.
     event: JSON.parse(row.eventJson) as TrajectoryEvent,
     seq: row.seq,
   }));
@@ -135,7 +135,7 @@ export function appendSessionActorMemoryTrajectory(
   const previous = context.state.trajectory.get(input.sessionId) ?? [];
   const nextSeq = (previous.at(-1)?.seq ?? -1) + 1;
   const added: SessionActorMemoryTrajectoryRow[] = input.events.map((event, index) => {
-    const eventJson = JSON.stringify(event);
+    const eventJson = event.line;
     return {
       seq: nextSeq + index,
       eventJson,
