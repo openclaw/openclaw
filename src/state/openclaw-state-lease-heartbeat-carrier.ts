@@ -156,7 +156,7 @@ export function acquireLeaseHeartbeatCarrier(params: {
     onFailure(fail: Member["failure"]) {
       member.failure = fail;
     },
-    postMessage(value: unknown, transferList: readonly Transferable[]) {
+    postMessage(value: unknown, transferList: Transferable[]) {
       member.channel.postMessage(value, transferList);
     },
     service() {
