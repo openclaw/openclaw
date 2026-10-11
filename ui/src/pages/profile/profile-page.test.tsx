@@ -130,10 +130,12 @@ it("renders identity before Usage statistics and opens the usage page", async ()
     expect(page.querySelector('[data-github-connection="personal"]')).not.toBeNull(),
   );
 
-  expect(request.mock.calls.map(([method]) => method)).toEqual([
-    "users.self",
-    "users.listModelAccounts",
-  ]);
+  await waitForFast(() =>
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "users.self",
+      "users.listModelAccounts",
+    ]),
+  );
   const identity = page.querySelector("#settings-profile-identity");
   expect(identity?.textContent).toContain("Refresh to retry");
   expect(
@@ -224,8 +226,11 @@ it("offers identity connection setup without profile RPCs or secret inputs for u
   const harness = createConnectedContext(request as GatewayBrowserClient["request"]);
   const page = mountProfilePage(harness.context);
 
-  flush();
-  await Promise.resolve();
+  await waitForFast(() =>
+    expect(page.querySelector("#settings-profile-identity")?.textContent).toContain(
+      "This connection has no personal profile",
+    ),
+  );
 
   expect(
     request.mock.calls.some(
@@ -287,10 +292,13 @@ it("falls back to the text avatar when the hero image fails to load", async () =
   expect(avatar.classList).toContain("is-pending");
 
   image?.dispatchEvent(new Event("error"));
-  flush();
+  await waitForFast(() => expect(avatar.classList).toContain("is-fallback"));
 
-  expect(avatar.querySelector("img")).toBeNull();
+  // The shared avatar owner hides its retained image when it reveals the fallback.
+  expect(avatar.querySelector(".identity-avatar__image")).toBe(image);
+  expect(avatar.getAttribute("data-avatar-state")).toBe("failed");
   expect(avatar.classList).toContain("is-fallback");
+  expect(avatar.classList).not.toContain("is-pending");
   expect(avatar.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe("🦞");
 });
 
@@ -811,8 +819,7 @@ it("rechecks avatar upload policy after processing and rerenders on config updat
     vi.fn(async () => new Response(JSON.stringify({ uploadsEnabled: false }))),
   );
   await config.refresh();
-  flush();
-  expect(page.querySelector('input[type="file"]')).toBeNull();
+  await waitForFast(() => expect(page.querySelector('input[type="file"]')).toBeNull());
   processed.resolve({ mime: "image/png", avatarBase64: "aA==", byteLength: 1 });
   await waitForFast(() =>
     expect(page.querySelector(".identity-error")?.textContent).toContain(uploadsDisabledMessage()),
@@ -983,7 +990,10 @@ it.each([
     const page = mountProfilePage(harness.context);
     await waitForFast(() => expect(page.querySelector(".settings-account")).not.toBeNull());
     const toggle = page.querySelector<HTMLInputElement>("input.settings-toggle__input");
-    await waitForFast(() => expect(toggle?.checked).toBe(enabled));
+    await waitForFast(() => {
+      expect(toggle?.disabled).toBe(false);
+      expect(toggle?.checked).toBe(enabled);
+    });
     expect(request.mock.calls.map(([method]) => method).toSorted()).toEqual(
       ["users.self", "users.listModelAccounts", "users.prefs.get"].toSorted(),
     );

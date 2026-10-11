@@ -1,4 +1,4 @@
-import { Show } from "solid-js";
+import { createMemo, Show } from "solid-js";
 import {
   GATEWAY_OWNER_PROFILE_ID,
   type UserProfile,
@@ -14,6 +14,7 @@ import {
 import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import "../../components/viewer-facepile.ts";
+import { projectApplicationConfig } from "../../lib/reactive/application.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { uploadsEnabled } from "../../lib/uploads.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
@@ -49,6 +50,11 @@ export type IdentitySectionProps = {
 };
 
 export function IdentitySection(props: IdentitySectionProps) {
+  const configuration = createMemo(() => {
+    const source = props.config;
+    return source ? projectApplicationConfig(source) : null;
+  });
+  const canUpload = () => configuration()?.read().uploadsEnabled !== false;
   const canWrite = () => props.canWrite !== false;
   const isOwnerProfile = () => props.profile.id === GATEWAY_OWNER_PROFILE_ID;
   return (
@@ -75,7 +81,7 @@ export function IdentitySection(props: IdentitySectionProps) {
                 }}
                 variant="profile"
               />
-              <Show when={canWrite() && uploadsEnabled(props.config)}>
+              <Show when={canWrite() && canUpload()}>
                 <button
                   type="button"
                   class="btn btn--sm"

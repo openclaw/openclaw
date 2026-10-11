@@ -328,7 +328,6 @@ function ProfilePageContent() {
     context.gateway.subscribe((snapshot) => state.applyGatewaySnapshot(snapshot)),
     context.agents.subscribe(state.publish),
     context.agentIdentity.subscribe(state.publish),
-    context.config.subscribe(state.publish),
     context.gateway.subscribeEvents((event) => {
       if (
         !state.identityBusy &&
