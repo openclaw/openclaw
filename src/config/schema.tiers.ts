@@ -178,6 +178,7 @@ const ADVANCED_TUNING_PATHS = new Set([
   "agents.defaults.heartbeat.every",
   "agents.entries.*.tools.github.allowInSandbox",
   "session.maintenance.preserveRecent",
+  "tools.sessions.allowThreadTargets",
 ]);
 
 function splitPath(path: string): string[] {

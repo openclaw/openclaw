@@ -587,6 +587,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
   "tools.sessions.visibility":
     'Controls which sessions can be targeted by sessions_list/sessions_history/sessions_search/sessions_send/session_status. ("all" default = any session on the Gateway, including other agents and users; "agent" = any session in the current agent id; "self" = only current; "tree" = current session + spawned subagent sessions). Cross-agent access is on by default and scoped by tools.agentToAgent; use narrower visibility to restrict reads and ordinary sends. Explicit agents.entries.<id>.tools.agentToAgent.send destinations can permit sends without widening reads.',
+  "tools.sessions.allowThreadTargets":
+    "Allow sessions_send to target thread- or topic-scoped chat sessions such as Telegram forum topics or Slack/Discord threads (default: false). The target runs in that session; anything it sends with the message tool lands in the human-facing thread.",
   "tools.message.crossContext.allowWithinProvider":
     "Allow sends to other channels within the same provider (default: true).",
   "tools.message.crossContext.allowAcrossProviders":
