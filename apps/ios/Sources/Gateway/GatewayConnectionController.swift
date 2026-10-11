@@ -1364,9 +1364,9 @@ extension GatewayConnectionController {
                     bootstrapToken: bootstrapToken,
                     password: password,
                     nodeOptions: nodeOptions,
-                    ingressAuthorization: ingressAuthorization,
                     personalTailscaleAuthentication: GatewaySettingsStore.usesPersonalTailscaleAuthentication(
-                        stableID: gatewayStableID))
+                        stableID: gatewayStableID),
+                    ingressAuthorization: ingressAuthorization)
                 // Only the actual Gateway handoff consumes this receipt. Browser and TLS
                 // waits must retain it so retries cannot outlive the original setup code.
                 authOverride?.markHandedOff()
