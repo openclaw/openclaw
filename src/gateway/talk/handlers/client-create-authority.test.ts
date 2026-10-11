@@ -76,10 +76,11 @@ import {
 import { talkClientHandlers } from "./client.js";
 import { talkVoiceHandlers } from "./voice.js";
 
-const voiceMocks = vi.hoisted(() => ({ resolveConfiguredRealtimeVoiceProvider: vi.fn() }));
+const voiceMocks = vi.hoisted(() => ({ resolveConfiguredRealtimeVoiceProviderAsync: vi.fn() }));
 vi.mock("../../../talk/provider-resolver.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../talk/provider-resolver.js")>()),
-  resolveConfiguredRealtimeVoiceProvider: voiceMocks.resolveConfiguredRealtimeVoiceProvider,
+  resolveConfiguredRealtimeVoiceProviderAsync:
+    voiceMocks.resolveConfiguredRealtimeVoiceProviderAsync,
 }));
 const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 const sessionKey = "agent:main:main";
@@ -95,7 +96,7 @@ function configureDelegatedBrowserProvider(
   createBrowserSession: (request: BrowserRequest) => Promise<typeof browserSession>,
 ) {
   const fixture = createDelegatedBrowserProviderFixture(createBrowserSession, tempDir);
-  voiceMocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+  voiceMocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
     provider: fixture.provider,
     providerConfig: {},
     capabilities: fixture.provider.capabilities,

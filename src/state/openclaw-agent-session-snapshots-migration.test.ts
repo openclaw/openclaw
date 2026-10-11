@@ -78,7 +78,11 @@ function seedV23(database: DatabaseSync, count: number) {
 }
 
 function transcriptRows(database: DatabaseSync) {
-  return database.prepare("SELECT rowid, * FROM transcript_events ORDER BY rowid").all();
+  return database
+    .prepare(
+      "SELECT rowid, session_id, seq, event_json, event_zstd, event_utf8_bytes, navigation_json, created_at FROM transcript_events ORDER BY rowid",
+    )
+    .all();
 }
 
 function snapshotRows(database: DatabaseSync) {

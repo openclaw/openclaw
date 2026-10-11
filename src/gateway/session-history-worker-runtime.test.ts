@@ -18,7 +18,6 @@ import * as reconcile from "../config/sessions/session-transcript-reconcile.js";
 import type { SessionTranscriptHistoryWorkerInput } from "../config/sessions/session-transcript-worker.types.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import { DEFAULT_WORKER_PENDING_TASKS } from "../infra/worker-task-capacity.js";
-import { AgentDatabaseRegistryChangedError } from "../state/openclaw-agent-db-registry-listing.js";
 import * as stateContext from "../state/openclaw-state-worker-context.js";
 import * as storeSources from "./session-utils-store-sources.js";
 
@@ -250,7 +249,7 @@ it.each([false, true])(
   "keeps exact lookup independent of auxiliary registry churn but retains primary authority (revoke: %s)",
   async (revoke) => {
     vi.spyOn(storeSources, "prepareGatewaySessionStoreReadSourcesAsync").mockRejectedValue(
-      new AgentDatabaseRegistryChangedError(),
+      new Error("Auxiliary registry changed during discovery"),
     );
     const capture = stateContext.captureOpenClawStateWorkerContext;
     const revoked = new Error("primary history owner revoked");
@@ -291,7 +290,7 @@ it.each([false, true])(
 it.each(["rpc", "http", "delta", "inline-visibility"] as const)(
   "retains auxiliary registry refusal for %s lineage projection",
   async (kind) => {
-    const failure = new AgentDatabaseRegistryChangedError();
+    const failure = new Error("Auxiliary registry changed during discovery");
     vi.spyOn(storeSources, "prepareGatewaySessionStoreReadSourcesAsync").mockRejectedValue(failure);
     const rpc = request();
     const target = {

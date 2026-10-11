@@ -32,10 +32,11 @@ const testMocks = vi.hoisted(() => ({
   runCliAgent: vi.fn(),
 }));
 
+// mock-isolation: CLI fault sequences use synthetic OAuth state without reading host credentials.
 vi.mock("./model-auth.js", () => ({
   ensureAuthProfileStore: testMocks.ensureAuthProfileStore,
   resolveAuthProfileOrder: testMocks.resolveAuthProfileOrder,
-  resolveModelAuthMode: testMocks.resolveModelAuthMode,
+  resolveModelAuthModeAsync: testMocks.resolveModelAuthMode,
 }));
 
 vi.mock("../plugins/cli-backends.runtime.js", () => ({

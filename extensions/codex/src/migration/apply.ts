@@ -348,7 +348,7 @@ function isCodexPluginLoadWarningItem(item: MigrationItem): boolean {
 async function buildTargetCodexPluginAppCacheKey(ctx: MigrationProviderContext): Promise<string> {
   const targets = resolvePlannedMigrationTargets(ctx);
   const appServer = resolveTargetCodexAppServer(ctx);
-  const authProfileId = resolveCodexAppServerAuthProfileIdForAgent({
+  const authProfileId = await resolveCodexAppServerAuthProfileIdForAgent({
     agentDir: targets.agentDir,
     config: ctx.config,
   });

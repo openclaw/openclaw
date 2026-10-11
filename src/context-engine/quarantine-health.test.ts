@@ -387,6 +387,7 @@ describe("context engine quarantine health", () => {
           return error;
         },
       );
+      let retirement: ReturnType<typeof pluginRuntime.waitForPluginRegistryRetirement> | undefined;
       try {
         const phase = await Promise.race([
           reached.promise.then(() => "worker"),
@@ -401,7 +402,11 @@ describe("context engine quarantine health", () => {
         expect(settled).toBe(false);
         expect(getContextEngineQuarantine(engineId)).toBeUndefined();
         if (mode === "superseded" || mode === "sync superseded") {
+          const supersededRegistry = pluginRuntime.getActivePluginRegistry();
           pluginRuntime.setActivePluginRegistry(createEmptyPluginRegistry());
+          if (supersededRegistry) {
+            retirement = pluginRuntime.waitForPluginRegistryRetirement(supersededRegistry);
+          }
         } else if (mode === "new failure") {
           await recordContextEngineQuarantine({
             ...quarantine,
@@ -410,6 +415,7 @@ describe("context engine quarantine health", () => {
         }
         release.resolve();
         expect(await loading).toBe(publicationThrows ? failure : undefined);
+        await retirement;
         expect(await listPersistedContextEngineQuarantines()).toEqual(
           mode === "new failure"
             ? [getContextEngineQuarantine(engineId)]
@@ -421,6 +427,7 @@ describe("context engine quarantine health", () => {
         prepare.mockRestore();
         release.resolve();
         await loading;
+        await retirement;
         observer.mockRestore();
         activationObserver.mockRestore();
         commit.mockRestore();
