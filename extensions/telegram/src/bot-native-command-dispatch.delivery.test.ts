@@ -20,6 +20,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import {
   parseSqliteSessionFileMarker,
   resolveStorePath,
@@ -165,7 +166,13 @@ describe("Telegram typed command delivery", () => {
       ...scope,
       message: { role: "assistant", content: "Earlier answer", timestamp: 1 },
     });
-    harness.replySpy.mockResolvedValue({ text: "Thinking level set to low.", replyToId: "30102" });
+    // get-reply marks command-owner replies; only those form command exchanges.
+    harness.replySpy.mockResolvedValue(
+      setReplyPayloadMetadata(
+        { text: "Thinking level set to low.", replyToId: "30102" },
+        { commandReply: true },
+      ),
+    );
     const bot = await createBot(true, true, cfg);
     await bot.handleUpdate({
       update_id: 3002,

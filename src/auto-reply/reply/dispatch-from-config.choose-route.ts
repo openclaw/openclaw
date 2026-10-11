@@ -3,7 +3,6 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import { scopeCommandTranscriptId } from "../../config/sessions/command-transcript.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
@@ -26,11 +25,11 @@ import {
 import { renderPostCompactionModelFailurePayload } from "./agent-runner-failure-reply.js";
 import { recoverBlockReplySources, setBlockReplyDelivery } from "./block-reply-delivery.js";
 import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
-import { resolveCommandContextText } from "./context-text.js";
 import {
   DispatchReplyOperationAbortedError,
   runWithDispatchAbortSignal,
 } from "./dispatch-from-config.abort.js";
+import { createDispatchTranscriptMirrors } from "./dispatch-from-config.command-mirror.js";
 import { admittedSessionSettingsRestrictRuntime } from "./dispatch-from-config.events.js";
 import {
   hasExecApprovalPayload,
@@ -60,7 +59,6 @@ import { isDispatchFinalReplySessionWriterAuthorized } from "./session-writer-de
 
 export async function chooseDispatchRoute(state: PrepareDispatchOperationReadyState) {
   const {
-    acpDispatchSessionKey,
     attachSourceReplyDeliveryMode,
     cfg,
     commitInboundDedupeIfClaimed,
@@ -77,7 +75,6 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     recordProcessed,
     replyContextAccountId,
     replyRoute,
-    resolvePreparedTranscriptBinding,
     routeReplyChannel,
     routeReplyThreadId,
     routeReplyTo,
@@ -206,43 +203,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     inboundAudio: state.inboundAudio,
   };
   const deferFinalTtsText = shouldDeferFinalTtsText(captionedFinalTtsContext);
-  let commandReplyIndex = 0;
-  const commandBlockMirror = (payload: ReplyPayload) => {
-    const metadata = getReplyPayloadMetadata(payload);
-    const commandText = normalizeOptionalString(resolveCommandContextText(ctx));
-    const commandId = scopeCommandTranscriptId(
-      normalizeOptionalString(state.messageIdForHook),
-      state.hookState.inboundClaimContext,
-    );
-    if (
-      ctx.CommandInterpretationSuppressed ||
-      !commandText?.startsWith("/") ||
-      !commandId ||
-      metadata?.assistantTranscriptOwned ||
-      metadata?.assistantMessageIndex !== undefined
-    ) {
-      return undefined;
-    }
-    const targetKey = acpDispatchSessionKey ?? sessionStoreEntry.sessionKey ?? sessionKey;
-    if (!targetKey) {
-      return undefined;
-    }
-    const binding = resolvePreparedTranscriptBinding(targetKey);
-    return transcriptMirrorForDeliveredPayload(
-      {
-        sessionKey: targetKey,
-        agentId: sessionAgentId,
-        expectedSessionId: binding?.sessionId,
-        storePath: binding?.storePath ?? sessionStoreEntry.storePath,
-        commandText,
-        commandId,
-        preferText: true,
-        idempotencyKey: `command-block:${commandId}:${++commandReplyIndex}`,
-        deliveryMirror: { kind: "channel-final", sourceMessageId: commandId },
-      },
-      payload,
-    );
-  };
+  const transcriptMirrors = createDispatchTranscriptMirrors(state);
   const cleanDeferredFinalDirectives = shouldCleanTtsDirectiveText(captionedFinalTtsContext);
   type BlockDelivery = { outcome: ReplyDispatchDeliveryOutcome; pending?: boolean };
   const blockDeliveryOutcomes = new Map<string, Array<Promise<BlockDelivery>>>();
@@ -258,17 +219,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   };
   const sendTrackedBlockReply = (operation: ReplyDispatchOperation) => {
     const payload = operation.kind === "prepared" ? operation.plan.payload : operation.payload;
-    const mirror = commandBlockMirror(payload);
-    const captureToken = mirror ? {} : undefined;
-    const deliveredMirror = captureDeliveredTranscriptMirror({
-      dispatcher,
-      metadata: mirror,
-      captureToken,
-      kind: "block",
-    });
-    if (captureToken) {
-      setReplyPayloadMetadata(payload, { finalDeliveryCapture: captureToken });
-    }
+    const recordBlockMirror = transcriptMirrors.captureBlock(payload);
     const delivery =
       operation.kind === "prepared"
         ? turnLedger.sendPreparedQueued("block", operation.plan)
@@ -282,13 +233,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
           })) ?? Promise.resolve({ outcome: "failed-deliver" }))
         : Promise.resolve({ outcome: "cancelled" }),
     );
-    if (mirror && delivery.queued && delivery.outcome) {
-      registerReplyDispatcherSettledTask(dispatcher, async () => {
-        if ((await delivery.outcome) === "delivered") {
-          await mirrorDeliveredReplyToTranscript({ metadata: deliveredMirror(), cfg });
-        }
-      });
-    }
+    recordBlockMirror(delivery);
     return delivery;
   };
   const recordRoutedBlockReplyDelivery = (
@@ -301,12 +246,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     }
     const outcome = resolveRoutedReplyDeliveryOutcome(result);
     if (outcome === "delivered") {
-      const metadata = commandBlockMirror(payload);
-      if (metadata) {
-        registerReplyDispatcherSettledTask(dispatcher, () =>
-          mirrorDeliveredReplyToTranscript({ metadata, cfg }),
-        );
-      }
+      transcriptMirrors.recordRoutedBlock(payload);
     }
     recordBlockOutcome(
       payload,
@@ -376,27 +316,9 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     }
     const payload = renderPostCompactionModelFailurePayload(preparation.payload);
     const payloadMetadata = getReplyPayloadMetadata(payload);
-    const expectedWriterRunId = normalizeOptionalString(params.replyOptions?.runId);
-    const expectedLifecycleRevision = sessionStoreEntry.entry?.lifecycleRevision;
-    const transcriptWriterMetadata = (
-      binding: ReturnType<typeof resolvePreparedTranscriptBinding>,
-    ) => ({
-      ...(binding ? { expectedSessionId: binding.sessionId } : {}),
-      ...(expectedLifecycleRevision !== undefined ? { expectedLifecycleRevision } : {}),
-      ...(expectedWriterRunId ? { expectedWriterRunId } : {}),
-      storePath: binding?.storePath ?? sessionStoreEntry.storePath,
-    });
-    const sourceReplySessionBinding = resolvePreparedTranscriptBinding(
-      payloadMetadata?.sourceReplyTranscriptMirror?.sessionKey,
-    );
     let sourceReplyTranscriptMirror: Parameters<
       typeof mirrorDeliveredReplyToTranscript
-    >[0]["metadata"] = payloadMetadata?.sourceReplyTranscriptMirror
-      ? {
-          ...payloadMetadata.sourceReplyTranscriptMirror,
-          ...transcriptWriterMetadata(sourceReplySessionBinding),
-        }
-      : undefined;
+    >[0]["metadata"] = transcriptMirrors.sourceReply(payloadMetadata?.sourceReplyTranscriptMirror);
     const hasTranscriptOwner =
       payloadMetadata?.assistantMessageIndex !== undefined ||
       payloadMetadata?.assistantTranscriptOwned === true;
@@ -498,44 +420,19 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     if (!isSessionWriterDeliveryAuthorized(normalizedPayload)) {
       return { queuedFinal: false, routedFinalCount: 0, sessionWriterDeliveryRevoked: true };
     }
-    const transcriptMirrorSessionKey =
-      acpDispatchSessionKey ?? sessionStoreEntry.sessionKey ?? sessionKey;
     const transcriptMirrorSourceId =
       normalizeOptionalString(state.messageIdForHook) ??
       normalizeOptionalString(params.replyOptions?.runId);
-    const transcriptMirrorSessionBinding = resolvePreparedTranscriptBinding(
-      transcriptMirrorSessionKey,
-    );
-    const commandText = ctx.CommandInterpretationSuppressed
-      ? undefined
-      : normalizeOptionalString(resolveCommandContextText(ctx));
-    const isCommandReply = !hasTranscriptOwner && commandText?.startsWith("/");
-    const commandId = isCommandReply
-      ? scopeCommandTranscriptId(transcriptMirrorSourceId, state.hookState.inboundClaimContext)
-      : undefined;
+    const isCommandReply = transcriptMirrors.isCommandReply(payload);
     const transcriptMirror =
       sourceReplyTranscriptMirror ??
-      ((state.normalizedCurrentSurface === "slack" || isCommandReply) &&
-      hasVisibleFinalContent &&
-      transcriptMirrorSessionKey
-        ? transcriptMirrorForDeliveredPayload(
-            {
-              sessionKey: transcriptMirrorSessionKey,
-              agentId: sessionAgentId,
-              ...transcriptWriterMetadata(transcriptMirrorSessionBinding),
-              preferText: true,
-              ...(isCommandReply && commandText && commandId ? { commandText, commandId } : {}),
-              ...(hasTranscriptOwner ? { transcriptOwner: true } : {}),
-              idempotencyKey: transcriptMirrorSourceId
-                ? `channel-final:${commandId ?? transcriptMirrorSourceId}:${options.deliveryId ?? "single"}`
-                : undefined,
-              deliveryMirror: {
-                kind: "channel-final",
-                ...(transcriptMirrorSourceId ? { sourceMessageId: transcriptMirrorSourceId } : {}),
-              },
-            },
-            normalizedPayload,
-          )
+      (hasVisibleFinalContent
+        ? transcriptMirrors.final(normalizedPayload, {
+            command: isCommandReply,
+            sourceId: transcriptMirrorSourceId,
+            transcriptOwner: hasTranscriptOwner,
+            deliveryId: options.deliveryId,
+          })
         : undefined);
     const routeFinalPayload = (finalPayload: ReplyPayload) =>
       state.routeReplyToOriginating(finalPayload, {

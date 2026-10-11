@@ -121,7 +121,9 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
           if (kind === "command") {
             return dispatchThroughSharedOwner({
               ...params,
-              replyResolver: async () => ({ text: "Final answer" }),
+              // Command owners mark their terminal replies; only those form command exchanges.
+              replyResolver: async () =>
+                setReplyPayloadMetadata({ text: "Final answer" }, { commandReply: true }),
             });
           }
           const runId = `run-${sourceMessageIds.length}`;
