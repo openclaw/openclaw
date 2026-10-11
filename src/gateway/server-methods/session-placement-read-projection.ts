@@ -1,10 +1,7 @@
-import { readBoardSessionKeys } from "../../boards/sqlite-board-store.kernel.js";
 import type { GatewayStoredSessionTarget } from "../../config/sessions/combined-store-gateway.js";
 import type { SessionRowDatabaseFacts } from "../../config/sessions/session-row-facts.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { projectSessionActivitySummary } from "../session-activity-summary-state.js";
 import { sessionModelRevision } from "../session-model-revision.js";
 import { isSessionPermissionChangePending } from "../session-permission-change.js";
@@ -36,10 +33,9 @@ export function readSessionRowFacts(params: {
   context?: PlacementReadContext;
   placementFactsReader?: SessionRowPlacementFactsReader;
   activitySummaryEnabled?: boolean;
-  databaseFacts?: Pick<SessionRowDatabaseFacts, "hasBoard" | "activitySummaryWatermark">;
+  databaseFacts: Pick<SessionRowDatabaseFacts, "hasBoard" | "activitySummaryWatermark">;
 }) {
   const { cfg, entry, placementFactsReader } = params;
-  // The board callback shares a closure context with present; never capture a resident row.
   const { key, agentId, storeTarget } = params.target;
   const context = params.context ?? {};
   let placementSource = placementFactsReader?.getProjectionFacts(entry.sessionId);
@@ -93,10 +89,10 @@ export function readSessionRowFacts(params: {
     cfg,
     entry,
     enabled: params.activitySummaryEnabled,
-    watermark: params.databaseFacts?.activitySummaryWatermark,
+    watermark: params.databaseFacts.activitySummaryWatermark,
   });
   return {
-    hasBoard: params.databaseFacts?.hasBoard ?? readSessionRowHasBoard({ key, storeTarget }),
+    hasBoard: params.databaseFacts.hasBoard,
     present: () => {
       const currentSource = placementFactsReader?.getProjectionFacts(entry.sessionId);
       if (currentSource !== placementSource) {
@@ -143,19 +139,4 @@ export function readSessionRowFacts(params: {
       };
     },
   };
-}
-
-function readSessionRowHasBoard(target: {
-  key: string;
-  storeTarget: GatewayStoredSessionTarget["storeTarget"];
-}) {
-  const { key, storeTarget } = target;
-  if (!isIncognitoOpenClawAgentSqlitePath(storeTarget.storePath, storeTarget)) {
-    throw new Error("Session Board membership requires prepared database facts");
-  }
-  const board = withOpenClawAgentDatabaseReadOnly(
-    (database) => readBoardSessionKeys(database, [key]).has(key),
-    { agentId: storeTarget.agentId, path: storeTarget.storePath },
-  );
-  return board.found && board.value;
 }

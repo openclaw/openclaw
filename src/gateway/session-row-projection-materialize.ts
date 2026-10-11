@@ -264,20 +264,16 @@ export function readResidentSessionRow(
     throw new Error("Incognito session descriptions require awaited row preparation");
   }
   const databaseFacts = params.databaseFacts ?? prepared?.databaseFacts;
-  if (!databaseFacts && !isIncognitoSessionKey(row.key)) {
-    throw new Error("Durable session rows require prepared database facts");
+  if (!databaseFacts) {
+    throw new Error("Session rows require prepared database facts");
   }
   const { inputs, presentation } = readSessionRowInputs({
     ...row,
     cfg,
-    preparedAcpMeta: databaseFacts ? databaseFacts.acpMeta : row.preparedAcpMeta,
-    preparedRuntimeOwnership: databaseFacts
-      ? databaseFacts.runtimeOwnership
-      : row.preparedRuntimeOwnership,
+    preparedAcpMeta: databaseFacts.acpMeta,
+    preparedRuntimeOwnership: databaseFacts.runtimeOwnership,
     preparedModelMetadata: readPreparedGatewayModelMetadata(cfg),
-    preparedRepositoryWorkspace: databaseFacts
-      ? databaseFacts.repositoryWorkspace
-      : params.repositoryWorkspace,
+    preparedRepositoryWorkspace: databaseFacts.repositoryWorkspace,
     configuredAgentIds: params.configuredAgentIds,
     store: prepared?.entries ?? {},
     storePath: row.storeTarget.storePath,
@@ -516,7 +512,7 @@ function findSessionRowById(
     ? [{ agentId: memory.agentId, storePath: memory.path }]
     : memorySessionActorOwners
         .list()
-        .map((owner) => ({ agentId: owner.agentId, storePath: owner.path }));
+        .map((memoryOwner) => ({ agentId: memoryOwner.agentId, storePath: memoryOwner.path }));
   for (const store of privateStores) {
     if (
       (!query.agentId || query.agentId === store.agentId) &&
