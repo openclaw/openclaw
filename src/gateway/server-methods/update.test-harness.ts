@@ -239,8 +239,9 @@ export const scheduleGatewayRestartMock = vi.fn(
   }),
 );
 
-export const readGatewayOwnerLeaseMock =
-  vi.fn<typeof import("../../infra/gateway-owner-lease.js").readGatewayOwnerLease>();
+export const readGatewayOwnerLeaseMock = vi.hoisted(() =>
+  vi.fn<typeof import("../../infra/gateway-owner-lease.js").readGatewayOwnerLease>(),
+);
 
 export type UpdateRunPayload = {
   runId: string;
