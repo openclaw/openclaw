@@ -132,11 +132,14 @@ describe("Codex supervision request lifetime", () => {
       const { result, error } = await Promise.resolve(
         tool.execute("read", { endpoint_id: "local", thread_id: "thread-1" }),
       ).then(
-        (result) => ({ result, error: undefined }),
-        (error: unknown) => ({ result: undefined, error }),
+        (value) => ({ result: value, error: undefined }),
+        (cause: unknown) => ({ result: undefined, error: cause }),
       );
       if (error) {
-        expect(String(error)).toMatch(/Codex (?:supervision|session reads).*disabled/);
+        expect(error).toBeInstanceOf(Error);
+        expect(error).toMatchObject({
+          message: expect.stringMatching(/Codex (?:supervision|session reads).*disabled/),
+        });
       }
       expect(result !== undefined && !pluginConfig.supervision.enabled).toBe(false);
       expect(
