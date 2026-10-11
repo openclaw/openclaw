@@ -2548,7 +2548,7 @@ src/skills/runtime/remote-skills.ts	1
 src/skills/workshop/tool-policy-diagnostic.ts	1
 src/snapshot/git-backup-codec.ts	7
 src/snapshot/git-backup.ts	2
-src/snapshot/local-repository.ts	6
+src/snapshot/local-repository.ts	4
 src/snapshot/manifest.ts	1
 src/state/local-onboarding-state.ts	1
 src/state/openclaw-agent-db-permissions.ts	1
@@ -2696,7 +2696,6 @@ ui/src/components/model-picker.ts	1
 ui/src/components/select-picker.ts	2
 ui/src/components/sensitive-input.ts	2
 ui/src/components/session-data-controller.ts	1
-ui/src/components/session-group-defaults-dialog.ts	1
 ui/src/components/session-organizer-controller.ts	5
 ui/src/components/settings-sidebar.ts	3
 ui/src/components/terminal/terminal-connection.ts	2

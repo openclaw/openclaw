@@ -260,11 +260,12 @@ async function patchSessionEntryInScope(
       sessionKey: resolved.sessionKey,
       exact: options.replaceEntry === true,
     },
-    readSnapshot: (database) =>
+    readSnapshot: (database, includeWindowFacts) =>
       readSessionEntrySelectionSnapshot(
         database,
         resolved.sessionKey,
         options.replaceEntry === true,
+        includeWindowFacts,
       ),
     resolved,
     sessionKey: resolved.sessionKey,
@@ -320,7 +321,8 @@ async function patchSessionEntryTargetInScope(
     validateCanonicalKeys: true,
     options,
     selection: { kind: "target", target: scope.target },
-    readSnapshot: (database) => readLifecycleTargetSnapshot(database, scope.target),
+    readSnapshot: (database, includeWindowFacts) =>
+      readLifecycleTargetSnapshot(database, scope.target, { includeWindowFacts }),
     resolved,
     sessionKey: scope.target.canonicalKey,
     storePath:
@@ -532,7 +534,7 @@ async function patchSqliteSessionEntrySnapshot(
               const mutation = applySessionEntryPatchInDatabase(writeDatabase, {
                 operationLabel: params.operationLabel,
                 validateCanonicalKeys: params.validateCanonicalKeys,
-                readSnapshot: params.readSnapshot,
+                readSnapshot: (current) => params.readSnapshot(current, true),
                 prepared,
                 sessionKey,
                 writeBase,

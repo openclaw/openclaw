@@ -138,7 +138,7 @@ const focusedCases = [
     name: "terminal",
     label: "terminal panel",
     path: focusPath({ kind: "terminal" }),
-    modulePath: "ui/src/components/terminal/terminal-panel-registration.ts",
+    modulePath: "ui/src/components/terminal/terminal-panel-registration.tsx",
     gateway: {
       featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
       methodResponses: {
