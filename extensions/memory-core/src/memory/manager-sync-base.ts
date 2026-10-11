@@ -8,12 +8,12 @@ import {
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import {
-  type MemorySessionSyncTarget,
-  type MemorySource,
-  type MemoryWorkspaceFiles,
-  type MemorySyncParams,
-  type MemorySyncProgressUpdate,
+import type {
+  MemorySessionSyncTarget,
+  MemorySource,
+  MemoryWorkspaceFiles,
+  MemorySyncParams,
+  MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 import {

@@ -62,7 +62,7 @@ async function createOwner() {
 function fixtureWriter(owner: MemoryIndexDatabase): DatabaseSync {
   let writer = fixtureWriters.get(owner);
   if (!writer) {
-    writer = new DatabaseSync(owner.db.location()!);
+    writer = sqliteRuntime.openNodeSqliteDatabase(owner.db.location()!);
     writer.exec("PRAGMA busy_timeout = 5000");
     fixtureWriters.set(owner, writer);
   }
