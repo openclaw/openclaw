@@ -80,7 +80,7 @@ export function createAssistantCommentaryMediaCustody(
     get lastRewrite() {
       return lastRewrite;
     },
-    async run<T>(operation: () => Promise<T>): Promise<T> {
+    async run<T>(this: void, operation: () => Promise<T>): Promise<T> {
       lastRewrite = undefined;
       preparingTranscript = true;
       const observer = observeChatSendCommentaryMedia(params);

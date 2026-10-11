@@ -34,9 +34,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
   } else {
     onlineFaces.set(host, onlineUsers);
   }
-  if (onlineUsers.length === 0) {
-    return nothing;
-  }
+
   const counts = host.sessionData.ownerCounts.counts;
   const countsFor = (user: PresenceViewer) =>
     counts && user.identity?.type === "profile"
@@ -150,6 +148,16 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                   const tag = activity ? literal`a` : literal`button`;
                   return staticHtml`<div
                   class="sidebar-online__row"
+                  draggable=${user.identity?.type === "profile" ? "true" : "false"}
+                  @dragstart=${(event: DragEvent) => {
+                    if (user.identity?.type === "profile") {
+                      host.sessionOrganizer.startSidebarEntryDrag(event, {
+                        type: "person",
+                        profileId: user.identity.id,
+                      });
+                    }
+                  }}
+                  @dragend=${() => host.sessionOrganizer.finishSidebarEntryDrag()}
                   data-person-card
                   data-person-card-section="online"
                 >
@@ -181,37 +189,45 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                     ${
                       workload && (workload.open > 0 || workload.running > 0)
                         ? html`<span class="sidebar-online__counts" aria-hidden="true">
-                            ${
-                              workload.running > 0
+                            ${(["running", "open"] as const).map((kind) =>
+                              workload[kind] > 0
                                 ? html`<span
-                                    class="sidebar-online__running"
-                                    data-session-count="running"
-                                    title=${t("presence.sessions.runningCount", { count: String(workload.running) })}
-                                    ><span class="session-run-spinner"></span
+                                    class=${`sidebar-online__${kind}`}
+                                    data-session-count=${kind}
+                                    title=${t(`presence.sessions.${kind}Count`, { count: String(workload[kind]) })}
+                                    ><span
+                                      class=${kind === "running" ? "session-run-spinner" : "sidebar-online__open-icon"}
+                                      >${kind === "running" ? nothing : icons.messageCircle}</span
                                     ><span class="sidebar-online__count"
-                                      >${workload.running}</span
+                                      >${workload[kind]}</span
                                     ></span
                                   >`
-                                : nothing
-                            }
-                            ${
-                              workload.open > 0
-                                ? html`<span
-                                    class="sidebar-online__open"
-                                    data-session-count="open"
-                                    title=${t("presence.sessions.openCount", { count: String(workload.open) })}
-                                    ><span class="sidebar-online__open-icon"
-                                      >${icons.messageCircle}</span
-                                    ><span class="sidebar-online__count"
-                                      >${workload.open}</span
-                                    ></span
-                                  >`
-                                : nothing
-                            }
+                                : nothing,
+                            )}
                           </span>`
                         : nothing
                     }
                   </${tag}>
+                  ${
+                    user.identity?.type === "profile"
+                      ? html`<button
+                          type="button"
+                          class="sidebar-pages__pin"
+                          aria-label=${t("nav.pin")}
+                          @click=${() => {
+                            if (user.identity?.type === "profile") {
+                              host.sessionOrganizer.writeSidebarEntryAt(
+                                `person:${user.identity.id}`,
+                                undefined,
+                                undefined,
+                              );
+                            }
+                          }}
+                        >
+                          ${icons.pin}
+                        </button>`
+                      : nothing
+                  }
                 </div>`;
                 })}
               </div>

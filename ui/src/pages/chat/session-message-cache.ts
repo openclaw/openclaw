@@ -3,6 +3,8 @@ import {
   readSessionMessageSequence,
   reduceSessionProjection,
 } from "@openclaw/gateway-client/browser";
+import type { ProgressCard } from "@openclaw/gateway-protocol";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
@@ -20,7 +22,55 @@ export const MAX_CACHED_CHAT_WEIGHT = 24 * 1024 * 1024;
 const cachedMessageWeights = new WeakMap<object, number>();
 const appendedEventClaims = new WeakMap<ChatMessageCache, WeakSet<object>>();
 
+export type ChatTranscriptMetadata = Pick<
+  GatewaySessionRow,
+  | "key"
+  | "kind"
+  | "classification"
+  | "participants"
+  | "expandedParticipants"
+  | "owner"
+  | "lastRunId"
+  | "status"
+  | "runtimeMs"
+>;
+
+const transcriptMetadata = new WeakMap<GatewaySessionRow, ChatTranscriptMetadata>();
+
+export function projectChatTranscriptMetadata(row: GatewaySessionRow): ChatTranscriptMetadata {
+  const existing = transcriptMetadata.get(row);
+  if (existing) {
+    return existing;
+  }
+  const {
+    key,
+    kind,
+    classification,
+    participants,
+    expandedParticipants,
+    owner,
+    lastRunId,
+    status,
+    runtimeMs,
+  } = row;
+  const metadata = {
+    key,
+    kind,
+    classification,
+    participants,
+    expandedParticipants,
+    owner,
+    lastRunId,
+    status,
+    runtimeMs,
+  };
+  transcriptMetadata.set(row, metadata);
+  return metadata;
+}
+
 export type ChatSessionSnapshot = {
+  transcriptMetadata?: ChatTranscriptMetadata;
+  progressCard?: ProgressCard | null;
   deltaCursor?: string;
   displayedLeafEntryId?: string | null;
   messages: unknown[];
@@ -194,15 +244,24 @@ export function cacheChatSessionSnapshot(
   cache: ChatMessageCache,
   host: ChatMessageCacheHost,
   target: ChatMessageCacheTarget,
-  snapshot: ChatSessionSnapshot,
+  incoming: ChatSessionSnapshot,
 ): void {
   const cacheKey = resolveChatSnapshotKey(host, target);
   const existing = getSessionCacheValue(cache, cacheKey);
+  // History prefetch owns transcript facts, not the independently refreshed card.
+  const snapshot =
+    incoming.progressCard === undefined &&
+    existing?.snapshot.progressCard !== undefined &&
+    existing.snapshot.sessionId === incoming.sessionId
+      ? { ...incoming, progressCard: existing.snapshot.progressCard }
+      : incoming;
   if (
     existing?.snapshot.messages === snapshot.messages &&
     existing.snapshot.deltaCursor === snapshot.deltaCursor &&
     existing.snapshot.sessionId === snapshot.sessionId &&
     existing.snapshot.displayedLeafEntryId === snapshot.displayedLeafEntryId &&
+    existing.snapshot.transcriptMetadata === snapshot.transcriptMetadata &&
+    existing.snapshot.progressCard === snapshot.progressCard &&
     samePagination(existing.snapshot.pagination, snapshot.pagination)
   ) {
     return;

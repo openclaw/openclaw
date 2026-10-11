@@ -167,9 +167,9 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
     const decoder = new TextDecoder();
     let buffer = "";
 
-    let currentBlock: TextContent | ThinkingContent | ToolCall | null = null;
+    type StreamingToolCall = ToolCall & { partialJson?: string };
+    let currentBlock: TextContent | ThinkingContent | StreamingToolCall | null = null;
     let currentBlockIndex = -1;
-    let currentToolArgs = "";
     let latestThoughtSignature: string | undefined;
     let latestUsage: Record<string, unknown> | undefined;
 
@@ -178,16 +178,16 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
         return;
       }
       if (currentBlock.type === "toolCall") {
-        if (currentToolArgs.trim()) {
-          currentBlock.arguments = parseTerminalToolCallArguments(currentToolArgs);
+        if (currentBlock.partialJson?.trim()) {
+          currentBlock.arguments = parseTerminalToolCallArguments(currentBlock.partialJson);
         }
+        delete currentBlock.partialJson;
         stream.push({
           type: "toolcall_end",
           contentIndex: currentBlockIndex,
           toolCall: currentBlock,
           partial: output,
         });
-        currentToolArgs = "";
       } else {
         if (currentBlock.type === "thinking") {
           if (!currentBlock.thinkingSignature && latestThoughtSignature) {
@@ -259,13 +259,13 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
       endCurrentBlock();
       currentBlockIndex = output.content.length;
       const name = readStringField(source, "name") ?? "tool";
-      const toolCall: ToolCall = {
+      const toolCall: StreamingToolCall = {
         type: "toolCall",
         id: readStringField(source, "id") ?? nextToolCallId(name),
         name,
         arguments: args,
+        partialJson: Object.keys(args).length > 0 ? JSON.stringify(args) : "",
       };
-      currentToolArgs = Object.keys(args).length > 0 ? JSON.stringify(args) : "";
       output.content.push(toolCall);
       stream.push({
         type: "toolcall_start",
@@ -379,7 +379,7 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
             if (streamedToolCallId) {
               currentBlock.id = streamedToolCallId;
             }
-            currentToolArgs += argText;
+            currentBlock.partialJson = (currentBlock.partialJson ?? "") + argText;
             stream.push({
               type: "toolcall_delta",
               contentIndex: currentBlockIndex,
@@ -476,6 +476,10 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
     stream.end();
   } catch (error) {
     const failure = options?.signal?.aborted ? transportAbortError(options.signal) : error;
+    for (const block of output.content) {
+      // SAFETY: Streaming tool blocks extend the terminal content type with this buffer.
+      delete (block as { partialJson?: string }).partialJson;
+    }
     failTransportStream({ stream, output, signal: options?.signal, error: failure });
   } finally {
     if (reader) {

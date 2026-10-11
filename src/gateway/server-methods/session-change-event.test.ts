@@ -40,10 +40,22 @@ import type { WorkerSessionPlacementRecord } from "../worker-environments/placem
 import type { GatewayRequestContext } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
+  warn: vi.fn(),
   invalidate: vi.fn(),
   loadRow: vi.fn(),
   rowLabel: "first",
 }));
+
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (...args: Parameters<typeof actual.createSubsystemLogger>) => {
+      const logger = actual.createSubsystemLogger(...args);
+      return args[0] === "gateway/session-events" ? { ...logger, warn: mocks.warn } : logger;
+    },
+  };
+});
 
 vi.mock("../session-sharing.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../session-sharing.js")>();
@@ -186,6 +198,20 @@ afterEach(async () => {
 });
 
 describe("sessions.changed coalescing", () => {
+  it("logs the message and code when capturing a session change fails", async () => {
+    const context = createContext();
+    vi.spyOn(getSessionRowProjection(context)!, "capture").mockImplementation(() => {
+      throw Object.assign(new Error("session snapshot unavailable"), { code: "ESESSION" });
+    });
+    mocks.warn.mockClear();
+
+    await emitAndSettleLeading(context, { sessionKey: "agent:main:test", reason: "update" });
+
+    expect(mocks.warn).toHaveBeenCalledWith("Session change capture failed", {
+      error: "session snapshot unavailable | ESESSION",
+    });
+  });
+
   it("publishes catalog-only changes without invalidating session projections or access", async () => {
     const context = createContext();
     const changed = vi.fn();

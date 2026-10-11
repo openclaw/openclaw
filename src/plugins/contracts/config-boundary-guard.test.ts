@@ -33,22 +33,37 @@ describe("config boundary guard", () => {
     tempRoots = [];
   });
 
-  it.each([
-    {
-      name: "deprecated API",
-      collect: collectDeprecatedInternalConfigApiViolations,
-      file: "src/example.ts",
-      expected:
-        "src/example.ts:1 use a passed cfg, context.getRuntimeConfig(), or getRuntimeConfig() at an explicit process boundary",
-    },
-    {
-      name: "runtime action",
-      collect: collectRuntimeActionLoadConfigViolations,
-      file: "extensions/telegram/src/send.ts",
-      expected: "extensions/telegram/src/send.ts:1: export function run() { return loadConfig(); }",
-    },
-  ])("refreshes $name source between scans", ({ collect, file, expected }) => {
+  it.each(
+    [
+      {
+        name: "deprecated API",
+        collect: collectDeprecatedInternalConfigApiViolations,
+        file: "src/example.ts",
+        expected:
+          "src/example.ts:1 use a passed cfg, context.getRuntimeConfig(), or getRuntimeConfig() at an explicit process boundary",
+      },
+      {
+        name: "runtime action",
+        collect: collectRuntimeActionLoadConfigViolations,
+        file: "extensions/telegram/src/send.ts",
+        expected:
+          "extensions/telegram/src/send.ts:1: export function run() { return loadConfig(); }",
+      },
+    ].flatMap((testCase) =>
+      ["ts", "tsx"].map((extension) => ({
+        collect: testCase.collect,
+        name: `${testCase.name} (${extension})`,
+        file: testCase.file.replace(/\.ts$/u, `.${extension}`),
+        expected: testCase.expected.replace(/\.ts:/u, `.${extension}:`),
+      })),
+    ),
+  )("refreshes $name source between scans", ({ collect, file, expected }) => {
     const repoRoot = makeRepoFixture();
+    writeFixture(
+      repoRoot,
+      "extensions/telegram/src/send.test.tsx",
+      "export function testSend() { return loadConfig(); }\n",
+    );
     writeFixture(repoRoot, file, "export function run() {}\n");
     expect(collect({ repoRoot })).toEqual([]);
 
@@ -132,11 +147,11 @@ describe("config boundary guard", () => {
     ]);
   });
 
-  it("allows narrow config SDK subpaths in production code", () => {
+  it.each(["ts", "tsx"])("allows narrow config SDK subpaths in production %s code", (extension) => {
     const repoRoot = makeRepoFixture();
     writeFixture(
       repoRoot,
-      "extensions/telegram/src/index.ts",
+      `extensions/telegram/src/index.${extension}`,
       [
         'import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";',
         'import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";',
@@ -147,6 +162,92 @@ describe("config boundary guard", () => {
 
     expect(collectDeprecatedInternalConfigApiViolations({ repoRoot })).toStrictEqual([]);
   });
+
+  it("does not combine unrelated imports into a config mutation violation", () => {
+    const repoRoot = makeRepoFixture();
+    writeFixture(
+      repoRoot,
+      "src/gateway/server-methods/agents.ts",
+      [
+        'import { a } from "./x.js";',
+        'import { replaceConfigFile } from "./agents-config-mutations.js";',
+        'import { readConfigFileSnapshotForWrite } from "../../config/config.js";',
+      ].join("\n"),
+    );
+
+    expect(collectDeprecatedInternalConfigApiViolations({ repoRoot })).toEqual([]);
+  });
+
+  it.each([
+    {
+      symbol: "transformConfigFileWithRetry",
+      module: "../../config/config.js",
+      message: "use the local domain config mutation helper instead of direct config writes",
+    },
+    {
+      symbol: "writeConfigFile",
+      module: "../../config/io.js",
+      message: "use replaceConfigFile(...) or mutateConfigFile(...) with afterWrite",
+    },
+    {
+      symbol: "loadConfig",
+      module: "../../config/config.js",
+      message: "use context.getRuntimeConfig() in gateway request handlers",
+    },
+  ])("reports the offending $symbol specifier's line", ({ symbol, module, message }) => {
+    const repoRoot = makeRepoFixture();
+    writeFixture(
+      repoRoot,
+      "src/gateway/server-methods/agents.ts",
+      [
+        'import { a } from "./x.js";',
+        'import { b } from "./y.js";',
+        "import {",
+        "  readConfigFileSnapshotForWrite,",
+        `  ${symbol},`,
+        `} from "${module}";`,
+      ].join("\n"),
+    );
+
+    expect(collectDeprecatedInternalConfigApiViolations({ repoRoot })).toEqual([
+      `src/gateway/server-methods/agents.ts:5 ${message}`,
+    ]);
+  });
+
+  it.each([
+    {
+      file: "src/commands/example.ts",
+      source: [
+        "const {",
+        "  readConfigFileSnapshot = async () => {},",
+        "  writeConfigFile,",
+        '} = await import("../config/io.js");',
+      ],
+      expected: [
+        "src/commands/example.ts:3 use replaceConfigFile(...) or mutateConfigFile(...) with afterWrite",
+      ],
+    },
+    {
+      file: "extensions/telegram/src/runtime.ts",
+      source: [
+        "const {",
+        "  getRuntimeConfig = () => {},",
+        '} = await import("openclaw/plugin-sdk/config-runtime");',
+      ],
+      expected: [
+        "extensions/telegram/src/runtime.ts:1 use narrow plugin-sdk config subpaths instead of openclaw/plugin-sdk/config-runtime",
+        "extensions/telegram/src/runtime.ts:3 use narrow plugin-sdk config subpaths instead of openclaw/plugin-sdk/config-runtime",
+      ],
+    },
+  ])(
+    "flags dynamic-import destructuring with nested braces in $file",
+    ({ file, source, expected }) => {
+      const repoRoot = makeRepoFixture();
+      writeFixture(repoRoot, file, source.join("\n"));
+
+      expect(collectDeprecatedInternalConfigApiViolations({ repoRoot })).toEqual(expected);
+    },
+  );
 
   it("flags low-level config mutation imports in semantic handlers", () => {
     const repoRoot = makeRepoFixture();

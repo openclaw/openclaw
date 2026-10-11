@@ -51,6 +51,11 @@ suite.define(() => {
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
       await waitForSessionRosterHydration(page);
+      // Keyboard owner selection is an All-scope control; keep the initial Mine default.
+      await page
+        .locator(".sidebar-navigation-scope")
+        .getByRole("button", { name: "All", exact: true })
+        .click();
       const trigger = page.getByRole("button", { name: "Filter & sort", exact: true });
       await trigger.focus();
       await page.keyboard.press("Enter");
@@ -187,9 +192,14 @@ suite.define(() => {
       await chooseSidebarOwner(page, "owner:profile-0");
       await expectBrowser(owners).toHaveAccessibleName("Owners: Owner 1");
       const active = menu.getByRole("radio", { name: "Active", exact: true });
+      const snoozed = menu.getByRole("radio", { name: "Snoozed", exact: true });
       await active.focus();
+      await page.keyboard.press("ArrowLeft");
+      await expectBrowser(snoozed).toBeChecked();
+      await expectBrowser(snoozed).toBeFocused();
       await page.keyboard.press("ArrowRight");
-      await expectBrowser(menu.getByRole("radio", { name: "Snoozed", exact: true })).toBeChecked();
+      await expectBrowser(active).toBeChecked();
+      await expectBrowser(active).toBeFocused();
       await page.keyboard.press("Escape");
       await expectBrowser(menu).toHaveCount(0);
       await expectBrowser(

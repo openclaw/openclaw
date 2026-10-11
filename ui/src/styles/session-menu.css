@@ -186,3 +186,55 @@ wa-dropdown-item.people-menu__submenu::part(submenu) {
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+
+wa-dropdown-item.session-menu__advanced::part(submenu) {
+  width: min(340px, calc(100vw - 24px));
+}
+
+.session-menu__communication {
+  padding: 2px 8px;
+}
+
+.session-menu__communication-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 36px;
+  font-size: calc(13px * var(--control-ui-text-scale));
+}
+
+.session-menu__communication-picker {
+  display: flex;
+  flex: 0 0 auto;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--menu-item-radius);
+  background: var(--bg);
+}
+
+.session-menu__communication-choice {
+  padding: 3px 7px;
+  border: 0;
+  border-radius: var(--menu-item-radius);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: calc(12px * var(--control-ui-text-scale));
+  cursor: var(--cursor-action);
+}
+
+.session-menu__communication-choice[aria-pressed="true"] {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.session-menu__communication-choice:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.session-menu__communication-choice:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
