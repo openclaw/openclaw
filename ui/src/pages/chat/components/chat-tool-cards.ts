@@ -1,4 +1,4 @@
-import { html } from "lit";
+import { html, nothing } from "lit";
 import {
   browserRouteKey,
   browserTabKey,
@@ -94,6 +94,7 @@ export function renderWorkGroupBrowserTabPreviews(
 }
 
 // Lit callers retain their plugin slot; Solid owns the fallback card and its children.
+// The stable child subtree carries Lit updates while Solid parks it collapsed.
 export function renderToolCard(card: ToolCard, options: ToolCardOptions & { children?: unknown }) {
   return renderPluginToolResult(
     card,
@@ -103,7 +104,9 @@ export function renderToolCard(card: ToolCard, options: ToolCardOptions & { chil
       .card=${card}
       .options=${options}
       .hasChildren=${Boolean(options.children)}
-      >${options.children}</openclaw-chat-tool-card
+      ><div style="display: contents">
+        ${options.expanded ? options.children : nothing}
+      </div></openclaw-chat-tool-card
     >`,
   );
 }

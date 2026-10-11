@@ -269,7 +269,9 @@ function ChatClawHubCardContent(props: Props, host: SolidBridgeElement<Props>) {
       context.navigate("skills", { search: `?${search}` });
     }
   }
-  const card = createMemo(() => read().presentation ?? props.recommendation);
+  const card = createMemo(
+    (): CardPresentation | undefined => read().presentation ?? props.recommendation,
+  );
   const icon = createMemo(() => {
     const current = card();
     return current
@@ -298,9 +300,11 @@ function ChatClawHubCardContent(props: Props, host: SolidBridgeElement<Props>) {
         <div
           class="card chat-clawhub-card"
           data-clawhub-id={current().id}
-          aria-busy={String(
-            read().status === "pending" || read().status === "initial" || iconPending(),
-          )}
+          aria-busy={
+            read().status === "pending" || read().status === "initial" || iconPending()
+              ? "true"
+              : "false"
+          }
         >
           <button class="chat-clawhub-card__listing" type="button" onClick={() => openListing()}>
             <span

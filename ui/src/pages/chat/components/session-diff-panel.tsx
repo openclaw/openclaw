@@ -29,7 +29,6 @@ import { openEditor } from "../../../lib/editor-links.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
-import { getSafeLocalStorage } from "../../../local-storage.ts";
 import { DiffBlock, DiffStatChips } from "./chat-diff-render.solid.tsx";
 import {
   SessionDiffMenu,
@@ -38,6 +37,10 @@ import {
   type SessionDiffMenuDraft,
   type SessionDiffScope,
 } from "./session-diff-menus.tsx";
+import {
+  loadSessionDiffPreferences,
+  saveSessionDiffPreferences,
+} from "./session-diff-preferences.ts";
 import { SessionSplitDiff } from "./session-diff-render.tsx";
 
 export type SessionDiffLoader = (params: SessionDiffScope) => Promise<SessionsDiffResult>;
@@ -58,27 +61,6 @@ type DiffValue = {
   result: SessionsDiffResult;
   views: FileView[];
 };
-type SessionDiffPreferences = { split: boolean; wrap: boolean };
-const PREFERENCES_KEY = "openclaw.control.sessionDiff.v1";
-
-function loadPreferences(): SessionDiffPreferences {
-  try {
-    const parsed = JSON.parse(getSafeLocalStorage()?.getItem(PREFERENCES_KEY) ?? "null") as {
-      split?: unknown;
-      wrap?: unknown;
-    } | null;
-    return { split: parsed?.split === true, wrap: parsed?.wrap === true };
-  } catch {
-    return { split: false, wrap: false };
-  }
-}
-function savePreferences(preferences: SessionDiffPreferences) {
-  try {
-    getSafeLocalStorage()?.setItem(PREFERENCES_KEY, JSON.stringify(preferences));
-  } catch {
-    /* Restricted storage must not break the viewer. */
-  }
-}
 const FILE_STATUS_LABELS = {
   added: ["A", "chat.sessionDiff.statusAdded"],
   deleted: ["D", "chat.sessionDiff.statusDeleted"],
@@ -114,7 +96,7 @@ function shellArgument(value: string) {
 }
 
 function SessionDiffContent(props: SessionDiffProps) {
-  const preferences = loadPreferences();
+  const preferences = loadSessionDiffPreferences();
   const [collapsedPaths, setCollapsedPaths] = createSignal(new Set<string>());
   const [menu, setMenu] = createSignal<SessionDiffMenuData | null>(null);
   const [scope, setScope] = createSignal<SessionDiffScope>({ scope: "all" });
@@ -241,18 +223,18 @@ function SessionDiffContent(props: SessionDiffProps) {
         setCollapsedPaths(new Set(untrack(value)?.views.map((view) => view.file.path) ?? []));
         return;
       case "expand-all":
-        setCollapsedPaths(new Set());
+        setCollapsedPaths(new Set<string>());
         return;
       case "toggle-wrap": {
         const next = !wrap();
         setWrap(next);
-        savePreferences({ split: split(), wrap: next });
+        saveSessionDiffPreferences({ split: split(), wrap: next });
         return;
       }
       case "toggle-split": {
         const next = !split();
         setSplit(next);
-        savePreferences({ split: next, wrap: wrap() });
+        saveSessionDiffPreferences({ split: next, wrap: wrap() });
         return;
       }
       case "scope":
@@ -507,7 +489,7 @@ function SessionDiffContent(props: SessionDiffProps) {
           <button
             class="session-diff__file-toggle"
             type="button"
-            aria-expanded={String(!collapsed())}
+            aria-expanded={collapsed() ? "false" : "true"}
             title={file().oldPath ? `${file().oldPath} → ${file().path}` : file().path}
             onClick={() => toggleFile(file().path)}
           >
@@ -663,7 +645,10 @@ function SessionDiffContent(props: SessionDiffProps) {
     );
   }
   return (
-    <div class={["session-diff", { "session-diff--wrap": wrap() }]} aria-busy={String(loading())}>
+    <div
+      class={["session-diff", { "session-diff--wrap": wrap() }]}
+      aria-busy={loading() ? "true" : "false"}
+    >
       <Show
         when={failure()}
         fallback={

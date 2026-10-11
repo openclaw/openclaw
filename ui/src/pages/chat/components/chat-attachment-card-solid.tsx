@@ -131,7 +131,7 @@ export function AttachmentCardHeader(props: AttachmentCardHeaderOptions) {
             class={downloadClass()}
             href={props.downloadPending ? undefined : props.downloadHref}
             aria-disabled={props.downloadPending ? "true" : undefined}
-            tabIndex={props.downloadPending && props.downloadPendingFocusable ? 0 : undefined}
+            tabindex={props.downloadPending && props.downloadPendingFocusable ? 0 : undefined}
             role="link"
             download={props.label}
             target="_blank"

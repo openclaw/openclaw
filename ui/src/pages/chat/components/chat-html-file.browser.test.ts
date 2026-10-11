@@ -1,6 +1,5 @@
 import { LanguageDescription } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
-import { ContextProvider } from "@lit/context";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { applicationContext, type ApplicationContext } from "../../../app/context.ts";
@@ -64,15 +63,22 @@ async function mount(
     sandboxUrl: "/mcp-app-sandbox",
     sandboxPort: 8444,
   }));
-  void new ContextProvider(panel, {
-    context: applicationContext,
-    initialValue: {
-      gateway: {
-        snapshot: { client: { request }, phase: "connected" },
-        connection: { gatewayUrl: "ws://gateway.example:8443" },
-        subscribe: () => () => {},
-      },
-    } as unknown as ApplicationContext,
+  const previewContext = {
+    gateway: {
+      snapshot: { client: { request }, phase: "connected" },
+      connection: { gatewayUrl: "ws://gateway.example:8443" },
+      subscribe: () => () => {},
+    },
+  } as unknown as ApplicationContext;
+  // Only the preview consumes this Gateway-only fixture; sibling catalogs need a full app.
+  panel.addEventListener("context-request", (event) => {
+    if (
+      event.context === applicationContext &&
+      event.contextTarget.localName === "openclaw-chat-html-preview"
+    ) {
+      event.stopPropagation();
+      event.callback(previewContext);
+    }
   });
   panel.style.cssText = "width:100%;height:600px";
   panel.content = file;

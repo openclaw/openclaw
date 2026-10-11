@@ -42,6 +42,7 @@ declare module "@solidjs/web" {
 }
 
 function handleRawDetailsToggle(event: Event) {
+  // SAFETY: Only the raw-details HTML button installs this handler.
   const button = event.currentTarget as HTMLButtonElement;
   const body = button
     .closest(".chat-tool-card__raw")
@@ -195,6 +196,7 @@ function ToolCardModes(props: {
   isError: boolean;
   file: DiffFilePaths;
 }) {
+  const modes = ["diff", "raw"] as const;
   // Tool call IDs repeat across messages, so every tab and panel includes its message key.
   const id = () => `${props.messageKey}:${props.card.id}`;
   const active = () => (props.isError || props.outcome === "skipped" ? "raw" : "diff");
@@ -215,7 +217,7 @@ function ToolCardModes(props: {
         group = element;
       }}
     >
-      <For each={["diff", "raw"] as const}>
+      <For each={modes}>
         {(mode) => (
           <wa-tab
             slot="nav"
@@ -228,25 +230,25 @@ function ToolCardModes(props: {
           </wa-tab>
         )}
       </For>
-      <wa-tab-panel
-        id={`${id()}-diff-panel`}
-        aria-labelledby={`${id()}-diff-tab`}
-        name="diff"
-        prop:active={active() === "diff"}
-      >
-        <DiffBlock lines={props.diff} outcome={props.outcome} file={props.file} />
-      </wa-tab-panel>
-      <wa-tab-panel
-        id={`${id()}-raw-panel`}
-        aria-labelledby={`${id()}-raw-tab`}
-        name="raw"
-        prop:active={active() === "raw"}
-      >
-        <ToolDataBlock
-          label={props.isError ? t("chat.toolCards.toolError") : undefined}
-          text={props.card.outputText!}
-        />
-      </wa-tab-panel>
+      <For each={modes}>
+        {(mode) => (
+          <wa-tab-panel
+            id={`${id()}-${mode}-panel`}
+            aria-labelledby={`${id()}-${mode}-tab`}
+            name={mode}
+            prop:active={active() === mode}
+          >
+            {mode === "diff" ? (
+              <DiffBlock lines={props.diff} outcome={props.outcome} file={props.file} />
+            ) : (
+              <ToolDataBlock
+                label={props.isError ? t("chat.toolCards.toolError") : undefined}
+                text={props.card.outputText!}
+              />
+            )}
+          </wa-tab-panel>
+        )}
+      </For>
     </wa-tab-group>
   );
 }

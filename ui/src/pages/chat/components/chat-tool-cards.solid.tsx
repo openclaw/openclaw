@@ -157,13 +157,12 @@ export function ToolIcon(props: {
   tool?: { toolName: string; pluginToolIcons?: PluginToolIcons };
 }) {
   const activityIcon = () => props.tool?.pluginToolIcons?.get(props.tool.toolName);
+  const fallbackIcon = () => {
+    // SAFETY: Own icon-data keys are the IconName union; unknown names use its puzzle entry.
+    return (Object.hasOwn(iconData, props.name) ? props.name : "puzzle") as IconName;
+  };
   return (
-    <Show
-      when={activityIcon()}
-      fallback={
-        <Icon name={(Object.hasOwn(iconData, props.name) ? props.name : "puzzle") as IconName} />
-      }
-    >
+    <Show when={activityIcon()} fallback={<Icon name={fallbackIcon()} />}>
       {(icon) => (
         <span
           class="chat-tool-activity-icon"
@@ -480,7 +479,7 @@ export function ToolCardView(props: ToolCardProps) {
                   { "chat-tool-row--running": running() },
                 ]}
                 type="button"
-                aria-expanded={String(props.options.expanded)}
+                aria-expanded={props.options.expanded ? "true" : "false"}
                 onPointerEnter={syncToolDisclosureOverflow}
                 onFocus={syncToolDisclosureOverflow}
                 onClick={() => props.options.onToggleExpanded(card().id)}
@@ -500,7 +499,7 @@ export function ToolCardView(props: ToolCardProps) {
               <button
                 class="chat-tool-row__toggle"
                 type="button"
-                aria-expanded={String(props.options.expanded)}
+                aria-expanded={props.options.expanded ? "true" : "false"}
                 aria-label={
                   subagent()
                     ? `${display().label} ${subagent()!.label}`

@@ -66,6 +66,7 @@ suite.define(() => {
             [
               "capture-suite.ts",
               "scenarios.ts",
+              "chat-tool-scenes.ts",
               "fixtures.ts",
               "fixture-fingerprint.ts",
               "../../ui/src/test-helpers/control-ui-e2e-screenshot.ts",

@@ -1,9 +1,25 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { summarizeAgentActivity } from "../../../../../src/agents/agent-activity-presentation.js";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import type { ToolCallView } from "../../../lib/chat/tool-call-view.ts";
+import { isToolCardError, isToolCardSkipped } from "../../../lib/chat/tool-cards.ts";
 import type { SubagentRowContext } from "../chat-spawned-subagent.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
+
+export function summarizeToolCardOutcomes(
+  cards: readonly ToolCard[],
+  activity?: Parameters<typeof summarizeAgentActivity>[0],
+) {
+  const failures = cards.filter(isToolCardError);
+  // Prepared outcomes remain authoritative even when their raw card is absent.
+  const outcomes = activity ? summarizeAgentActivity(activity).outcomes : undefined;
+  return {
+    failed: outcomes?.failed ?? failures.length,
+    skipped: outcomes?.skipped ?? cards.filter(isToolCardSkipped).length,
+    exitCode: failures[0]?.exitCode,
+  };
+}
 
 export function toolWorkspacePath(card: ToolCard, view: ToolCallView): string | null {
   if (view.kind !== "read" && view.kind !== "edit" && view.kind !== "write") {

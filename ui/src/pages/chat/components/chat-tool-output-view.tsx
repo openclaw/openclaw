@@ -127,7 +127,7 @@ function ToolOutput(props: Props) {
   const displayText = () => (card() ? (formatToolOutput(card()!) ?? "") : "");
   return (
     <Show when={card()}>
-      <section class="chat-tool-output" aria-busy={String(loadState() === "loading")}>
+      <section class="chat-tool-output" aria-busy={loadState() === "loading" ? "true" : "false"}>
         <div class="sidebar-header">
           <div class="sidebar-title">{toolOutputSourceLabel(card()!)}</div>
         </div>

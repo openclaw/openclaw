@@ -8,6 +8,7 @@ import {
   createAssistantMessage,
   createMessageGroup,
 } from "./chat-message.test-support.ts";
+import { renderToolFixture, settleToolBridges } from "./chat-tool-render.test-support.ts";
 
 it("keeps MCP App raw details reachable from its widget menu", async () => {
   const container = document.createElement("div");
@@ -23,7 +24,7 @@ it("keeps MCP App raw details reachable from its widget menu", async () => {
     ),
     "assistant",
   );
-  render(
+  await renderToolFixture(
     renderMessageGroup(group, {
       showReasoning: true,
       showToolCalls: true,
@@ -35,6 +36,7 @@ it("keeps MCP App raw details reachable from its widget menu", async () => {
   );
   await vi.dynamicImportSettled();
   expect(customElements.get("mcp-app-view")).toBeDefined();
+  await settleToolBridges(container);
 
   const dropdown = container.querySelector("wa-dropdown");
   expect(dropdown).toBeInstanceOf(HTMLElement);

@@ -91,7 +91,7 @@ function MenuItem(props: { value: string; label: SolidJSX.Element; checked?: boo
       }
       value={props.value}
       role={props.checked === undefined ? undefined : "menuitemradio"}
-      aria-checked={props.checked === undefined ? undefined : String(props.checked)}
+      aria-checked={props.checked === undefined ? undefined : props.checked ? "true" : "false"}
     >
       <span class="session-menu__text">{props.label}</span>
       {props.checked && (
@@ -152,8 +152,8 @@ function SessionDiffMenuContent(
       return;
     }
     if (value.startsWith("open-editor:")) {
-      const editor = value.slice("open-editor:".length) as EditorId;
-      if (EDITOR_IDS.includes(editor) && menu?.kind === "file" && menu.absolutePath) {
+      const editor = EDITOR_IDS.find((id) => value === `open-editor:${id}`);
+      if (editor && menu?.kind === "file" && menu.absolutePath) {
         run({ kind: "open-editor", editor, path: menu.absolutePath });
       }
       return;

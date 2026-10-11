@@ -1,43 +1,37 @@
 import { Show, createMemo } from "solid-js";
-import { summarizeAgentActivity } from "../../../../../src/agents/agent-activity-presentation.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import type { resolveToolApprovalReviewOutcome } from "../../../lib/chat/tool-approval-reviews.ts";
-import { isToolCardError, isToolCardSkipped } from "../../../lib/chat/tool-cards.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
+import { summarizeToolCardOutcomes } from "./chat-tool-render-model.ts";
 
 export type ToolOutcomeSummaryProps = {
   cards: readonly ToolCard[];
   includeCount?: boolean;
-  activity?: Parameters<typeof summarizeAgentActivity>[0];
+  activity?: Parameters<typeof summarizeToolCardOutcomes>[1];
 };
 
 /** Status belongs in the disclosure; diagnostics stay in the expanded tool output. */
 export function ToolOutcomeSummary(props: ToolOutcomeSummaryProps) {
-  const failures = createMemo(() => props.cards.filter(isToolCardError));
-  const outcomes = createMemo(() =>
-    props.activity ? summarizeAgentActivity(props.activity).outcomes : undefined,
-  );
-  const failureCount = () => outcomes()?.failed ?? failures().length;
-  const skipped = () => outcomes()?.skipped ?? props.cards.filter(isToolCardSkipped).length;
+  const outcomes = createMemo(() => summarizeToolCardOutcomes(props.cards, props.activity));
   const outcome = () =>
-    failures()[0]?.exitCode === undefined
+    outcomes().exitCode === undefined
       ? t("chat.toolCards.failed")
-      : t("chat.toolCards.exitCode", { code: String(failures()[0]!.exitCode) });
+      : t("chat.toolCards.exitCode", { code: String(outcomes().exitCode) });
   return (
     <>
-      <Show when={failureCount() > 0}>
+      <Show when={outcomes().failed > 0}>
         <span class="chat-tool-failure">
           {props.includeCount !== false
-            ? t("chat.toolCards.failureCount", { count: String(failureCount()) })
+            ? t("chat.toolCards.failureCount", { count: String(outcomes().failed) })
             : outcome()}
         </span>
       </Show>
-      <Show when={skipped() > 0}>
+      <Show when={outcomes().skipped > 0}>
         <span class="chat-tool-skipped">
           {props.includeCount !== false
-            ? t("chat.toolCards.skippedCount", { count: String(skipped()) })
+            ? t("chat.toolCards.skippedCount", { count: String(outcomes().skipped) })
             : t("chat.toolCards.skipped")}
         </span>
       </Show>
