@@ -40,12 +40,14 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   };
 });
 
-vi.mock("./thread-resolution.js", () => ({
+vi.mock("./thread-resolution.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./thread-resolution.js")>()),
   createSlackThreadTsResolver: () => ({
     resolve: async ({ message }: { message: Record<string, unknown> }) => message,
   }),
 }));
-vi.mock("./message-handler/pipeline.runtime.js", () => ({
+vi.mock("./message-handler/pipeline.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./message-handler/pipeline.runtime.js")>()),
   prepareSlackMessage: prepareSlackMessageMock,
   dispatchPreparedSlackMessage: dispatchPreparedSlackMessageMock,
 }));
