@@ -629,7 +629,7 @@ describe("durable model prompt projection at provider dispatch", () => {
   it.each([
     { body: "plain", nested: false, hook: false },
     { body: "forwarded inter-session", nested: true, hook: false },
-    { body: "redacted hook", nested: false, hook: true },
+    { body: "hook", nested: false, hook: true },
   ])(
     "replays an inter-session turn with its stored provenance envelope: $body body",
     async ({ nested, hook }) => {
@@ -712,7 +712,7 @@ describe("durable model prompt projection at provider dispatch", () => {
         expect(firstUser(requests[0]!)).toContain("sourceSession=agent:main:parent");
         expect(firstUser(requests[0]!)).toContain(task);
         expect(firstUser(requests[1]!)).toBe(firstUser(requests[0]!));
-        // Unredacted hook text never reaches the provider.
+        // A replacement that drops the source envelope is ignored.
         expect(JSON.stringify(requests)).not.toContain("hidden");
         expect(JSON.stringify(loadTranscriptEventsSync(target))).not.toContain(
           "modelPromptProjection",
