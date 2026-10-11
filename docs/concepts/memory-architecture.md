@@ -42,10 +42,10 @@ Five rules shape everything below:
    memory cannot catch poisoned facts reliably, so OpenClaw enforces
    provenance at write time and gates promotion structurally instead of
    trying to detect bad memories later.
-4. **Deterministic gates, model judgment inside them.** Scoring, thresholds,
-   eligibility, matching, and lifecycle are deterministic code. The language
+4. **Fixed checks, model judgment inside them.** Scoring, thresholds,
+   eligibility, matching, and lifecycle use fixed code rules. The language
    model is used where language judgment is genuinely needed, always inside
-   bounds that deterministic code enforces.
+   bounds that fixed code rules enforce.
 5. **Failures never block replies.** Every memory step in the reply path has
    a timeout, a fallback, or both. A memory subsystem that is down degrades
    recall quality; it never eats a turn.
@@ -80,7 +80,7 @@ columns the model cannot write through prose:
 - **Origin class** is a closed set: `owner` (typed by the owner in a trusted
   channel), `agent` (derived by the agent from owner content), `untrusted`
   (derived from external content such as web pages, tool output, or non-owner
-  participants in group chats), and `system` (scaffolding such as heartbeat
+  participants in group chats), and `system` (runtime instructions such as heartbeat
   prompts and cron preambles).
 - **Session kind** records whether the source session was interactive, cron,
   heartbeat, or a sub-agent run.
@@ -89,12 +89,12 @@ columns the model cannot write through prose:
   accumulating beside them.
 
 Classification is conservative: content whose provenance cannot be determined
-is treated as `untrusted` if externally derived and `system` if scaffolding.
+is treated as `untrusted` if externally derived and `system` if it contains runtime instructions.
 It is never defaulted to `owner`.
 
 Two hygiene rules use this metadata to stop the classic failure modes of
 always-on agents, where production audits have found the overwhelming
-majority of auto-captured memories to be scaffolding restatements, heartbeat
+majority of auto-captured memories to be restatements of runtime instructions, heartbeat
 noise, and recall feedback loops:
 
 - **Session-kind gating.** Cron, heartbeat, and sub-agent sessions do not
@@ -143,7 +143,7 @@ flowchart LR
   A["Interactive sessions"] -->|notes, flush| E["Episodic tier + index (with provenance)"]
   B["Session end"] -->|transcript ingestion| E
   C["Pre-compaction flush"] -->|facts to daily notes| E
-  E --> G["Dreaming: gate (deterministic)"]
+  E --> G["Dreaming: check (rule-based)"]
   G -->|"gated candidates (never untrusted or system)"| L["Consolidation (model, bounded)"]
   L -->|"merge, supersede, dedupe"| M["MEMORY.md / USER.md"]
   L -->|summary + pre-image| D["DREAMS.md"]
@@ -173,7 +173,7 @@ touching long-term memory.
 
 **Deep promotes through two gates in sequence:**
 
-1. **The deterministic gate.** Candidates are ranked by weighted signals
+1. **The rule-based check.** Candidates are ranked by weighted signals
    (retrieval relevance, recall frequency, query diversity, recency,
    multi-day recurrence, conceptual richness) and must pass all threshold
    gates. Recall behavior drives the ranking: memory graduates because it
@@ -213,7 +213,7 @@ requiring every editor of a plain Markdown file to share a lock.
 
 ## Recall: two lanes
 
-Recall is split by cost. The default lane is deterministic and adds no
+Recall is split by cost. The default lane is rule-based and adds no
 latency; the escalation lane runs a real sub-agent and is reserved for turns
 that need it.
 
@@ -266,7 +266,7 @@ The blocking recall sub-agent from [Active memory](/concepts/active-memory)
 is the deep lane: a real agent turn that can search and read across
 conversation history, including cross-conversation transcript recall where
 `rememberAcrossConversations` allows it. By default it runs only when two
-deterministic conditions hold:
+fixed conditions hold:
 
 1. The message shows recall intent: explicit references to the past,
    temporal phrasing, or direct questions about prior decisions or
@@ -324,7 +324,7 @@ active in that session.
 The boundary follows the same research result as the rest of recall: selective,
 query-relevant context outperforms indiscriminate history as sessions and
 corpora grow (LongMemEval, arXiv:2410.10813). Project identity is therefore a
-deterministic eligibility and ranking signal, not another model judgment or a
+rule-based eligibility and ranking signal, not another model judgment or a
 new configuration surface.
 
 ## The user model
@@ -363,7 +363,7 @@ event benchmarks). OpenClaw therefore compiles intentions out of the model:
   changelog") go into a per-agent SQLite table via the `intent` tool, with
   machine-checkable trigger fields: keywords, an optional trigger
   embedding, channel and sender scope, expiry, fire budget, cooldown.
-  Every inbound message runs a deterministic prefilter against armed
+  Every inbound message runs a rule-based prefilter against armed
   intents; a hit injects the intent as hidden context for the reply. No
   model call happens in the matching path.
 - **Aspirations** that cannot be compiled stay in Markdown, tagged with

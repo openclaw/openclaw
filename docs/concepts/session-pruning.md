@@ -103,7 +103,7 @@ Only `toolResult` messages are eligible; normal conversation text is left alone.
 
 ## Legacy image cleanup
 
-OpenClaw also builds a separate idempotent replay view for sessions that persist raw image blocks or prompt-hydration media markers in history.
+For sessions that persist raw image blocks or prompt-hydration media markers in history, OpenClaw builds a separate replay view. Cleaning the same view again makes no additional changes.
 
 - It preserves at least the **3 most recent completed turns** byte-for-byte. After the first cleanup, the boundary advances in batches of **8 completed turns**, retaining 3–10 completed turns between cuts. This count includes text-only turns; appending a turn between cuts leaves the earlier replay bytes unchanged.
 - The window advances only when a new user turn begins, never within a tool loop. Replay derives the same boundary after a restart; compaction or an explicit history-window cut starts a new retained history segment. Image cleanup does not enforce the total model context limit; normal compaction and overflow recovery still own that limit.

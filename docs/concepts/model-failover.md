@@ -158,7 +158,7 @@ OpenClaw uses **auth profiles** for both API keys and OAuth tokens.
 - Config `auth.profiles` / `auth.order` are **metadata + routing only** (no secrets).
 - Legacy `credentials/oauth.json`, `auth-profiles.json`, `auth-state.json`, and
   per-agent `auth.json` files are imported only by `openclaw doctor --fix`.
-  Runtime fails closed for the affected agent until credential-bearing legacy
+  Runtime execution is blocked for the affected agent until credential-bearing legacy
   files are migrated. It never silently imports or falls back to them.
 
 More detail: [OAuth](/concepts/oauth)
