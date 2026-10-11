@@ -116,7 +116,7 @@ const device = {
   expiresInMs: 60_000,
   pollAfterMs: 1_000,
 } as const;
-const config = { agents: { entries: { main: { default: true } } } };
+const config = { agents: { entries: { main: {} } } };
 const configResponse = {
   config,
   sourceConfig: config,
@@ -129,7 +129,7 @@ const configResponse = {
 
 suite.define(() => {
   it.each(["profile", "agent"] as const)(
-    "explains native GitHub lookup in %s Settings without changing setup scope",
+    "keeps native GitHub status compact in %s Settings without changing setup scope",
     async (surface) => {
       await suite.withPage(pageOptions(), async ({ page }) => {
         const native = {
@@ -192,8 +192,7 @@ suite.define(() => {
         await expect(section.getByText("No credentials", { exact: true }).first()).toBeVisible();
         await section.scrollIntoViewIfNeeded();
         await capture(page, `13-native-${surface}.png`);
-        await expect(section.getByText(/OS account running the Gateway/)).toBeVisible();
-        await expect(section).toContainText("Other OS users' logins are separate.");
+        await expect(section.getByText(/OS account running the Gateway/)).toHaveCount(0);
         if (surface === "agent") {
           await section.getByRole("button", { name: "Manage connections in Profile" }).click();
           await expect(page).toHaveURL(/settings\/profile#settings-profile-github-connections$/);
@@ -317,7 +316,7 @@ suite.define(() => {
       );
       await expect(section.getByRole("button", { name: "Change System GitHub" })).toHaveCount(0);
       await expect(section.locator('[data-github-connection="agent"]')).toHaveCount(0);
-      expect(await gateway.getRequests("users.self")).toHaveLength(0);
+      expect(await gateway.getRequests("users.self")).toHaveLength(1);
       const configReads = (await gateway.getRequests("config.get")).length;
       const configWrites = (await gateway.getRequests("config.set")).length;
       await section.getByRole("button", { name: "Connect My GitHub" }).click();
@@ -471,6 +470,19 @@ suite.define(() => {
       const connect = await gateway.waitForRequest("connect");
       const instanceId = (connect.params as { client: { instanceId: string } }).client.instanceId;
       const reads = (await gateway.getRequests("users.github.status")).length;
+      await gateway.setMethodResponse("users.self", {
+        profile: {
+          id: "55555555-5555-4555-8555-555555555555",
+          displayName: "Second Person",
+          emails: [],
+          avatarMime: null,
+          hasAvatar: false,
+          githubIdentity: null,
+          mergedInto: null,
+          createdAt: 1,
+          updatedAt: 2,
+        },
+      });
       await gateway.emitGatewayEvent("presence", {
         presence: [
           {

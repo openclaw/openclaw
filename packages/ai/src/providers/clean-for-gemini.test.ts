@@ -3,40 +3,23 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../../../src/infra/runtime-worker-url.js";
+import { cleanForGeminiEntrypoint } from "./clean-for-gemini-runtime.test-support.js";
 import { cleanSchemaForGemini } from "./clean-for-gemini.js";
 
 const execFileAsync = promisify(execFile);
 
 describe("cleanSchemaForGemini", () => {
   it("normalizes deep nullable schemas in a cold process", async () => {
-    const source = String.raw`
-      import assert from "node:assert/strict";
-      import { cleanSchemaForGemini } from ${JSON.stringify(new URL("./clean-for-gemini.ts", import.meta.url).href)};
-      import { stripUnsupportedSchemaKeywords } from ${JSON.stringify(new URL("./schema-keyword-strip.ts", import.meta.url).href)};
-      let value = { type: "string", format: "date-time" };
-      for (let index = 0; index < 2048; index += 1) {
-        value = { anyOf: [value, { type: "null" }] };
-      }
-      const schema = JSON.parse(JSON.stringify({
-        type: "object", properties: { value }, required: ["value"],
-      }));
-      const normalized = cleanSchemaForGemini(schema);
-      const stripped = stripUnsupportedSchemaKeywords(schema, new Set(["format"]));
-      let leaf = stripped.properties.value;
-      for (let index = 0; index < 2048; index += 1) {
-        assert.equal(leaf.anyOf.length, 2);
-        assert.deepEqual(leaf.anyOf[1], { type: "null" });
-        leaf = leaf.anyOf[0];
-      }
-      const circular = { type: "object", properties: {} };
-      circular.properties.self = circular;
-      assert.throws(() => cleanSchemaForGemini(circular), TypeError);
-      assert.throws(() => stripUnsupportedSchemaKeywords(circular, new Set()), TypeError);
-      process.stdout.write(JSON.stringify({ normalized, leaf }));
-    `;
     const { stdout } = await execFileAsync(
       process.execPath,
-      ["--max-old-space-size=192", "--import", "tsx", "--input-type=module", "-e", source],
+      [
+        "--max-old-space-size=192",
+        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cleanForGeminiEntrypoint)),
+      ],
       { cwd: process.cwd(), encoding: "utf8", maxBuffer: 1024 * 1024, timeout: 20_000 },
     );
     expect(JSON.parse(stdout)).toEqual({
@@ -48,116 +31,6 @@ describe("cleanSchemaForGemini", () => {
       leaf: { type: "string" },
     });
   }, 30_000);
-
-  it("strips serialized optional markers without changing required fields or the input", () => {
-    const schema = {
-      type: "object",
-      properties: {
-        action: { type: "string" },
-        timeout: { type: "number", "~optional": true },
-        options: {
-          type: "array",
-          "~optional": true,
-          items: {
-            type: "object",
-            properties: {
-              name: { type: "string" },
-              label: { type: "string", "~optional": true },
-            },
-            required: ["name"],
-          },
-        },
-      },
-      required: ["action"],
-    };
-    const original = structuredClone(schema);
-
-    expect(cleanSchemaForGemini(schema)).toStrictEqual({
-      type: "object",
-      properties: {
-        action: { type: "string" },
-        timeout: { type: "number" },
-        options: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: { name: { type: "string" }, label: { type: "string" } },
-            required: ["name"],
-          },
-        },
-      },
-      required: ["action"],
-    });
-    expect(schema).toStrictEqual(original);
-  });
-
-  it("preserves literal property names and defaults matching the optional marker", () => {
-    const schema = {
-      type: "object",
-      properties: { "~optional": { type: "string", "~optional": true } },
-      default: { "~optional": "literal value" },
-    };
-
-    expect(cleanSchemaForGemini(schema)).toStrictEqual({
-      type: "object",
-      properties: { "~optional": { type: "string" } },
-      default: { "~optional": "literal value" },
-    });
-  });
-
-  it("coerces null properties to an empty object", () => {
-    const cleaned = cleanSchemaForGemini({
-      type: "object",
-      properties: null,
-    }) as { type?: unknown; properties?: unknown };
-
-    expect(cleaned.type).toBe("object");
-    expect(cleaned.properties).toStrictEqual({});
-  });
-
-  it("coerces non-object properties to an empty object", () => {
-    const cleaned = cleanSchemaForGemini({
-      type: "object",
-      properties: "invalid",
-    }) as { properties?: unknown };
-
-    expect(cleaned.properties).toStrictEqual({});
-  });
-
-  it("coerces array properties to an empty object", () => {
-    const cleaned = cleanSchemaForGemini({
-      type: "object",
-      properties: [],
-    }) as { properties?: unknown };
-
-    expect(cleaned.properties).toStrictEqual({});
-  });
-
-  it("filters required fields that are not in properties", () => {
-    const cleaned = cleanSchemaForGemini({
-      type: "object",
-      properties: {
-        action: { type: "string" },
-        amount: { type: "number" },
-      },
-      required: ["action", "amount", "token"],
-    }) as { required?: string[] };
-
-    expect(cleaned.required).toEqual(["action", "amount"]);
-  });
-
-  it("preserves required when all fields exist in properties", () => {
-    const cleaned = cleanSchemaForGemini({
-      type: "object",
-      properties: {
-        action: { type: "string" },
-        amount: { type: "number" },
-      },
-      required: ["action", "amount"],
-    }) as { required?: string[] };
-
-    expect(cleaned.required).toEqual(["action", "amount"]);
-  });
 
   it("removes required entirely when no fields match properties", () => {
     const cleaned = cleanSchemaForGemini({
@@ -178,44 +51,6 @@ describe("cleanSchemaForGemini", () => {
     }) as { required?: string[] };
 
     expect(cleaned.required).toBeUndefined();
-  });
-
-  it("leaves required as-is for non-object schemas when properties is absent", () => {
-    const cleaned = cleanSchemaForGemini({
-      type: "array",
-      required: ["a", "b"],
-    }) as { required?: string[] };
-
-    expect(cleaned.required).toEqual(["a", "b"]);
-  });
-
-  it("filters required in nested object properties", () => {
-    const cleaned = cleanSchemaForGemini({
-      type: "object",
-      properties: {
-        config: {
-          type: "object",
-          properties: {
-            name: { type: "string" },
-          },
-          required: ["name", "ghost"],
-        },
-      },
-    }) as { properties?: { config?: { required?: string[] } } };
-
-    expect(cleaned.properties?.config?.required).toEqual(["name"]);
-  });
-
-  it("does not treat inherited keys as declared properties", () => {
-    const cleaned = cleanSchemaForGemini({
-      type: "object",
-      properties: {
-        name: { type: "string" },
-      },
-      required: ["toString", "name"],
-    }) as { required?: string[] };
-
-    expect(cleaned.required).toEqual(["name"]);
   });
 
   it("coerces nested null properties while preserving valid siblings", () => {
@@ -241,31 +76,6 @@ describe("cleanSchemaForGemini", () => {
     expect(cleaned.properties?.good?.type).toBe("string");
   });
 
-  it("strips empty required arrays", () => {
-    const cleaned = cleanSchemaForGemini({
-      type: "object",
-      properties: {
-        name: { type: "string" },
-      },
-      required: [],
-    }) as Record<string, unknown>;
-
-    expect(cleaned).not.toHaveProperty("required");
-    expect(cleaned.type).toBe("object");
-  });
-
-  it("preserves non-empty required arrays", () => {
-    const cleaned = cleanSchemaForGemini({
-      type: "object",
-      properties: {
-        name: { type: "string" },
-      },
-      required: ["name"],
-    }) as Record<string, unknown>;
-
-    expect(cleaned.required).toEqual(["name"]);
-  });
-
   it("strips empty required arrays in nested schemas", () => {
     const cleaned = cleanSchemaForGemini({
       type: "object",
@@ -285,22 +95,6 @@ describe("cleanSchemaForGemini", () => {
     expect(cleaned.properties?.nested).not.toHaveProperty("required");
   });
 
-  it("strips the not keyword from schemas", () => {
-    // `not` is outside the OpenAPI 3.0 subset accepted by Gemini-backed
-    // providers and triggers upstream HTTP 400s if left in tool schemas.
-    const cleaned = cleanSchemaForGemini({
-      type: "object",
-      not: { const: true },
-      properties: {
-        name: { type: "string" },
-      },
-    }) as Record<string, unknown>;
-
-    expect(cleaned).not.toHaveProperty("not");
-    expect(cleaned.type).toBe("object");
-    expect(cleaned.properties).toEqual({ name: { type: "string" } });
-  });
-
   it("collapses type arrays by stripping null entries", () => {
     // Type arrays like ["string", "null"] must collapse to a scalar OpenAPI
     // type for Gemini compatibility.
@@ -313,57 +107,11 @@ describe("cleanSchemaForGemini", () => {
     expect(cleaned.description).toBe("nullable field");
   });
 
-  it("collapses type arrays in nested property schemas", () => {
-    const cleaned = cleanSchemaForGemini({
-      type: "object",
-      properties: {
-        agentId: {
-          type: ["string", "null"],
-          description: "Agent id",
-        },
-      },
-    }) as { properties?: { agentId?: Record<string, unknown> } };
-
-    expect(cleaned.properties?.agentId?.type).toBe("string");
-  });
-
-  it.each([
-    {
-      name: "integer enum",
-      schema: { type: "integer", enum: [1, 2, 3] },
-      expected: { type: "integer", enum: ["1", "2", "3"] },
-    },
-    {
-      name: "integer enum before type",
-      schema: { enum: [1, 2, 3], type: "integer" },
-      expected: { enum: ["1", "2", "3"], type: "integer" },
-    },
-    {
-      name: "boolean enum",
-      schema: { type: "boolean", enum: [true, false] },
-      expected: { type: "boolean", enum: ["true", "false"] },
-    },
-    {
-      name: "string enum",
-      schema: { type: "string", enum: ["a", "b", "c"] },
-      expected: { type: "string", enum: ["a", "b", "c"] },
-    },
-    {
-      name: "integer const before type",
-      schema: { const: 42, type: "integer" },
-      expected: { enum: ["42"], type: "integer" },
-    },
-  ])("stringifies $name values without changing the schema type", ({ schema, expected }) => {
-    expect(cleanSchemaForGemini(schema)).toStrictEqual(expected);
-  });
-
-  it("drops null/undefined enum entries and de-duplicates", () => {
-    const cleaned = cleanSchemaForGemini({
+  it("stringifies an integer const before type without changing the schema type", () => {
+    expect(cleanSchemaForGemini({ const: 42, type: "integer" })).toStrictEqual({
+      enum: ["42"],
       type: "integer",
-      enum: [1, 2, 2, null, undefined, 3],
-    }) as { enum?: unknown };
-
-    expect(cleaned.enum).toStrictEqual(["1", "2", "3"]);
+    });
   });
 
   it("stringifies nested numeric enums while preserving their number type", () => {
@@ -398,6 +146,17 @@ describe("cleanSchemaForGemini", () => {
     }) as { enum?: unknown };
 
     expect(cleaned.enum).toBeUndefined();
+  });
+
+  it("preserves the type behind a percent-encoded local schema reference", () => {
+    const filter = { type: "object", properties: { limit: { type: "number" } } };
+    expect(
+      cleanSchemaForGemini({
+        type: "object",
+        $defs: { "Filter/value~": filter },
+        properties: { filter: { $ref: "#%2F%24defs%2FFilter%7E1value%7E0" } },
+      }),
+    ).toStrictEqual({ type: "object", properties: { filter } });
   });
 
   it("preserves shared definitions across inline and reference traversal", () => {

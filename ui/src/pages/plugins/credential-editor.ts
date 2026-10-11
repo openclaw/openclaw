@@ -36,7 +36,7 @@ export type PluginCredentialEditorContext = {
   onCommit: (path: Array<string | number>, value: unknown) => Promise<boolean>;
   onDiscard: () => Promise<boolean>;
 };
-type CredentialField = Pick<ConfigNodeRenderParams, "path" | "value" | "disabled" | "onPatch"> & {
+type CredentialField = Pick<ConfigNodeRenderParams, "path" | "value" | "disabled"> & {
   descriptionId?: string;
 };
 
@@ -108,13 +108,14 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
   override disconnectedCallback() {
     this.generation++;
     this.inspection = null;
+    this.revealed = false;
     this.literal = "";
     this.reference = { source: "env", provider: "default", id: "" };
     this.referenceSubmitted = false;
     super.disconnectedCallback();
   }
 
-  private async inspect() {
+  private async inspect(reveal = false) {
     const { gateway, pluginId, baseHash, canInspect } = this.context;
     const connection = gateway.capture();
     const generation = ++this.generation;
@@ -128,7 +129,7 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
     try {
       const result = await connection.client.request<PluginsCredentialsInspectResult>(
         "plugins.credentials.inspect",
-        { pluginId, path: this.field.path, baseHash },
+        { pluginId, path: this.field.path, baseHash, ...(reveal ? { reveal: true } : {}) },
       );
       if (generation !== this.generation || !gateway.isCurrent(connection)) {
         return;
@@ -137,7 +138,10 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
         this.error = t("pluginsPage.credentials.stale");
         return;
       }
-      this.inspection = result.credential;
+      this.inspection =
+        result.credential.kind === "literal" && !reveal ? { kind: "literal" } : result.credential;
+      this.revealed =
+        reveal && result.credential.kind === "literal" && result.credential.value !== undefined;
       if (this.dialogOpen && result.credential.kind === "reference") {
         this.reference = { ...result.credential.ref };
       }
@@ -152,14 +156,26 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
     }
   }
 
+  private toggleReveal() {
+    if (this.revealed) {
+      this.revealed = false;
+      if (this.inspection?.kind === "literal") {
+        this.inspection = { kind: "literal" };
+      }
+    } else if (this.literal) {
+      this.revealed = true;
+    } else {
+      void this.inspect(true);
+    }
+  }
+
   private openReference() {
     this.referenceSubmitted = false;
     const value = this.inspection;
-    if (value?.kind === "reference") {
-      this.reference = { ...value.ref };
-    } else {
-      this.reference = { source: "env", provider: "default", id: "" };
-    }
+    this.reference =
+      value?.kind === "reference"
+        ? { ...value.ref }
+        : { source: "env", provider: "default", id: "" };
     this.dialogOpen = true;
   }
 
@@ -181,31 +197,7 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
       this.context.gateway === gateway &&
       gateway.isCurrent(connection) &&
       JSON.stringify([this.context.pluginId, this.field.path]) === owner;
-    this.saving = true;
-    this.referenceSubmitted ||= this.dialogOpen;
-    this.error = "";
-    try {
-      const acknowledged = await this.context.onCommit(this.field.path, value);
-      if (!current()) {
-        return;
-      }
-      if (acknowledged) {
-        this.referenceSubmitted = false;
-        this.dialogOpen = false;
-        this.literal = "";
-        await this.inspect();
-      } else {
-        this.error = this.context.saveError || t("pluginsPage.credentials.saveFailed");
-      }
-    } catch (error) {
-      if (current()) {
-        this.error = formatUiError(error);
-      }
-    } finally {
-      if (current()) {
-        this.saving = false;
-      }
-    }
+    return this.commitOrDiscardReference(current, value);
   }
 
   private async cancelReference() {
@@ -225,18 +217,41 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
       connection !== null &&
       gateway.isCurrent(connection) &&
       this.fieldIdentity === owner;
-    this.cancelling = true;
+    return this.commitOrDiscardReference(current, undefined);
+  }
+
+  private async commitOrDiscardReference(
+    current: () => boolean,
+    value: string | SecretRef | undefined,
+  ) {
+    const pending = value === undefined ? "cancelling" : "saving";
+    this[pending] = true;
+    if (value !== undefined) {
+      this.referenceSubmitted ||= this.dialogOpen;
+      this.error = "";
+    }
     try {
-      const discarded = await this.context.onDiscard();
+      const acknowledged = await (value === undefined
+        ? this.context.onDiscard()
+        : this.context.onCommit(this.field.path, value));
       if (!current()) {
         return;
       }
-      if (discarded) {
+      if (acknowledged) {
         this.referenceSubmitted = false;
         this.dialogOpen = false;
+        if (value !== undefined) {
+          this.literal = "";
+        }
         await this.inspect();
       } else {
-        this.error = this.context.saveError || t("configView.discardUnconfirmed");
+        this.error =
+          this.context.saveError ||
+          t(
+            value === undefined
+              ? "configView.discardUnconfirmed"
+              : "pluginsPage.credentials.saveFailed",
+          );
       }
     } catch (error) {
       if (current()) {
@@ -244,7 +259,7 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
       }
     } finally {
       if (current()) {
-        this.cancelling = false;
+        this[pending] = false;
       }
     }
   }
@@ -258,7 +273,7 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
       this.field.disabled || this.loading || this.saving || this.cancelling || !this.inspection;
     const failure = this.error || this.context.saveError;
     return html`<openclaw-modal-dialog
-      .label=${t("pluginsPage.credentials.referenceTitle")}
+      .label=${`${t("pluginsPage.credentials.referenceTitle")}: ${this.descriptor.label}`}
       @modal-cancel=${(event: Event) => {
         event.preventDefault();
         void this.cancelReference();
@@ -291,28 +306,19 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
                     ${credentialSources.map((source) => html`<option value=${source} ?selected=${source === this.reference.source}>${t(`pluginsPage.credentials.sources.${source}`)}</option>`)}
                   </select></label
                 >
-                <label
-                  >${t("pluginsPage.credentials.provider")}<input
-                    class="settings-input"
-                    .value=${this.reference.provider}
-                    ?disabled=${blocked}
-                    @input=${(event: Event) => {
-                      if (event.currentTarget instanceof HTMLInputElement) {
-                        this.reference = { ...this.reference, provider: event.currentTarget.value };
-                      }
-                    }}
-                /></label>
-                <label
-                  >${t("pluginsPage.credentials.identifier")}<input
-                    class="settings-input"
-                    .value=${this.reference.id}
-                    ?disabled=${blocked}
-                    @input=${(event: Event) => {
-                      if (event.currentTarget instanceof HTMLInputElement) {
-                        this.reference = { ...this.reference, id: event.currentTarget.value };
-                      }
-                    }}
-                /></label>
+                ${(["provider", "id"] as const).map(
+                  (key) => html`<label
+                    >${t(`pluginsPage.credentials.${key === "id" ? "identifier" : key}`)}<input
+                      class="settings-input"
+                      .value=${this.reference[key]}
+                      ?disabled=${blocked}
+                      @input=${(event: Event) => {
+                        if (event.currentTarget instanceof HTMLInputElement) {
+                          this.reference = { ...this.reference, [key]: event.currentTarget.value };
+                        }
+                      }}
+                  /></label>`,
+                )}
                 <p class="muted">${t(`pluginsPage.credentials.help.${this.reference.source}`)}</p>
                 ${this.inspection?.kind === "reference" && this.inspection.unresolved ? html`<p class="callout warn">${t("pluginsPage.credentials.unresolved")}</p>` : nothing}
               `
@@ -357,6 +363,7 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
               ${credential?.kind === "reference" ? html`<code>${credential.ref.id}</code>` : nothing}
               <button
                 class="btn btn--sm"
+                aria-label=${`${t(environment ? "pluginsPage.credentials.viewSource" : "pluginsPage.credentials.editReference")}: ${this.descriptor.label}`}
                 aria-describedby=${ifDefined(this.field.descriptionId)}
                 ?disabled=${this.loading || !credential || !this.context.canInspect}
                 @click=${() => this.openReference()}
@@ -366,7 +373,7 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
             </div>`
           : html`
               <div
-                class="plugin-credential__input"
+                class="plugin-credential__input settings-secret"
                 @focusout=${(event: FocusEvent) => {
                   if (
                     event.relatedTarget instanceof Element &&
@@ -386,7 +393,7 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
                   autocomplete="off"
                   spellcheck="false"
                   type=${this.revealed ? "text" : "password"}
-                  .value=${this.literal}
+                  .value=${this.literal || (this.revealed && credential?.kind === "literal" ? (credential.value ?? "") : "")}
                   placeholder=${configured ? t("pluginsPage.credentials.stored") : (this.descriptor.placeholder ?? "")}
                   ?disabled=${disabled}
                   @input=${(event: Event) => {
@@ -402,14 +409,12 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
                   }}
                 />
                 <button
-                  class="btn btn--icon btn--ghost"
+                  class="settings-secret__toggle"
                   type="button"
-                  aria-label=${t(this.revealed ? "pluginsPage.credentials.hide" : "pluginsPage.credentials.reveal")}
+                  aria-label=${`${t(this.revealed ? "pluginsPage.credentials.hide" : "pluginsPage.credentials.reveal")}: ${this.descriptor.label}`}
                   aria-pressed=${this.revealed}
-                  ?disabled=${disabled || !this.literal}
-                  @click=${() => {
-                    this.revealed = !this.revealed;
-                  }}
+                  ?disabled=${disabled || this.loading || (!this.literal && credential?.kind !== "literal")}
+                  @click=${() => this.toggleReveal()}
                 >
                   ${this.revealed ? icons.eyeOff : icons.eye}
                 </button>
@@ -417,6 +422,7 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
               <div class="plugin-credential__links">
                 ${this.descriptor.signupUrl ? html`<a href=${this.descriptor.signupUrl} target="_blank" rel="noopener noreferrer">${t("pluginsPage.credentials.signup")}${icons.externalLink}</a>` : nothing}<button
                   class="btn btn--ghost btn--sm"
+                  aria-label=${`${t("pluginsPage.credentials.useReference")}: ${this.descriptor.label}`}
                   aria-describedby=${ifDefined(this.field.descriptionId)}
                   ?disabled=${disabled || this.loading || !credential || !this.context.canInspect}
                   @click=${() => this.openReference()}

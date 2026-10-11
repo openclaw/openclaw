@@ -1,6 +1,3 @@
-// Control UI helper reveals a one-time secret in-app. window.prompt cannot do this job:
-// it is unstyled, unlabeled, uncopyable on touch, and never renders at all in a webview
-// without a dialog bridge, which drops the only copy of a freshly issued credential.
 import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
 import { renderCopyButton } from "./copy-button.ts";
@@ -19,10 +16,9 @@ type SecretRevealDialogOptions = {
   /** Success mark beside the title. Set only where the dialog reports a settled outcome;
    *  a reveal that still needs the operator to act should not look finished. */
   status?: "success";
-  /** The one conditional branch, lifted out of the calm text so it cannot be skimmed
-   *  past. Info tone: this is guidance the reader may not need, not an error. */
+  /** Optional guidance displayed as an info callout. */
   callout?: string;
-  /** Muted trailing rationale. Never the answer to "what do I do now?"; that leads. */
+  /** Muted trailing rationale. */
   note?: string;
 };
 
@@ -34,10 +30,7 @@ export function showSecretRevealDialog(options: SecretRevealDialogOptions): Prom
   return withPromiseModalHost<void>(undefined, ({ render, finish }) => {
     let dismissRefused = false;
     const acknowledge = () => finish();
-    // The secret is shown once, so a stray Escape or backdrop click must not be the last
-    // thing that happens to it. Web Awesome pulses the refused dialog; the hint is the
-    // accessible half of that answer, because a silent no-op reads as a broken control.
-    // An outcome-only dialog holds nothing recoverable, so it dismisses normally.
+    // Keep one-time secrets visible until acknowledged; announce refused dismissal accessibly.
     const handleCancel = (event: Event) => {
       if (!options.secret) {
         acknowledge();
@@ -50,10 +43,6 @@ export function showSecretRevealDialog(options: SecretRevealDialogOptions): Prom
       dismissRefused = true;
       paint();
     };
-    // Sibling convention (confirm-dialog): the accent button is the action that commits
-    // something. Acknowledging a secret is that gate; closing a report of work already
-    // done is not, so it stays neutral -- with a raised border, because .btn's resting
-    // border sits within ~4/255 of --card in dark and vanishes on this surface.
     const acknowledgeClass = options.secret ? "btn primary" : "btn secret-reveal__dismiss";
     const paint = () => {
       render(() => {

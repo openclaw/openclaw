@@ -21,10 +21,15 @@ import {
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import { runStep } from "../../infra/update-runner-command.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { GatewayConnectionWork } from "../server-connection-work.js";
+import { runGatewayCloseSteps } from "../server-shutdown.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -81,7 +86,8 @@ vi.mock("../../infra/github-issue.js", async () => {
     ) => actual.reconcileGithubIssue(issue, mocks.runGh, hooks),
   };
 });
-vi.mock("../server-restart-sentinel.js", () => ({
+vi.mock("../server-update-sentinel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server-update-sentinel.js")>()),
   refreshLatestUpdateRestartSentinel: mocks.sentinel,
 }));
 
@@ -95,10 +101,22 @@ type ClientAuthority = Pick<
   "internal" | "authenticatedUserProfile" | "connectionSignal"
 >;
 
+function namedAdministrator(): ClientAuthority {
+  return {
+    authenticatedUserProfile: {
+      profileId: "11111111-2222-4333-8444-555555555555",
+      displayName: "Example administrator",
+      hasAvatar: false,
+      updatedAt: 0,
+    },
+  };
+}
+
 async function invoke(
   params: Record<string, unknown>,
   hasCurrentClientAuthority = () => true,
   authority: ClientAuthority = { internal: { operatorRoleActor: { kind: "system" } } },
+  trackExecution?: GatewayRequestHandlerOptions["context"]["trackExecution"],
 ) {
   const respond = vi.fn<RespondFn>();
   const options: GatewayRequestHandlerOptions = {
@@ -118,6 +136,7 @@ async function invoke(
     },
     isWebchatConnect: () => false,
     context: createDirectChatContext({
+      ...(trackExecution ? { trackExecution } : {}),
       validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
     }),
   };
@@ -201,11 +220,76 @@ beforeEach(async () => {
   }));
 });
 afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   await home.restore();
 });
 
 describe("Report action from the authoritative update ledger", () => {
+  it.each(["identity", "attempt", "digest"] as const)(
+    "retires named administrator consent when %s changes during final validation",
+    async (change) => {
+      recordFailure();
+      const authority = namedAdministrator();
+      const { previewDigest } = await preview(authority);
+      const paused = createDeferred();
+      const resume = createDeferred();
+      // Read admission, validate before reservation, validate after artifact staging.
+      mocks.sentinel
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null)
+        .mockImplementationOnce(async () => {
+          paused.resolve();
+          await resume.promise;
+          return change === "digest" ? matchingSentinel() : null;
+        });
+      const submitting = invoke(
+        { action: "submit", attemptId: runId, previewDigest },
+        undefined,
+        authority,
+      );
+      await paused.promise;
+      if (change === "identity") {
+        authority.authenticatedUserProfile!.profileId = "another-administrator";
+      } else if (change === "attempt") {
+        createUpdateRun({ trigger: "control-ui" });
+      }
+      resume.resolve();
+      const response = await submitting;
+      expect(response).not.toHaveBeenCalledWith(true, expect.anything());
+      expect(await readUpdateFailureReportReceipt(runId)).toBeNull();
+      expect(await reportFiles()).toEqual([]);
+      expect(mocks.runGh).not.toHaveBeenCalled();
+    },
+  );
+
+  it("never authenticates the host after owner demotion during artifact publication", async () => {
+    recordFailure();
+    const authority = namedAdministrator();
+    authority.authenticatedUserProfile!.profileId = GATEWAY_OWNER_PROFILE_ID;
+    const { previewDigest } = await preview(authority);
+    const rename = fs.rename.bind(fs);
+    const publication = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+      await rename(...args);
+      if (String(args[0]).includes(`${path.sep}update-reports${path.sep}`)) {
+        authority.authenticatedUserProfile!.profileId = "named-administrator";
+      }
+    });
+    try {
+      const response = await invoke(
+        { action: "submit", attemptId: runId, previewDigest },
+        undefined,
+        authority,
+      );
+      expect(response).not.toHaveBeenCalledWith(true, expect.anything());
+      expect(mocks.runGh).not.toHaveBeenCalled();
+      expect(await readUpdateFailureReportReceipt(runId)).toBeNull();
+      expect(await reportFiles()).toEqual([]);
+    } finally {
+      publication.mockRestore();
+    }
+  });
+
   it.each(["compact", "direct-success", "other-scope"] as const)(
     "enriches only the same scoped attempt in lifecycle order: %s",
     async (mode) => {
@@ -607,6 +691,7 @@ describe("Report action from the authoritative update ledger", () => {
     "reuses CLI $outcome across Gateway reconnect, changed preview: $changedPreview",
     async ({ outcome, changedPreview }) => {
       recordFailure();
+      mocks.select.mockResolvedValueOnce("report").mockResolvedValue("dismiss");
       mocks.runGh.mockImplementation(async (args) => {
         if (args[0] === "auth") {
           return { started: true, status: 0, stdout: Buffer.alloc(0) };
@@ -644,19 +729,41 @@ describe("Report action from the authoritative update ledger", () => {
         }),
       ).resolves.toBe("handled");
       expect(runtime.error).not.toHaveBeenCalled();
+      expect(mocks.select).toHaveBeenCalledTimes(outcome === "pending" ? 2 : 1);
+      if (outcome === "pending") {
+        expect(mocks.select).toHaveBeenNthCalledWith(
+          2,
+          expect.objectContaining({
+            options: expect.arrayContaining([{ value: "status", label: "Check report status" }]),
+          }),
+        );
+      }
       const createPhases = () =>
         mocks.runGh.mock.calls.map(([args]) => args[0]).filter((kind) => kind !== "issue");
       expect(createPhases()).toEqual(["auth", "api"]);
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
-      expect(readUpdateFailureReportReceipt(runId)).toMatchObject({ status: outcome });
+      expect(await readUpdateFailureReportReceipt(runId)).toMatchObject({ status: outcome });
 
       const { body, previewDigest } = await preview();
       if (!changedPreview) {
         expect(runtime.log).toHaveBeenCalledWith(body);
       }
-      expect(readUpdateFailureReportReceipt(runId)?.previewDigest === previewDigest).toBe(
+      expect((await readUpdateFailureReportReceipt(runId))?.previewDigest === previewDigest).toBe(
         !changedPreview,
       );
+      if (outcome === "pending") {
+        const callsBefore = mocks.runGh.mock.calls.length;
+        const named = await invoke(
+          { action: "submit", attemptId: runId, previewDigest },
+          undefined,
+          namedAdministrator(),
+        );
+        expect(named).toHaveBeenCalledWith(true, expect.objectContaining({ status: "pending" }));
+        expect(named.mock.calls[0]?.[1]).not.toHaveProperty("fallbackUrl");
+        expect(named.mock.calls[0]?.[1]).not.toHaveProperty("url");
+        expect(mocks.runGh).toHaveBeenCalledTimes(callsBefore);
+      }
       const response = await invoke({ action: "submit", attemptId: runId, previewDigest });
       expect(response).toHaveBeenCalledWith(
         true,
@@ -686,8 +793,8 @@ describe("Report action from the authoritative update ledger", () => {
         previewDigest: nextResult.previewDigest,
       });
       expect(createPhases()).toEqual(["auth", "api", "auth", "api"]);
-      expect(readUpdateFailureReportReceipt(nextRunId)).toMatchObject({ status: outcome });
-      expect(readUpdateFailureReportReceipt(runId)).toMatchObject({ status: outcome });
+      expect(await readUpdateFailureReportReceipt(nextRunId)).toMatchObject({ status: outcome });
+      expect(await readUpdateFailureReportReceipt(runId)).toMatchObject({ status: outcome });
     },
   );
 
@@ -735,7 +842,7 @@ describe("Report action from the authoritative update ledger", () => {
         undefined,
         expect.objectContaining({ code: "INVALID_REQUEST" }),
       );
-      expect(readUpdateFailureReportReceipt(runId)).toBeNull();
+      expect(await readUpdateFailureReportReceipt(runId)).toBeNull();
       expect(await reportFiles()).toEqual([]);
 
       const reconnected = { ...authority, connectionSignal: new AbortController().signal };
@@ -759,14 +866,18 @@ describe("Report action from the authoritative update ledger", () => {
     });
     expect(respond).not.toHaveBeenCalled();
     expect(mocks.sentinel).not.toHaveBeenCalled();
-    expect(readUpdateFailureReportReceipt(runId)).toBeNull();
+    expect(await readUpdateFailureReportReceipt(runId)).toBeNull();
     expect(await reportFiles()).toEqual([]);
     expect(mocks.runGh).not.toHaveBeenCalled();
   });
 
-  it("retains a confirmed created URL if the connection retires after issue creation", async () => {
+  it("settles accepted report transport, receipt, and artifact cleanup before Gateway close", async () => {
     recordFailure();
     const connection = new AbortController();
+    const work = new GatewayConnectionWork();
+    const created = createDeferred();
+    const releaseResponse = createDeferred();
+    const closeStarted = createDeferred();
     const authority: ClientAuthority = {
       internal: { operatorRoleActor: { kind: "system" } },
       connectionSignal: connection.signal,
@@ -774,18 +885,59 @@ describe("Report action from the authoritative update ledger", () => {
     const { previewDigest } = await preview(authority);
     mocks.runGh.mockImplementation(async (args) => {
       if (args[0] === "api") {
-        connection.abort();
+        created.resolve();
+        await releaseResponse.promise;
         return { started: true, status: 0, stdout: Buffer.from(issueUrl) };
       }
       return { started: true, status: 0, stdout: Buffer.alloc(0) };
     });
     const params = { action: "submit", attemptId: runId, previewDigest };
-    await invoke(params, () => true, authority);
-    closeOpenClawStateDatabaseForTest();
-    expect(readUpdateFailureReportReceipt(runId)).toMatchObject({
-      status: "created",
-      url: issueUrl,
+    const submitting = invoke(
+      params,
+      () => true,
+      authority,
+      (run) => work.track(run),
+    );
+    await created.promise;
+    connection.abort();
+    work.beginClose();
+    const close = vi.fn(async () => {
+      expect(await readUpdateFailureReportReceipt(runId)).toMatchObject({
+        status: "created",
+        url: issueUrl,
+      });
+      expect(await reportFiles()).toEqual([]);
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
     });
+    const closeError = vi.fn();
+    const noWork = async () => {};
+    const closing = runGatewayCloseSteps({
+      owner: {
+        connectionWork: work,
+        stopConnectionDependentSidecars: async () => {
+          closeStarted.resolve();
+        },
+        stopRegisteredGatewayLifetimeSidecars: noWork,
+        stopRegisteredPostReadySidecars: noWork,
+        runClosePrelude: noWork,
+        sealAndJoinRegisteredSidecarStops: noWork,
+      },
+      close,
+      onError: closeError,
+    });
+    void closing.catch(() => {});
+    try {
+      await closeStarted.promise;
+      expect(work.hasPendingWork).toBe(true);
+      expect(close).not.toHaveBeenCalled();
+    } finally {
+      releaseResponse.resolve();
+      await submitting;
+      await closing;
+    }
+    expect(close).toHaveBeenCalledOnce();
+    expect(closeError).not.toHaveBeenCalled();
     const reconnected = await invoke(params, () => true, {
       ...authority,
       connectionSignal: new AbortController().signal,

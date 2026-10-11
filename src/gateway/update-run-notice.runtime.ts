@@ -6,15 +6,13 @@ import { appendAssistantMessageToSessionTranscript } from "../config/sessions/tr
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   captureDeliveryQueueStateContext,
-  resolveDeliveryQueueStateEnv,
   type DeliveryQueueStateContext,
 } from "../infra/delivery-queue-state-context.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { findDeliveryIntentOwner } from "../infra/outbound/delivery-queue-storage.js";
 import { recordUpdateRunStep, recordUpdateRunVerification } from "../infra/update-run-ledger.js";
+import { renderUpdateRunNotice, type UpdateRunNoticeKind } from "../infra/update-run-notice.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
-import { readUpdateRunReportHealth } from "../infra/update-run-report-health.js";
-import { renderUpdateRunNotice, type UpdateRunNoticeKind } from "../infra/update-run-report.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sendGatewayLifecycleNotice } from "./server-restart-sentinel-notice.js";
 import {
@@ -26,23 +24,23 @@ import {
 const log = createSubsystemLogger("gateway/update-run");
 
 /** Prepare routing before an update can replace lazily loaded channel modules. */
-export function createUpdateRunNotifier(
+export async function createUpdateRunNotifier(
   initial: UpdateRunRecord,
   getConfig: () => OpenClawConfig = getRuntimeConfig,
   deps: CliDeps = createDefaultDeps(),
-  target?: ReturnType<typeof resolveUpdateRunNoticeTarget>,
+  target?: Awaited<ReturnType<typeof resolveUpdateRunNoticeTarget>>,
   context: DeliveryQueueStateContext = captureDeliveryQueueStateContext(),
 ) {
   const env = context.workerContext.environment;
   const noticeTarget =
     target ??
-    resolveUpdateRunNoticeTarget({
+    (await resolveUpdateRunNoticeTarget({
       cfg: getConfig(),
       sessionKey: initial.origin.sessionKey,
       explicitDeliveryContext: initial.origin.deliveryContext,
       threadId: initial.origin.deliveryContext?.threadId,
       env,
-    });
+    }));
   const { sessionKey } = initial.origin;
   // Update delivery belongs to the host and can outlive the requesting attempt.
   return (run: UpdateRunRecord, kind: UpdateRunNoticeKind) =>
@@ -58,17 +56,7 @@ export function createUpdateRunNotifier(
       if (recorded) {
         return { delivered: false, owned: recorded };
       }
-      const message = renderUpdateRunNotice(
-        run,
-        kind,
-        kind === "finished" && run.status === "failed"
-          ? {
-              currentHealth: await readUpdateRunReportHealth(run.verification, {
-                env: resolveDeliveryQueueStateEnv(undefined, context),
-              }),
-            }
-          : {},
-      );
+      const message = renderUpdateRunNotice(run, kind);
       if (!message) {
         return { delivered: false, owned: false };
       }
@@ -115,7 +103,7 @@ export function createUpdateRunNotifier(
       }
       const custody =
         currentTarget.kind === "route"
-          ? findDeliveryIntentOwner(deliveryIntentId, undefined, context)
+          ? await findDeliveryIntentOwner(deliveryIntentId, undefined, context)
           : null;
       const owned = delivered || custody?.status === "pending" || custody?.status === "completed";
       if (owned && kind !== "finished") {
@@ -135,6 +123,7 @@ export function createUpdateRunNotifier(
 
 export async function notifyUpdateRunPhase(run: UpdateRunRecord): Promise<void> {
   if (run.phase === "activating" || run.phase === "finished") {
-    await createUpdateRunNotifier(run)(run, run.phase);
+    const notify = await createUpdateRunNotifier(run);
+    await notify(run, run.phase);
   }
 }

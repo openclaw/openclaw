@@ -2,7 +2,9 @@ import { listAgentIds, resolveConfiguredAgentId } from "../agents/agent-scope-co
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { beginLifecycleWriteCustody } from "../infra/lifecycle-write-custody.js";
 import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
+import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import type { GitBackupIdentity } from "../snapshot/git-backup-codec.js";
@@ -122,15 +124,19 @@ export async function backupGitCreateCommand(runtime: RuntimeEnv, options: Backu
   if (options.push && !options.excludeSecrets) {
     runtime.error(GIT_BACKUP_PUSH_CREDENTIAL_WARNING);
   }
+  const releaseCustody = beginLifecycleWriteCustody("backup");
+  let failure: unknown;
   try {
-    const result = await createGitBackup({
-      repositoryPath,
-      stateDir: resolveStateDir(),
-      databases: await resolveCreateDatabases(options),
-      all: options.all,
-      excludeSecrets: options.excludeSecrets,
-      push: options.push,
-    });
+    const result = await withCommandProcessScope(async () =>
+      createGitBackup({
+        repositoryPath,
+        stateDir: resolveStateDir(),
+        databases: await resolveCreateDatabases(options),
+        all: options.all,
+        excludeSecrets: options.excludeSecrets,
+        push: options.push,
+      }),
+    );
     // A completed local backup remains successful even when requested remote replication fails;
     // pushFailed records that durable degradation without discarding the recoverable local commit.
     await recordBackupOutcomeBestEffort(runtime, {
@@ -158,6 +164,7 @@ export async function backupGitCreateCommand(runtime: RuntimeEnv, options: Backu
     }
     return result;
   } catch (error) {
+    failure = error;
     await recordBackupOutcomeBestEffort(runtime, {
       kind: "git",
       archivePath: repositoryPath,
@@ -165,6 +172,8 @@ export async function backupGitCreateCommand(runtime: RuntimeEnv, options: Backu
       error: formatErrorMessage(error),
     });
     throw error;
+  } finally {
+    releaseCustody(failure);
   }
 }
 

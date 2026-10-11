@@ -1,6 +1,10 @@
 import type { RouteId } from "../../app-route-paths.ts";
 import type { NativeDeviceSettingsSnapshot } from "../../app/native-device-settings.ts";
-import { APPEARANCE_SETTINGS_TARGET_IDS, SETTINGS_ROUTE_TARGETS } from "./route-data.ts";
+import {
+  appearanceSettingsRouteTarget,
+  APPEARANCE_SETTINGS_TARGET_IDS,
+  SETTINGS_ROUTE_TARGETS,
+} from "./route-data.ts";
 
 export const SESSION_STORAGE_SETTINGS_TARGET_ID = "settings-session-storage";
 
@@ -17,6 +21,7 @@ export const COMMUNICATION_SETTINGS_TARGET_IDS = {
 
 export const PROFILE_SETTINGS_TARGET_IDS = {
   identity: "settings-profile-identity",
+  personalInstructions: "settings-profile-personal-instructions",
   githubConnections: "settings-profile-github-connections",
 } as const;
 
@@ -31,12 +36,38 @@ export type SettingsSearchTarget = {
   readonly search?: string;
   readonly aliases?: string;
   readonly requiresIdentity?: true;
+  readonly requiresMultipleProfiles?: true;
   readonly requiresNativeDeviceSettings?: true;
 };
 
 // Keep destinations and translation keys together without importing page
 // renderers: settings search runs before the destination page is loaded.
 export const SETTINGS_SEARCH_TARGETS = {
+  webSearch: {
+    routeId: "search",
+    labelKey: "tabs.search",
+    hash: "",
+    searchKeys: [
+      "searchPage.enabled",
+      "searchPage.provider",
+      "searchPage.test",
+      "searchPage.setup",
+    ],
+    aliases:
+      "web internet native hosted automatic provider brave parallel google gemini searxng codex openai api key endpoint",
+  },
+  appearanceBackground: {
+    routeId: "appearance",
+    labelKey: "configView.appearance.background.title",
+    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.background}`,
+    searchKeys: [
+      "configView.appearance.background.custom",
+      "configView.appearance.background.newSession",
+      "configView.appearance.background.sessions",
+      "configView.appearance.background.visibility",
+    ],
+    aliases: "wallpaper photo picture image backdrop hide disable opt out",
+  },
   sessionStorage: {
     routeId: "ai-agents",
     labelKey: "configView.sessionStorage.title",
@@ -76,6 +107,10 @@ export const SETTINGS_SEARCH_TARGETS = {
         snapshot.app?.showDockIcon !== undefined,
       "configPage.deviceSettings.launchAtLogin": (snapshot) =>
         snapshot.app?.launchAtLogin !== undefined,
+      "configPage.deviceSettings.keepGatewayRunning": (snapshot) =>
+        snapshot.app?.keepGatewayRunning !== undefined,
+      "configPage.deviceSettings.keepGatewayRunningHint": (snapshot) =>
+        snapshot.app?.keepGatewayRunning !== undefined,
       "configPage.deviceSettings.quickChat": (snapshot) =>
         snapshot.app?.quickChatEnabled !== undefined,
       "configPage.deviceSettings.capabilities": (snapshot) => snapshot.capabilities !== undefined,
@@ -199,6 +234,15 @@ export const SETTINGS_SEARCH_TARGETS = {
     aliases: "profile avatar image email",
     requiresIdentity: true,
   },
+  personalInstructions: {
+    routeId: "profile",
+    labelKey: "profilePage.personalInstructions.title",
+    hash: `#${PROFILE_SETTINGS_TARGET_IDS.personalInstructions}`,
+    searchKeys: ["profilePage.personalInstructions.description"],
+    aliases: "USER.md personal instructions preferences",
+    requiresIdentity: true,
+    requiresMultipleProfiles: true,
+  },
   githubConnections: {
     routeId: "profile",
     labelKey: "githubConnections.title",
@@ -235,10 +279,8 @@ export const SETTINGS_SEARCH_TARGETS = {
     aliases: "locale translation",
   },
   appearanceTheme: {
-    routeId: "appearance",
+    ...appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.theme),
     labelKey: "configView.appearance.theme",
-    search: "?section=__appearance__",
-    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.theme}`,
     searchKeys: [
       "configView.appearance.chooseTheme",
       "configView.appearance.importedTheme",
@@ -249,10 +291,8 @@ export const SETTINGS_SEARCH_TARGETS = {
     aliases: "tweakcn light dark system",
   },
   appearanceAccent: {
-    routeId: "appearance",
+    ...appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.accent),
     labelKey: "configView.appearance.accent",
-    search: "?section=__appearance__",
-    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.accent}`,
     searchKeys: [
       "configView.appearance.accentHint",
       "configView.appearance.customAccent",
@@ -270,22 +310,34 @@ export const SETTINGS_SEARCH_TARGETS = {
     aliases: "colour swatch palette highlight green purple neutral",
   },
   appearanceTypography: {
-    routeId: "appearance",
+    ...appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.typography),
     labelKey: "configView.appearance.typography",
-    search: "?section=__appearance__",
-    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.typography}`,
     searchKeys: [
       "configView.appearance.fonts.ui",
       "configView.appearance.fonts.chat",
+      "configView.appearance.fonts.terminal",
+      "configView.appearance.fonts.terminalDefault",
       "configView.appearance.fonts.themeDefault",
     ],
     aliases: "font fonts typeface",
   },
+  appearanceTabIcon: {
+    ...appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.tabIcon),
+    labelKey: "configView.appearance.tabIcon.title",
+    searchKeys: [
+      "configView.appearance.tabIcon.source",
+      "configView.appearance.tabIcon.agent",
+      "configView.appearance.tabIcon.shape",
+      "configView.appearance.tabIcon.square",
+      "configView.appearance.tabIcon.rounded",
+      "configView.appearance.tabIcon.circle",
+      "configView.appearance.tabIcon.lobsterdex",
+    ],
+    aliases: "favicon browser tab icon agent avatar image",
+  },
   appearanceTextSize: {
-    routeId: "appearance",
+    ...appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.textSize),
     labelKey: "configView.appearance.textSize",
-    search: "?section=__appearance__",
-    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.textSize}`,
     searchKeys: [
       "configView.textSizes.small",
       "configView.textSizes.default",
@@ -326,11 +378,11 @@ export const SETTINGS_SEARCH_TARGETS = {
       "automatic auto discover discovery native external conversations show hide sidebar claude sessions",
   },
   appearanceChat: {
-    routeId: "appearance",
+    ...appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.chat),
     labelKey: "configView.chatPrefs.title",
-    search: "?section=__appearance__",
-    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.chat}`,
     searchKeys: [
+      "configView.chatPrefs.openLinksExternally",
+      "configView.chatPrefs.openLinksExternallyHint",
       "configView.chatPrefs.messageWidth",
       "configView.chatPrefs.messageWidthHint",
       "configView.chatPrefs.showTaskProgress",
@@ -361,10 +413,8 @@ export const SETTINGS_SEARCH_TARGETS = {
       "keyboard enter follow-up followup steer queue microphone voice audio input codex claude terminal viewer camera dictation dictate width task progress checklist collapse expand",
   },
   appearanceConnection: {
-    routeId: "appearance",
+    ...appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.connection),
     labelKey: "configView.connection.title",
-    search: "?section=__appearance__",
-    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.connection}`,
     searchKeys: [
       "configView.connection.gateway",
       "configView.connection.status",

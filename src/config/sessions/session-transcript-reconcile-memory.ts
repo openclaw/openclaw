@@ -3,11 +3,13 @@ import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
+  isIncognitoOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type { PreparedSessionTranscriptProjectionMetadata } from "./session-transcript-projection-rebuild.js";
+import { transcriptEventJsonSql } from "./transcript-payload.js";
 
 const SOURCE_FRAME_BYTES = 256 * 1024;
 
@@ -60,6 +62,14 @@ function readSnapshot(database: OpenClawAgentDatabase, sessionId: string) {
         maxSeq: row.max_seq,
         generation: row.generation,
       }
+    : undefined;
+}
+
+/** Capture only the live incognito source; durable stores stay with the native execution owner. */
+export function captureMemoryTranscriptProjectionSource(options: OpenClawAgentDatabaseOptions) {
+  const database = getOpenClawAgentDatabaseIfOpen(options);
+  return database && isIncognitoOpenClawAgentDatabase(database)
+    ? createMemoryTranscriptProjectionSource(database, { ...options, path: database.path })
     : undefined;
 }
 
@@ -137,8 +147,8 @@ export function createMemoryTranscriptProjectionSource(
               .select([
                 "seq",
                 "created_at",
-                /* kysely-allow-raw: acquire UTF-8 once without main-thread decoding or parsing. */
-                sql<Uint8Array>`CAST(event_json AS BLOB)`.as("bytes"),
+                /* kysely-allow-raw: acquire canonical event bytes once; framing does not decode JSON. */
+                sql<Uint8Array>`CAST(${transcriptEventJsonSql(database.db)} AS BLOB)`.as("bytes"),
               ])
               .where("session_id", "=", sessionId)
               .where("seq", ">", afterSeq);

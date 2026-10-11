@@ -101,7 +101,7 @@ read_when:
 
 `allowLoopback` trusts local processes on the Gateway host to the same degree as the reverse proxy. Enable it only when the Gateway is still firewalled from direct remote access and the local proxy strips or overwrites client-supplied identity headers.
 
-Internal Gateway clients that do not travel through the reverse proxy should use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`, not trusted-proxy identity headers. `openclaw gateway status` selects this local password automatically when no `--url` override is supplied, including with `--json`. Non-loopback Control UI deployments still need explicit `gateway.controlUi.allowedOrigins`.
+Internal Gateway clients that do not travel through the reverse proxy should use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`, not trusted-proxy identity headers. `openclaw gateway status` selects this local password automatically when no `--url` override is supplied, including with `--json`. For browser access, omit `gateway.controlUi.allowedOrigins` to use `gateway.publicOrigin` as the default, or configure an explicit list that overrides it.
 
 Update and restart health checks can also reuse the local CLI's existing paired device credentials when no shared credential is configured. These checks read existing identity and token state without creating an identity or saving replacement credentials.
 </Warning>
@@ -146,6 +146,22 @@ Any local process that can connect to the Gateway can impersonate a loopback rev
 Run `openclaw configure --section gateway` and select **Trusted Proxy**. Entering an address or CIDR that matches a loopback source under the Gateway's runtime rules shows the security warning above and asks whether to allow loopback authentication. This includes ranges containing loopback, even when their base address is not loopback. The default is **No** for a new configuration. **Yes** saves `gateway.auth.trustedProxy.allowLoopback: true`; **No** leaves it unset and warns that loopback proxy requests will fail with `trusted_proxy_loopback_source`, with a link back to this page.
 
 When reconfiguring an existing trusted-proxy setup, the prompt defaults to the existing `allowLoopback` opt-in. Choosing **No** revokes it. If no entered address or range matches a loopback source, the wizard leaves the existing value unchanged. Same-mode reconfiguration also preserves `deviceAutoApprove` verbatim; device enrollment policy is not changed by this prompt. Switching from another auth mode does not restore dormant trusted-proxy opt-ins.
+
+With live configuration reload enabled, changes to `gateway.trustedProxies`,
+`gateway.allowRealIpFallback`, `gateway.auth.allowTailscale`,
+`gateway.auth.identityScopes`, and `gateway.auth.trustedProxy` apply without a
+Gateway restart. Transport policy changes require clients to reconnect while
+preserving accepted runs and queued inputs whose access grants are unchanged.
+This includes proxy headers, OIDC mapping, device auto-approval, and trusted proxy
+addresses. Removing a connected identity from `allowUsers`, disabling its auth
+method, or changing its own identity-scope grant still revokes accepted work.
+Restoring the grant does not revive revoked work. Identity-scope edits for other
+identities leave existing connections and work unchanged; clients without verified
+operator identities also ignore those edits. HTTP requests and plugin auth cookies
+do not use identity-scope grants and are unaffected by those scope edits.
+A configuration writer receives its accepted result before its connection closes.
+Pending handshakes and HTTP requests recheck the policy applicable to their authority
+after asynchronous waits.
 
 ## Per-identity scope grants
 
@@ -438,18 +454,14 @@ If startup fails with an error like `gateway auth mode is trusted-proxy, but a s
 - Remove the shared token when using trusted-proxy mode, or
 - Switch `gateway.auth.mode` to `"token"` if you intend token-based auth.
 
-Loopback trusted-proxy identity headers still fail closed: same-host callers are not silently authenticated as proxy users. Internal OpenClaw callers that bypass the proxy may authenticate with `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD` instead. Token fallback remains intentionally unsupported in trusted-proxy mode.
+Loopback trusted-proxy identity headers are still rejected by default: same-host callers are not silently authenticated as proxy users. Internal OpenClaw callers that bypass the proxy may authenticate with `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD` instead. Token fallback remains intentionally unsupported in trusted-proxy mode.
 
 ## Restrict a separate Gateway to one owner
 
-Use a [separate Gateway cell](/gateway/multi-tenant-hosting) when one owner needs a
+Use a [separate Gateway](/gateway/security/trust-model) when one owner needs a
 different trust boundary. A separate workspace, model picker filter, or Gateway
 process under the same OS user does not isolate its credentials and state from
 other agents running as that user.
-
-Fleet-managed cells currently use token authentication. This trusted-proxy
-procedure requires an independently provisioned cell; do not overwrite Fleet's
-managed auth configuration.
 
 The identity-aware proxy must reject every other user **before forwarding any HTTP
 request or WebSocket upgrade**. Bind that policy to a verified immutable identity,
@@ -465,9 +477,9 @@ WebSocket authentication paths. Existing connections also require explicit
 revocation or disconnection. Enforce the owner restriction at the proxy for all
 routes, including plugin routes, and do not create an unprotected node route.
 
-For a proxy-only cell, omit both Gateway token and password configuration and
+For a proxy-only Gateway, omit both Gateway token and password configuration and
 their environment variables. Keep `allowLoopback: false` when the proxy has a
-separate network identity. The provider credential inside the cell authenticates
+separate network identity. The provider credential inside the Gateway authenticates
 the workload to its provider; it does not authenticate the human using the
 Gateway. The host administrator remains trusted.
 
@@ -477,11 +489,11 @@ Before enabling trusted-proxy auth, verify:
 
 - [ ] **Proxy is the only path**: The Gateway port is firewalled from everything except your proxy.
 - [ ] **trustedProxies is minimal**: Only your actual proxy IPs, not entire subnets.
-- [ ] **Loopback proxy source is deliberate**: trusted-proxy auth fails closed for loopback-source requests unless `gateway.auth.trustedProxy.allowLoopback` is explicitly enabled for a same-host proxy.
+- [ ] **Loopback proxy source is deliberate**: trusted-proxy auth rejects loopback-source requests unless `gateway.auth.trustedProxy.allowLoopback` is explicitly enabled for a same-host proxy.
 - [ ] **Proxy strips headers**: Your proxy overwrites (not appends) `x-forwarded-*` headers from clients.
 - [ ] **Client IP is attributable**: The proxy always rebuilds `X-Forwarded-For` with the original non-loopback client address.
 - [ ] **TLS termination**: Your proxy handles TLS; users connect via HTTPS.
-- [ ] **allowedOrigins is explicit**: Non-loopback Control UI uses explicit `gateway.controlUi.allowedOrigins`.
+- [ ] **Browser origins are configured**: Non-loopback Control UI uses `gateway.publicOrigin` with `gateway.controlUi.allowedOrigins` omitted, or an explicit allowlist.
 - [ ] **allowUsers is set** (recommended): Restrict to known users rather than allowing anyone authenticated.
 - [ ] **No mixed token config**: Do not set both `gateway.auth.token` and `gateway.auth.mode: "trusted-proxy"`.
 - [ ] **Local password fallback is private**: If you configure `gateway.auth.password` for internal direct callers, keep the Gateway port firewalled so non-proxy remote clients cannot reach it directly.
@@ -537,7 +549,7 @@ A Gateway token cannot replace proxy authentication. Do not send identity header
 
   </Accordion>
   <Accordion title="trusted_proxy_local_interface_source / trusted_proxy_local_interface_check_failed">
-    The request's source IP matched one of the Gateway host's own non-loopback network interface addresses (not the proxy), a guard against spoofed same-host traffic on tailnets or Docker bridge networks. `..._check_failed` means interface discovery itself errored, so OpenClaw fails closed.
+    The request's source IP matched one of the Gateway host's own non-loopback network interface addresses (not the proxy), a guard against spoofed same-host traffic on tailnets or Docker bridge networks. `..._check_failed` means interface discovery itself errored, so OpenClaw rejects the request.
 
     Check:
 

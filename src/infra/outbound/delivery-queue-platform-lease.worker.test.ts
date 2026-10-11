@@ -8,7 +8,10 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { stateWorkerRegistry } from "../../state/openclaw-state-worker-registry.js";
+import type { WorkerWriteOperationContext } from "../../state/worker-operation-registry.js";
 import { captureDeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
 import type { SqliteWorkerRequest } from "../sqlite-worker-contract.js";
 import { ackDelivery } from "./delivery-queue-ack.js";
@@ -18,7 +21,13 @@ import {
   claimReusableDeliveryPlatformSendAttempt,
   renewDeliveryPlatformSendLease,
 } from "./delivery-queue-platform-lease.js";
-import { enqueueDeliveryOnce, loadPendingDelivery } from "./delivery-queue-storage.js";
+import {
+  enqueueDelivery,
+  enqueueDeliveryOnce,
+  markDeliveryPlatformSendAttemptStarted,
+  markDeliveryPlatformSendDispatched,
+  loadPendingDelivery,
+} from "./delivery-queue-storage.js";
 import { installDeliveryQueueTmpDirHooks } from "./delivery-queue.test-helpers.js";
 
 function observeRenewalDispatch(id: string) {
@@ -55,6 +64,74 @@ describe("outbound producer claim worker", () => {
     vi.useRealTimers();
   });
 
+  it("refreshes the attempt timestamp immediately before provider I/O", async () => {
+    const id = await enqueueDelivery(
+      {
+        channel: "forum",
+        to: "123",
+        payloads: [{ text: "test" }],
+      },
+      fixtures.tmpDir(),
+    );
+
+    await stateWorkerRegistry.prepare("deliveryQueue.mutateOutbound");
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const env = { ...process.env, OPENCLAW_STATE_DIR: fixtures.tmpDir() };
+      const database = openOpenClawStateDatabase({ env });
+      const context: WorkerWriteOperationContext = {
+        open: () => database,
+        writeAdmitted: () => {
+          throw new Error("Outbound mutations retain their custom admission");
+        },
+        write: (operation, options) =>
+          runOpenClawStateWriteTransaction(operation, { database, env }, options),
+        stateOptions: () => ({ path: database.path, env }),
+      };
+      stateWorkerRegistry.execute(
+        { type: "deliveryQueue.mutateOutbound", input: { kind: "start", id } },
+        context,
+      );
+      vi.setSystemTime(9_000);
+      stateWorkerRegistry.execute(
+        { type: "deliveryQueue.mutateOutbound", input: { kind: "dispatch", id } },
+        context,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const entry = await loadPendingDelivery(id, fixtures.tmpDir());
+    expect(entry?.platformSendStartedAt).toBe(9_000);
+    expect(entry?.recoveryState).toBe("send_attempt_started");
+  });
+
+  it("transfers only reply metadata from the actual callback-bearing send context", async () => {
+    const stateDir = fixtures.tmpDir();
+    const id = await enqueueDelivery(
+      { channel: "matrix", to: "!synthetic:example", payloads: [{ text: "ordinary result" }] },
+      stateDir,
+    );
+    const localGuard = vi.fn();
+    const route = {
+      replyToId: "reply",
+      threadId: "thread",
+      assertDirectAdapterHandoff: localGuard,
+    };
+    await markDeliveryPlatformSendAttemptStarted(id, stateDir, route);
+    expect(await loadPendingDelivery(id, stateDir)).toMatchObject({
+      effectiveReplyToId: "reply",
+      recoveryState: "send_attempt_started",
+    });
+    await markDeliveryPlatformSendDispatched(id, stateDir, { ...route, replyToId: null });
+    expect(await loadPendingDelivery(id, stateDir)).toMatchObject({
+      effectiveReplyToId: null,
+      recoveryState: "send_attempt_started",
+    });
+    expect(localGuard).not.toHaveBeenCalled();
+  });
+
   it("claims and renews retained custody without host data SQL, then reopens the same owner", async () => {
     const stateDir = fixtures.tmpDir();
     const id = "worker-claim";
@@ -65,7 +142,7 @@ describe("outbound producer claim worker", () => {
     );
     await closeOpenClawStateDatabaseAsync();
     const context = captureDeliveryQueueStateContext(stateDir);
-    const sql = observeHostDataSql({ ...process.env, OPENCLAW_STATE_DIR: stateDir });
+    const sql = observeHostDataSql();
     let claimId: string | undefined;
     let expiresAt: number | undefined;
     try {

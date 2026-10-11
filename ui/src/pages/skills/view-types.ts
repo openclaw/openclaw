@@ -1,56 +1,21 @@
 import type { TemplateResult } from "lit";
 import type { SkillLibraryEntry } from "../../../../packages/gateway-protocol/src/index.ts";
-import type { SkillStatusReport } from "../../api/types.ts";
-import type { ClawHubSearchResult } from "../../lib/skills/clawhub-search.ts";
-import type {
-  ClawHubSkillSecurityVerdict,
-  ClawHubSkillDetail,
-  SkillOperation,
-  SkillMessageMap,
-} from "../../lib/skills/index.ts";
+import type { SkillsState } from "../../lib/skills/index.ts";
 
 export type SkillsStatusFilter = "all" | "ready" | "needs-setup" | "disabled";
 export type SkillDetailTab = "overview" | "card";
 
 export type SkillsProps = {
+  state: SkillsState;
   surface?: "discovery" | "settings";
   libraryEntries?: SkillLibraryEntry[];
   onLibraryOpen?: (skillId: string) => void;
   library?: TemplateResult;
   showInventory?: boolean;
-  personalImport?: boolean;
   canUpdate: boolean;
   canInstall: boolean;
-  connected: boolean;
   loading: boolean;
-  report: SkillStatusReport | null;
   error: string | null;
-  filter: string;
-  statusFilter: SkillsStatusFilter;
-  edits: Record<string, string>;
-  operation: SkillOperation;
-  messages: SkillMessageMap;
-  detailKey: string | null;
-  detailTab: SkillDetailTab;
-  clawhubVerdicts: Record<string, ClawHubSkillSecurityVerdict>;
-  clawhubVerdictsLoading: boolean;
-  clawhubVerdictsError: string | null;
-  skillCardContents: Record<string, string>;
-  skillCardLoadingKey: string | null;
-  skillCardErrors: Record<string, string>;
-  clawhubQuery: string;
-  clawhubResults: ClawHubSearchResult[] | null;
-  clawhubIconUrls?: Record<string, string>;
-  clawhubSearchLoading: boolean;
-  clawhubSearchError: string | null;
-  clawhubDetail: ClawHubSkillDetail | null;
-  clawhubDetailRef: string | null;
-  clawhubDetailLoading: boolean;
-  clawhubDetailError: string | null;
-  clawhubInstallMessage: {
-    kind: "success" | "error";
-    text: string;
-  } | null;
   onFilterChange: (next: string) => void;
   onStatusFilterChange: (next: SkillsStatusFilter) => void;
   onRefresh: () => void;

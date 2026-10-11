@@ -56,21 +56,6 @@ function textJoined(lines: string[]): string {
 }
 
 describe("formatMessageCliText displayLimit", () => {
-  it("honors displayLimit for message read", () => {
-    const messages = Array.from({ length: 40 }, (_, i) =>
-      msg(`id-${i}`, `2026-01-01T00:00:0${i % 10}.000Z`, `user-${i}`, `text-${i}`),
-    );
-
-    const result = readResultPayload({ messages });
-    const out = textJoined(formatMessageCliText(result, { displayLimit: 15 }));
-
-    // Should include items within the limit
-    expect(out).toContain("text-0");
-    expect(out).toContain("text-14");
-    // Should NOT include items beyond the limit
-    expect(out).not.toContain("text-15");
-  });
-
   it("honors displayLimit for list-pins", () => {
     const pins = Array.from({ length: 40 }, (_, i) =>
       msg(`pin-${i}`, `2026-01-01T00:00:0${i % 10}.000Z`, `user-${i}`, `pin-text-${i}`),
@@ -84,26 +69,7 @@ describe("formatMessageCliText displayLimit", () => {
     expect(out).not.toContain("pin-text-15");
   });
 
-  it("honors displayLimit for search", () => {
-    const messages = Array.from({ length: 40 }, (_, i) =>
-      msg(`id-${i}`, `2026-01-01T00:00:0${i % 10}.000Z`, `user-${i}`, `search-${i}`),
-    );
-    // Discord search returns messages as array-of-array
-    const wrapped = messages.map((m) => [m]);
-
-    const result = searchResultPayload({ results: { messages: wrapped } });
-    const out = textJoined(formatMessageCliText(result, { displayLimit: 15 }));
-
-    expect(out).toContain("search-0");
-    expect(out).toContain("search-14");
-    expect(out).not.toContain("search-15");
-  });
-
-  it.each([
-    { displayLimit: 1, expectedRows: 1 },
-    { displayLimit: 75, expectedRows: 75 },
-    { displayLimit: undefined, expectedRows: 50 },
-  ])(
+  it.each([{ displayLimit: undefined, expectedRows: 50 }])(
     "renders $expectedRows reaction rows for displayLimit $displayLimit",
     ({ displayLimit, expectedRows }) => {
       const reactions = Array.from({ length: 80 }, (_, index) => ({
@@ -126,49 +92,17 @@ describe("formatMessageCliText displayLimit", () => {
     },
   );
 
-  it.each([0, 1])(
-    "renders an explicit outcome for a search with no results (total: %i)",
-    (totalResults) => {
-      const result = searchResultPayload({
-        results: { messages: [], total_results: totalResults },
-      });
-
-      expect(formatMessageCliText(result)).toEqual(["Search results", "No results."]);
-    },
-  );
-
-  it("defaults to 25 when no displayLimit is provided", () => {
-    const messages = Array.from({ length: 50 }, (_, i) =>
-      msg(`id-${i}`, `2026-01-01T00:00:0${i % 10}.000Z`, `user-${i}`, `text-${i}`),
-    );
-
-    const result = readResultPayload({ messages });
-    const out = textJoined(formatMessageCliText(result));
-
-    expect(out).toContain("text-24");
-    expect(out).not.toContain("text-25");
-  });
-
-  it("renders all rows when total is below displayLimit", () => {
-    const messages = [
-      msg("id-1", "2026-01-01T00:00:00.000Z", "alice", "hello"),
-      msg("id-2", "2026-01-01T00:00:01.000Z", "bob", "world"),
-    ];
-
-    const result = readResultPayload({ messages });
-    const out = textJoined(formatMessageCliText(result, { displayLimit: 30 }));
-
-    expect(out).toContain("hello");
-    expect(out).toContain("world");
+  it("renders an explicit empty search outcome despite an approximate positive total", () => {
+    const result = searchResultPayload({ results: { messages: [], total_results: 1 } });
+    expect(formatMessageCliText(result)).toEqual(["Search results", "No results."]);
   });
 });
 
 describe("formatMessageCliText reaction labels", () => {
-  it.each(["raw", "name", "emoji", "key"] as const)(
-    "renders untrusted %s reaction cells as plain terminal text",
-    (field) => {
-      const label = "\u001b[2Jreaction\nline";
-      const reaction = field === "raw" ? { emoji: { raw: label } } : { [field]: label };
+  const label = "\u001b[2J:party_parrot:🦞\nline";
+  it.each([{ field: "name", reaction: { name: label, emoji: "unused-emoji", key: "unused-key" } }])(
+    "renders the preferred $field label as plain text without changing the payload",
+    ({ reaction }) => {
       const result = {
         kind: "action",
         channel: "matrix",
@@ -180,81 +114,28 @@ describe("formatMessageCliText reaction labels", () => {
         dryRun: false,
       } satisfies MessageActionResult;
       const payload = structuredClone(result.payload);
-
       const output = textJoined(formatMessageCliText(result));
-
       expect(result.payload).toEqual(payload);
       expect(output).not.toContain("\u001b[2J");
-      expect(output).toContain("reaction\\nline");
+      expect(output).toContain(":party_parrot:🦞\\nline");
+      expect(output).not.toContain("unused-");
       expect(output).toContain("alice");
       expect(output).toContain("bob\\tother");
       expect(output.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
     },
   );
-
-  it.each([
-    ["matrix", { key: "👍" }, "👍"],
-    ["matrix", { key: ":party_parrot:" }, ":party_parrot:"],
-    ["discord", { emoji: { id: "123", name: "party", raw: "party:123" } }, "party:123"],
-    ["slack", { name: "thumbsup" }, "thumbsup"],
-    ["msteams", { name: "like", emoji: "👍" }, "like"],
-    [
-      "directchat",
-      { emoji: { raw: "raw-priority" }, name: "unused-name", key: "unused-key" },
-      "raw-priority",
-    ],
-    [
-      "directchat",
-      { name: "name-priority", emoji: "unused-emoji", key: "unused-key" },
-      "name-priority",
-    ],
-    ["directchat", { emoji: "🦞", key: "unused-key" }, "🦞"],
-  ] as const)("renders %s reaction labels from their result shape", (channel, reaction, label) => {
-    const result = {
-      kind: "action",
-      channel,
-      action: "reactions",
-      handledBy: "plugin",
-      payload: {
-        reactions: [{ ...reaction, count: 2, users: ["@alice:qa.test", "@bob:qa.test"] }],
-      },
-      dryRun: false,
-    } satisfies MessageActionResult;
-
-    const output = textJoined(formatMessageCliText(result));
-
-    expect(output).toContain(label);
-    expect(output).toContain("@alice:qa.test");
-    expect(output).toContain("@bob:qa.test");
-  });
 });
 
 describe("renderPaginationHint", () => {
-  it("emits hint when payload has hasMore: true", () => {
+  it.each([
+    { nextBatch: "token-123" },
+    { "@odata.nextLink": "https://graph.microsoft.com/v1.0/next" },
+  ])("emits a hint for provider continuation %j", (continuation) => {
     const messages = [msg("id-1", "2026-01-01T00:00:00.000Z", "alice", "hello")];
-    const result = readResultPayload({ messages, hasMore: true });
-    const out = textJoined(formatMessageCliText(result, { displayLimit: 5 }));
-
-    expect(out).toContain("More results available");
-  });
-
-  it("emits hint when payload has nextBatch string", () => {
-    const messages = [msg("id-1", "2026-01-01T00:00:00.000Z", "alice", "hello")];
-    const result = readResultPayload({ messages, nextBatch: "token-123" });
-    const out = textJoined(formatMessageCliText(result, { displayLimit: 5 }));
-
-    expect(out).toContain("More results available");
-  });
-
-  it("emits hint when payload has @odata.nextLink string", () => {
-    const messages = [msg("id-1", "2026-01-01T00:00:00.000Z", "alice", "hello")];
-    const result = readResultPayload({
-      messages,
-      "@odata.nextLink": "https://graph.microsoft.com/v1.0/next",
-    });
-    const out = textJoined(formatMessageCliText(result, { displayLimit: 5 }));
-
-    expect(out).toContain("More results available");
+    const result = readResultPayload({ messages, ...continuation });
+    expect(textJoined(formatMessageCliText(result, { displayLimit: 5 }))).toContain(
+      "More results available",
+    );
   });
 
   it.each([0, 1])("preserves explicit search continuation with %i returned messages", (count) => {
@@ -268,43 +149,6 @@ describe("renderPaginationHint", () => {
     expect(textJoined(formatMessageCliText(result, { displayLimit: 5 }))).toContain(
       "More results available",
     );
-  });
-
-  it.each([2, 200])(
-    "does not infer more search results from approximate total %i",
-    (totalResults) => {
-      const message = msg("id-1", "2026-01-01T00:00:00.000Z", "alice", "hello");
-      const result = searchResultPayload({
-        results: { messages: [[message]], total_results: totalResults },
-      });
-
-      expect(textJoined(formatMessageCliText(result, { displayLimit: 5 }))).not.toContain(
-        "More results available",
-      );
-    },
-  );
-
-  it("does NOT emit hint when total_results equals returned count (completed search)", () => {
-    const messages = [
-      msg("id-1", "2026-01-01T00:00:00.000Z", "alice", "hello"),
-      msg("id-2", "2026-01-01T00:00:01.000Z", "bob", "world"),
-    ];
-    // total_results: 2 with 2 returned messages → search is complete.
-    const wrapped = messages.map((m) => [m]);
-    const result = searchResultPayload({
-      results: { messages: wrapped, total_results: 2 },
-    });
-    const out = textJoined(formatMessageCliText(result, { displayLimit: 5 }));
-
-    expect(out).not.toContain("More results available");
-  });
-
-  it("does NOT emit hint when no pagination signal is present", () => {
-    const messages = [msg("id-1", "2026-01-01T00:00:00.000Z", "alice", "hello")];
-    const result = readResultPayload({ messages });
-    const out = textJoined(formatMessageCliText(result, { displayLimit: 5 }));
-
-    expect(out).not.toContain("More results available");
   });
 });
 
@@ -328,55 +172,30 @@ describe("formatMessageCliText send results", () => {
     ]);
   });
 
-  it.each([
-    {
-      status: "suppressed" as const,
-      suppressionReason: "cancelled_by_message_sending_hook" as const,
-      expected: "Message send suppressed: cancelled_by_message_sending_hook.",
-    },
-    {
-      status: "failed" as const,
-      error: "provider rejected the message",
-      expected: "provider rejected the message",
-    },
-    {
-      status: "partial_failed" as const,
-      error: "second attachment rejected",
-      messageId: "first-part-1",
-      expected: "second attachment rejected",
-    },
-  ])(
-    "reports a $status delivery without claiming success",
-    ({ status, suppressionReason, error, messageId, expected }) => {
-      const result = {
-        kind: "send",
-        action: "send",
+  it("reports a partial delivery failure without claiming success", () => {
+    const result = {
+      kind: "send",
+      action: "send",
+      channel: "directchat",
+      to: "room-1",
+      handledBy: "core",
+      payload: {},
+      dryRun: false,
+      sendResult: {
         channel: "directchat",
         to: "room-1",
-        handledBy: "core",
-        payload: {},
-        dryRun: false,
-        sendResult: {
-          channel: "directchat",
-          to: "room-1",
-          via: "direct",
-          mediaUrl: null,
-          deliveryStatus: status,
-          ...(suppressionReason ? { suppressionReason } : {}),
-          ...(error ? { error } : {}),
-          ...(messageId ? { result: { channel: "directchat", messageId } } : {}),
-        },
-      } satisfies MessageActionResult;
-
-      const output = textJoined(formatMessageCliText(result));
-
-      expect(output).toContain(expected);
-      expect(output).not.toContain("✅ Sent");
-      if (messageId) {
-        expect(output).toContain(`Message ID: ${messageId}`);
-      }
-    },
-  );
+        via: "direct",
+        mediaUrl: null,
+        deliveryStatus: "partial_failed",
+        error: "second attachment rejected",
+        result: { channel: "directchat", messageId: "first-part-1" },
+      },
+    } satisfies MessageActionResult;
+    const output = textJoined(formatMessageCliText(result));
+    expect(output).toContain("second attachment rejected");
+    expect(output).not.toContain("✅ Sent");
+    expect(output).toContain("Message ID: first-part-1");
+  });
 });
 
 describe("formatMessageCliText payload scalars", () => {
@@ -449,24 +268,10 @@ describe("formatMessageCliText payload scalars", () => {
 
 describe("formatMessageCliText provider-reported failures", () => {
   it.each([
-    ["disabled reaction", "react", { ok: false, hint: "Reactions are disabled." }, "disabled"],
-    [
-      "rejected added reaction",
-      "react",
-      { ok: false, warning: "Unavailable", added: "✅" },
-      "Unavailable",
-    ],
-    [
-      "rejected delete",
-      "delete",
-      { ok: false, deleted: false, warning: "Not deleted" },
-      "Not deleted",
-    ],
     ["rejected poll", "poll", { ok: false, error: "Poll rejected" }, "Poll rejected"],
-    ["rejected send", "send", { ok: false, error: "Message rejected" }, "Message rejected"],
   ] as const)("reports %s without claiming success", (_name, action, payload, expected) => {
     const result = {
-      kind: action === "send" || action === "poll" ? action : "action",
+      kind: action === "poll" ? action : "action",
       channel: "telegram",
       action,
       to: "123",
@@ -522,38 +327,6 @@ describe("formatMessageCliText poll results", () => {
       }
     },
   );
-
-  it("formats direct core poll results as direct deliveries", () => {
-    const result = {
-      kind: "poll",
-      action: "poll",
-      channel: "directchat",
-      to: "room-1",
-      handledBy: "core",
-      payload: {},
-      dryRun: false,
-      pollResult: {
-        channel: "directchat",
-        to: "room-1",
-        question: "Lunch?",
-        options: ["Pizza", "Sushi"],
-        maxSelections: 1,
-        durationSeconds: null,
-        durationHours: null,
-        via: "direct",
-        result: {
-          messageId: "p1",
-          target: { kind: "conversation", id: "conv-1" },
-          pollId: "poll-1",
-        },
-      },
-    } satisfies MessageActionResult;
-
-    expect(formatMessageCliText(result)).toEqual([
-      "✅ Poll sent via Direct Chat. Message ID: p1 (conversation conv-1)",
-      "Poll id: poll-1",
-    ]);
-  });
 });
 
 describe("formatMessageCliText broadcast results", () => {

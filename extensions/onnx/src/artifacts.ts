@@ -1,6 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
+import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
+import {
+  readFileWindowFully,
+  root as fsRoot,
+  sha256File,
+} from "openclaw/plugin-sdk/file-access-runtime";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import type { ModelFile, ModelPreset } from "./catalog.js";
@@ -31,7 +36,11 @@ const ExportSchema = Type.Object(
   { additionalProperties: false },
 );
 
-async function readBounded(file: string, maxBytes: number): Promise<Buffer> {
+async function withModelFile<T>(
+  file: string,
+  maxBytes: number,
+  consume: (handle: FileHandle, size: number) => Promise<T>,
+): Promise<T> {
   let handle;
   try {
     handle = await fs.open(file, "r");
@@ -39,24 +48,29 @@ async function readBounded(file: string, maxBytes: number): Promise<Buffer> {
     if (!stat.isFile() || stat.size < 1 || stat.size > maxBytes) {
       throw new OnnxWorkerError("model-integrity");
     }
-    const data = Buffer.alloc(stat.size);
-    let offset = 0;
-    while (offset < data.length) {
-      const { bytesRead } = await handle.read(data, offset, data.length - offset, offset);
-      if (bytesRead === 0) {
-        throw new OnnxWorkerError("model-integrity");
-      }
-      offset += bytesRead;
-    }
-    return data;
+    return await consume(handle, stat.size);
   } catch (error) {
     if (error instanceof OnnxWorkerError) {
       throw error;
     }
-    throw new OnnxWorkerError("model-missing");
+    throw new OnnxWorkerError(
+      error instanceof Error && "code" in error && error.code === "too-large"
+        ? "model-integrity"
+        : "model-missing",
+    );
   } finally {
     await handle?.close();
   }
+}
+
+async function readBounded(file: string, maxBytes: number): Promise<Buffer> {
+  return await withModelFile(file, maxBytes, async (handle, size) => {
+    const data = Buffer.alloc(size);
+    if ((await readFileWindowFully(handle, data, 0)) !== data.length) {
+      throw new OnnxWorkerError("model-integrity");
+    }
+    return data;
+  });
 }
 
 export async function resolveModelFiles(root: string, model: ModelPreset): Promise<ModelFile[]> {
@@ -92,16 +106,23 @@ export async function resolveModelFiles(root: string, model: ModelPreset): Promi
   return value.files.map((file) => ({ name: file.name, bytes: file.size, sha256: file.sha256 }));
 }
 
+function modelArtifactByteLimit(file: ModelFile): number {
+  const limit = file.name === "model.onnx" ? 1_500_000_000 : 16_777_216;
+  if (file.bytes > limit) {
+    throw new OnnxWorkerError("model-integrity");
+  }
+  return file.bytes;
+}
+
 export async function readModelArtifact(
   root: string,
   model: ModelPreset,
   file: ModelFile,
 ): Promise<Buffer> {
-  const limit = file.name === "model.onnx" ? 1_500_000_000 : 16_777_216;
-  if (file.bytes > limit) {
-    throw new OnnxWorkerError("model-integrity");
-  }
-  const data = await readBounded(path.join(root, model.id, file.name), limit);
+  const data = await readBounded(
+    path.join(root, model.id, file.name),
+    modelArtifactByteLimit(file),
+  );
   if (
     data.length !== file.bytes ||
     createHash("sha256").update(data).digest("hex") !== file.sha256
@@ -111,9 +132,26 @@ export async function readModelArtifact(
   return data;
 }
 
+async function verifyModelArtifact(
+  root: string,
+  model: ModelPreset,
+  file: ModelFile,
+): Promise<void> {
+  const maxBytes = modelArtifactByteLimit(file);
+  await withModelFile(path.join(root, model.id, file.name), maxBytes, async (handle, size) => {
+    if (size !== file.bytes) {
+      throw new OnnxWorkerError("model-integrity");
+    }
+    const hash = await sha256File(handle, { maxBytes });
+    if (hash.bytes !== file.bytes || hash.digest !== file.sha256) {
+      throw new OnnxWorkerError("model-integrity");
+    }
+  });
+}
+
 export async function verifyModel(root: string, model: ModelPreset): Promise<void> {
   for (const file of await resolveModelFiles(root, model)) {
-    await readModelArtifact(root, model, file);
+    await verifyModelArtifact(root, model, file);
   }
 }
 
@@ -127,9 +165,9 @@ export async function downloadModel(
       `${model.id} requires a local export. Use the plugin's export-gliclass-instruct.py helper.`,
     );
   }
-  const { fetchWithSsrFGuard } = await import("openclaw/plugin-sdk/ssrf-runtime");
   const destination = path.join(root, model.id);
   await fs.mkdir(destination, { recursive: true });
+  const directory = await fsRoot(destination);
   for (const file of model.source.files) {
     signal.throwIfAborted();
     const target = path.join(destination, file.name);
@@ -140,12 +178,14 @@ export async function downloadModel(
       throw error;
     });
     if (existing) {
-      await readModelArtifact(root, model, file);
+      await verifyModelArtifact(root, model, file);
       continue;
     }
-    const temp = path.join(destination, `.${file.name}.${randomUUID()}.partial`);
-    try {
-      const url = `https://huggingface.co/${model.source.repository}/resolve/${model.source.revision}/${file.path}`;
+    const temp = `.${file.name}.${randomUUID()}.partial`;
+    const url = `https://huggingface.co/${model.source.repository}/resolve/${model.source.revision}/${file.path}`;
+    // The producer must finish verification and release before publication.
+    async function* downloadChunks() {
+      const { fetchWithSsrFGuard } = await import("openclaw/plugin-sdk/ssrf-runtime");
       const guarded = await fetchWithSsrFGuard({
         url,
         requireHttps: true,
@@ -156,34 +196,19 @@ export async function downloadModel(
         if (!guarded.response.ok || !guarded.response.body) {
           throw new Error(`Model download failed: HTTP ${guarded.response.status}.`);
         }
-        const handle = await fs.open(temp, "wx", 0o600);
-        const reader = guarded.response.body.getReader();
         const hash = createHash("sha256");
         let size = 0;
-        try {
-          while (true) {
-            signal.throwIfAborted();
-            const chunk = await reader.read();
-            if (chunk.done) {
-              break;
-            }
-            size += chunk.value.byteLength;
-            if (size > file.bytes) {
-              throw new Error("Model download exceeds its pinned size.");
-            }
-            hash.update(chunk.value);
-            await handle.writeFile(chunk.value);
+        signal.throwIfAborted();
+        for await (const chunk of guarded.response.body) {
+          size += chunk.byteLength;
+          if (size > file.bytes) {
+            throw new Error("Model download exceeds its pinned size.");
           }
-          if (size !== file.bytes || hash.digest("hex") !== file.sha256) {
-            throw new Error("Model download failed its pinned integrity check.");
-          }
-        } finally {
-          try {
-            await reader.cancel();
-          } finally {
-            reader.releaseLock();
-            await handle.close();
-          }
+          hash.update(chunk);
+          yield chunk;
+        }
+        if (size !== file.bytes || hash.digest("hex") !== file.sha256) {
+          throw new Error("Model download failed its pinned integrity check.");
         }
       } finally {
         try {
@@ -192,18 +217,26 @@ export async function downloadModel(
           await guarded.release();
         }
       }
+    }
+    await directory.create(`./${temp}`, downloadChunks(), {
+      mode: 0o600 & ~process.umask(),
+      durable: false,
+      mkdir: false,
+      maxBytes: file.bytes,
+      signal,
+    });
+    try {
       signal.throwIfAborted();
-      // Publishing with link never overwrites an existing operator artifact.
       try {
-        await fs.link(temp, target);
+        await fs.link(path.join(directory.rootReal, temp), target);
       } catch (error) {
         if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) {
           throw error;
         }
-        await readModelArtifact(root, model, file);
+        await verifyModelArtifact(root, model, file);
       }
     } finally {
-      await fs.rm(temp, { force: true });
+      await directory.remove(`./${temp}`, { force: true });
     }
   }
 }

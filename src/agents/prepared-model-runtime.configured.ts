@@ -16,8 +16,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
-import { resolveAgentEntry } from "./agent-scope-config.js";
+import { resolveAgentEntry, toAgentEntriesRecord } from "./agent-scope-config.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -61,7 +62,7 @@ export function collectPreparedModelRuntimeConfiguredRefs(
           ...config,
           agents: {
             ...(config.agents?.defaults ? { defaults: config.agents.defaults } : {}),
-            list: entry ? [entry] : [],
+            entries: toAgentEntriesRecord(entry ? [entry] : []),
           },
         }
       : config,
@@ -113,26 +114,6 @@ export function collectPreparedModelRuntimeProviderIds(
   return [...providerIds].toSorted((left, right) => left.localeCompare(right));
 }
 
-function hasConfiguredInlineProviderModel(
-  config: OpenClawConfig,
-  provider: string,
-  modelId: string,
-  matchesStaticModelId: StaticModelIdMatcher,
-): boolean {
-  return Object.entries(config.models?.providers ?? {}).some(
-    ([providerId, providerConfig]) =>
-      normalizeProviderId(providerId) === provider &&
-      (providerConfig.models ?? []).some((model) =>
-        matchesStaticModelId({
-          candidateId: model.id,
-          rowProvider: providerId,
-          provider,
-          modelId,
-        }),
-      ),
-  );
-}
-
 export function collectConfiguredProviderIdsNeedingStaticCatalog(params: {
   config: OpenClawConfig;
   configuredModelRefs?: readonly ConfiguredModelRef[];
@@ -149,15 +130,19 @@ export function collectConfiguredProviderIdsNeedingStaticCatalog(params: {
       continue;
     }
     const { provider, modelId } = parsed;
-    if (
-      hasConfiguredInlineProviderModel(
-        params.config,
-        provider,
-        modelId,
-        params.matchesStaticModelId,
-      ) ||
-      params.resolveStaticCatalogModel({ provider, modelId })
-    ) {
+    const configuredInline = Object.entries(params.config.models?.providers ?? {}).some(
+      ([providerId, providerConfig]) =>
+        normalizeProviderId(providerId) === provider &&
+        (providerConfig.models ?? []).some((model) =>
+          params.matchesStaticModelId({
+            candidateId: model.id,
+            rowProvider: providerId,
+            provider,
+            modelId,
+          }),
+        ),
+    );
+    if (configuredInline || params.resolveStaticCatalogModel({ provider, modelId })) {
       continue;
     }
     providerIds.add(provider);
@@ -179,13 +164,9 @@ export function prepareConfiguredRuntimeModels(params: {
   matchesStaticModelId: StaticModelIdMatcher;
 }): PreparedConfiguredRuntimeModel[] {
   const prepared: PreparedConfiguredRuntimeModel[] = [];
-  const seen = new Set<string>();
-  for (const { modelId, provider } of params.configuredModelRefs) {
-    const key = buildModelCatalogMergeKey(provider, modelId);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
+  for (const { modelId, provider } of dedupeByKey(params.configuredModelRefs, (ref) =>
+    buildModelCatalogMergeKey(ref.provider, ref.modelId),
+  )) {
     // Match request-time fallback precedence exactly: manifest/runtime-discovery rows win,
     // and the provider-static catalog fills only models absent from that surface.
     let model =
@@ -325,15 +306,40 @@ export function listConfiguredOwnerInputs(
         (agentId === compatibilityAgentId ? defaultWorkspaceDir : undefined);
       const preserveWorkspaceDirOnRefresh =
         launchWorkspaceDir && !resolveAgentEntry(config, agentId)?.workspace?.trim();
+      const workspaceDir = preserveWorkspaceDirOnRefresh
+        ? launchWorkspaceDir
+        : resolveAgentWorkspaceDir(config, agentId);
+      const configured = resolveDefaultModelForAgent({ cfg: config, agentId });
+      const subagentModel = resolveSubagentConfiguredModelSelection({
+        cfg: config,
+        agentId,
+        includeAgentPrimary: false,
+      });
       const input: PreparedModelRuntimeInput = {
         agentId,
         agentDir,
         config,
         inheritedAuthDir,
-        workspaceDir: preserveWorkspaceDirOnRefresh
-          ? launchWorkspaceDir
-          : resolveAgentWorkspaceDir(config, agentId),
-        runtimePluginSelections: resolveConfiguredRuntimePluginSelections(config, agentId),
+        workspaceDir,
+        runtimePluginSelections: resolveModelCandidateChain({
+          cfg: config,
+          agentId,
+          manifestPlugins: [],
+          provider: configured.provider || DEFAULT_PROVIDER,
+          model: configured.model || DEFAULT_MODEL,
+          requestedRouteResolution: "resolved",
+          // Session policy can narrow either configured chain after admission waits. Prepare
+          // their owners once so nested execution never expands an already frozen generation.
+          fallbacksOverride: [
+            ...resolveConfiguredModelFallbacks({ cfg: config, agentId }),
+            ...(subagentModel ? [subagentModel] : []),
+            ...(resolveSubagentSpawnModelFallbacksOverride(config, agentId) ?? []),
+          ],
+        }).map((candidate) => ({
+          provider: candidate.provider,
+          modelId: candidate.model,
+          agentId,
+        })),
       };
       if (allowGatewaySubagentBinding === true) {
         input.allowGatewaySubagentBinding = true;
@@ -343,35 +349,4 @@ export function listConfiguredOwnerInputs(
       }
       return input;
     });
-}
-
-function resolveConfiguredRuntimePluginSelections(
-  config: OpenClawConfig,
-  agentId: string,
-): PreparedModelRuntimeInput["runtimePluginSelections"] {
-  const configured = resolveDefaultModelForAgent({ cfg: config, agentId });
-  const subagentModel = resolveSubagentConfiguredModelSelection({
-    cfg: config,
-    agentId,
-    includeAgentPrimary: false,
-  });
-  return resolveModelCandidateChain({
-    cfg: config,
-    agentId,
-    manifestPlugins: [],
-    provider: configured.provider || DEFAULT_PROVIDER,
-    model: configured.model || DEFAULT_MODEL,
-    requestedRouteResolution: "resolved",
-    // Session policy can narrow either configured chain after admission waits. Prepare
-    // their owners once so nested execution never expands an already frozen generation.
-    fallbacksOverride: [
-      ...resolveConfiguredModelFallbacks({ cfg: config, agentId }),
-      ...(subagentModel ? [subagentModel] : []),
-      ...(resolveSubagentSpawnModelFallbacksOverride(config, agentId) ?? []),
-    ],
-  }).map((candidate) => ({
-    provider: candidate.provider,
-    modelId: candidate.model,
-    agentId,
-  }));
 }

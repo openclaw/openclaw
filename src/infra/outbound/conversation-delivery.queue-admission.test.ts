@@ -11,13 +11,14 @@ import {
 } from "../../config/sessions/conversation-delivery-store.js";
 import {
   registerConversationAddresses,
-  resolveConversation,
-  resolveConversationRegistryScope,
+  prepareConversationRegistryScope,
 } from "../../config/sessions/conversation-registry.js";
 import { resolveConversationRouteFingerprint } from "../../config/sessions/conversation-route-fingerprint.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   conversation,
   holdConversationWriterForTest,
+  readConversationDeliveryStateForTest,
 } from "../../gateway/conversation-delivery.test-support.js";
 import { runGatewayConversationSend } from "../../gateway/conversation-send.js";
 import {
@@ -27,13 +28,11 @@ import {
 import { addTestHook } from "../../plugins/hooks.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { PluginHookHandlerMap } from "../../plugins/types.js";
-import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
-import {
-  defaultConversationDeliveryDeps,
-  type ConversationDeliveryDeps,
-} from "./conversation-delivery.js";
+import { getDeliveryQueueEntryOwnersInDatabase } from "../delivery-queue-sqlite.kernel.js";
+import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.test-support.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { deliverOutboundPayloadsInternal } from "./deliver.js";
 import {
@@ -45,7 +44,6 @@ import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js"
 import { drainPendingDeliveriesCore } from "./delivery-queue-recovery.js";
 import {
   enqueueDeliveryOnce,
-  findDeliveryIntentOwner,
   loadPendingDelivery,
   loadUnfinishedDelivery,
 } from "./delivery-queue-storage.js";
@@ -54,6 +52,7 @@ import {
   installDeliveryQueueTmpDirHooks,
   readQueuedEntries,
 } from "./delivery-queue.test-helpers.js";
+import * as messageActionRunner from "./message-action-runner.js";
 
 describe("conversation completion through the real delivery queue", () => {
   const fixtures = installDeliveryQueueTmpDirHooks();
@@ -87,17 +86,21 @@ describe("conversation completion through the real delivery queue", () => {
     return registry;
   }
 
-  function createConversationOperation(operationId: string, message: string) {
+  async function createConversationOperation(
+    operationId: string,
+    message: string,
+    config: OpenClawConfig = {},
+  ) {
     const stateDir = fixtures.tmpDir();
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const scope = resolveConversationRegistryScope({ agentId: "main", config: {} });
-    onTestFinished(() => {
-      closeOpenClawAgentDatabaseByPath(scope.storePath);
+    const scope = await prepareConversationRegistryScope({ agentId: "main", config });
+    onTestFinished(async () => {
+      await closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
     });
-    registerConversationAddresses(scope, [
+    await registerConversationAddresses(scope, [
       { ...conversation, deliveryTarget: conversation.target },
     ]);
-    beginConversationDeliveryOperation(scope, {
+    await beginConversationDeliveryOperation(scope, {
       operationId,
       operationKind: "send",
       conversationRef: conversation.conversationRef,
@@ -127,7 +130,7 @@ describe("conversation completion through the real delivery queue", () => {
   it("fails closed for an unfinished conversation intent without route authority", async () => {
     const operationId = "missing-route-operation";
     const queueId = "missing-route-queue";
-    const { stateDir, scope } = createConversationOperation(operationId, "retained intent");
+    const { stateDir, scope } = await createConversationOperation(operationId, "retained intent");
     const sendText = vi.fn(async () => ({ channel: "reef" as const, messageId: "must-not-send" }));
     installSender(sendText);
     const rejectionError = "Conversation delivery is missing its current route authorization";
@@ -149,7 +152,7 @@ describe("conversation completion through the real delivery queue", () => {
       cause: { retryable: false },
       queueCustody: "released",
     });
-    expect(getConversationDeliveryOperation(scope, operationId)).toMatchObject({
+    expect(await getConversationDeliveryOperation(scope, operationId)).toMatchObject({
       status: "rejected",
       queueId,
       rejectionError,
@@ -174,7 +177,7 @@ describe("conversation completion through the real delivery queue", () => {
     async ({ reason, expectedReason }) => {
       const operationId = "provider-rejected-operation";
       const queueId = "provider-rejected-queue";
-      const { stateDir, scope } = createConversationOperation(operationId, "rendered text");
+      const { stateDir, scope } = await createConversationOperation(operationId, "rendered text");
       const writerReady = createDeferred<ReturnType<typeof holdConversationWriterForTest>>();
       let providerRejects = true;
       const platformSend = vi.fn(async () => ({
@@ -196,11 +199,15 @@ describe("conversation completion through the real delivery queue", () => {
       });
       const registry = installSender(sendText);
       const readState = () => {
-        const owner = findDeliveryIntentOwner(queueId, stateDir);
+        const owner = getDeliveryQueueEntryOwnersInDatabase(
+          openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } }),
+          [OUTBOUND_DELIVERY_QUEUE_NAME],
+          queueId,
+        ).get(OUTBOUND_DELIVERY_QUEUE_NAME);
         return {
           queueStatus: owner?.status,
           settlementPending: owner?.settlementPending === true,
-          operation: getConversationDeliveryOperation(scope, operationId),
+          operation: readConversationDeliveryStateForTest(scope, operationId),
         };
       };
       const observations: Array<{
@@ -280,7 +287,7 @@ describe("conversation completion through the real delivery queue", () => {
         ]);
         expect(auditOutcomes).toEqual(["failed"]);
         expect(
-          getConversationDeliveryOperation(scope, operationId)?.platformMessageId,
+          (await getConversationDeliveryOperation(scope, operationId))?.platformMessageId,
         ).toBeUndefined();
         expect(messageSent).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -300,24 +307,14 @@ describe("conversation completion through the real delivery queue", () => {
   it.each(["omitted-default", "legacy-marker"] as const)(
     "resumes created operation custody with a retained %s completion locator",
     async (locator) => {
-      const stateDir = fixtures.tmpDir();
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      const legacyMarker = path.join(stateDir, "custom", "sessions.json");
+      const legacyMarker = path.join(fixtures.tmpDir(), "custom", "sessions.json");
       const config = locator === "legacy-marker" ? { session: { store: legacyMarker } } : {};
-      const scope = resolveConversationRegistryScope({ agentId: "main", config });
-      onTestFinished(() => {
-        closeOpenClawAgentDatabaseByPath(scope.storePath);
-      });
-      registerConversationAddresses(scope, [
-        { ...conversation, deliveryTarget: conversation.target },
-      ]);
       const operationId = "retained-created-operation";
-      beginConversationDeliveryOperation(scope, {
+      const { stateDir, scope } = await createConversationOperation(
         operationId,
-        operationKind: "send",
-        conversationRef: conversation.conversationRef,
-        message: "retained intent",
-      });
+        "retained intent",
+        config,
+      );
       const completion = {
         kind: "conversation" as const,
         agentId: "main",
@@ -337,7 +334,7 @@ describe("conversation completion through the real delivery queue", () => {
         queueId,
         stateDir,
       );
-      expect(getConversationDeliveryOperation(scope, operationId)?.status).toBe("created");
+      expect((await getConversationDeliveryOperation(scope, operationId))?.status).toBe("created");
       const sendText = vi.fn(async () => {
         expect((await loadPendingDelivery(queueId, stateDir))?.deliveryCompletion).toEqual(
           completion,
@@ -361,7 +358,7 @@ describe("conversation completion through the real delivery queue", () => {
         }),
       ).resolves.toMatchObject([{ messageId: "retained-send" }]);
       expect(sendText).toHaveBeenCalledOnce();
-      expect(getConversationDeliveryOperation(scope, operationId)?.status).toBe("sent");
+      expect((await getConversationDeliveryOperation(scope, operationId))?.status).toBe("sent");
       expect(await loadPendingDelivery(queueId, stateDir)).toBeNull();
     },
   );
@@ -369,21 +366,8 @@ describe("conversation completion through the real delivery queue", () => {
   it.each(["logical-agent", "physical-owner", "physical-path"] as const)(
     "rejects changed %s before completion mutates the operation",
     async (changed) => {
-      vi.stubEnv("OPENCLAW_STATE_DIR", fixtures.tmpDir());
-      const scope = resolveConversationRegistryScope({ agentId: "main", config: {} });
-      onTestFinished(() => {
-        closeOpenClawAgentDatabaseByPath(scope.storePath);
-      });
-      registerConversationAddresses(scope, [
-        { ...conversation, deliveryTarget: conversation.target },
-      ]);
       const operationId = "mismatched-completion";
-      beginConversationDeliveryOperation(scope, {
-        operationId,
-        operationKind: "send",
-        conversationRef: conversation.conversationRef,
-        message: "captured owner",
-      });
+      const { scope } = await createConversationOperation(operationId, "captured owner");
       const target = captureConversationDeliveryTarget(scope);
       if (changed === "logical-agent") {
         target.agentId = "other";
@@ -404,7 +388,7 @@ describe("conversation completion through the real delivery queue", () => {
           target,
         ),
       ).rejects.toThrow("Conversation delivery target does not match durable custody");
-      expect(getConversationDeliveryOperation(scope, operationId)?.status).toBe("created");
+      expect((await getConversationDeliveryOperation(scope, operationId))?.status).toBe("created");
     },
   );
 
@@ -414,19 +398,19 @@ describe("conversation completion through the real delivery queue", () => {
     fs.mkdirSync(originalRoot);
     fs.mkdirSync(replacementRoot);
     vi.stubEnv("OPENCLAW_STATE_DIR", originalRoot);
-    const scope = resolveConversationRegistryScope({ agentId: "main", config: {} });
+    const scope = await prepareConversationRegistryScope({ agentId: "main", config: {} });
     const replacementScope = {
       agentId: "main",
       storePath: path.join(replacementRoot, "agents", "main", "agent", "openclaw-agent.sqlite"),
       env: { ...scope.env, OPENCLAW_STATE_DIR: replacementRoot },
     };
-    onTestFinished(() => {
-      closeOpenClawAgentDatabaseByPath(scope.storePath);
-      closeOpenClawAgentDatabaseByPath(replacementScope.storePath);
+    onTestFinished(async () => {
+      await closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
+      await closeOpenClawAgentDatabaseByPathAsync(replacementScope.storePath);
     });
     const config = { agents: { entries: { main: {} } }, session: { store: scope.storePath } };
     const operationId = "real-queue-admission";
-    registerConversationAddresses(scope, [
+    await registerConversationAddresses(scope, [
       { ...conversation, deliveryTarget: conversation.target },
     ]);
     const started = createDeferred<{
@@ -453,45 +437,46 @@ describe("conversation completion through the real delivery queue", () => {
     installSender(sendText);
     let actionFailed = false;
     let actionError: unknown;
-    const runMessageAction = vi.fn<ConversationDeliveryDeps["runMessageAction"]>(async (input) => {
-      if (!input.deliveryIntentId) {
-        throw new Error("Gateway conversation send did not supply its queue intent");
-      }
-      const writer = holdConversationWriterForTest(scope);
-      custodyWriter = writer;
-      started.resolve({ writer, queueId: input.deliveryIntentId });
-      await writer.entered;
-      if (cleanupStarted) {
-        await writer.release();
-      }
-      // Gateway has created the operation and captured its target; every real
-      // action/send adapter below must retain those facts through its awaits.
-      vi.stubEnv("OPENCLAW_STATE_DIR", replacementRoot);
-      try {
-        return await defaultConversationDeliveryDeps.runMessageAction(input);
-      } catch (error) {
-        actionFailed = true;
-        actionError = error;
-        throw error;
-      }
-    });
+    const runMessageAction = messageActionRunner.runMessageAction;
+    const action = vi
+      .spyOn(messageActionRunner, "runMessageAction")
+      .mockImplementation(async (input) => {
+        if (!input.deliveryIntentId) {
+          throw new Error("Gateway conversation send did not supply its queue intent");
+        }
+        const writer = holdConversationWriterForTest(scope);
+        custodyWriter = writer;
+        started.resolve({ writer, queueId: input.deliveryIntentId });
+        await writer.entered;
+        if (cleanupStarted) {
+          await writer.release();
+        }
+        // Gateway has created the operation and captured its target; every real
+        // action/send adapter below must retain those facts through its awaits.
+        vi.stubEnv("OPENCLAW_STATE_DIR", replacementRoot);
+        try {
+          return await runMessageAction(input);
+        } catch (error) {
+          actionFailed = true;
+          actionError = error;
+          throw error;
+        }
+      });
+    onTestFinished(() => action.mockRestore());
     const enqueueReply = holdEnqueueReply();
     const enqueueCommitted = enqueueReply.held.then(() => {
       enqueueReply.release();
     });
     let settled = false;
-    const delivery = runGatewayConversationSend(
-      {
-        config,
-        readCurrentConfig: () => config,
-        agentId: "main",
-        senderIsOwner: true,
-        operationId,
-        conversationRef: conversation.conversationRef,
-        message: "synthetic conversation",
-      },
-      { ...defaultConversationDeliveryDeps, resolveConversation, runMessageAction },
-    ).finally(() => {
+    const delivery = runGatewayConversationSend({
+      config,
+      readCurrentConfig: () => config,
+      agentId: "main",
+      senderIsOwner: true,
+      operationId,
+      conversationRef: conversation.conversationRef,
+      message: "synthetic conversation",
+    }).finally(() => {
       settled = true;
     });
     const outcome = delivery.then(
@@ -530,7 +515,7 @@ describe("conversation completion through the real delivery queue", () => {
       expect(settled).toBe(false);
       expect(readQueuedEntries(originalRoot)).toHaveLength(1);
       expect(readQueuedEntries(replacementRoot)).toEqual([]);
-      expect(getConversationDeliveryOperation(scope, operationId)?.status).toBe("created");
+      expect(readConversationDeliveryStateForTest(scope, operationId)?.status).toBe("created");
       const [queued] = readQueuedEntries(originalRoot);
       expect(queued).not.toHaveProperty("conversationDeliveryTarget");
       expect(queued).not.toHaveProperty("deliveryQueueStateContext");
@@ -553,7 +538,7 @@ describe("conversation completion through the real delivery queue", () => {
       await settlementWriter.entered;
       await setImmediate();
       expect(settled).toBe(false);
-      expect(getConversationDeliveryOperation(scope, operationId)).toMatchObject({
+      expect(readConversationDeliveryStateForTest(scope, operationId)).toMatchObject({
         status: "queued",
         queueId,
       });
@@ -564,14 +549,14 @@ describe("conversation completion through the real delivery queue", () => {
       expect(await outcome).toMatchObject({
         value: { status: "sent", messageId: "reef-delivered", queueId },
       });
-      expect(runMessageAction).toHaveBeenCalledOnce();
+      expect(action).toHaveBeenCalledOnce();
       expect(sendText).toHaveBeenCalledOnce();
-      expect(getConversationDeliveryOperation(scope, operationId)).toMatchObject({
+      expect(await getConversationDeliveryOperation(scope, operationId)).toMatchObject({
         status: "sent",
         platformMessageId: "reef-delivered",
         queueId,
       });
-      expect(getConversationDeliveryOperation(replacementScope, operationId)).toBeUndefined();
+      expect(await getConversationDeliveryOperation(replacementScope, operationId)).toBeUndefined();
       expect(readQueuedEntries(originalRoot)).toEqual([]);
       expect(readQueuedEntries(replacementRoot)).toEqual([]);
     } finally {

@@ -46,17 +46,19 @@ it.each(["settled", "retained"] as const)(
     const observed = acquisition.catch((error: unknown) => error);
     try {
       await cleanupEntered.promise;
-      expect(() => instance.reserveReplacement()).toThrow("active retained work");
+      const releaseReplacement = instance.reserveReplacement();
+      expect(instance.retainedWorkCount).toBe(1);
       cleanup.reject(cleanupError);
       expect(await observed).toMatchObject({
         message: "Prepared registry acquisition and cleanup failed",
         cause: cleanupError,
       });
       if (outcome === "retained") {
-        expect(() => instance.reserveReplacement()).toThrow("active retained work");
+        expect(instance.retainedWorkCount).toBe(1);
       } else {
-        instance.reserveReplacement()();
+        expect(instance.retainedWorkCount).toBe(0);
       }
+      releaseReplacement();
     } finally {
       cleanup.reject(cleanupError);
       await observed;

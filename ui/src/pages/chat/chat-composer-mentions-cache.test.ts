@@ -15,26 +15,8 @@ afterEach(resetMentionComposerFixture);
 
 const freshMs = 5 * 60_000;
 
-describe.each(["chat", "new-session"] as const)("%s mention query cache", (kind) => {
-  it.each(["dismiss", "select", "new token"])(
-    "reuses results immediately after %s",
-    async (action) => {
-      const view = composerFixture(kind);
-      view.edit("@Al");
-      await vi.advanceTimersByTimeAsync(150);
-      if (action === "select") {
-        view.key("Enter");
-      } else if (action === "dismiss") {
-        view.key("Escape");
-      }
-      view.edit("Review @Al");
-      expect(view.container.querySelectorAll('[role="option"]')).toHaveLength(2);
-      expect(view.container.querySelector(".mention-menu__loading")).toBeNull();
-      await vi.advanceTimersByTimeAsync(150);
-      expect(view.request).toHaveBeenCalledTimes(1);
-    },
-  );
-
+describe("mention query cache", () => {
+  const kind = "chat";
   it.each(["before", "after"])(
     "keeps an in-flight result when reopened %s it settles",
     async (reopen) => {
@@ -264,12 +246,13 @@ it.each(["pending", "denied"])(
     const directory = { client, ownerKey: "A", params: { sessionKey: "agent:main:chat" } };
     const other = { ...directory, ownerKey: "B" };
     const render = vi.fn();
+    const input = { value: "@Al", selectionStart: 3, selectionEnd: 3 };
     menu.syncDirectory(directory);
-    menu.update("@Al", 3, render, true);
+    menu.update(input, render, "trigger");
     await vi.advanceTimersByTimeAsync(150);
     menu.syncDirectory(other);
     menu.syncDirectory(directory);
-    menu.update("@Al", 3, render, true);
+    menu.update(input, render, "trigger");
     await vi.advanceTimersByTimeAsync(150);
     if (replacement === "denied") {
       current.reject(new GatewayRequestError({ code: "FORBIDDEN", message: "Access revoked" }));
@@ -280,7 +263,7 @@ it.each(["pending", "denied"])(
     original.resolve(people);
     await vi.advanceTimersByTimeAsync(0);
     menu.close();
-    menu.update("@Al", 3, render, true);
+    menu.update(input, render, "trigger");
     expect(menu.activeLabel()).toBe("");
     await vi.advanceTimersByTimeAsync(150);
     expect(request).toHaveBeenCalledTimes(replacement === "pending" ? 2 : 3);

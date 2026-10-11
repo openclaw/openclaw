@@ -2,6 +2,7 @@
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
+import { Pointer } from "typebox/schema";
 
 const PercentileCutoffsSchema = Type.Object({
   p50: Type.Optional(Type.Number()),
@@ -42,13 +43,11 @@ const OpenRouterRoutingSchema = Type.Object({
   preferred_max_latency: Type.Optional(Type.Union([Type.Number(), PercentileCutoffsSchema])),
 });
 
-// Schema for Vercel AI Gateway routing preferences
 const VercelGatewayRoutingSchema = Type.Object({
   only: Type.Optional(Type.Array(Type.String())),
   order: Type.Optional(Type.Array(Type.String())),
 });
 
-// Schema for thinking level support and provider-specific values
 const ThinkingLevelMapValueSchema = Type.Union([Type.String(), Type.Null()]);
 const ThinkingLevelMapSchema = Type.Object({
   off: Type.Optional(ThinkingLevelMapValueSchema),
@@ -172,13 +171,12 @@ export const validateModelsConfig = Compile(ModelsConfigSchema);
 
 export type ModelsConfig = Static<typeof ModelsConfigSchema>;
 export function formatValidationPath(error: TLocalizedValidationError): string {
+  const path = Pointer.Indices(error.instancePath).join(".").replace(/\//g, ".");
   if (error.keyword === "required") {
     const requiredProperty = error.params.requiredProperties[0];
     if (requiredProperty) {
-      const basePath = error.instancePath.replace(/^\//, "").replace(/\//g, ".");
-      return basePath ? `${basePath}.${requiredProperty}` : requiredProperty;
+      return path ? `${path}.${requiredProperty}` : requiredProperty;
     }
   }
-  const path = error.instancePath.replace(/^\//, "").replace(/\//g, ".");
   return path || "root";
 }

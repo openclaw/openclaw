@@ -79,6 +79,51 @@ describe("gateway ws log helpers", () => {
     },
   );
 
+  test("evicts only the oldest unanswered request timings when the cap is exceeded", () => {
+    setVerbose(false);
+    setLoggerOverride({ level: "silent", consoleLevel: "info" });
+    const output = vi.fn();
+    loggingState.rawConsole = { log: output, info: output, warn: output, error: output };
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const frame = (id: string) => ({ connId: "evict", id, method: "health" });
+    const answer = (id: string) => {
+      output.mockClear();
+      logWs("out", "res", { ...frame(id), ok: true });
+    };
+    // Old requests that never get a response, then the request under test, then enough
+    // newer ones to cross the cap.
+    for (let index = 0; index < 1_500; index += 1) {
+      logWs("in", "req", frame(`stale-${index}`));
+    }
+    logWs("in", "req", frame("live"));
+    for (let index = 0; index < 600; index += 1) {
+      logWs("in", "req", frame(`newer-${index}`));
+    }
+    clock.mockReturnValue(1_000 + 5_000);
+    try {
+      // The request that was in flight when the cap tripped keeps its slow-response timing.
+      answer("live");
+      expect(output).toHaveBeenLastCalledWith(expect.stringContaining("5000ms"));
+      answer("newer-599");
+      expect(output).toHaveBeenLastCalledWith(expect.stringContaining("5000ms"));
+      // Exactly the 101 oldest entries were dropped to hold the 2000 bound.
+      answer("stale-0");
+      expect(output).not.toHaveBeenCalled();
+      answer("stale-100");
+      expect(output).not.toHaveBeenCalled();
+      answer("stale-101");
+      expect(output).toHaveBeenLastCalledWith(expect.stringContaining("5000ms"));
+    } finally {
+      clock.mockReturnValue(1_000);
+      for (let index = 0; index < 1_500; index += 1) {
+        logWs("out", "res", { ...frame(`stale-${index}`), ok: true });
+      }
+      for (let index = 0; index < 600; index += 1) {
+        logWs("out", "res", { ...frame(`newer-${index}`), ok: true });
+      }
+    }
+  });
+
   test("admits only useful optimized-mode frames and honors console info enablement", () => {
     setVerbose(false);
     setLoggerOverride({ level: "silent", consoleLevel: "info" });
@@ -187,6 +232,35 @@ describe("gateway ws log helpers", () => {
   ])("formatForLog keeps bounded %s values UTF-16 safe", (_name, input) => {
     expect(formatForLog(input)).toBe(`${"a".repeat(239)}...`);
   });
+
+  test.each(["assistant", "tool", "lifecycle", "other"])(
+    "keeps Incognito %s content out of verbose event logs while retaining routing metadata",
+    (stream) => {
+      setVerbose(true);
+      setGatewayWsLogStyle("full");
+      setLoggerOverride({ level: "silent", consoleLevel: "info" });
+      const output = vi.fn();
+      loggingState.rawConsole = { log: output, info: output, warn: output, error: output };
+      const marker = "synthetic-private-content";
+      const summary = summarizeAgentEventForWsLog({
+        runId: "private-run",
+        sessionKey: "agent:main:dashboard:incognito-synthetic",
+        stream,
+        seq: 2,
+        data: { text: marker, meta: marker, error: marker, reason: marker },
+      });
+      logWs("out", "event", { event: "agent", ...summary });
+      expect(output).toHaveBeenCalled();
+      expect(JSON.stringify(output.mock.calls)).not.toContain(marker);
+      expect(summary).toEqual({
+        run: "private-run",
+        agent: "main",
+        session: "dashboard:incognito-synthetic",
+        stream,
+        aseq: 2,
+      });
+    },
+  );
 
   test("summarizeAgentEventForWsLog compacts assistant payloads", () => {
     const summary = summarizeAgentEventForWsLog({

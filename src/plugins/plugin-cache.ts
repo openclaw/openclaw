@@ -1,18 +1,20 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { PluginHostCleanupResult } from "./host-hook-cleanup.types.js";
 import {
-  createPluginCacheArtifacts,
-  createPluginRootArtifacts,
-  type PluginSourceCacheRecord,
-} from "./plugin-cache-artifacts.js";
+  appendPluginInstanceCleanupFailures,
+  summarizePluginRetirementResults,
+} from "./host-hook-cleanup-result.js";
+import type { PluginHostCleanupResult } from "./host-hook-cleanup.types.js";
+import type { PluginSourceCacheRecord } from "./plugin-cache-artifacts.js";
 import type { PluginCacheFact } from "./plugin-cache-management.js";
 import { createPluginCacheSdk } from "./plugin-cache-sdk.js";
 import type { PluginCache, PluginRootCacheRecord } from "./plugin-cache.types.js";
+import { PluginInstanceDrainTimeoutError } from "./plugin-instance-error.js";
 import {
   createPluginExecutionFrame,
   getPluginExecutionFrame,
@@ -24,24 +26,6 @@ import type { PluginInstanceResource } from "./plugin-instance.types.js";
 export type { PluginCache } from "./plugin-cache.types.js";
 
 const PLUGIN_CACHE_FACT_INVALIDATED = "PLUGIN_CACHE_FACT_INVALIDATED";
-
-/** Cached diagnostics must not retain the caller through V8's lazy stack frames. */
-export function materializePluginCacheError(failure: unknown): void {
-  let error = failure;
-  const seen = new Set<Error>();
-  while (error instanceof Error && !seen.has(error)) {
-    seen.add(error);
-    try {
-      error.stack = String(error.stack);
-    } catch {
-      // V8's setter releases private frames even when formatting throws;
-      // coercion also detaches CallSites returned by a custom formatter.
-      error.stack = "Stack trace unavailable: custom formatter failed";
-    }
-    // Bounded file readers wrap their original failure without replacing its stack.
-    error = error.cause;
-  }
-}
 
 /** Explicit fact invalidation cancels its preparation. */
 export class PluginCacheFactInvalidatedError extends Error {
@@ -79,6 +63,44 @@ const cacheRetainers = resolveGlobalSingleton(
       }
     >(),
 );
+
+const instanceCacheOwners = resolveGlobalSingleton(
+  Symbol.for("openclaw.pluginInstanceCacheOwners"),
+  () => new WeakMap<PluginInstanceResource, Set<PluginCache>>(),
+);
+
+/** Inventories retain admitted instances until transfer or successful physical disposal. */
+export function retainPluginCacheInstance(
+  instance: PluginInstanceResource,
+  cache = getPluginCache(),
+): void {
+  cache.instances.add(instance);
+  let owners = instanceCacheOwners.get(instance);
+  if (!owners) {
+    instanceCacheOwners.set(instance, (owners = new Set()));
+  }
+  owners.add(cache);
+}
+
+/** A retiring inventory releases its own custody; terminal disposal releases every birth cache. */
+export function releasePluginCacheInstance(
+  instance: PluginInstanceResource,
+  cache?: PluginCache,
+): void {
+  const owners = instanceCacheOwners.get(instance);
+  if (cache) {
+    cache.instances.delete(instance);
+    owners?.delete(cache);
+  } else {
+    for (const owner of owners ?? []) {
+      owner.instances.delete(instance);
+    }
+    owners?.clear();
+  }
+  if (owners?.size === 0) {
+    instanceCacheOwners.delete(instance);
+  }
+}
 
 function getPluginCacheRetainers(cache: PluginCache) {
   let retained = cacheRetainers.get(cache);
@@ -128,6 +150,7 @@ function createPluginMetadataCache(): PluginCache["metadata"] {
       snapshot: undefined,
       owner: "operation",
       configFingerprint: undefined,
+      agentWorkspaceFingerprint: undefined,
       envFingerprint: undefined,
       defaultDiscoveryCompatible: false,
       compatiblePolicyHashes: undefined,
@@ -145,15 +168,18 @@ function createPluginMetadataCache(): PluginCache["metadata"] {
     providerPolicyOwners: new WeakMap(),
     channelAdapters: new WeakMap(),
     bundledChannelCatalogs: new Map(),
-    bundledProviderPolicySurfaces: new Map(),
+    bundledProviderPolicySurfaces: new WeakMap(),
     staticCatalogStates: new WeakMap(),
     modelSuppressionResolvers: new WeakMap(),
+    mcpAuthDeclarations: new WeakMap(),
   };
 }
 
 /** Invalidate discovery facts without retiring callbacks owned by this operation. */
 export function invalidatePluginCacheMetadata(cache: PluginCache): void {
+  cache.sourceAdmissions?.invalidate();
   cache.metadata = createPluginMetadataCache();
+  cache.sdk.native.parents.clear();
   for (const root of cache.roots.values()) {
     root.files.clear();
     root.checkedEntries.clear();
@@ -188,7 +214,10 @@ export function createPluginCache(options: { kind?: PluginCache["kind"] } = {}):
     persistedInstalledIndex: new Map(),
     preparedBundledDiscoveryModes: new Map(),
     dependencyStatus: new WeakMap(),
-    ...createPluginCacheArtifacts(),
+    moduleLoaders: new Map(),
+    sources: new Map(),
+    sourceAliases: new Map(),
+    runtimeRecordRoots: new WeakMap(),
   };
 }
 
@@ -339,14 +368,14 @@ export function retirePluginCacheInstance(
   instance: PluginInstanceResource,
   cache = getPluginCache(),
 ): Promise<void> {
-  cache.instances.add(instance);
+  retainPluginCacheInstance(instance, cache);
   // A registration caller may receive a self-retirement acknowledgment; this owner must join fully.
   const completion = pluginInstanceInvocation
     .exit(() => instance.dispose())
     .then((result) => {
       // Failed outcomes stay available to the cache's existing disposal aggregator.
       if (result.errors.length === 0) {
-        cache.instances.delete(instance);
+        releasePluginCacheInstance(instance, cache);
       }
     });
   void completion.catch(() => {});
@@ -389,7 +418,7 @@ export function retirePluginCache(
   };
   // Abort listeners may reenter retirement or release the final generation immediately.
   retained.controller.abort();
-  materializePluginCacheError(retained.controller.signal.reason);
+  materializeErrorStack(retained.controller.signal.reason);
   if (retained.references.size === 0) {
     retained.beginRetirement?.();
   } else {
@@ -423,8 +452,30 @@ function beginPluginCacheRetirement(
     const outcomes = await Promise.allSettled(
       [...resources].map(async (resource) => ({ resource, result: await resource.dispose() })),
     );
+    const nativeAdmissions = cache.sourceAdmissions;
+    if (nativeAdmissions) {
+      const pending = outcomes.flatMap((outcome) =>
+        outcome.status === "fulfilled"
+          ? outcome.value.result.errors.flatMap((error) =>
+              error instanceof PluginInstanceDrainTimeoutError ? [error.settled] : [],
+            )
+          : [],
+      );
+      if (pending.length > 0) {
+        // A bounded retirement report does not release files still used by timed-out calls.
+        void Promise.allSettled(pending)
+          .then(() => nativeAdmissions.dispose())
+          .catch((error: unknown) =>
+            process.emitWarning(`Plugin native capture cleanup failed: ${String(error)}`),
+          );
+      } else {
+        await nativeAdmissions.dispose();
+      }
+    }
     cache.setupModules.clear();
-    cache.instances.clear();
+    for (const instance of cache.instances) {
+      releasePluginCacheInstance(instance, cache);
+    }
     const unexpected = [
       ...(registry.status === "rejected" ? [registry.reason] : []),
       ...outcomes.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
@@ -439,19 +490,7 @@ function beginPluginCacheRetirement(
         continue;
       }
       const { resource, result } = outcome.value;
-      for (const error of result.errors) {
-        // A registry join may have already included this same instance's outcome.
-        if (
-          !failures.some(
-            (failure) =>
-              failure.pluginId === resource.pluginId &&
-              failure.hookId === "instance" &&
-              failure.error === error,
-          )
-        ) {
-          failures.push({ pluginId: resource.pluginId, hookId: "instance", error });
-        }
-      }
+      appendPluginInstanceCleanupFailures(failures, resource.pluginId, result);
     }
     return { cleanupCount: host?.cleanupCount ?? 0, failures };
   };
@@ -468,19 +507,7 @@ export async function waitForPluginCacheRetirement(
   );
   state.retirements = state.retirements.filter((retirement) => !ready.includes(retirement));
   const results = await Promise.all(ready.map((retirement) => retirement.completion));
-  const failures = results.flatMap((result) =>
-    result.status === "rejected" ? [result.reason] : [],
-  );
-  if (failures.length) {
-    throw new AggregateError(failures, "Plugin cache retirement failed");
-  }
-  const completed = results.flatMap((result) =>
-    result.status === "fulfilled" ? [result.value] : [],
-  );
-  return {
-    cleanupCount: completed.reduce((count, result) => count + result.cleanupCount, 0),
-    failures: completed.flatMap((result) => result.failures),
-  };
+  return summarizePluginRetirementResults(results, "Plugin cache retirement failed");
 }
 
 export function getPluginCacheRoot(rootDir: string): PluginRootCacheRecord {
@@ -499,7 +526,11 @@ export function getPluginCacheRoot(rootDir: string): PluginRootCacheRecord {
       files: new Map(),
       checkedEntries: new Map(),
       paths: new Map(),
-      ...createPluginRootArtifacts(),
+      artifactLoadsInProgress: new Set(),
+      artifacts: new Map(),
+      runtimeArtifacts: new Map(),
+      entryBoundaries: new Map(),
+      entryPaths: new Map(),
     };
     cache.roots.set(key, root);
   }

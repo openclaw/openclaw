@@ -76,6 +76,68 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
     await server?.close();
   });
 
+  it("retains code controls when a streaming fence closes", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page
+        .locator(".agent-chat__composer-combobox textarea")
+        .fill("Show the deployment checks");
+      await page.getByRole("button", { name: "Send message" }).click();
+      const request = await gateway.waitForRequest("chat.send");
+      const runId = requireString(requireRecord(request.params).idempotencyKey, "run id");
+      const initial =
+        "```ts\n" +
+        Array.from(
+          { length: 9 },
+          (_, index) => `const check${index} = "${"deployment check ".repeat(8)}";`,
+        ).join("\n");
+      const emitDelta = async (text: string, deltaText: string) => {
+        await gateway.emitGatewayEvent("chat", {
+          deltaText,
+          message: { role: "assistant", content: [{ type: "text", text }] },
+          runId,
+          sessionKey: "main",
+          state: "delta",
+        });
+      };
+      await emitDelta(initial, initial);
+      const wrapper = page.locator(".chat-bubble.streaming .code-block-wrapper");
+      await wrapper.locator(".code-block-expand").click();
+      await wrapper.locator(".code-block-wrap").click();
+      const retained = await wrapper.elementHandle();
+      await expect.poll(() => wrapper.getAttribute("class")).toContain("is-expanded");
+      await expect.poll(() => wrapper.getAttribute("class")).toContain("is-wrapped");
+      if (captureProof) {
+        await page.screenshot({
+          path: path.join(artifactDir, `${proofStage}-before-fence-close.png`),
+        });
+      }
+      const suffix = "\n```\n\nAll deployment checks are ready.";
+      await emitDelta(initial + suffix, suffix);
+      await expect
+        .poll(() => page.locator(".chat-bubble.streaming .chat-text").textContent())
+        .toContain("All deployment checks are ready.");
+      if (captureProof) {
+        await page.screenshot({
+          path: path.join(artifactDir, `${proofStage}-after-fence-close.png`),
+        });
+      }
+      expect(await retained?.evaluate((element) => element.isConnected)).toBe(true);
+      expect(await wrapper.count()).toBe(1);
+      expect(await wrapper.getAttribute("class")).toContain("is-wrapped");
+      expect(await wrapper.getAttribute("class")).toContain("is-expanded");
+    } finally {
+      await context.close();
+    }
+  });
+
   it.each([8, 12])("clips %i block-art lines to seven rendered rows", async (lineCount) => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();

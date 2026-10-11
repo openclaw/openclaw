@@ -1,9 +1,18 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SessionsListResult } from "../../api/types.ts";
-import { renderDashboards, type DashboardsRouteData } from "./view.ts";
+import {
+  renderDashboards,
+  type DashboardGalleryFilters,
+  type DashboardsRouteData,
+} from "./view.ts";
+
+const filters: DashboardGalleryFilters = { query: "", ownerId: "", sort: "updated" };
+const handlers = {
+  onFilterChange: vi.fn(),
+};
 
 function routeData(sessions: SessionsListResult["sessions"], basePath = ""): DashboardsRouteData {
   return {
@@ -27,7 +36,7 @@ describe("dashboards index", () => {
     "replaces the accessible loading skeleton with the resolved %s state",
     (outcome) => {
       const container = document.createElement("div");
-      render(renderDashboards(undefined), container);
+      render(renderDashboards(undefined, filters, handlers), container);
 
       const busy = container.querySelector('[aria-busy="true"]');
       expect(busy).not.toBeNull();
@@ -52,7 +61,7 @@ describe("dashboards index", () => {
         data.result = null;
         data.error = "Dashboard service unavailable";
       }
-      render(renderDashboards(data), container);
+      render(renderDashboards(data, filters, handlers), container);
 
       expect(container.querySelector('[aria-busy="true"]')).toBeNull();
       expect(container.querySelector(".skeleton")).toBeNull();
@@ -77,6 +86,7 @@ describe("dashboards index", () => {
     "links each dashboard to an ordinary open that respects presentation defaults at %s",
     (basePath) => {
       const container = document.createElement("div");
+      const onNavigate = vi.fn();
       render(
         renderDashboards(
           routeData(
@@ -84,13 +94,18 @@ describe("dashboards index", () => {
               {
                 key: "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
                 kind: "direct",
-                boardFace: "dashboard",
+                boardFace: "chat",
                 displayName: "Deploy monitor",
                 updatedAt: 2,
               },
             ],
             basePath,
           ),
+          filters,
+          {
+            onFilterChange: vi.fn(),
+            onNavigate,
+          },
         ),
         container,
       );
@@ -100,12 +115,47 @@ describe("dashboards index", () => {
       expect(
         row?.querySelector<HTMLAnchorElement>(".dashboard-card__main")?.getAttribute("href"),
       ).toBe(`${basePath}/dashboard/main/deploy-monitor-1234567890abcdef1234567890abcdef`);
+      const link = row!.querySelector<HTMLAnchorElement>(".dashboard-card__main")!;
+      let intercepted = false;
+      container.addEventListener("click", (event) => {
+        intercepted = event.defaultPrevented;
+        // Observe the card's routing decision without navigating the jsdom document.
+        event.preventDefault();
+      });
+      const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+      link.dispatchEvent(click);
+      expect(intercepted).toBe(true);
+      expect(onNavigate).toHaveBeenCalledExactlyOnceWith("dashboard", {
+        pathname: `${basePath}/dashboard/main/deploy-monitor-1234567890abcdef1234567890abcdef`,
+        search:
+          "?__openclawSessionKey=agent%3Amain%3Adashboard%3A12345678-90ab-cdef-1234-567890abcdef",
+      });
+
+      for (const activation of [
+        { ctrlKey: true },
+        { metaKey: true },
+        { shiftKey: true },
+        { altKey: true },
+        { button: 1 },
+      ]) {
+        const modified = new MouseEvent("click", {
+          bubbles: true,
+          cancelable: true,
+          ...activation,
+        });
+        link.dispatchEvent(modified);
+        expect(intercepted).toBe(false);
+      }
+      const handled = new MouseEvent("click", { bubbles: true, cancelable: true });
+      handled.preventDefault();
+      link.dispatchEvent(handled);
+      expect(onNavigate).toHaveBeenCalledOnce();
     },
   );
 
   it("explains how to create a dashboard when the list is empty", () => {
     const container = document.createElement("div");
-    render(renderDashboards(routeData([])), container);
+    render(renderDashboards(routeData([]), filters, handlers), container);
 
     const empty = container.querySelector("[data-dashboards-empty]");
     expect(empty?.textContent).toContain("No dashboards yet");

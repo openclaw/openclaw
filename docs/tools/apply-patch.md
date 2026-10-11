@@ -45,6 +45,7 @@ runs to the end of the file.
 ## Notes
 
 - Patch paths support relative paths (from the workspace directory) and absolute paths.
+- Use `./~/file` for a file inside a literal `~` directory; `~/file` retains its home-directory meaning.
 - `tools.exec.applyPatch.workspaceOnly` defaults to `true` (workspace-contained). Set it to `false` only if you intentionally want `apply_patch` to write/delete outside the workspace directory.
 - This setting is independent of `tools.exec.mode`. Setting `tools.exec.mode: "full"` does not lift the `apply_patch` workspace boundary.
 - `tools.fs.workspaceOnly` contains `apply_patch` independently, so clearing one setting can leave the other in force.
@@ -54,6 +55,7 @@ runs to the end of the file.
 - Memory-flush runs expose only `read` and append-only `write`, so `apply_patch` is unavailable even in `full` mode.
 - Runs whose entire agent executes on a worker (`worker-turn`) ignore both configuration settings. With no permission mode, they contain `apply_patch` whenever it is available; an explicit `full` mode disables that tool containment. Workers used only for remote commands (`remote-exec`) follow the locally running agent's file-tool policy.
 - `*** Add File:` and a non-self `*** Move to:` require the destination path to be absent. To intentionally replace a path, delete it earlier in the same patch before adding or moving the replacement.
+- For workspace-contained host paths, updates can follow directory aliases that stay inside the workspace. Adds and moves to new files reject aliased parents; deleting a final symlink removes the link itself. A move through an alias to the same file applies the update in place.
 - Use `*** Move to:` within an `*** Update File:` hunk to rename files.
 - `*** End of File` marks an EOF-only insert when needed.
 - Enabled by default for every model. Set `tools.exec.applyPatch.enabled: false`

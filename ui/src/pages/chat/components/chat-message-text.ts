@@ -1,7 +1,5 @@
-import { html, nothing, render, type RootPart } from "lit";
-import { AsyncDirective, directive } from "lit/async-directive.js";
+import { html } from "lit";
 import { guard } from "lit/directives/guard.js";
-import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons } from "../../../components/icons.ts";
@@ -253,15 +251,21 @@ export function renderMessageMarkdown(
   const recoverFullMessage =
     isAssistant || (opts.role === "user" && disclosure?.onRetryFullMessage);
   const recovered = recoverFullMessage && disclosure?.expanded;
-  const { content: text, parts } = renderMarkdownText(
-    recovered ? (disclosure.markdown ?? markdown) : markdown,
-    messageKey,
-    opts.isStreaming,
-    recovered ? { ...markdownRenderOptions, mode: "document" } : markdownRenderOptions,
-    duplicateSuffix,
-    isAssistant && opts.isStreaming ? messageKey : undefined,
-    media,
-  );
+  const source = recovered ? (disclosure.markdown ?? markdown) : markdown;
+  const options: MarkdownRenderOptions = recovered
+    ? { ...markdownRenderOptions, mode: "document" }
+    : markdownRenderOptions;
+  const parts: [string, string] = opts.isStreaming
+    ? toStreamingMarkdownParts(source, options, isAssistant ? messageKey : undefined)
+    : [toSanitizedMarkdownHtml(source, options), ""];
+  if (duplicateSuffix) {
+    const terminalPart = parts[1].trim() ? 1 : 0;
+    parts[terminalPart] = appendDuplicateSuffix(parts[terminalPart], duplicateSuffix);
+  }
+  const content = renderMarkdownMedia({ messageKey, source, parts }, media);
+  const text = html`
+    <div class="chat-text" dir="${detectTextDirection(media?.text ?? source)}">${content}</div>
+  `;
   // Exhausted recovery keeps the preview visible and offers manual re-entry.
   if (recoverFullMessage && disclosure?.onRetryFullMessage) {
     return html`
@@ -331,121 +335,6 @@ export type AssistantMessageDisclosure = {
   /** Set when automatic full-message retries exhausted; invoking re-enters the loader. */
   onRetryFullMessage?: () => void;
 };
-
-class MarkdownPartsDirective extends AsyncDirective {
-  private messageKey: string | undefined;
-  private source = "";
-  private stableHtml = "";
-  private fragments: string[] = [];
-  private generation = {};
-  private mediaSlots = new Map<number, { element: HTMLElement; part?: RootPart }>();
-  private mediaRender = {};
-
-  protected override disconnected() {
-    for (const slot of this.mediaSlots.values()) {
-      slot.part?.setConnected(false);
-    }
-  }
-
-  protected override reconnected() {
-    for (const slot of this.mediaSlots.values()) {
-      slot.part?.setConnected(true);
-    }
-  }
-
-  render(
-    messageKey: string,
-    source: string,
-    [stableHtml, tailHtml]: readonly [string, string],
-    media?: MarkdownMedia,
-  ) {
-    if (this.messageKey !== messageKey) {
-      for (const slot of this.mediaSlots.values()) {
-        render(nothing, slot.element);
-      }
-      this.mediaSlots.clear();
-    }
-    if (
-      this.messageKey !== messageKey ||
-      !source.startsWith(this.source) ||
-      !stableHtml.startsWith(this.stableHtml)
-    ) {
-      this.fragments = [];
-      this.stableHtml = "";
-      this.generation = {};
-    }
-    if (stableHtml.length > this.stableHtml.length) {
-      this.fragments.push(stableHtml.slice(this.stableHtml.length));
-    }
-    this.messageKey = messageKey;
-    this.source = source;
-    this.stableHtml = stableHtml;
-    const usedSlots = new Set<number>();
-    const mediaRender = (this.mediaRender = {});
-    const positionedMedia = media
-      ? {
-          ...media,
-          render: (item: MarkdownMedia["items"][number], index: number) => {
-            let slot = this.mediaSlots.get(index);
-            if (!slot) {
-              slot = { element: document.createElement("div") };
-              this.mediaSlots.set(index, slot);
-            }
-            usedSlots.add(index);
-            // Markdown can move a media slot from its streaming tail into the
-            // stable prefix. Keep the media renderer and decoded image mounted.
-            slot.part = render(media.render(item, index), slot.element);
-            slot.part.setConnected(this.isConnected);
-            return slot.element;
-          },
-        }
-      : undefined;
-    queueMicrotask(() => {
-      if (this.mediaRender !== mediaRender) {
-        return;
-      }
-      for (const [index, slot] of this.mediaSlots) {
-        if (!usedSlots.has(index)) {
-          render(nothing, slot.element);
-          this.mediaSlots.delete(index);
-        }
-      }
-    });
-    // Canonical HTML proves continuity; live DOM also contains the reader's
-    // control choices and Markdown enhancements, which must stay on its nodes.
-    return keyed(
-      this.generation,
-      html`${this.fragments.map((fragment) => renderMarkdownMedia(fragment, positionedMedia))}${renderMarkdownMedia(tailHtml, positionedMedia)}`,
-    );
-  }
-}
-
-const markdownParts = directive(MarkdownPartsDirective);
-
-function renderMarkdownText(
-  markdown: string,
-  messageKey: string,
-  isStreaming: boolean,
-  markdownRenderOptions?: MarkdownRenderOptions,
-  duplicateSuffix?: DuplicateSuffix,
-  streamKey?: string,
-  media?: MarkdownMedia,
-) {
-  const parts: [string, string] = isStreaming
-    ? toStreamingMarkdownParts(markdown, markdownRenderOptions, streamKey)
-    : [toSanitizedMarkdownHtml(markdown, markdownRenderOptions), ""];
-  if (duplicateSuffix) {
-    const terminalPart = parts[1].trim() ? 1 : 0;
-    parts[terminalPart] = appendDuplicateSuffix(parts[terminalPart], duplicateSuffix);
-  }
-  const content = markdownParts(messageKey, markdown, parts, media);
-  return {
-    parts,
-    content: html`
-      <div class="chat-text" dir="${detectTextDirection(media?.text ?? markdown)}">${content}</div>
-    `,
-  };
-}
 
 function appendDuplicateSuffix(rendered: string, suffix: DuplicateSuffix): string {
   const template = document.createElement("template");

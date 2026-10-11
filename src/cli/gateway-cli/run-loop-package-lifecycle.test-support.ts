@@ -2,11 +2,15 @@ import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
-import { expect, it, vi } from "vitest";
+import { setImmediate } from "node:timers/promises";
+import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import {
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
@@ -16,14 +20,20 @@ import {
   gateFixtureHandoffPublication,
   observeFixtureHelper,
   startPackageLifecycleStopFixture,
+  writePackageLifecycleFixture,
 } from "./run-loop-package-helper.test-support.js";
 import type { UpdateRespawnFixtures } from "./run-loop.test-support.js";
 
-const sourceUrl = (file: string) => JSON.stringify(new URL(`../../${file}`, import.meta.url).href);
-
 /** Real package staging, helper IPC and run-loop Stop share one held script. */
 export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixtures): void {
-  it.runIf(fixtures.originalPlatformDescriptor?.value !== "win32").each([
+  let receipts: FixtureReceiptChannel;
+  beforeAll(async () => {
+    receipts = await openFixtureReceiptChannel();
+  });
+  afterAll(async () => {
+    await receipts?.close();
+  });
+  it.runIf(fixtures.originalPlatformDescriptor?.value !== "win32").for([
     { signal: "SIGINT", uncertain: false, closeFailure: false, phase: "staging" },
     { signal: "SIGTERM", uncertain: true, closeFailure: false, phase: "staging" },
     { signal: "SIGINT", uncertain: false, closeFailure: true, phase: "staging" },
@@ -33,9 +43,16 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
     { signal: "hosted Gateway stop", uncertain: false, closeFailure: false, phase: "staging" },
   ] as const)(
     "joins pre-park package lifecycle before $signal (phase=$phase, uncertain=$uncertain, closeFailure=$closeFailure)",
-    async ({ signal, uncertain, closeFailure, phase }) => {
+    { timeout: 60000 },
+    async ({ signal, uncertain, closeFailure, phase }, context) => {
       const hosted = signal === "hosted Gateway stop";
       fixtures.setPlatform(fixtures.originalPlatformDescriptor!.value);
+      // Initialize against the case's mocks before the helper starts its held script.
+      const { discardPackageUpdateStage, runPackageUpdateLifecycle } =
+        await import("../../infra/package-update-lifecycle.js");
+      const { createNpmTarget } = await import("../../infra/package-update-steps.test-support.js");
+      const { resolveNpmGlobalPrefixLayoutFromPrefix } =
+        await import("../../infra/update-npm-prefix.js");
       const dirs = createTempDirTracker();
       // The runner removes its TMPDIR after failure; unresolved ownership evidence
       // must survive that outer cleanup until its test owner can inspect it.
@@ -55,100 +72,10 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
         JSON.stringify({ name: "openclaw", version: "1.0.0", type: "module" }),
       );
       await fs.writeFile(path.join(root, "dist", "index.js"), "export {};\n");
-      const bootstrap = `
-        import fs from "node:fs/promises";
-        import path from "node:path";
-        const { register } = await import(${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm/api")).href)});
-        register({ tsconfig: ${JSON.stringify(path.resolve("tsconfig.json"))} });
-        const { registerSealedRuntime } = await import(${sourceUrl("infra/sealed-runtime-registry.ts")});
-        registerSealedRuntime({ json5: undefined, resolveSecureTempRoot: () => ${JSON.stringify(control)} });
-      `;
-      await fs.writeFile(
-        path.join(root, "dist", "cli", "daemon-cli.js"),
-        `${bootstrap}
-        const ledger = await import(${sourceUrl("infra/update-run-ledger.ts")});
-        export const { adoptUpdateRun, finishUpdateRun, getUpdateRun, recordUpdateRunStep, recordUpdateRunVerification } = ledger;
-        const handoff = await import(${sourceUrl("infra/update-managed-service-handoff.ts")});
-        export const { assertForegroundUpdateOrigin } = handoff;
-        `,
-      );
-      const entrypoint = path.join(root, "openclaw.mjs");
-      await fs.writeFile(
-        entrypoint,
-        `${bootstrap}
-        const root = ${JSON.stringify(root)}, control = ${JSON.stringify(control)};
-        if (process.argv[2] === "triage") {
-          process.stdout.write(JSON.stringify({ diagnostic: "isolated lifecycle fixture" }));
-        } else {
-          const handoff = await import(${sourceUrl("infra/update-managed-service-handoff.ts")});
-          const { readControlPlaneUpdateSentinelMeta } = await import(${sourceUrl("infra/update-control-plane-sentinel.ts")});
-          const { runGlobalPackageUpdateSteps } = await import(${sourceUrl("infra/package-update-steps.ts")});
-          const { createNpmTarget, createRootRunner } = await import(${sourceUrl("infra/package-update-steps.test-support.ts")});
-          const { writePackageDistInventory } = await import(${JSON.stringify(new URL("../../../scripts/lib/package-dist-inventory.ts", import.meta.url).href)});
-          const { runCommandWithTimeout } = await import(${sourceUrl("process/exec.ts")});
-          const meta = await readControlPlaneUpdateSentinelMeta();
-          const run = { runId: meta.runId, env: process.env };
-          let outcome;
-          try {
-            outcome = await runGlobalPackageUpdateSteps({
-              installTarget: createNpmTarget(path.dirname(root)), installSpec: "openclaw@2.0.0",
-              packageName: "openclaw", packageRoot: root, timeoutMs: 30000,
-              runCommand: createRootRunner(path.dirname(root)),
-              validateCandidate: async () => [],
-              beforeActivate: async () => {
-                await fs.writeFile(path.join(control, "before-activate"), "lifecycle settled");
-                await handoff.parkForegroundUpdateHandoff({ root, run });
-              },
-              runStep: async (step) => {
-                if (step.name === "package-install") {
-                  const prefix = step.argv[step.argv.indexOf("--prefix") + 1];
-                  const candidate = path.join(prefix, "lib", "node_modules", "openclaw");
-                  await fs.cp(root, candidate, { recursive: true });
-                  await fs.writeFile(path.join(candidate, "package.json"), JSON.stringify({name:"openclaw",version:"2.0.0",type:"module"}));
-                  await fs.mkdir(path.join(candidate, "scripts"), { recursive: true });
-                  await fs.writeFile(path.join(candidate, ".openclaw-lifecycle-pending"), "pending candidate lifecycle\\n");
-                  await fs.writeFile(path.join(candidate, "scripts", "preinstall-package-manager-warning.mjs"), ${JSON.stringify(`
-                    import fs from "node:fs/promises";
-                    import path from "node:path";
-                    const control = ${JSON.stringify(control)};
-                    await fs.appendFile(path.join(control, "script-calls"), "preinstall\\n");
-                    await fs.writeFile(path.join(control, "script-entered"), String(process.pid));
-                    while (!(await fs.access(path.join(control, "release-script")).then(() => true, () => false)))
-                      await new Promise(resolve => setTimeout(resolve, 10));
-                    await fs.writeFile(path.join(control, "script-settled"), "writer finished");
-                  `)});
-                  await fs.writeFile(path.join(candidate, "scripts", "postinstall-bundled-plugins.mjs"), ${JSON.stringify(`
-                    import fs from "node:fs/promises";
-                    import path from "node:path";
-                    await fs.appendFile(${JSON.stringify(path.join(control, "script-calls"))}, "postinstall\\n");
-                    await fs.rm(path.join(process.cwd(), ".openclaw-lifecycle-pending"));
-                  `)});
-                  await writePackageDistInventory(candidate);
-                  await fs.writeFile(path.join(control, "stage.json"), JSON.stringify({prefix, packageRoot:candidate}));
-                  return { name:step.name, command:step.argv.join(" "), cwd:step.cwd, durationMs:0, exitCode:0 };
-                }
-                const result = await runCommandWithTimeout(step.argv, {cwd:step.cwd,timeoutMs:step.timeoutMs});
-                return { name:step.name, command:step.argv.join(" "), cwd:step.cwd, durationMs:0,
-                  exitCode:result.code, stderrTail:result.stderr, signal:result.signal, killed:result.killed, termination:result.termination };
-              },
-            });
-          } catch (error) {
-            outcome = {steps:[], failedStep:{name:"activation",stderrTail:String(error)}, recovery:{serviceRestartSafe:false}};
-          }
-          await fs.writeFile(path.join(control, "outcome.json"), JSON.stringify(outcome));
-          process.stdout.write(JSON.stringify({root,mode:"npm",status:outcome.failedStep?"error":"ok",
-            reason:outcome.failedStep?"package-lifecycle-fixture-failed":undefined,
-            steps:outcome.steps,recovery:outcome.recovery,after:{version:outcome.afterVersion??"1.0.0"}}));
-          process.exitCode = outcome.failedStep ? 1 : 0;
-          process.disconnect();
-        }
-        `,
-      );
-      const { writePackageDistInventory } =
-        await import("../../../scripts/lib/package-dist-inventory.ts");
-      await writePackageDistInventory(root);
+      const entrypoint = await writePackageLifecycleFixture(root, control, receipts.endpoint);
       try {
-        await withEnvAsync(
+        context.signal.throwIfAborted();
+        const work = withEnvAsync(
           {
             HOME: home,
             OPENCLAW_HOME: undefined,
@@ -158,6 +85,10 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
           },
           async () => {
             const server = createServer((socket) => socket.end("serving"));
+            const closeServer = () =>
+              new Promise<void>((resolve) => {
+                server.close(() => resolve());
+              });
             server.listen(0, "127.0.0.1");
             await once(server, "listening");
             const address = server.address();
@@ -187,9 +118,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
               await fixtures.withIsolatedSignals(async ({ captureSignal }) => {
                 const close = vi.fn(async () => {
                   if (server.listening) {
-                    await new Promise<void>((resolve) => {
-                      server.close(() => resolve());
-                    });
+                    await closeServer();
                   }
                   if (closeFailure) {
                     throw new Error("fixture Gateway close failed");
@@ -282,6 +211,17 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                   phase === "preparing"
                     ? await gateFixtureHandoffPublication(root, identity.handoffId)
                     : undefined;
+                let abortRelease: Promise<void> | undefined;
+                const abort = () => {
+                  released = true;
+                  preparing?.release();
+                  abortRelease ??= fs.writeFile(releasePath, "fixture cancellation");
+                  void abortRelease.catch(() => {});
+                };
+                context.signal.addEventListener("abort", abort, { once: true });
+                if (context.signal.aborted) {
+                  abort();
+                }
                 let starting:
                   | ReturnType<typeof handoff.startManagedServiceUpdateHandoff>
                   | undefined;
@@ -298,6 +238,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                   }
                 };
                 const runScenario = async () => {
+                  context.signal.throwIfAborted();
                   const handoffParams: Parameters<
                     typeof handoff.startManagedServiceUpdateHandoff
                   >[0] = {
@@ -341,6 +282,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                       (error: unknown) => ({ error }),
                     );
                     await withTimeout(preparing.entered, 15000);
+                    context.signal.throwIfAborted();
                     await requestStop();
                     expect(
                       stop.earlyExit,
@@ -362,6 +304,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                     return;
                   }
                   const prepared = await starting;
+                  context.signal.throwIfAborted();
                   if (prepared.status !== "started" || !prepared.handoffId) {
                     throw new Error("helper did not start");
                   }
@@ -382,7 +325,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                     // The RPC caller already cancels when its transfer is refused.
                     // Process closure and lease absence establish the joined result.
                     await handoff.cancelManagedServiceUpdateHandoff(identity);
-                    await helper.waitForClose();
+                    await withinTest(helper.waitForClose(), context.signal);
                     expect(await withTimeout(exited, 15000)).toBe(0);
                     expect(store.read(root).kind).toBe("absent");
                     expect(fixtures.respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
@@ -390,11 +333,17 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                     return;
                   }
                   expect(await handoff.transferManagedServiceUpdateHandoff(identity)).toBe(true);
-                  await expect
-                    .poll(() => fsSync.existsSync(path.join(control, "script-entered")), {
-                      timeout: 15000,
-                    })
-                    .toBe(true);
+                  // The script writes the marker before reporting on its separate receipt
+                  // socket; helper close can overtake that socket's final delivery.
+                  await withinTest(
+                    Promise.race([
+                      receipts.waitFor(control, "script-entered"),
+                      helper.waitForClose().then(() => {
+                        expect(fsSync.existsSync(path.join(control, "script-entered"))).toBe(true);
+                      }),
+                    ]),
+                    context.signal,
+                  );
                   lifecycleScriptPid = Number(
                     await fs.readFile(path.join(control, "script-entered"), "utf8"),
                   );
@@ -402,12 +351,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                   const stage = JSON.parse(
                     await fs.readFile(path.join(control, "stage.json"), "utf8"),
                   ) as { prefix: string; packageRoot: string };
-                  const { runPackageUpdateLifecycle, discardPackageUpdateStage } =
-                    await import("../../infra/package-update-lifecycle.js");
-                  const { createNpmTarget } =
-                    await import("../../infra/package-update-steps.test-support.js");
-                  const { resolveNpmGlobalPrefixLayoutFromPrefix } =
-                    await import("../../infra/update-npm-prefix.js");
+                  context.signal.throwIfAborted();
                   competing = runPackageUpdateLifecycle({
                     packageRoot: stage.packageRoot,
                     manager: "npm",
@@ -425,7 +369,6 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                       layout: resolveNpmGlobalPrefixLayoutFromPrefix(stage.prefix),
                       installTarget: createNpmTarget(path.dirname(root)),
                     },
-                    manager: "npm",
                     committed: false,
                   });
                   expect(disposal).toMatchObject({ status: "failed", preserveStage: true });
@@ -448,20 +391,18 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                     await stop.expectHostedPending();
                   } else if (!uncertain && !closeFailure && phase !== "completion") {
                     const persistedReads =
-                      fixtures.consumeGatewayRestartIntentPayloadSync.mock.calls.length;
-                    fixtures.consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({
+                      fixtures.consumeGatewayRestartIntentPayload.mock.calls.length;
+                    fixtures.consumeGatewayRestartIntentPayload.mockResolvedValueOnce({
                       reason: "update.run",
                     });
                     captureSignal("SIGTERM")();
                     await fixtures.waitForLoopCondition(
                       () =>
-                        fixtures.consumeGatewayRestartIntentPayloadSync.mock.calls.length ===
+                        fixtures.consumeGatewayRestartIntentPayload.mock.calls.length ===
                         persistedReads + 1,
                       "persisted SIGTERM restart was not consumed",
                     );
-                    await new Promise<void>((resolve) => {
-                      setImmediate(resolve);
-                    });
+                    await setImmediate();
                     expect(close).not.toHaveBeenCalled();
                     expect(runtime.exit).not.toHaveBeenCalled();
                     const localReads = fixtures.consumeGatewayRestartIntent.mock.calls.length;
@@ -475,9 +416,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                         fixtures.consumeGatewayRestartIntent.mock.calls.length === localReads + 1,
                       "same-owner SIGUSR2 restart was not consumed",
                     );
-                    await new Promise<void>((resolve) => {
-                      setImmediate(resolve);
-                    });
+                    await setImmediate();
                     expect(close).not.toHaveBeenCalled();
                     expect(runtime.exit).not.toHaveBeenCalled();
                     expect(server.listening).toBe(true);
@@ -519,7 +458,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                       identity,
                     );
                     expect(fsSync.existsSync(path.join(control, "before-activate"))).toBe(true);
-                    await helper.waitForClose();
+                    await withinTest(helper.waitForClose(), context.signal);
                   } else {
                     await withTimeout(exited, handoffParams.timeoutMs!);
                     expect(fsSync.existsSync(path.join(control, "outcome.json"))).toBe(true);
@@ -527,11 +466,8 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                   await competing;
                   await expect.poll(() => store.read(root).kind, { timeout: 15000 }).toBe("absent");
                   const { isPidAlive } = await import("../../shared/pid-alive.js");
-                  await expect
-                    .poll(() => prepared.pid !== undefined && isPidAlive(prepared.pid), {
-                      timeout: 15000,
-                    })
-                    .toBe(false);
+                  await withinTest(helper.waitForClose(), context.signal);
+                  expect(prepared.pid !== undefined && isPidAlive(prepared.pid)).toBe(false);
                   expect(isPidAlive(lifecycleScriptPid)).toBe(false);
                   expect(competingScripts).toBe(0);
                   expect(fsSync.existsSync(path.join(control, "script-settled"))).toBe(true);
@@ -592,8 +528,10 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                     );
                   });
                 } finally {
+                  context.signal.removeEventListener("abort", abort);
                   released = true;
                   preparing?.release();
+                  await settle(() => abortRelease);
                   await settle(() => fs.writeFile(releasePath, "fixture cleanup"));
                   await settle(async () => {
                     if (starting) {
@@ -638,9 +576,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                   });
                   await settle(async () => {
                     if (server.listening) {
-                      await new Promise<void>((resolve) => {
-                        server.close(() => resolve());
-                      });
+                      await closeServer();
                     }
                   });
                   await settle(() => gatewayLock.current?.release());
@@ -678,14 +614,20 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
               });
             } finally {
               if (server.listening) {
-                await new Promise<void>((resolve) => {
-                  server.close(() => resolve());
-                });
+                await closeServer();
               }
               await gatewayLock.current?.release();
             }
           },
         );
+        // Retain this body and its cleanup after Vitest cancels its timeout wrapper.
+        context.onTestFinished(() =>
+          work.then(
+            () => {},
+            () => {},
+          ),
+        );
+        await work;
       } catch (error) {
         preserveArtifacts = true;
         throw error;
@@ -695,6 +637,5 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
         }
       }
     },
-    60000,
   );
 }

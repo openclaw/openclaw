@@ -7,6 +7,7 @@ import type {
   ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import { createInitialConfigState } from "../../lib/config/config-state-model.ts";
 import type {
   PluginCatalogItem,
   PluginDiscoveryDetailResult,
@@ -19,10 +20,9 @@ import {
   type ApplicationContextProvider,
 } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import type { InstallWizardController } from "./install-wizard-controller.ts";
-import type { PluginInstallWizardState } from "./install-wizard-model.ts";
 import type { PluginRowMessage } from "./plugin-row-message.ts";
 import type { PluginsConsentController } from "./plugins-consent-controller.ts";
+import type { PluginMutationAction } from "./plugins-page-model.ts";
 import type { PluginsRouteData } from "./route-data.ts";
 import "./plugins-page.ts";
 
@@ -53,7 +53,7 @@ type TestPluginsPage = HTMLElement & {
   updateComplete: Promise<boolean>;
   result: PluginListResult | null;
   loading: boolean;
-  busy: Record<string, boolean>;
+  busy: Record<string, PluginMutationAction>;
   messages: Record<string, PluginRowMessage>;
   detail: {
     pluginId: string;
@@ -62,9 +62,10 @@ type TestPluginsPage = HTMLElement & {
   } | null;
   pluginConfigEditPending: boolean;
   applyMutationResult: (result: PluginMutationResult) => void;
-  consentController: Pick<PluginsConsentController, "install" | "mutateInstalledPlugin">;
-  installWizard: PluginInstallWizardState | null;
-  installWizardController: InstallWizardController;
+  consentController: Pick<
+    PluginsConsentController,
+    "install" | "mutateInstalledPlugin" | "installProgress"
+  >;
   refreshCatalog: () => Promise<void>;
   uninstall: (pluginId: string, rowKey: string) => Promise<void>;
 };
@@ -197,7 +198,7 @@ export function createPluginsRouteData(
 export function createClient(handler: RequestHandler) {
   const request = vi.fn(handler);
   return {
-    client: { request } as unknown as GatewayBrowserClient,
+    client: { request, addEventListener: () => () => {} } as unknown as GatewayBrowserClient,
     request,
   };
 }
@@ -230,6 +231,7 @@ export function createGateway(client: GatewayBrowserClient, connected = true): G
     connectionRevision: 0,
     eventLog: [],
     eventLogRevision: 0,
+    loadSelfProfile: async () => null,
     connect: () => undefined,
     setSessionKey: () => undefined,
     start: () => undefined,
@@ -293,7 +295,11 @@ export function createRuntimeConfigHarness(
   const removeFormValue = vi.fn<(path: Array<string | number>) => void>();
   const save = vi.fn(async () => true);
   const runtimeConfig = {
-    state: runtimeConfigState,
+    // Keep the fixture identity used by autosave notifications, with the owner's real defaults.
+    state: Object.assign(runtimeConfigState, {
+      ...createInitialConfigState(),
+      ...runtimeConfigState,
+    }),
     canSet: true,
     refresh: refreshConfig,
     ensureLoaded: vi.fn(async () => undefined),
@@ -407,12 +413,14 @@ export async function activatePluginControl(
   label: string,
 ) {
   const controls = [
-    ...page.querySelectorAll<HTMLElement>(`${pluginSelector} button, ${pluginSelector} wa-switch`),
+    ...page.querySelectorAll<HTMLElement>(
+      `${pluginSelector} button, ${pluginSelector} input.settings-toggle__input`,
+    ),
   ];
   const control =
     controls.find((element) =>
       (element.getAttribute("aria-label") ?? element.textContent ?? "").includes(label),
-    ) ?? controls.find((element) => element.tagName.toLowerCase() === "wa-switch");
+    ) ?? controls.find((element) => element instanceof HTMLInputElement);
   if (!control) {
     const pluginId = /data-plugin-id=["']([^"']+)["']/u.exec(pluginSelector)?.[1];
     const plugin = page.result?.plugins.find((entry) => entry.id === pluginId);
@@ -426,13 +434,7 @@ export async function activatePluginControl(
     await page.updateComplete;
     return;
   }
-  if (control.tagName.toLowerCase() === "wa-switch") {
-    const toggle = control as HTMLElement & { checked: boolean };
-    toggle.checked = !toggle.checked;
-    toggle.dispatchEvent(new Event("change", { bubbles: true }));
-  } else {
-    control.click();
-  }
+  control.click();
   await page.updateComplete;
 }
 

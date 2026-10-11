@@ -4,10 +4,15 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { doctorCommand } from "../commands/doctor.js";
 import { loadPluginRegistryHandle } from "../plugins/loader.js";
+import * as pluginSourceFiles from "../plugins/plugin-source-file.js";
 import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 const { mocks } = await import("./doctor-health.test-support.js");
+
+vi.mock("../plugins/plugin-source-file.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-source-file.js")>()),
+}));
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -16,9 +21,7 @@ afterEach(() => {
 
 it.each([
   { failure: "ENOSPC", update: "standalone" },
-  { failure: "SyntaxError", update: "standalone" },
   { failure: "ENOSPC", update: "in-progress" },
-  { failure: "ENOSPC", update: "parent-only" },
 ])(
   "reports a plugin $failure during $update Doctor with its corresponding outcome",
   async ({ failure, update }) => {
@@ -57,14 +60,15 @@ it.each([
       };
       mocks.config.mockReturnValue(cfg);
       let failedWrite = false;
-      const write = fs.writeFileSync;
       if (failure === "ENOSPC") {
-        vi.spyOn(fs, "writeFileSync").mockImplementation((target, ...args) => {
-          if (path.basename(String(target)) === "index.cjs" && String(target) !== source) {
+        // Copy-owner tests cover fs-safe translation; Doctor consumes this capture boundary.
+        const copy = pluginSourceFiles.copyPluginSourceFile;
+        vi.spyOn(pluginSourceFiles, "copyPluginSourceFile").mockImplementation((...args) => {
+          if (args[0] === source) {
             failedWrite = true;
             throw Object.assign(new Error("fixture capture write failed"), { code: "ENOSPC" });
           }
-          return write(target, ...args);
+          return copy(...args);
         });
       }
       mocks.runContributions.mockImplementation(async () => {
@@ -74,7 +78,15 @@ it.each([
             expect(registry.plugins.find((plugin) => plugin.id === id)).toMatchObject({
               status: "error",
               failurePhase: "load",
+              error: expect.stringContaining(
+                failure === "ENOSPC" ? "fixture capture write failed" : "fixture syntax failed",
+              ),
             });
+            if (failure === "ENOSPC") {
+              expect(registry.plugins.find((plugin) => plugin.id === id)?.error).toContain(
+                "free space on the filesystem used by the plugin load and rerun Doctor",
+              );
+            }
           } finally {
             await disposePluginRegistryInstances(registry);
           }

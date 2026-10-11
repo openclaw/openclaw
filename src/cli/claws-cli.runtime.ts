@@ -1,5 +1,5 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
-import { stableStringify } from "@openclaw/normalization-core";
+import { filterStringEntries, stableStringify } from "@openclaw/normalization-core";
 import {
   listAgentEntries,
   listAgentIds,
@@ -47,7 +47,6 @@ import {
   CLAW_OUTPUT_STABILITY,
   type ClawAddPlan,
 } from "../claws/types.js";
-// Runtime handlers for experimental local Claws commands.
 import { getRuntimeConfig } from "../config/config.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import { redactSensitiveArgv } from "../config/redact-argv.js";
@@ -56,7 +55,7 @@ import {
   resolveCronJobsStorePath,
 } from "../cron/store.js";
 import { redactSensitiveText } from "../logging/redact.js";
-import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+import { defaultRuntime, ExitError, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { authorizeLegacyV1Resume } from "./claws-cli-legacy-resume.js";
 import {
   emitClawFailure,
@@ -74,6 +73,8 @@ import type {
 } from "./claws-cli.js";
 import { clawMonitorCleanupGateway } from "./claws-cli.monitor-cleanup.js";
 import { clawPackageRemovalGateway } from "./claws-cli.package-removal.js";
+import { clawRemovalJournalGateway } from "./claws-cli.removal-journal.js";
+import { offlineClawAction } from "./claws-cli.state-owner.js";
 import { listCronJobsFromGateway } from "./cron-cli/list-jobs.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 import { resolvePluginBatchReload } from "./plugins-lifecycle-client.js";
@@ -100,12 +101,7 @@ function logClawAddPlanSummary(plan: ClawAddPlan, runtime: RuntimeEnv): void {
       typeof server?.url === "string"
         ? redactSensitiveUrlLikeString(server.url)
         : typeof server?.command === "string"
-          ? redactSensitiveArgv([
-              server.command,
-              ...(Array.isArray(server.args)
-                ? server.args.filter((arg): arg is string => typeof arg === "string")
-                : []),
-            ]).join(" ")
+          ? redactSensitiveArgv([server.command, ...filterStringEntries(server.args)]).join(" ")
           : "invalid declaration";
     runtime.log(`  MCP ${action.id}: ${target}`);
   }
@@ -146,37 +142,21 @@ async function matchingResumeState(plan: ClawAddPlan, opts: ClawsAddOptions) {
   };
 }
 
-function failNonDryRun(opts: ClawsAddOptions, runtime: RuntimeEnv): boolean {
-  if (opts.dryRun) {
-    return false;
-  }
-  const consented = opts.yes && opts.planIntegrity;
-  if (consented) {
-    return false;
-  }
-  const code = opts.yes ? "plan_integrity_required" : "consent_required";
-  const message = opts.yes
-    ? "Claw add consent must include --plan-integrity from the exact dry-run plan."
-    : "Claw add requires explicit consent; pass --dry-run to preview or --yes with --plan-integrity to create the new agent and workspace.";
-  emitClawFailure(runtime, opts.json, message, {
-    schemaVersion: CLAW_ADD_PLAN_SCHEMA_VERSION,
-    stability: CLAW_OUTPUT_STABILITY,
-    ok: false,
-    error: { code, message },
-  });
-  return true;
-}
-
-function requireRemoveConsent(opts: ClawsRemoveOptions, runtime: RuntimeEnv): boolean {
+function requireClawPlanConsent(
+  action: "add" | "remove",
+  opts: ClawsAddOptions | ClawsRemoveOptions,
+  runtime: RuntimeEnv,
+): boolean {
   if (opts.dryRun || (opts.yes && opts.planIntegrity)) {
     return false;
   }
   const code = opts.yes ? "plan_integrity_required" : "consent_required";
   const message = opts.yes
-    ? "Claw remove consent must include --plan-integrity from the exact dry-run plan."
-    : "Claw remove requires explicit consent; pass --dry-run to preview or --yes with --plan-integrity to remove owned state.";
+    ? `Claw ${action} consent must include --plan-integrity from the exact dry-run plan.`
+    : `Claw ${action} requires explicit consent; pass --dry-run to preview or --yes with --plan-integrity to ${action === "add" ? "create the new agent and workspace" : "remove owned state"}.`;
   emitClawFailure(runtime, opts.json, message, {
-    schemaVersion: CLAW_REMOVE_PLAN_SCHEMA_VERSION,
+    schemaVersion:
+      action === "add" ? CLAW_ADD_PLAN_SCHEMA_VERSION : CLAW_REMOVE_PLAN_SCHEMA_VERSION,
     stability: CLAW_OUTPUT_STABILITY,
     ok: false,
     error: { code, message },
@@ -251,13 +231,15 @@ export async function runClawsInspectCommand(
   }
 }
 
-export async function runClawsAddCommand(
+export const runClawsAddCommand = offlineClawAction("add", runClawsAddCommandLocal);
+
+async function runClawsAddCommandLocal(
   sourcePath: string,
   opts: ClawsAddOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
   assertExperimentalClawsEnabled();
-  if (failNonDryRun(opts, runtime)) {
+  if (requireClawPlanConsent("add", opts, runtime)) {
     return;
   }
   let legacyV1ResumeRecord: PersistedClawInstall | undefined;
@@ -299,24 +281,20 @@ export async function runClawsAddCommand(
     existingCronJobIds: cronStore.store.jobs.map((job) => job.id),
     packagePreflight: preflightClawPackage,
   };
-  let plan = await buildClawAddPlan({
+  const planInput = {
     manifest: result.manifest,
     clawMarkdownBody: result.clawMarkdownBody,
     packageBootstrap: result.packageBootstrap,
     openClawProfile: result.openClawProfile,
     source: result.source,
     diagnostics: result.diagnostics,
-    context: basePlanContext,
-  });
+  };
+  let plan = await buildClawAddPlan({ ...planInput, context: basePlanContext });
   let legacyResumePlan = result.legacyOpenClawProfile
     ? await buildClawAddPlan({
-        manifest: result.manifest,
-        clawMarkdownBody: result.clawMarkdownBody,
-        packageBootstrap: result.packageBootstrap,
+        ...planInput,
         openClawProfile: result.legacyOpenClawProfile,
         reconstructLegacyDynamicToolProfilePlan: true,
-        source: result.source,
-        diagnostics: result.diagnostics,
         context: basePlanContext,
       })
     : undefined;
@@ -383,24 +361,12 @@ export async function runClawsAddCommand(
         : existingWorkspacePaths,
       ...(canResumeWorkspace ? { resumableWorkspace: resumeRecord.workspace } : {}),
     };
-    plan = await buildClawAddPlan({
-      manifest: result.manifest,
-      clawMarkdownBody: result.clawMarkdownBody,
-      packageBootstrap: result.packageBootstrap,
-      openClawProfile: result.openClawProfile,
-      source: result.source,
-      diagnostics: result.diagnostics,
-      context: resumePlanContext,
-    });
+    plan = await buildClawAddPlan({ ...planInput, context: resumePlanContext });
     if (result.legacyOpenClawProfile) {
       legacyResumePlan = await buildClawAddPlan({
-        manifest: result.manifest,
-        clawMarkdownBody: result.clawMarkdownBody,
-        packageBootstrap: result.packageBootstrap,
+        ...planInput,
         openClawProfile: result.legacyOpenClawProfile,
         reconstructLegacyDynamicToolProfilePlan: true,
-        source: result.source,
-        diagnostics: result.diagnostics,
         context: resumePlanContext,
       });
     }
@@ -427,30 +393,24 @@ export async function runClawsAddCommand(
           },
         ],
       };
-    } else {
-      resumableInstallRecord = resumeRecord;
     }
   }
 
-  if (plan.blockers.length > 0) {
+  if (opts.dryRun || plan.blockers.length > 0) {
     if (opts.json) {
       writeRuntimeJson(runtime, plan);
     } else {
       logClawExperimentalWarning(runtime);
+      if (plan.blockers.length === 0) {
+        runtime.log(`Claw add plan: ${plan.claw.name}@${plan.claw.version}`);
+      }
       logClawAddPlanSummary(plan, runtime);
-      runtime.error(formatClawDiagnostics(plan.blockers));
+      if (plan.blockers.length > 0) {
+        runtime.error(formatClawDiagnostics(plan.blockers));
+      }
     }
-    runtime.exit(1);
-    return;
-  }
-
-  if (opts.dryRun) {
-    if (opts.json) {
-      writeRuntimeJson(runtime, plan);
-    } else {
-      logClawExperimentalWarning(runtime);
-      runtime.log(`Claw add plan: ${plan.claw.name}@${plan.claw.version}`);
-      logClawAddPlanSummary(plan, runtime);
+    if (plan.blockers.length > 0) {
+      runtime.exit(1);
     }
     return;
   }
@@ -513,7 +473,9 @@ export async function runClawsAddCommand(
   }
 }
 
-export async function runClawsStatusCommand(
+export const runClawsStatusCommand = offlineClawAction("status", runClawsStatusCommandLocal);
+
+async function runClawsStatusCommandLocal(
   target: string | undefined,
   opts: ClawsStatusOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -539,15 +501,15 @@ export async function runClawsStatusCommand(
   }
 }
 
-export { runClawsUpdateCommand } from "./claws-update-cli.runtime.js";
+export const runClawsRemoveCommand = offlineClawAction("remove", runClawsRemoveCommandLocal);
 
-export async function runClawsRemoveCommand(
+async function runClawsRemoveCommandLocal(
   target: string,
   opts: ClawsRemoveOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
   assertExperimentalClawsEnabled();
-  if (requireRemoveConsent(opts, runtime)) {
+  if (requireClawPlanConsent("remove", opts, runtime)) {
     return;
   }
   const selected = opts.removeReferenced ?? [];
@@ -602,6 +564,7 @@ export async function runClawsRemoveCommand(
   }
   try {
     const result = await applyClawRemovePlan(plan, {
+      journalGateway: clawRemovalJournalGateway,
       monitorGateway: clawMonitorCleanupGateway,
       packageGateway: clawPackageRemovalGateway,
       consentPlanIntegrity: opts.planIntegrity,
@@ -639,6 +602,9 @@ export async function runClawsRemoveCommand(
       runtime.exit(1);
     }
   } catch (error) {
+    if (error instanceof ExitError) {
+      throw error;
+    }
     const code = error instanceof ClawRemoveError ? error.code : "remove_failed";
     const message = error instanceof Error ? error.message : String(error);
     emitClawFailure(runtime, opts.json, message, {
@@ -650,7 +616,9 @@ export async function runClawsRemoveCommand(
   }
 }
 
-export async function runClawsExportCommand(
+export const runClawsExportCommand = offlineClawAction("export", runClawsExportCommandLocal);
+
+async function runClawsExportCommandLocal(
   agentId: string,
   opts: ClawsExportOptions,
   runtime: RuntimeEnv = defaultRuntime,

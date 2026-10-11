@@ -4,6 +4,7 @@ import { property, state } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { t } from "../i18n/index.ts";
+import { registerMcpEnglish } from "../i18n/locales/en-mcp.ts";
 import { resolveEditableSnapshotConfig } from "../lib/config/config-state-model.ts";
 import {
   buildAddMcpServerPatch,
@@ -32,6 +33,8 @@ import {
 } from "./settings-ui.ts";
 import { WizardLoginController } from "./wizard-login-controller.ts";
 
+registerMcpEnglish();
+
 type McpServerMessage = { kind: "error" | "success"; text: string };
 
 function quoteShellArg(value: string): string {
@@ -57,11 +60,9 @@ class McpServersCard extends OpenClawLightDomElement {
 
   @property() docsUrl = "https://docs.openclaw.ai/tools/mcp";
 
-  @state() private rows: McpServerSummary[] | null = null;
   @state() private busy = false;
   @state() private message: McpServerMessage | null = null;
   @state() private formOpen = false;
-  private feedbackGeneration = 0;
   private readonly login = new WizardLoginController(this, {
     getClient: () => this.context?.gateway.snapshot.client ?? null,
     getAgentId: () => null,
@@ -74,26 +75,15 @@ class McpServersCard extends OpenClawLightDomElement {
     .effect(
       () => this.context?.runtimeConfig,
       (runtimeConfig) => {
-        const generation = this.feedbackGeneration;
-        this.syncRows();
+        this.requestUpdate();
         void runtimeConfig.ensureLoaded().catch((error: unknown) => {
-          if (
-            generation !== this.feedbackGeneration ||
-            !this.isConnected ||
-            runtimeConfig !== this.context?.runtimeConfig
-          ) {
-            return;
-          }
           this.message = {
             kind: "error",
             text: formatUiError(error),
           };
         });
-        const unsubscribe = runtimeConfig.subscribe(() => this.syncRows());
+        const unsubscribe = runtimeConfig.subscribe(() => this.requestUpdate());
         return () => {
-          // Async config work belongs to one connected source. Retire its UI
-          // feedback before a replacement source or retained card can reuse it.
-          this.feedbackGeneration += 1;
           this.busy = false;
           this.message = null;
           unsubscribe();
@@ -117,11 +107,6 @@ class McpServersCard extends OpenClawLightDomElement {
     this.login.reset();
     this.subscriptions.clear();
     super.disconnectedCallback();
-  }
-
-  private syncRows() {
-    const snapshot = this.context?.runtimeConfig.state.configSnapshot;
-    this.rows = summarizeMcpServers(resolveEditableSnapshotConfig(snapshot));
   }
 
   private mutationBlockedReason(): string | null {
@@ -166,25 +151,20 @@ class McpServersCard extends OpenClawLightDomElement {
     if (!this.context || !this.canMutate() || this.busy) {
       return false;
     }
-    const generation = this.feedbackGeneration;
     this.busy = true;
     this.message = null;
     const result = await patchMcpServers(this.context.runtimeConfig, options);
-    if (generation !== this.feedbackGeneration) {
-      return false;
-    }
     this.busy = false;
     if (!result.ok) {
       this.message = { kind: "error", text: result.error };
       return false;
     }
-    this.syncRows();
     this.message = { kind: "success", text: options.successText };
     return true;
   }
 
   private async addServer(form: McpServerForm) {
-    const name = form.name.trim();
+    const name = form.name;
     if (!MCP_SERVER_NAME_PATTERN.test(name)) {
       this.message = { kind: "error", text: t("mcpServers.nameInvalid") };
       return;
@@ -302,7 +282,9 @@ class McpServersCard extends OpenClawLightDomElement {
 
   override render() {
     const blockedReason = this.mutationBlockedReason();
-    const rows = this.rows;
+    const rows = summarizeMcpServers(
+      resolveEditableSnapshotConfig(this.context?.runtimeConfig.state.configSnapshot),
+    );
     const body = !rows
       ? renderSettingsLoadingSkeleton({ rows: 2 })
       : rows.length === 0

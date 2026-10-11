@@ -4,11 +4,6 @@
 export type BindingTargetKind = "subagent" | "session";
 
 /**
- * Lifecycle state for a registered session binding.
- */
-type BindingStatus = "active" | "ending" | "ended";
-
-/**
  * Placement requested when binding a child/current session to a conversation.
  */
 export type SessionBindingPlacement = "current" | "child";
@@ -42,11 +37,16 @@ export type SessionBindingRecord = {
   targetSessionKey: string;
   targetKind: BindingTargetKind;
   conversation: ConversationRef;
-  status: BindingStatus;
+  /** Lifecycle state for a registered session binding. */
+  status: "active" | "ending" | "ended";
   boundAt: number;
   expiresAt?: number;
   metadata?: Record<string, unknown>;
 };
+
+export type SessionBindingInspection =
+  | { status: "available"; binding: SessionBindingRecord | null }
+  | { status: "unavailable" };
 
 /**
  * Request to create or refresh a session binding for a conversation.
@@ -58,6 +58,8 @@ export type SessionBindingBindInput = {
   placement?: SessionBindingPlacement;
   metadata?: Record<string, unknown>;
   ttlMs?: number;
+  /** Host admission authority; current-placement adapters recheck before committing a binding. */
+  assertCurrent?: () => void;
 };
 
 /**

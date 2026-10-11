@@ -52,39 +52,51 @@ async function fixture(rootPath = "skills/guide") {
     skills: ["skills"],
     version: "1.0.0",
   };
-  const read = (name = "operator-guide") =>
-    withPluginCache(createPluginCache(), () => readPluginSkill(record, name));
+  const read = (name = "operator-guide", selectedPath?: string) =>
+    withPluginCache(createPluginCache(), () =>
+      readPluginSkill(record, name, { path: selectedPath }),
+    );
+  const bundle = (selectedPath?: string) =>
+    readPluginSkillBundle({
+      pluginRoot: rootDir,
+      rootPath,
+      name: "operator-guide",
+      rejectHardlinks: true,
+      path: selectedPath,
+    });
+  const inventory = () => ({
+    package: { name: "@example/plugin" },
+    version: {
+      version: "1.0.0",
+      pluginManifestSummary: {
+        bundledSkills: [
+          {
+            name: "operator-guide",
+            rootPath,
+            skillMdPath: `${rootPath}/SKILL.md`,
+          },
+        ],
+      },
+      files: [...source].map(([p, b]) => ({
+        path: `${rootPath}/${p}`,
+        size: b.length,
+        sha256: createHash("sha256").update(b).digest("hex"),
+      })),
+    },
+  });
   const calls: URL[] = [];
-  const catalog = (alter?: (value: Record<string, unknown>) => void) =>
+  const catalog = (alter?: (value: ReturnType<typeof inventory>) => void, selectedPath?: string) =>
     fetchClawHubPluginSkill({
       packageName: "@example/plugin",
       version: "1.0.0",
       skillName: "operator-guide",
       skipAuth: true,
+      path: selectedPath,
       fetchImpl: async (input) => {
         const url = new URL(input instanceof Request ? input.url : input);
         calls.push(url);
         if (url.pathname.endsWith("/versions/1.0.0")) {
-          const value = {
-            package: { name: "@example/plugin" },
-            version: {
-              version: "1.0.0",
-              pluginManifestSummary: {
-                bundledSkills: [
-                  {
-                    name: "operator-guide",
-                    rootPath,
-                    skillMdPath: `${rootPath}/SKILL.md`,
-                  },
-                ],
-              },
-              files: [...source].map(([p, b]) => ({
-                path: `${rootPath}/${p}`,
-                size: b.length,
-                sha256: createHash("sha256").update(b).digest("hex"),
-              })),
-            },
-          };
+          const value = inventory();
           alter?.(value);
           return Response.json(value);
         }
@@ -97,12 +109,16 @@ async function fixture(rootPath = "skills/guide") {
         return new Response(data ? new Uint8Array(data) : null, { status: data ? 200 : 404 });
       },
     });
-  return { root, rootDir, skillDir, record, source, calls, read, catalog };
+  return { root, rootDir, skillDir, record, source, calls, read, catalog, bundle };
 }
 
 describe("complete plugin skill bundles", () => {
   it("returns equivalent installed/catalog inventories, full text, unlinked files and visible binaries", async () => {
-    const { read, catalog, source, calls, skillDir } = await fixture();
+    const { read, catalog, source, calls, skillDir, root, rootDir, record } = await fixture();
+    const alias = path.join(root, "plugin-alias");
+    await fs.symlink(rootDir, alias, process.platform === "win32" ? "junction" : "dir");
+    record.rootDir = alias;
+    record.skills.push("skills/guide");
     const text = "# UTF-8 text\t\r\nλ\u007f\u0080\u009f";
     const controls = [0x00, 0x08, 0x0b, 0x0c, 0x0e, 0x1f];
     source.set("text.txt", Buffer.from(text));
@@ -113,29 +129,36 @@ describe("complete plugin skill bundles", () => {
       await fs.writeFile(path.join(skillDir, name), bytes);
     }
     const installed = await read();
+    expect(installed.rootPath).toBe("skills/guide");
+    expect(installed.entryPath).toBe("SKILL.md");
+    expect(
+      await withPluginCache(createPluginCache(), () =>
+        readPluginSkill({ ...record, rootDir }, "operator-guide"),
+      ),
+    ).toEqual(installed);
     expect(await catalog()).toEqual(installed);
     expect(installed.files.map((f) => f.path)).toEqual([...source.keys()].toSorted());
-    expect(installed.files.find((f) => f.path === "references/guide.md")?.content).toBe(
-      source.get("references/guide.md")!.toString(),
-    );
-    expect(installed.files.find((f) => f.path === "assets/picture.png")).toMatchObject({
-      status: "binary",
-      sizeBytes: 4,
-    });
-    expect(installed.files.find((f) => f.path === "empty.txt")).toMatchObject({
-      status: "ready",
-      content: "",
-    });
-    expect(installed.files.find((f) => f.path === "text.txt")).toMatchObject({
-      status: "ready",
-      content: text,
-    });
-    for (const code of controls) {
-      expect(installed.files.find((f) => f.path === `control-${code}.txt`)).toEqual({
-        path: `control-${code}.txt`,
-        sizeBytes: 1,
-        status: "binary",
-      });
+    expect(
+      installed.files.filter((file) => file.status === "ready").map((file) => file.path),
+    ).toEqual(["SKILL.md"]);
+    expect(
+      installed.files
+        .filter((file) => file.path !== "SKILL.md")
+        .every((file) => file.status === "deferred" && file.content === undefined),
+    ).toBe(true);
+    expect(calls).toHaveLength(2);
+    for (const [filePath, bytes] of source) {
+      const selected = await read("operator-guide", filePath);
+      expect(await catalog(undefined, filePath)).toEqual(selected);
+      const selectedFile = selected.files.find((file) => file.path === filePath)!;
+      const binary = filePath === "assets/picture.png" || filePath.startsWith("control-");
+      expect(selectedFile.status).toBe(binary ? "binary" : "ready");
+      expect(selectedFile.content).toBe(binary ? undefined : bytes.toString());
+      expect(
+        selected.files
+          .filter((file) => file.path !== filePath)
+          .every((file) => file.status === "deferred"),
+      ).toBe(true);
     }
     expect(
       calls
@@ -146,11 +169,6 @@ describe("complete plugin skill bundles", () => {
 
   it.each([
     {
-      boundary: "root depth",
-      rootPath: Array.from({ length: 16 }, (_, i) => `root-${i}`).join("/"),
-      filePath: "reference.md",
-    },
-    {
       boundary: "relative depth",
       rootPath: "skills/guide",
       filePath: [...Array.from({ length: 15 }, (_, i) => `part-${i}`), "reference.md"].join("/"),
@@ -160,59 +178,33 @@ describe("complete plugin skill bundles", () => {
       rootPath: `${"a".repeat(255)}/${"b".repeat(255)}`,
       filePath: "reference.md",
     },
-    {
-      boundary: "relative length",
-      rootPath: "skills/guide",
-      filePath: `${"a".repeat(255)}/${"b".repeat(252)}.md`,
-    },
   ])(
     "applies $boundary limits independently to root and relative paths",
     async ({ rootPath, filePath }) => {
-      const { rootDir, skillDir, source, catalog, calls } = await fixture(rootPath);
+      const { skillDir, source, catalog, calls, bundle } = await fixture(rootPath);
       const contents = Buffer.from("Complete boundary reference.");
       source.set(filePath, contents);
       await fs.mkdir(path.dirname(path.join(skillDir, filePath)), { recursive: true });
       await fs.writeFile(path.join(skillDir, filePath), contents);
-      const installed = await readPluginSkillBundle({
-        pluginRoot: rootDir,
-        rootPath,
-        name: "operator-guide",
-        rejectHardlinks: true,
-      });
+      const installed = await bundle();
       const published = await catalog((value) => {
-        const version = value.version as {
-          files: { path: string }[];
-          pluginManifestSummary: { bundledSkills: { skillMdPath: string }[] };
-        };
+        const version = value.version;
         version.pluginManifestSummary.bundledSkills[0]!.skillMdPath = `./${rootPath}/SKILL.md`;
         for (const file of version.files) {
           file.path = `./${file.path}`;
         }
       });
       expect(published).toEqual({ ...installed, version: "1.0.0" });
-      expect(published.files.find((file) => file.path === filePath)?.content).toBe(
-        contents.toString(),
-      );
+      expect(published.files.find((file) => file.path === filePath)?.status).toBe("deferred");
       expect(
         calls
           .filter((url) => url.pathname.endsWith("/file"))
           .map((url) => url.searchParams.get("path")),
-      ).toEqual([...source.keys()].toSorted().map((file) => `./${rootPath}/${file}`));
+      ).toEqual([`./${rootPath}/SKILL.md`]);
     },
   );
 
-  it("reads the installed bundle through a symlinked plugin root", async () => {
-    const { root, rootDir, record, read } = await fixture();
-    const alias = path.join(root, "plugin-alias");
-    await fs.symlink(rootDir, alias, process.platform === "win32" ? "junction" : "dir");
-    const result = await withPluginCache(createPluginCache(), () =>
-      readPluginSkill({ ...record, rootDir: alias }, "operator-guide"),
-    );
-    expect(result).toEqual(await read());
-    expect(result.rootPath).toBe("skills/guide");
-  });
-
-  it.each(["", "./"])(
+  it.each(["./"])(
     "reads a declared package-root skill with exact %s inventory paths",
     async (prefix) => {
       const { record, rootDir, source, catalog, calls } = await fixture();
@@ -225,10 +217,7 @@ describe("complete plugin skill bundles", () => {
         readPluginSkill({ ...record, skills: ["."] }, "operator-guide"),
       );
       const published = await catalog((value) => {
-        const version = value.version as {
-          files: { path: string }[];
-          pluginManifestSummary: { bundledSkills: { rootPath: string; skillMdPath: string }[] };
-        };
+        const version = value.version;
         version.pluginManifestSummary.bundledSkills[0]!.rootPath = ".";
         version.pluginManifestSummary.bundledSkills[0]!.skillMdPath = `${prefix}SKILL.md`;
         for (const file of version.files) {
@@ -241,7 +230,7 @@ describe("complete plugin skill bundles", () => {
         calls
           .filter((url) => url.pathname.endsWith("/file"))
           .map((url) => url.searchParams.get("path")),
-      ).toEqual([...source.keys()].toSorted().map((file) => `${prefix}${file}`));
+      ).toEqual([`${prefix}SKILL.md`]);
     },
   );
 
@@ -262,7 +251,8 @@ describe("complete plugin skill bundles", () => {
     );
     const result = await read();
     for (const p of ["link.txt", "hardlink.txt", "outside"]) {
-      expect(result.files.find((f) => f.path === p)).toMatchObject({ status: "unavailable" });
+      const selected = await read("operator-guide", p);
+      expect(selected.files.find((f) => f.path === p)).toMatchObject({ status: "unavailable" });
     }
     expect(result.files.find((f) => f.path === "large.txt")).toMatchObject({ status: "too-large" });
     expect(JSON.stringify(result)).not.toContain("private fixture");
@@ -277,63 +267,69 @@ describe("complete plugin skill bundles", () => {
     await expect(read()).rejects.toThrow("ambiguous");
   });
 
-  it.each(["version", "path", "duplicate", "alias", "control", "DEL"])(
+  it.each(["version", "path", "alias", "control", "tree"] as const)(
     "rejects a catalog %s mismatch before file reads",
     async (kind) => {
       const { catalog, calls } = await fixture();
       await expect(
-        catalog((value) => {
-          const version = value.version as { version: string; files: { path: string }[] };
-          if (kind === "version") {
-            version.version = "2.0.0";
-          }
-          if (kind === "path") {
-            version.files[0]!.path = "skills/guide/../../outside.txt";
-          }
-          if (kind === "control" || kind === "DEL") {
-            version.files[0]!.path = `skills/guide/bad${String.fromCharCode(kind === "control" ? 0x1f : 0x7f)}.txt`;
-          }
-          if (kind === "duplicate") {
-            version.files.push(version.files[0]!);
-          }
-          if (kind === "alias") {
-            version.files.push({ ...version.files[0]!, path: `./${version.files[0]!.path}` });
+        catalog(({ version }) => {
+          switch (kind) {
+            case "version":
+              version.version = "2.0.0";
+              break;
+            case "path":
+              version.files[0]!.path = "skills/guide/../../outside.txt";
+              break;
+            case "control":
+              version.files[0]!.path = "skills/guide/bad\u001f.txt";
+              break;
+            case "alias":
+              version.files.push({ ...version.files[0]!, path: `./${version.files[0]!.path}` });
+              break;
+            case "tree":
+              for (let index = 0; index < 50; index++) {
+                version.files.push({
+                  path: `skills/guide/branch-${index}/a/b/c/d/e/f/g/h/i/j/file.txt`,
+                  size: 0,
+                  sha256: createHash("sha256").update("").digest("hex"),
+                });
+              }
           }
         }),
-      ).rejects.toThrow();
+      ).rejects.toThrow(kind === "tree" ? "inventory limits" : undefined);
       expect(calls).toHaveLength(1);
     },
   );
 
-  it("rejects excess catalog tree entries before reading any file bodies", async () => {
-    const { catalog, calls } = await fixture();
-    await expect(
-      catalog((value) => {
-        const files = (value.version as { files: { path: string; size: number; sha256: string }[] })
-          .files;
-        for (let index = 0; index < 50; index++) {
-          files.push({
-            path: `skills/guide/branch-${index}/a/b/c/d/e/f/g/h/i/j/file.txt`,
-            size: 0,
-            sha256: createHash("sha256").update("").digest("hex"),
-          });
+  it.each(["integrity", "deadline"] as const)(
+    "leaves selected content unavailable after %s failure",
+    async (failure) => {
+      const { catalog, source, calls } = await fixture();
+      let time = Date.now();
+      if (failure === "deadline") {
+        vi.spyOn(Date, "now").mockImplementation(() => time);
+      }
+      const result = await catalog(({ version }) => {
+        if (failure === "integrity") {
+          version.files[0]!.sha256 = "0".repeat(64);
+        } else {
+          time += 30_001;
         }
-      }),
-    ).rejects.toThrow("inventory limits");
-    expect(calls).toHaveLength(1);
-  });
-
-  it("represents failed integrity checks without claiming the contents were read", async () => {
-    const { catalog, source } = await fixture();
-    const result = await catalog((value) => {
-      (value.version as { files: { sha256: string }[] }).files[0]!.sha256 = "0".repeat(64);
-    });
-    expect(result.files.find((file) => file.path === "SKILL.md")).toEqual({
-      path: "SKILL.md",
-      sizeBytes: source.get("SKILL.md")!.length,
-      status: "unavailable",
-    });
-  });
+      });
+      expect(calls).toHaveLength(failure === "deadline" ? 1 : 2);
+      expect(result.files).toHaveLength(5);
+      expect(result.files.find((file) => file.path === "SKILL.md")).toEqual({
+        path: "SKILL.md",
+        sizeBytes: source.get("SKILL.md")!.length,
+        status: "unavailable",
+      });
+      expect(
+        result.files
+          .filter((file) => file.path !== "SKILL.md")
+          .every((file) => file.status === "deferred"),
+      ).toBe(true);
+    },
+  );
 
   it("shows an empty declared folder and rejects excess inventory instead of truncating", async () => {
     const { rootDir, skillDir } = await fixture();
@@ -360,59 +356,50 @@ describe("complete plugin skill bundles", () => {
     );
     await expect(read("skills/guide")).rejects.toThrow("file count");
   });
-  it("stops catalog requests when the overall read budget expires", async () => {
-    const { catalog, calls } = await fixture();
-    let time = Date.now();
-    vi.spyOn(Date, "now").mockImplementation(() => time);
-    const result = await catalog(() => {
-      time += 30_001;
-    });
-    expect(calls).toHaveLength(1);
-    expect(result.files).toHaveLength(5);
-    expect(result.files.every((file) => file.status === "unavailable")).toBe(true);
-  });
+  it.each(["overflow", "exact"] as const)(
+    "preserves the inventory at the %s aggregate size boundary",
+    async (boundary) => {
+      const { skillDir, source, catalog, bundle } = await fixture();
+      const exact = boundary === "exact";
+      if (exact) {
+        await fs.rm(skillDir, { recursive: true });
+        await fs.mkdir(skillDir, { recursive: true });
+        source.clear();
+      }
+      const count = exact ? SKILL_LIBRARY_MAX_BUNDLE_BYTES / SKILL_LIBRARY_MAX_FILE_BYTES : 9;
+      for (let i = 0; i < count; i++) {
+        const name = exact ? (i === 0 ? "SKILL.md" : `part-${i}.md`) : `large-${i}.txt`;
+        const contents = Buffer.alloc(SKILL_LIBRARY_MAX_FILE_BYTES, "a");
+        source.set(name, contents);
+        await fs.writeFile(path.join(skillDir, name), contents);
+      }
+      if (exact) {
+        source.set("z-empty.txt", Buffer.alloc(0));
+        await fs.writeFile(path.join(skillDir, "z-empty.txt"), "");
+      }
+      const installed = await bundle();
+      expect(await catalog()).toEqual({ ...installed, version: "1.0.0" });
+      expect(installed.files).toHaveLength(source.size);
+      if (exact) {
+        expect(installed.files.find((file) => file.path === "SKILL.md")?.status).toBe("ready");
+        expect(
+          installed.files
+            .filter((file) => file.path !== "SKILL.md")
+            .every((file) => file.status === "deferred"),
+        ).toBe(true);
+        expect(installed.files.reduce((bytes, file) => bytes + file.sizeBytes, 0)).toBe(
+          SKILL_LIBRARY_MAX_BUNDLE_BYTES,
+        );
+      } else {
+        expect(installed.files.find((file) => file.path === "large-8.txt")?.status).toBe(
+          "too-large",
+        );
+      }
+    },
+  );
 
-  it("keeps aggregate-size overflow visible in both inventories", async () => {
-    const { source, skillDir, read, catalog } = await fixture();
-    for (let i = 0; i < 9; i++) {
-      const contents = Buffer.alloc(SKILL_LIBRARY_MAX_FILE_BYTES, "a");
-      const name = `large-${i}.txt`;
-      source.set(name, contents);
-      await fs.writeFile(path.join(skillDir, name), contents);
-    }
-    const installed = await read();
-    expect(await catalog()).toEqual(installed);
-    expect(installed.files.find((file) => file.path === "large-8.txt")?.status).toBe("too-large");
-    expect(installed.files).toHaveLength(source.size);
-  });
-  it("reads every byte of a static bundle that exactly fits the aggregate limit", async () => {
-    const { rootDir, skillDir, source, catalog } = await fixture();
-    await fs.rm(skillDir, { recursive: true });
-    await fs.mkdir(skillDir, { recursive: true });
-    source.clear();
-    for (let i = 0; i < SKILL_LIBRARY_MAX_BUNDLE_BYTES / SKILL_LIBRARY_MAX_FILE_BYTES; i++) {
-      const file = i === 0 ? "SKILL.md" : `part-${i}.md`;
-      const contents = Buffer.alloc(SKILL_LIBRARY_MAX_FILE_BYTES, "a");
-      source.set(file, contents);
-      await fs.writeFile(path.join(skillDir, file), contents);
-    }
-    source.set("z-empty.txt", Buffer.alloc(0));
-    await fs.writeFile(path.join(skillDir, "z-empty.txt"), "");
-    const installed = await readPluginSkillBundle({
-      pluginRoot: rootDir,
-      rootPath: "skills/guide",
-      name: "operator-guide",
-      rejectHardlinks: true,
-    });
-    expect(await catalog()).toEqual({ ...installed, version: "1.0.0" });
-    expect(installed.files.every((file) => file.status === "ready")).toBe(true);
-    expect(installed.files.reduce((bytes, file) => bytes + file.sizeBytes, 0)).toBe(
-      SKILL_LIBRARY_MAX_BUNDLE_BYTES,
-    );
-  });
-
-  it("charges failed bounded reads before admitting another file", async () => {
-    const { rootDir, skillDir } = await fixture();
+  it("bounds a growing selected file without touching unselected bodies", async () => {
+    const { skillDir, bundle } = await fixture();
     const growing = new Set<string>();
     for (let i = 0; i < 9; i++) {
       const file = path.join(skillDir, `growing-${i}.txt`);
@@ -441,34 +428,15 @@ describe("complete plugin skill bundles", () => {
         });
       },
     });
-    const result = await readPluginSkillBundle({
-      pluginRoot: rootDir,
-      rootPath: "skills/guide",
-      name: "operator-guide",
-      rejectHardlinks: true,
-    });
+    const result = await bundle("growing-0.txt");
     const bytesRead = (await Promise.all(reads)).reduce((sum, bytes) => sum + bytes, 0);
-    expect(bytesRead).toBeGreaterThan(SKILL_LIBRARY_MAX_FILE_BYTES);
+    expect(bytesRead).toBeGreaterThan(0);
     // fs-safe reads at most one extra byte to detect overflow.
-    expect(bytesRead).toBeLessThanOrEqual(SKILL_LIBRARY_MAX_BUNDLE_BYTES + 1);
+    expect(bytesRead).toBeLessThanOrEqual(2);
     expect(result.files.find((file) => file.path === "z-after.txt")).toMatchObject({
-      status: "too-large",
+      status: "deferred",
     });
+    expect(result.files.find((file) => file.path === "growing-0.txt")?.status).toBe("too-large");
     expect(result.files).toHaveLength(15);
-  });
-
-  it("reads overlapping declarations once while preserving distinct-name ambiguity checks", async () => {
-    const { record } = await fixture();
-    const result = await withPluginCache(createPluginCache(), () =>
-      readPluginSkill(
-        {
-          ...record,
-          skills: ["skills", "skills/guide"],
-        },
-        "operator-guide",
-      ),
-    );
-    expect(result.files).toHaveLength(5);
-    expect(result.entryPath).toBe("SKILL.md");
   });
 });

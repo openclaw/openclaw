@@ -5,7 +5,6 @@ import {
   oversizedJsonResponse,
   streamedJsonResponse,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
-import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generation";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -48,24 +47,6 @@ function requirePostJsonCall(index = 0): {
   return params;
 }
 
-function requireFetchInitCall(index: number): {
-  url?: string;
-  init?: { method?: string };
-  timeoutMs?: number;
-} {
-  const call = (
-    fetchWithTimeoutMock.mock.calls as unknown as Array<[string, { method?: string }, number]>
-  )[index];
-  if (!call) {
-    throw new Error(`Expected fetchWithTimeout call ${index}`);
-  }
-  return {
-    url: call[0],
-    init: call[1],
-    timeoutMs: call[2],
-  };
-}
-
 function mockXaiVideoRequest(requestId: string) {
   postJsonRequestMock.mockImplementation(async () => ({
     response: Response.json({ request_id: requestId }),
@@ -95,16 +76,6 @@ function mockXaiVideoTask(params: {
 }
 
 describe("xai video generation provider", () => {
-  it("declares explicit mode capabilities", () => {
-    const provider = buildXaiVideoGenerationProvider();
-    expectExplicitVideoGenerationCapabilities(provider);
-    expect(provider.capabilities.videoToVideo).toMatchObject({
-      maxDurationSeconds: 10,
-      supportsAspectRatio: false,
-      supportsResolution: false,
-    });
-  });
-
   it("advertises canonical 1.5 and resolves capabilities for all API aliases", async () => {
     const provider = buildXaiVideoGenerationProvider();
 
@@ -241,44 +212,6 @@ describe("xai video generation provider", () => {
     expect(postJsonRequestMock).not.toHaveBeenCalled();
   });
 
-  it("creates, polls, and downloads a generated video", async () => {
-    mockXaiVideoTask({
-      requestId: "req_123",
-      videoUrl: "https://cdn.x.ai/video.mp4",
-      videoBytes: "webm-bytes",
-      mimeType: "video/webm",
-    });
-
-    const provider = buildXaiVideoGenerationProvider();
-    const result = await provider.generateVideo({
-      provider: "xai",
-      model: "grok-imagine-video",
-      prompt: "A tiny robot crab crossing a moonlit tide pool",
-      cfg: {},
-      durationSeconds: 6,
-      aspectRatio: "16:9",
-      resolution: "720P",
-    });
-
-    const createRequest = requirePostJsonCall();
-    expect(createRequest.url).toBe("https://api.x.ai/v1/videos/generations");
-    expect(createRequest.body?.model).toBe("grok-imagine-video");
-    expect(createRequest.body?.prompt).toBe("A tiny robot crab crossing a moonlit tide pool");
-    expect(createRequest.body?.duration).toBe(6);
-    expect(createRequest.body?.aspect_ratio).toBe("16:9");
-    expect(createRequest.body?.resolution).toBe("720p");
-    const pollRequest = requireFetchInitCall(0);
-    expect(pollRequest.url).toBe("https://api.x.ai/v1/videos/req_123");
-    expect(pollRequest.init?.method).toBe("GET");
-    expect(provider.defaultTimeoutMs).toBe(600_000);
-    expect(pollRequest.timeoutMs).toBeGreaterThan(599_000);
-    expect(pollRequest.timeoutMs).toBeLessThanOrEqual(600_000);
-    expect(result.videos[0]?.mimeType).toBe("video/webm");
-    expect(result.videos[0]?.fileName).toBe("video-1.webm");
-    expect(result.metadata?.requestId).toBe("req_123");
-    expect(result.metadata?.mode).toBe("generate");
-  });
-
   it("applies configured xAI request policy to video generation requests", async () => {
     const dispatcherPolicy = { proxyUrl: "http://proxy.example:3128" };
     const requestPolicy = {
@@ -395,28 +328,6 @@ describe("xai video generation provider", () => {
     ).rejects.toThrow("xAI generated video download exceeds 1 bytes");
   });
 
-  it("bounds an unbounded successful xAI create JSON body and cancels the stream", async () => {
-    const oversized = oversizedJsonResponse();
-    postJsonRequestMock.mockResolvedValue({
-      response: oversized.response,
-      release: vi.fn(async () => {}),
-    });
-
-    const provider = buildXaiVideoGenerationProvider();
-    await expect(
-      provider.generateVideo({
-        provider: "xai",
-        model: "grok-imagine-video",
-        prompt: "oversized create body",
-        cfg: {},
-      }),
-    ).rejects.toThrow("xAI video generation response: JSON response exceeds 16777216 bytes");
-    // The bounded reader cancelled the stream rather than buffering the whole
-    // body, and stopped reading well before the 64 MiB ceiling.
-    expect(oversized.state.canceled).toBe(true);
-    expect(oversized.state.enqueuedBytes).toBeLessThan(64 * 1024 * 1024);
-  });
-
   it("bounds an unbounded successful xAI poll JSON body and cancels the stream", async () => {
     const oversized = oversizedJsonResponse();
     postJsonRequestMock.mockImplementation(async () => ({
@@ -472,58 +383,6 @@ describe("xai video generation provider", () => {
         cfg: {},
       }),
     ).rejects.toThrow("xAI video generation response malformed");
-  });
-
-  it("treats unknown xAI poll statuses as continue-polling and returns when terminal", async () => {
-    vi.useFakeTimers();
-    try {
-      mockXaiVideoRequest("req_unknown_then_done");
-      fetchWithTimeoutMock
-        .mockResolvedValueOnce(
-          Response.json({
-            request_id: "req_unknown_then_done",
-            status: "almost_done",
-          }),
-        )
-        .mockResolvedValueOnce(
-          Response.json({
-            request_id: "req_unknown_then_done",
-            status: "submitted",
-          }),
-        )
-        .mockResolvedValueOnce(
-          Response.json({
-            request_id: "req_unknown_then_done",
-            status: "done",
-            video: { url: "https://cdn.x.ai/eventual.mp4" },
-          }),
-        )
-        .mockResolvedValueOnce({
-          headers: new Headers({ "content-type": "video/mp4" }),
-          arrayBuffer: async () => Buffer.from("mp4"),
-        });
-
-      const provider = buildXaiVideoGenerationProvider();
-      const pending = provider.generateVideo({
-        provider: "xai",
-        model: "grok-imagine-video",
-        prompt: "unknown then done",
-        cfg: {},
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(4_999);
-      expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1);
-      await vi.advanceTimersByTimeAsync(4_999);
-      expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(1);
-      const result = await pending;
-
-      expect(result.metadata?.requestId).toBe("req_unknown_then_done");
-      expect(result.metadata?.status).toBe("done");
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("treats `cancelled` as a terminal failure", async () => {

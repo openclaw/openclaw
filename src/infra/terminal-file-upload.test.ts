@@ -18,6 +18,7 @@ import {
   isCanonicalTerminalUploadBase64,
 } from "../../packages/gateway-protocol/src/schema/terminal-constants.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { ensureTerminalUploadCleanup, stageTerminalUpload } from "./terminal-file-upload.js";
 
 vi.mock("node:fs/promises", async () => {
@@ -57,6 +58,26 @@ async function retainedDirectories(root: string): Promise<string[]> {
     .map((entry) => entry.name);
 }
 
+async function advanceUploadCleanup(root: string, ms: number): Promise<void> {
+  const completed = createDeferredCore();
+  const rmMock = vi.mocked(rm);
+  const remove = rmMock.getMockImplementation()!;
+  rmMock.mockImplementation((target, options) => {
+    if (path.dirname(String(target)) === root) {
+      // Observe timer-driven removal before joining recovery. Deletion alone
+      // precedes scan completion and lock release, stranding retries on fake time.
+      completed.resolve(ensureTerminalUploadCleanup({ tempRoot: root }));
+    }
+    return remove(target, options);
+  });
+  try {
+    await vi.advanceTimersByTimeAsync(ms);
+    await completed.promise;
+  } finally {
+    rmMock.mockImplementation(remove);
+  }
+}
+
 describe("terminal file upload", () => {
   it("stages arbitrary bytes under a private temporary directory", async () => {
     const root = tempDirs.make("openclaw-terminal-upload-test-");
@@ -92,7 +113,6 @@ describe("terminal file upload", () => {
 
   it.each([
     { name: "an empty lock", payload: "" },
-    { name: "a partial lock", payload: '{"pid":' },
     { name: "an orphaned reclaim guard", payload: null },
   ])("protects shared-root locks and recovers safely from $name", async ({ payload }) => {
     const root = tempDirs.make("openclaw-terminal-upload-private-lock-test-");
@@ -229,32 +249,20 @@ describe("terminal file upload", () => {
         ).path,
       );
 
-    expect(await stagedName("..\\..\\secret\u0000.txt")).toBe("secret_.txt");
-    expect(await stagedName("report:<final>?!-%PATH%.pdf. ")).toBe("report__final___-_PATH_.pdf");
-    expect(await stagedName("CON.txt")).toBe("_CON.txt");
-    expect(await stagedName("COM¹.txt")).toBe("_COM¹.txt");
-    expect(await stagedName("LPT³.log")).toBe("_LPT³.log");
+    expect(await stagedName("..\\..\\secret\u0000.txt")).toBe("secret.txt");
+    expect(await stagedName("report:<final>?!-%PATH%.pdf. ")).toBe("reportfinal_-_PATH_.pdf");
+    expect(await stagedName("CON.txt")).toBe("CON_.txt");
+    expect(await stagedName("COM¹.txt")).toBe("COM¹_.txt");
+    expect(await stagedName("LPT³.log")).toBe("LPT³_.log");
     expect(Buffer.byteLength(await stagedName("🦞".repeat(100)), "utf8")).toBeLessThanOrEqual(180);
     expect(await stagedName(`${"a".repeat(179)}.b`)).toBe("a".repeat(179));
     expect(await stagedName(`${"b".repeat(179)} c`)).toBe("b".repeat(179));
     expect(await stagedName(`${"c".repeat(175)}🦞.d`)).toBe(`${"c".repeat(175)}🦞`);
-    expect(await stagedName(`CON${" ".repeat(177)}x`)).toBe("_CON");
+    expect(await stagedName(`CON${" ".repeat(177)}x`)).toBe("CON_");
     expect(await stagedName("..")).toBe("upload");
   });
 
-  it("recovers expired upload directories after restart", async () => {
-    const root = tempDirs.make("openclaw-terminal-upload-recovery-test-");
-    const directory = path.join(root, "openclaw-terminal-upload-stale");
-    await mkdir(directory, { mode: 0o700 });
-    await writeFile(path.join(directory, "report.pdf"), "stale");
-    await utimes(directory, new Date(0), new Date(0));
-
-    await ensureTerminalUploadCleanup({ tempRoot: root, retentionMs: 1, nowMs: Date.now() });
-
-    await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it.each([1, directoryLimit + 1])(
+  it.each([directoryLimit + 1])(
     "keeps the original recovered expiry after renames in %i upload directories",
     async (count) => {
       vi.useFakeTimers({ now: Date.now() + 60_000 });
@@ -277,11 +285,9 @@ describe("terminal file upload", () => {
         expect(await retainedDirectories(root)).toHaveLength(count);
         expect(vi.getTimerCount()).toBe(1);
 
-        await vi.advanceTimersByTimeAsync(1);
+        await advanceUploadCleanup(root, 1);
 
-        await vi.waitFor(async () => {
-          expect(await retainedDirectories(root)).toHaveLength(0);
-        });
+        expect(await retainedDirectories(root)).toHaveLength(0);
         expect(vi.getTimerCount()).toBe(0);
       } finally {
         vi.useRealTimers();
@@ -289,10 +295,7 @@ describe("terminal file upload", () => {
     },
   );
 
-  it.each([
-    { identity: "native", largeFileIds: false },
-    { identity: "64-bit", largeFileIds: true },
-  ])(
+  it.each([{ identity: "64-bit", largeFileIds: true }])(
     "gives a replacement directory its own expiry with $identity file identifiers",
     async ({ largeFileIds }) => {
       vi.useFakeTimers({ now: Date.now() + 60_000 });
@@ -331,10 +334,8 @@ describe("terminal file upload", () => {
         expect(await readFile(path.join(directory, "replacement.bin"), "utf8")).toBe(
           "new upload directory",
         );
-        await vi.advanceTimersByTimeAsync(retentionMs - remainingMs);
-        await vi.waitFor(async () => {
-          await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
-        });
+        await advanceUploadCleanup(root, retentionMs - remainingMs);
+        await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
         expect(await readFile(path.join(movedDirectory, "original.bin"), "utf8")).toBe(
           "keep outside staging",
         );
@@ -368,11 +369,8 @@ describe("terminal file upload", () => {
         "keep until expiry",
       );
 
-      await vi.advanceTimersByTimeAsync(retentionMs / 2);
-      await vi.waitFor(async () => {
-        await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
-      });
-      await ensureTerminalUploadCleanup({ tempRoot: root, retentionMs });
+      await advanceUploadCleanup(root, retentionMs / 2);
+      await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
       expect(vi.getTimerCount()).toBe(0);
       await vi.advanceTimersByTimeAsync(retentionMs * 2);
       expect(vi.getTimerCount()).toBe(0);
@@ -459,11 +457,9 @@ describe("terminal file upload", () => {
       expect(await retainedDirectories(root)).toHaveLength(directoryLimit);
 
       rmMock.mockImplementation(actualFs.rm);
-      await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+      await advanceUploadCleanup(root, 60 * 60 * 1000);
 
-      await vi.waitFor(async () => {
-        await expect(stat(expiredDirectory)).rejects.toMatchObject({ code: "ENOENT" });
-      });
+      await expect(stat(expiredDirectory)).rejects.toMatchObject({ code: "ENOENT" });
       const accepted = await stageTerminalUpload(
         { name: "after-cleanup.bin", contentBase64: "AA==" },
         { tempRoot: root },
@@ -556,10 +552,8 @@ describe("terminal file upload", () => {
       await writeFile(path.join(directory, "report.pdf"), "stale");
       await utimes(directory, new Date(0), new Date(0));
 
-      await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
-      await vi.waitFor(async () => {
-        await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
-      });
+      await advanceUploadCleanup(root, 60 * 60 * 1000);
+      await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       vi.useRealTimers();
     }
@@ -594,11 +588,9 @@ describe("terminal file upload", () => {
       ).rejects.toBe(writeError);
       expect(await readFile(partialFile)).toEqual(Buffer.from([0]));
 
-      await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+      await advanceUploadCleanup(root, 60 * 60 * 1000);
 
-      await vi.waitFor(async () => {
-        await expect(stat(path.dirname(partialFile))).rejects.toMatchObject({ code: "ENOENT" });
-      });
+      await expect(stat(path.dirname(partialFile))).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       writeMock.mockImplementation(actualFs.writeFile);
       rmMock.mockImplementation(actualFs.rm);

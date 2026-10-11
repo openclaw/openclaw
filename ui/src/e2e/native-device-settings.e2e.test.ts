@@ -196,7 +196,9 @@ suite.define(() => {
           const precise = permissionsPage.locator(".settings-row").filter({
             has: page.locator(".settings-row__title").filter({ hasText: /^Precise location$/ }),
           });
-          await precise.getByRole("button", { name: "Open Settings", exact: true }).waitFor();
+          await precise
+            .getByRole("button", { name: "Open Settings: Precise location", exact: true })
+            .waitFor();
           expect(await precise.getByRole("switch").count()).toBe(0);
           await capture("04-ios-permissions");
           await precise.scrollIntoViewIfNeeded();
@@ -305,7 +307,9 @@ suite.define(() => {
         const notifications = permissionsPage.locator(".settings-row").filter({
           has: page.locator(".settings-row__title").filter({ hasText: /^Notifications$/ }),
         });
-        await notifications.getByRole("button", { name: "Grant…", exact: true }).click();
+        await notifications
+          .getByRole("button", { name: "Grant…: Notifications", exact: true })
+          .click();
         await expect
           .poll(messages)
           .toContainEqual({ type: "request-permission", id: "notifications" });

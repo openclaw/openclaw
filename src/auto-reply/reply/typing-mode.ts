@@ -1,4 +1,3 @@
-// Normalizes typing indicator modes from config and directives.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { TypingMode } from "../../config/types.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
@@ -16,9 +15,6 @@ type TypingModeContext = {
   suppressTyping?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 };
-
-/** Group chats default to message-triggered typing to avoid noisy indicators. */
-const DEFAULT_GROUP_TYPING_MODE: TypingMode = "message";
 
 /** Resolves the effective typing mode for the current auto-reply turn. */
 export function resolveTypingMode({
@@ -42,13 +38,11 @@ export function resolveTypingMode({
   if (configured) {
     return configured;
   }
-  if (sourceReplyDeliveryMode === "message_tool_only") {
+  if (sourceReplyDeliveryMode === "message_tool_only" || !isGroupChat || wasMentioned) {
     return "instant";
   }
-  if (!isGroupChat || wasMentioned) {
-    return "instant";
-  }
-  return DEFAULT_GROUP_TYPING_MODE;
+  // Group chats wait for visible text to avoid noisy indicators.
+  return "message";
 }
 
 /** Event-driven typing signaler used by streaming reply dispatch. */
@@ -80,84 +74,11 @@ export function createTypingSignaler(params: {
   const disabled = isHeartbeat || mode === "never";
   let hasRenderableText = false;
 
-  const isRenderableText = (text?: string): boolean => {
-    const trimmed = normalizeOptionalString(text);
-    if (!trimmed) {
-      return false;
-    }
-    return !isSilentReplyText(trimmed, SILENT_REPLY_TOKEN);
-  };
-
-  const signalRunStart = async () => {
-    if (disabled || !shouldStartImmediately) {
-      return;
-    }
-    await typing.startTypingLoop();
-  };
-
-  const signalMessageStart = async () => {
-    if (disabled || !shouldStartOnMessageStart) {
-      return;
-    }
-    if (!hasRenderableText) {
-      return;
-    }
-    await typing.startTypingLoop();
-  };
-
-  const signalTextDelta = async (text?: string) => {
-    if (disabled) {
-      return;
-    }
-    if (!isRenderableText(text)) {
-      return;
-    }
-    hasRenderableText = true;
-    if (shouldStartOnText) {
-      await typing.startTypingOnText(text);
-      return;
-    }
-    if (shouldStartOnReasoning) {
-      if (!typing.isActive()) {
-        await typing.startTypingLoop();
-      }
-      typing.refreshTypingTtl();
-    }
-  };
-
-  const signalReasoningDelta = async () => {
-    if (disabled || !shouldStartOnReasoning) {
-      return;
-    }
-    // Reasoning deltas are the signal to show typing in thinking mode,
-    // even before any visible assistant text has arrived.
-    await typing.startTypingLoop();
-    typing.refreshTypingTtl();
-  };
-
-  const signalToolStart = async () => {
-    if (disabled) {
-      return;
-    }
+  const refreshTyping = async (allowStart: boolean) => {
     if (!typing.isActive()) {
-      // In message mode, only start typing on tool calls after renderable text
-      // has been confirmed.
-      if (shouldStartOnMessageStart && !hasRenderableText) {
+      if (!allowStart) {
         return;
       }
-      await typing.startTypingLoop();
-      typing.refreshTypingTtl();
-      return;
-    }
-    // Keep typing indicator alive during tool execution.
-    typing.refreshTypingTtl();
-  };
-
-  const signalExecutionActivity = async () => {
-    if (disabled) {
-      return;
-    }
-    if (!typing.isActive()) {
       await typing.startTypingLoop();
     }
     typing.refreshTypingTtl();
@@ -169,11 +90,46 @@ export function createTypingSignaler(params: {
     shouldStartOnMessageStart,
     shouldStartOnText,
     shouldStartOnReasoning,
-    signalRunStart,
-    signalMessageStart,
-    signalTextDelta,
-    signalReasoningDelta,
-    signalToolStart,
-    signalExecutionActivity,
+    async signalRunStart() {
+      if (!disabled && shouldStartImmediately) {
+        await typing.startTypingLoop();
+      }
+    },
+    async signalMessageStart() {
+      if (!disabled && shouldStartOnMessageStart && hasRenderableText) {
+        await typing.startTypingLoop();
+      }
+    },
+    async signalTextDelta(text?: string) {
+      const trimmed = disabled ? undefined : normalizeOptionalString(text);
+      if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
+        return;
+      }
+      hasRenderableText = true;
+      if (shouldStartOnText) {
+        await typing.startTypingOnText(text);
+      } else if (shouldStartOnReasoning) {
+        await refreshTyping(true);
+      }
+    },
+    async signalReasoningDelta() {
+      if (disabled || !shouldStartOnReasoning) {
+        return;
+      }
+      // Thinking mode starts before visible assistant text arrives.
+      await typing.startTypingLoop();
+      typing.refreshTypingTtl();
+    },
+    async signalToolStart() {
+      if (!disabled) {
+        // Message mode cannot start typing before visible text.
+        await refreshTyping(!shouldStartOnMessageStart || hasRenderableText);
+      }
+    },
+    async signalExecutionActivity() {
+      if (!disabled) {
+        await refreshTyping(true);
+      }
+    },
   };
 }

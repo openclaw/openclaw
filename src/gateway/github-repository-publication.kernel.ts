@@ -5,10 +5,10 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
+import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 
-export type RepositoryGitHubPublicationRow = DB["github_repository_publication_requests"];
 const table = "github_repository_publication_requests";
 const query = (db: DatabaseSync) => getNodeSqliteKysely<Pick<DB, typeof table>>(db);
 
@@ -42,6 +42,7 @@ export function repositoryGitHubPublicationDigest(row: RepositoryGitHubPublicati
         row.workspace_tree,
         row.previous_head_commit,
         row.created_at_ms,
+        ...(row.requester_authority_json !== null ? [row.requester_authority_json] : []),
       ]),
     )
     .digest("hex");
@@ -52,7 +53,8 @@ export function checkRepositoryGitHubPublication(
 ): RepositoryGitHubPublicationRow {
   if (
     repositoryGitHubPublicationDigest(row) !== row.request_digest ||
-    (row.identity_source === "personal") !== (row.owner_profile_id !== null)
+    (row.identity_source === "personal") !== (row.owner_profile_id !== null) ||
+    (row.owner_profile_id !== null && row.requester_authority_json !== null)
   ) {
     throw new Error("GitHub repository publication receipt is corrupt.");
   }
@@ -118,27 +120,17 @@ function selectRepositoryGitHubPublications(
   filter: RepositoryGitHubPublicationFilter,
 ) {
   let selection = query(db).selectFrom(table).selectAll();
-  if (filter.sessionId !== undefined) {
-    selection = selection.where("session_id", "=", filter.sessionId);
-  }
-  if (filter.sessionKey !== undefined) {
-    selection = selection.where("session_key", "=", filter.sessionKey);
-  }
-  if (filter.agentId !== undefined) {
-    selection = selection.where("agent_id", "=", filter.agentId);
-  }
-  if (filter.workspaceId !== undefined) {
-    selection = selection.where("workspace_id", "=", filter.workspaceId);
-  }
-  if (filter.ownerProfileId !== undefined) {
-    selection = selection.where(
-      "owner_profile_id",
-      filter.ownerProfileId === null ? "is" : "=",
-      filter.ownerProfileId,
-    );
-  }
-  if (filter.idempotencyKey !== undefined) {
-    selection = selection.where("idempotency_key", "=", filter.idempotencyKey);
+  for (const [column, value] of [
+    ["session_id", filter.sessionId],
+    ["session_key", filter.sessionKey],
+    ["agent_id", filter.agentId],
+    ["workspace_id", filter.workspaceId],
+    ["owner_profile_id", filter.ownerProfileId],
+    ["idempotency_key", filter.idempotencyKey],
+  ] as const) {
+    if (value !== undefined) {
+      selection = selection.where(column, value === null ? "is" : "=", value);
+    }
   }
   if (filter.pending !== undefined) {
     selection = selection.where(

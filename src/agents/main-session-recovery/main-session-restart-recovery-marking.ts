@@ -1,13 +1,22 @@
 import { randomUUID } from "node:crypto";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { resolveStateDir } from "../../config/paths.js";
 import type {
   InternalSessionEntry as SessionEntry,
   RestartRecoveryRun,
 } from "../../config/sessions.js";
 import {
-  applySessionEntryReplacements,
-  listSessionEntriesReadOnly,
-} from "../../config/sessions/session-accessor.js";
+  hasMainSessionRecoveryClaim,
+  hasRestartRecoveryTerminalRun,
+  isMainRestartRecoveryCandidate,
+  isRetryableUnadoptedChatClaim,
+  normalizeMainSessionRecoveryRunFences,
+} from "../../config/sessions/restart-recovery-state.js";
+import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
+import {
+  readSessionEntryReadOnlyInWorker,
+  readSessionEntrySummariesInWorker,
+} from "../../config/sessions/session-entry-read-runtime.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartRecoveryCandidate } from "../../gateway/chat-abort.js";
@@ -19,15 +28,11 @@ import {
 } from "../../infra/agent-events.js";
 import { hasLiveAgentRunContext, listAgentRunsForSession } from "../../infra/agent-run-registry.js";
 import { captureGatewaySessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
+import { resolveExplicitIncognitoAgentSqliteTarget } from "../../state/openclaw-agent-db.paths.js";
+import { createCurrentProcessOwnerLookup } from "./main-session-recovery-live-owners.js";
 import {
-  listActiveEmbeddedRunSessionIds,
-  listActiveEmbeddedRunSessionKeys,
-} from "../embedded-agent-runner/active-run-projections.js";
-import {
-  isMainRestartRecoveryAggregateTerminalOnly,
-  isMainRestartRecoveryCandidate,
-  isMainSessionRecoveryReconciliationCandidate,
-  normalizeMainSessionRecoveryRunFences,
+  hasCompletedMainSessionRecoveryOutcome,
+  isMainRestartRecoveryTerminalOnly,
   transitionMainSessionRecovery,
 } from "./main-session-recovery-state.js";
 import type { MainSessionRecoveryStoreTarget } from "./main-session-recovery-store.js";
@@ -38,19 +43,15 @@ import {
 } from "./main-session-restart-recovery-diagnostics.js";
 import {
   discoverRestartRecoveryStoreTargets,
-  hasCurrentProcessOwner,
   mainSessionRecoveryLog,
-  normalizeFiniteTimestamp,
-  normalizeStringSet,
 } from "./main-session-restart-recovery-shared.js";
 import { captureYieldedMainSessionContinuation } from "./main-session-restart-recovery-target.js";
 
 async function markRecoveryStore(params: {
   agentId?: string;
   storePath: string;
-  sessionKey?: string;
+  sessionKeys?: readonly string[];
   assertCommitAllowed?: () => void;
-  statuses?: Array<NonNullable<SessionEntry["status"]>>;
   plan: (
     entry: SessionEntry,
     sessionKey: string,
@@ -59,7 +60,6 @@ async function markRecoveryStore(params: {
         action: "mark";
         forceRestartSafeTools?: boolean;
         replaceRuns?: boolean;
-        resetRuntime?: boolean;
         runs?: RestartRecoveryRun[];
       }
     | { action: "retire_terminal" }
@@ -70,8 +70,7 @@ async function markRecoveryStore(params: {
   return await applySessionEntryReplacements<{ marked: number; skipped: number }>({
     agentId: params.agentId,
     storePath: params.storePath,
-    sessionKeys: params.sessionKey ? [params.sessionKey] : undefined,
-    statuses: params.statuses,
+    sessionKeys: params.sessionKeys,
     requireWriteSuccess: true,
     assertCommitAllowed: () => {
       params.assertCommitAllowed?.();
@@ -91,20 +90,21 @@ async function markRecoveryStore(params: {
           counts.skipped++;
           continue;
         }
-        if (plan.action === "restore_yielded") {
-          yieldOwners.push(plan.isCurrent);
-          transitionMainSessionRecovery(entry, { kind: "clear" });
-          replacements.push({ sessionKey, entry });
-          counts.skipped++;
-          continue;
-        }
-        if (plan.action === "retire_terminal") {
-          transitionMainSessionRecovery(entry, {
-            kind: "observe",
-            cycleId: randomUUID(),
-            lifecycleGeneration: getAgentEventLifecycleGeneration(),
-            sessionKey,
-          });
+        if (plan.action !== "mark") {
+          if (plan.action === "restore_yielded") {
+            yieldOwners.push(plan.isCurrent);
+          }
+          transitionMainSessionRecovery(
+            entry,
+            plan.action === "restore_yielded"
+              ? { kind: "clear" }
+              : {
+                  kind: "observe",
+                  cycleId: randomUUID(),
+                  lifecycleGeneration: getAgentEventLifecycleGeneration(),
+                  sessionKey,
+                },
+          );
           replacements.push({ sessionKey, entry });
           counts.skipped++;
           continue;
@@ -132,7 +132,6 @@ async function markRecoveryStore(params: {
 export async function markRestartAbortedMainSessions(params: {
   resolveGatewayContext: GatewayContextResolver;
   cfg?: OpenClawConfig;
-  additionalCfgs?: Iterable<OpenClawConfig | undefined>;
   stateDir?: string;
   activeRuns: Iterable<RestartRecoveryCandidate>;
   isActiveRun?: (run: RestartRecoveryCandidate) => boolean;
@@ -141,6 +140,10 @@ export async function markRestartAbortedMainSessions(params: {
   const activeRuns = [...params.activeRuns];
   const currentLifecycleGeneration = getAgentEventLifecycleGeneration();
   const result = { marked: 0, skipped: 0 };
+  const skipReasons = new Map<string, number>();
+  const recordSkip = (reason: string) => {
+    skipReasons.set(reason, (skipReasons.get(reason) ?? 0) + 1);
+  };
   // Channel work can outlive its chat-run registration. The admission owner
   // retains the authoritative store and session identities until the turn releases.
   const activeAdmissions = captureGatewaySessionWorkAdmissions(params.resolveGatewayContext);
@@ -148,13 +151,12 @@ export async function markRestartAbortedMainSessions(params: {
     return result;
   }
 
-  const storeTargets = new Map<
-    string,
-    Pick<MainSessionRecoveryStoreTarget, "agentId" | "storePath">
-  >();
-  const addStoreTarget = (
-    target: Pick<MainSessionRecoveryStoreTarget, "agentId" | "storePath">,
-  ) => {
+  const storeTargets = new Map<string, RestartRecoveryStoreTarget>();
+  const addStoreTarget = (target: RestartRecoveryStoreTarget) => {
+    // Volatile admissions belong to this process and cannot survive its restart.
+    if (resolveExplicitIncognitoAgentSqliteTarget(target.storePath, target)) {
+      return;
+    }
     const resolved = resolveSqliteTargetFromSessionStorePath(target.storePath, {
       agentId: target.agentId,
     });
@@ -166,20 +168,17 @@ export async function markRestartAbortedMainSessions(params: {
     }
   };
   const stateDir = params.stateDir ?? resolveStateDir(process.env);
-  const configs = [params.cfg, ...(params.additionalCfgs ?? [])].filter(Boolean);
-  for (const cfg of configs.length > 0 ? configs : [undefined]) {
-    try {
-      for (const target of await discoverRestartRecoveryStoreTargets({ cfg, stateDir })) {
-        addStoreTarget(target);
-      }
-    } catch (err) {
-      if (!cfg) {
-        throw err;
-      }
-      mainSessionRecoveryLog.warn(
-        `failed to resolve configured session stores for restart marker: ${String(err)}`,
-      );
+  try {
+    for (const target of await discoverRestartRecoveryStoreTargets({ cfg: params.cfg, stateDir })) {
+      addStoreTarget(target);
     }
+  } catch (err) {
+    if (!params.cfg) {
+      throw err;
+    }
+    mainSessionRecoveryLog.warn(
+      `failed to resolve configured session stores for restart marker: ${String(err)}`,
+    );
   }
 
   for (const storePath of activeAdmissions.targets.keys()) {
@@ -189,7 +188,7 @@ export async function markRestartAbortedMainSessions(params: {
     const { storePath } = target;
     // Preselect read-only: ID-only admissions can own multiple persisted keys.
     // The per-key replacement below rereads the row and revalidates its owner.
-    const sessionKeys = listSessionEntriesReadOnly({ ...target, projection: "list", clone: false })
+    const sessionKeys = (await readSessionEntrySummariesInWorker(target))
       .filter(
         ({ sessionKey, entry }) =>
           activeRuns.some(
@@ -203,7 +202,7 @@ export async function markRestartAbortedMainSessions(params: {
       try {
         const storeResult = await markRecoveryStore({
           ...target,
-          sessionKey: selectedSessionKey,
+          sessionKeys: [selectedSessionKey],
           assertCommitAllowed: () => {
             if (isCurrent && !isCurrent()) {
               throw new Error("Restart recovery owner changed before commit");
@@ -216,9 +215,10 @@ export async function markRestartAbortedMainSessions(params: {
               (run) =>
                 run.sessionKey === sessionKey &&
                 run.sessionId === entry.sessionId &&
-                (entry.status === "running" ||
+                (entry.lifecycleRunId === run.runId ||
+                  entry.restartRecoveryDeliveryRunId === run.runId ||
                   run.observedAt === undefined ||
-                  normalizeFiniteTimestamp(entry.updatedAt) === undefined ||
+                  asFiniteNumber(entry.updatedAt) === undefined ||
                   (entry.updatedAt < run.observedAt &&
                     run.lifecycleGeneration !== currentLifecycleGeneration)) &&
                 params.isActiveRun?.(run) !== false,
@@ -229,6 +229,7 @@ export async function markRestartAbortedMainSessions(params: {
               sessionId: entry.sessionId,
             });
             if (matchingActiveRuns.length === 0 && !matchedActiveAdmission) {
+              recordSkip("owner_changed");
               return undefined;
             }
             if (
@@ -240,9 +241,12 @@ export async function markRestartAbortedMainSessions(params: {
                 storePath,
               })
             ) {
+              recordSkip("yielded_continuation");
               return undefined;
             }
-            const wasRunning = entry.status === "running";
+            if (!isMainRestartRecoveryCandidate(entry, sessionKey)) {
+              recordSkip("not_main_session");
+            }
             const runs = normalizeMainSessionRecoveryRunFences([
               ...(entry.restartRecoveryRuns ?? []).filter(
                 (run) => run.lifecycleGeneration === currentLifecycleGeneration,
@@ -268,7 +272,6 @@ export async function markRestartAbortedMainSessions(params: {
               action: "mark",
               forceRestartSafeTools: matchedActiveAdmission,
               replaceRuns: true,
-              resetRuntime: !wasRunning,
               runs,
             };
           },
@@ -281,6 +284,7 @@ export async function markRestartAbortedMainSessions(params: {
           throw error;
         }
         result.skipped++;
+        recordSkip("owner_changed");
       }
     }
   }
@@ -288,6 +292,13 @@ export async function markRestartAbortedMainSessions(params: {
   if (result.marked > 0) {
     mainSessionRecoveryLog.warn(
       `marked ${result.marked} interrupted main session(s) for restart recovery${
+        params.reason ? ` (${params.reason})` : ""
+      }`,
+    );
+  } else if (activeRuns.length > 0) {
+    const dominantSkipReason = [...skipReasons].toSorted((a, b) => b[1] - a[1])[0]?.[0];
+    mainSessionRecoveryLog.warn(
+      `marked 0 interrupted main session(s) for restart recovery: activeRuns=${activeRuns.length} skipped=${result.skipped} skipReason=${dominantSkipReason ?? "no_matching_session"}${
         params.reason ? ` (${params.reason})` : ""
       }`,
     );
@@ -303,6 +314,14 @@ type OrphanMarkParams = {
   lifecycleGeneration: string;
 };
 
+function hasOrphanedMainSessionWork(entry: SessionEntry): boolean {
+  return (
+    hasMainSessionRecoveryClaim(entry) ||
+    entry.abortedLastRun === true ||
+    entry.status === "interrupted"
+  );
+}
+
 async function markOrphanedMainSessionStore(
   params: OrphanMarkParams & {
     target: RestartRecoveryStoreTarget & { sessionKey?: string };
@@ -311,25 +330,26 @@ async function markOrphanedMainSessionStore(
     assertCommitAllowed?: () => void;
   },
 ): Promise<{ marked: number; skipped: number }> {
-  const providedActiveSessionIds =
-    params.activeSessionIds === undefined ? undefined : normalizeStringSet(params.activeSessionIds);
-  const providedActiveSessionKeys =
-    params.activeSessionKeys === undefined
-      ? undefined
-      : normalizeStringSet(params.activeSessionKeys);
-  const updatedBeforeMs = normalizeFiniteTimestamp(params.updatedBeforeMs);
-  // Lifecycle rotation synchronously evicts stale owners, so this same registry
-  // view drives both operational routing and recovery suppression. Re-read it at
-  // each check so a newer owner can still fence an older async recovery scan.
-  const resolveActiveSessionIds = () =>
-    providedActiveSessionIds ?? normalizeStringSet(listActiveEmbeddedRunSessionIds());
-  const resolveActiveSessionKeys = () =>
-    providedActiveSessionKeys ?? normalizeStringSet(listActiveEmbeddedRunSessionKeys());
+  const hasCurrentProcessOwner = createCurrentProcessOwnerLookup(params);
+  const updatedBeforeMs = asFiniteNumber(params.updatedBeforeMs);
+  const key = params.target.sessionKey;
+  let sessionKeys: string[];
+  if (key) {
+    const entry = await readSessionEntryReadOnlyInWorker({ ...params.target, sessionKey: key });
+    sessionKeys = entry && hasOrphanedMainSessionWork(entry) ? [key] : [];
+  } else {
+    sessionKeys = (await readSessionEntrySummariesInWorker(params.target))
+      .filter(({ entry }) => hasOrphanedMainSessionWork(entry))
+      .map(({ sessionKey }) => sessionKey);
+  }
+  if (sessionKeys.length === 0) {
+    return { marked: 0, skipped: 0 };
+  }
 
   const orphanChecks: Array<() => boolean> = [];
   return await markRecoveryStore({
     ...params.target,
-    statuses: params.target.sessionKey ? undefined : ["running"],
+    sessionKeys,
     assertCommitAllowed: () => {
       assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
       params.assertCommitAllowed?.();
@@ -340,14 +360,17 @@ async function markOrphanedMainSessionStore(
     plan: (entry, sessionKey) => {
       params.assertCommitAllowed?.();
       if (
-        (entry.status !== "running" && !isMainSessionRecoveryReconciliationCandidate(entry)) ||
+        !hasOrphanedMainSessionWork(entry) ||
+        entry.archivedAt !== undefined ||
+        isRetryableUnadoptedChatClaim(entry) ||
+        entry.mainRestartRecovery?.tombstone ||
         (params.expectedSessionId !== undefined && entry.sessionId !== params.expectedSessionId) ||
         (params.expectedLifecycleRevision !== undefined &&
           entry.lifecycleRevision !== params.expectedLifecycleRevision)
       ) {
         return undefined;
       }
-      const updatedAt = normalizeFiniteTimestamp(entry.updatedAt);
+      const updatedAt = asFiniteNumber(entry.updatedAt);
       if (updatedBeforeMs !== undefined && updatedAt !== undefined && updatedAt > updatedBeforeMs) {
         return undefined;
       }
@@ -361,12 +384,7 @@ async function markOrphanedMainSessionStore(
         listAgentRunsForSession({ sessionKey, sessionId: entry.sessionId }).some(({ runId }) =>
           hasLiveAgentRunContext(runId),
         ) ||
-        hasCurrentProcessOwner({
-          activeSessionIds: resolveActiveSessionIds(),
-          activeSessionKeys: resolveActiveSessionKeys(),
-          entry,
-          sessionKey,
-        });
+        hasCurrentProcessOwner(entry, sessionKey);
       if (hasLiveOwner()) {
         return undefined;
       }
@@ -395,13 +413,37 @@ async function markOrphanedMainSessionStore(
         }
         return undefined;
       }
-      if (entry.abortedLastRun === true) {
+      // A crash or early restart abort can persist the interruption without a claim.
+      // Reuse the normal mark transition, preserving budgets on existing cycles.
+      const hasClaim = hasMainSessionRecoveryClaim(entry);
+      const completed = hasCompletedMainSessionRecoveryOutcome(entry);
+      // A receipt for this continuation wins even when its saved outcome is interrupted.
+      if (
+        !hasClaim &&
+        (completed ||
+          [
+            entry.lifecycleRunId,
+            entry.activeWriterRunId,
+            entry.restartRecoveryDeliverySourceRunId,
+          ].some((runId) => runId !== undefined && hasRestartRecoveryTerminalRun(entry, runId)))
+      ) {
+        return undefined;
+      }
+      if (
+        hasClaim &&
+        !completed &&
+        (entry.abortedLastRun === true ||
+          (!entry.pendingFinalDelivery &&
+            entry.status !== undefined &&
+            entry.status !== "failed" &&
+            entry.status !== "interrupted"))
+      ) {
         return undefined;
       }
       orphanChecks.push(hasLiveOwner);
-      return isMainRestartRecoveryAggregateTerminalOnly(entry)
+      return completed || isMainRestartRecoveryTerminalOnly(entry)
         ? { action: "retire_terminal" }
-        : { action: "mark", resetRuntime: entry.status !== "running" };
+        : { action: "mark" };
     },
   });
 }
@@ -422,6 +464,7 @@ export async function markOrphanedMainSessionForRecovery(params: {
 
 export async function markStartupOrphanedMainSessionsForRecovery(params: {
   cfg?: OpenClawConfig;
+  agentIds?: ReadonlySet<string>;
   stateDir?: string;
   activeSessionIds?: Iterable<string>;
   activeSessionKeys?: Iterable<string>;
@@ -431,10 +474,7 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
   const result = { marked: 0, skipped: 0 };
   const failedTargets: RestartRecoveryStoreTarget[] = [];
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
-  const storeTargets = await discoverRestartRecoveryStoreTargets({
-    ...params,
-    statuses: ["running"],
-  });
+  const storeTargets = await discoverRestartRecoveryStoreTargets(params);
   for (const target of storeTargets) {
     const key = restartRecoveryStoreTargetKey(target);
     if (params.startupCheckedStorePaths?.has(key)) {

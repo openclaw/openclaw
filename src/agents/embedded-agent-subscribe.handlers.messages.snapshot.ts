@@ -2,7 +2,13 @@ import { createInlineCodeState } from "../../packages/markdown-core/src/code-spa
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
 import type { AssistantMessage } from "../llm/types.js";
+import {
+  assistantVisibleTextFilters,
+  toolCallXmlTextFilter,
+} from "../shared/text/assistant-visible-text.js";
 import { findCodeRegions } from "../shared/text/code-regions.js";
+import { applyTextFilters } from "../shared/text/text-projection.js";
+import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
   resolveAssistantStreamBlockIndex,
   resolveAssistantStreamItemId,
@@ -12,8 +18,7 @@ import type {
   EmbeddedAgentSubscribeState,
 } from "./embedded-agent-subscribe.handlers.types.js";
 import {
-  extractAssistantVisibleText,
-  sanitizeAssistantVisibleStreamText,
+  prepareAssistantVisibleText,
   stripDowngradedToolCallText,
 } from "./embedded-agent-utils.js";
 
@@ -47,38 +52,81 @@ export function extractAssistantStreamSnapshot(
     inlineCode: createInlineCodeState(),
   };
   let rawText = "";
-  let blockSource = "";
-  let finalAnswer = true;
+  const blockSources: { text: string; separator: string; finalAnswer: boolean }[] = [];
   const parts: { separator: string; index?: number }[] = [];
-  const text = extractAssistantVisibleText(observedMessage, (part, final, phase, index) => {
+  const renderText = prepareAssistantVisibleText(observedMessage, (part, final, phase, index) => {
     // Native blocks can divide a tag or fence; only complete visible parts get a separator.
     const separator =
       rawText && !state.pendingTagFragment && !state.pendingFenceFragment ? "\n" : "";
+    const previousIndex = parts.at(-1)?.index;
     parts.push({ separator, index });
     rawText += `${separator}${part}`;
     // Final prose preserves inline tag examples; generic streams still hide reasoning.
     const preparedFinal = phase === "final_answer" && !ctx.params.enforceFinalTag;
-    finalAnswer &&= preparedFinal;
     const visible = preparedFinal
       ? `${separator}${part}`
       : ctx.stripBlockTags(`${separator}${part}`, state, {
           final: final && options?.final !== false,
         });
-    blockSource += visible;
+    const previous = blockSources.at(-1);
+    if (
+      previous &&
+      previousIndex !== undefined &&
+      index === previousIndex + 1 &&
+      previous.finalAnswer === preparedFinal
+    ) {
+      previous.text += visible;
+    } else {
+      blockSources.push({
+        text: visible.startsWith(separator) ? visible.slice(separator.length) : visible,
+        separator,
+        finalAnswer: preparedFinal,
+      });
+    }
     return preparedFinal ? part : visible;
   });
-  const visibleBlockSource = finalAnswer
-    ? sanitizeAssistantVisibleStreamText(blockSource, "final_answer", {
-        preserveTrailingWhitespace: true,
-      })
-    : stripDowngradedToolCallText(blockSource, { preserveTrailingWhitespace: true });
+  const visibleBlockSource = blockSources
+    .map(({ text, separator, finalAnswer }) => ({
+      separator,
+      text: finalAnswer
+        ? sanitizeUserFacingText(
+            applyTextFilters(
+              text,
+              assistantVisibleTextFilters("final-answer-delivery", options?.final === false, {
+                preserveTrailingWhitespace: true,
+              }),
+            ),
+            { streaming: options?.final === false },
+          )
+        : toolCallXmlTextFilter(
+            { stripFunctionCallsXmlPayloads: true },
+            options?.final === false,
+          ).transform(stripDowngradedToolCallText(text, { preserveTrailingWhitespace: true })),
+    }))
+    // An empty observed tail still marks a native boundary for prefix reconciliation.
+    .filter(
+      ({ text }, index) =>
+        text.trim() || (options?.observedText === "" && index === blockSources.length - 1),
+    )
+    .map(({ text, separator }, index) => `${index > 0 ? separator : ""}${text}`)
+    .join("");
   const blockReply = parseReplyDirectives(
     options?.final === false
       ? splitTrailingDirective(visibleBlockSource, { preserveTrailingWhitespace: true }).text
       : visibleBlockSource,
     { preserveTrailingWhitespace: true },
   );
-  return { text, rawText, state, parts, blockText: blockReply.text, message: observedMessage };
+  let text: string | undefined;
+  return {
+    get text() {
+      return (text ??= renderText());
+    },
+    rawText,
+    state,
+    parts,
+    blockText: blockReply.text,
+    message: observedMessage,
+  };
 }
 
 /** Reconcile one prepared source frame without translating raw or rendered offsets. */
@@ -194,7 +242,7 @@ export function reconcileBlockReplySnapshot(
         }
       }
     }
-    ctx.blockChunker.replace(nextText);
+    ctx.blockChunker.replace(nextText, 0, retainedPrefix);
     return;
   }
 
@@ -220,7 +268,7 @@ export function reconcileBlockReplySnapshot(
     }
   }
   if (retainedPrefix && nextText.length < consumed && restartPrefix !== next.blockText) {
-    ctx.blockChunker.replace(nextText);
+    ctx.blockChunker.replace(nextText, 0, retainedPrefix);
     return;
   }
   const sourceBreaks: number[] = [];
@@ -271,6 +319,6 @@ export function reconcileBlockReplySnapshot(
     contentIndex: restartIndex,
     itemId: resolveAssistantStreamItemId({ contentIndex: restartIndex, message: next.message }),
   };
-  ctx.blockChunker.reset(sourceBreaks);
+  ctx.blockChunker.reset(sourceBreaks, restartPrefix.length);
   ctx.blockChunker.append(next.blockText.slice(restartPrefix.length));
 }

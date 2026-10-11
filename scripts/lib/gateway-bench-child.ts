@@ -1,4 +1,3 @@
-// Gateway Bench Child script supports OpenClaw repository automation.
 import type { ChildProcess } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import {
@@ -24,6 +23,7 @@ export type StopChildResult = ChildExit & {
 };
 
 type StopChildOptions = {
+  onForceKill?: () => void;
   killGraceMs?: number;
   teardownGraceMs?: number;
 };
@@ -109,13 +109,15 @@ export async function stopChild(
   const signalProcessTree = (signal: NodeJS.Signals): boolean => {
     let delivered = true;
     terminateManagedChild(
-      {
-        kill(childSignal) {
-          delivered = child.kill(childSignal);
-          return delivered;
-        },
-        pid: child.pid,
-      },
+      process.platform === "win32"
+        ? child
+        : {
+            kill(childSignal) {
+              delivered = child.kill(childSignal);
+              return delivered;
+            },
+            pid: child.pid,
+          },
       signal,
       {
         onChildSignalError(error) {
@@ -157,6 +159,7 @@ export async function stopChild(
       await waitForProcessTreeExit(teardownGraceMs);
     }
     if (sentTeardownSignal && processTreeAlive()) {
+      options.onForceKill?.();
       signalProcessTree("SIGKILL");
       await waitForProcessTreeExit(killGraceMs);
     }
@@ -217,6 +220,7 @@ export async function stopChild(
     return { exitCode: null, exitedBeforeTeardown: true, signal: null };
   }
 
+  options.onForceKill?.();
   signalProcessTree("SIGKILL");
   const killedExit = await waitForExit(killGraceMs);
   const finalExit = killedExit ?? currentExit();

@@ -14,16 +14,17 @@ import {
 } from "./session-accessor.sqlite-projection-read.js";
 import { resolveVisibleMessagePositions } from "./session-accessor.sqlite-reset-window.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
+import { transcriptEventNavigationSql } from "./transcript-payload.js";
 
 // These derived facts omit transcript bodies and remain inside the admitted snapshot.
 const inputMessageJson =
   /* kysely-allow-raw: Project only input provenance and exact run correlation without hydrating message bodies. */
-  sql<string>`json_object('role', json_extract(event.event_json, '$.message.role'),
-    'idempotencyKey', json_extract(event.event_json, '$.message.idempotencyKey'),
-    'provenance', json_extract(event.event_json, '$.message.provenance'),
+  sql<string>`json_object('role', json_extract(${transcriptEventNavigationSql("event")}, '$.message.role'),
+    'idempotencyKey', json_extract(${transcriptEventNavigationSql("event")}, '$.message.idempotencyKey'),
+    'provenance', json_extract(${transcriptEventNavigationSql("event")}, '$.message.provenance'),
     '__openclaw', json_object(
-      'runId', json_extract(event.event_json, '$.message.__openclaw.runId'),
-      'steerTargetRunId', json_extract(event.event_json, '$.message.__openclaw.steerTargetRunId')))`;
+      'runId', json_extract(${transcriptEventNavigationSql("event")}, '$.message.__openclaw.runId'),
+      'steerTargetRunId', json_extract(${transcriptEventNavigationSql("event")}, '$.message.__openclaw.steerTargetRunId')))`;
 
 type RunInputVisibility =
   | { hidden: false }
@@ -90,7 +91,7 @@ export function readSessionTranscriptRunInputVisibilityFromProjection(
     )
     .where(
       /* kysely-allow-raw: Validate the persisted role without materializing input bodies. */
-      sql<string>`json_extract(event.event_json, '$.message.role')`,
+      sql<string>`json_extract(${transcriptEventNavigationSql("event")}, '$.message.role')`,
       "=",
       "user",
     )
@@ -110,7 +111,7 @@ export function readSessionTranscriptRunInputVisibilityFromProjection(
           /* kysely-allow-raw: A steering admission cannot identify the input that originated its receiving run. */
           sql<
             string | null
-          >`json_extract(event.event_json, '$.message.__openclaw.steerTargetRunId')`,
+          >`json_extract(${transcriptEventNavigationSql("event")}, '$.message.__openclaw.steerTargetRunId')`,
           "is",
           null,
         )
@@ -130,13 +131,13 @@ export function readSessionTranscriptRunInputVisibilityFromProjection(
       eb.or([
         eb(
           /* kysely-allow-raw: Match only steering committed to this exact run. */
-          sql<string>`json_extract(event.event_json, '$.message.__openclaw.steerTargetRunId')`,
+          sql<string>`json_extract(${transcriptEventNavigationSql("event")}, '$.message.__openclaw.steerTargetRunId')`,
           "=",
           params.runId,
         ),
         eb(
           /* kysely-allow-raw: Retained user records can carry the receiving run explicitly. */
-          sql<string>`json_extract(event.event_json, '$.message.__openclaw.runId')`,
+          sql<string>`json_extract(${transcriptEventNavigationSql("event")}, '$.message.__openclaw.runId')`,
           "=",
           params.runId,
         ),

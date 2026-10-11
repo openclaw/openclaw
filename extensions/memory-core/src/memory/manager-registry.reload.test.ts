@@ -8,7 +8,8 @@ describe("memory manager adapter retirement", () => {
   it.each(["reject", "unavailable"])(
     "retires a fallback-backed manager when its %s primary adapter is replaced",
     async (failure) => {
-      const registry = new MemoryManagerRegistry();
+      const lifecycle: MemoryManagerLifecycle = {};
+      const registry = new MemoryManagerRegistry(lifecycle);
       const manager = { close: vi.fn(async () => {}) };
       const unaffected = { close: vi.fn(async () => {}) };
       registry.track(manager, "fallback-backed");
@@ -45,10 +46,10 @@ describe("memory manager adapter retirement", () => {
         );
       }
 
-      const retirement = registry.prepareReload({
-        retireRuntime: false,
-        retiringEmbeddingProviders: [primary],
-      });
+      const retirement = prepareMemoryManagerReload(
+        { retireRuntime: false, retiringEmbeddingProviders: [primary] },
+        lifecycle,
+      );
       try {
         await expect(retirement.drain()).resolves.toEqual({ errors: [] });
         expect(manager.close).toHaveBeenCalledOnce();
@@ -61,14 +62,21 @@ describe("memory manager adapter retirement", () => {
 });
 
 it("joins pending manager cleanup across overlapping reload drains", async () => {
-  const registry = new MemoryManagerRegistry();
+  const lifecycle: MemoryManagerLifecycle = {};
+  const registry = new MemoryManagerRegistry(lifecycle);
   const closing = createDeferred<void>();
   const manager = { close: () => closing.promise };
   const failure = new Error("manager cleanup failed");
   registry.track(manager, "shared-manager");
-  const first = registry.prepareReload({ retireRuntime: true, retiringEmbeddingProviders: [] });
+  const first = prepareMemoryManagerReload(
+    { retireRuntime: true, retiringEmbeddingProviders: [] },
+    lifecycle,
+  );
   const firstDrain = first.drain();
-  const second = registry.prepareReload({ retireRuntime: true, retiringEmbeddingProviders: [] });
+  const second = prepareMemoryManagerReload(
+    { retireRuntime: true, retiringEmbeddingProviders: [] },
+    lifecycle,
+  );
   const secondDrain = second.drain();
   try {
     closing.reject(failure);
@@ -82,68 +90,6 @@ it("joins pending manager cleanup across overlapping reload drains", async () =>
     first.resume();
     second.resume();
   }
-});
-
-it("owns failed late creation cleanup until explicit close", async () => {
-  const registry = new MemoryManagerRegistry();
-  const entered = createDeferred<void>();
-  const released = createDeferred<void>();
-  const failure = new Error("late manager close failed");
-  const late = { close: vi.fn().mockRejectedValueOnce(failure).mockResolvedValue(undefined) };
-  const replacement = { close: vi.fn(async () => {}) };
-  const transient = { close: vi.fn(async () => {}) };
-  const pending = registry.acquire(
-    { agentId: "main", purpose: "default" },
-    {
-      prepare: () => ({
-        key: "main:late:default",
-        reuse: () => true,
-        create: async () => {
-          entered.resolve();
-          await released.promise;
-          return late;
-        },
-      }),
-    },
-  );
-  const observed = expect(pending).rejects.toBe(failure);
-  await entered.promise;
-  const retirement = registry.prepareReload({
-    retireRuntime: true,
-    retiringEmbeddingProviders: [],
-  });
-  const draining = retirement.drain();
-  released.resolve();
-  try {
-    await observed;
-    await draining;
-  } finally {
-    released.resolve();
-    retirement.resume();
-  }
-  expect.soft(registry.canPublishProbe(late)).toBe(false);
-  expect(late.close).toHaveBeenCalledOnce();
-  await registry.acquire(
-    { agentId: "main", purpose: "default" },
-    {
-      prepare: () => ({ key: "main:late:default", reuse: () => true, create: () => replacement }),
-    },
-  );
-  await registry.acquire(
-    { agentId: "main", purpose: "status" },
-    {
-      prepare: () => ({ key: "main:status", reuse: () => true, create: () => transient }),
-    },
-  );
-  expect(late.close).toHaveBeenCalledOnce();
-  await registry.closeAll();
-  expect(late.close).toHaveBeenCalledTimes(2);
-  expect(replacement.close).toHaveBeenCalledOnce();
-  expect(transient.close).not.toHaveBeenCalled();
-  await registry.closeAll();
-  expect(late.close).toHaveBeenCalledTimes(2);
-  expect(replacement.close).toHaveBeenCalledOnce();
-  await transient.close();
 });
 
 it("fences acquisition when reload starts before the manager owner initializes", async () => {

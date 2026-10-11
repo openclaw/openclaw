@@ -1,4 +1,11 @@
-import { InvalidArgumentError, type Command } from "commander";
+import { Command, InvalidArgumentError } from "commander";
+
+export function createNodeWorkerCommand(): Command {
+  return new Command("worker")
+    .description("Run the private macOS app node-host worker")
+    .option("--desktop-sharing", "Enable the app's desktop viewer capability")
+    .option("--no-desktop-sharing", "Disable the app's desktop viewer capability");
+}
 
 /** Collect repeatable, comma-separated exact node command ids without treating patterns as globs. */
 function collectNodeCommandIds(value: string, previous: string[] = []): string[] {

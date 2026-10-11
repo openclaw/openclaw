@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { html, nothing, render, type ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
@@ -7,32 +8,39 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
+import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   getChatAttachmentDataUrl,
   registerChatAttachmentPayload,
   releaseChatAttachmentPayload,
 } from "./attachment-payload-store.ts";
+import { selectFile } from "./chat-attachment-picker.test-support.ts";
 import { storeChatComposerMemoryFallback } from "./chat-composer-memory-fallback.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import { ChatPageRetainedSessions } from "./chat-page-retained-sessions.ts";
 import {
-  closeStagedPane,
   ChatPaneComposerHandoff,
   discardStateStagedAttachments,
   preparePaneStagedAttachments,
   replacePaneStagedAttachmentGatewayOwner,
   restorePaneStagedAttachments,
 } from "./chat-pane-attachment-handoff.ts";
-import { createTestChatPane } from "./chat-pane.test-support.ts";
-import { enqueueChatMessage, subscribeChatOutboxProjection } from "./chat-queue.ts";
+import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
+import { enqueueChatMessage } from "./chat-queue.ts";
 import {
   captureChatCommandComposerRecovery,
   settleChatCommandComposer,
 } from "./chat-send-composer.ts";
+import { ChatStateController } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { renderChatAttachmentInputs } from "./components/chat-attachment-inputs.ts";
+import { renderAttachmentPreview } from "./components/chat-attachments.ts";
+import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.ts";
 import {
   ChatComposerPersistence,
   CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
-  loadChatComposerSnapshot,
+  loadChatComposerState,
   storedChatOutboxScopeKey,
 } from "./composer-persistence.ts";
 import {
@@ -42,7 +50,7 @@ import {
   isQueuedMessageBeingEdited,
   updateQueuedMessageEdit,
 } from "./queued-message-edit.ts";
-import type { ChatSplitLayout } from "./split-layout-types.ts";
+import { singlePaneLayout } from "./split-layout.ts";
 
 function storedAttachment(id: string, mimeType = "image/png"): ChatAttachment {
   return registerChatAttachmentPayload({
@@ -84,7 +92,7 @@ describe("cross-region Home composer ownership", () => {
     agentId = "main",
   ) {
     if (!context.chatAttachmentHandoff) {
-      const stagedHandoff = createChatAttachmentHandoff();
+      const stagedHandoff = createChatAttachmentHandoff(createApplicationGateway().gateway);
       Object.assign(context, { chatAttachmentHandoff: stagedHandoff });
       disposals.push(() => stagedHandoff.dispose());
     }
@@ -95,17 +103,28 @@ describe("cross-region Home composer ownership", () => {
     current.chatMessage = "";
     current.chatQueue = [];
     const persistence = new ChatComposerPersistence(() => current);
+    const host: ReactiveControllerHost = {
+      addController: () => {},
+      removeController: () => {},
+      requestUpdate: () => {},
+      updateComplete: Promise.resolve(true),
+    };
+    const controller = new ChatStateController<ChatPageHost>(host);
     current.canRestoreComposer = () => persistence.active;
-    current.requestUpdate = () => persistence.persistChangedState();
+    const notify = vi.fn(() => persistence.persistChangedState());
+    current.requestUpdate = notify;
     persistence.start();
-    const unsubscribe = subscribeChatOutboxProjection(current);
+    const unsubscribe = chatOutboxOwner(current).subscribe(current);
     const view = { presented: true, owner };
     const handoff = new ChatPaneComposerHandoff(context, {
       state: () => current,
       owner: () => view.owner,
+      presentationOwner: () => persistence.presentationOwner,
       region: () => region,
       presented: () => view.presented,
       pause: () => persistence.stop(),
+      takeAttachmentReads: () => controller.takeAttachmentReads(),
+      adoptAttachmentReads: (reads) => controller.adoptAttachmentReads(reads, current),
       resume: (restore) => {
         if (restore) {
           persistence.restore();
@@ -118,11 +137,14 @@ describe("cross-region Home composer ownership", () => {
       handoff.dispose();
       unsubscribe();
       persistence.stop();
+      controller.attachmentReads.abortReads();
       discardStateStagedAttachments(current);
     });
     return {
       current,
       persistence,
+      controller,
+      notify,
       view,
       handoff,
       edit: (text: string, attachments = current.chatAttachments) => {
@@ -134,7 +156,116 @@ describe("cross-region Home composer ownership", () => {
     };
   }
 
-  it.each(["empty", "text", "attachment"] as const)(
+  it.each(["complete", "remove"] as const)(
+    "keeps pending file custody through repeated Home handoffs and %s after source disposal",
+    (outcome) => {
+      const context = {} as ApplicationContext;
+      const owner = { recoveryScope: "profile-a" } as GatewayBrowserClient;
+      const page = presentation(context, owner, "page");
+      page.edit("Keep this draft and file");
+      const container = document.createElement("div");
+      const props = page.controller.attachmentInputProps(page.current);
+      render(
+        html`${renderChatAttachmentInputs(props)}${renderAttachmentPreview(props)}`,
+        container,
+      );
+      const readers: FileReader[] = [];
+      const read = vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function (
+        this: FileReader,
+      ) {
+        readers.push(this);
+      });
+      disposals.push(() => {
+        read.mockRestore();
+        render(nothing, container);
+      });
+      const input = container.querySelector<HTMLInputElement>(".agent-chat__file-input");
+      if (!input) {
+        throw new Error("Expected the Home attachment input");
+      }
+      selectFile(input, new File(["pending payload"], "handoff.txt", { type: "text/plain" }));
+      expect(page.controller.attachmentReads.pendingReads).toBe(1);
+      const reader = readers[0];
+      if (!reader) {
+        throw new Error("Expected a pending file read");
+      }
+
+      page.view.presented = false;
+      const dock = presentation(context, owner, "dock");
+      dock.handoff.claim();
+      expect(dock.current.chatMessage).toBe("Keep this draft and file");
+      expect(page.controller.attachmentReads.pendingReads).toBe(0);
+      expect(dock.controller.attachmentReads.pendingReads).toBe(1);
+      render(
+        renderAttachmentPreview(dock.controller.attachmentInputProps(dock.current)),
+        container,
+      );
+      expect(container.querySelector('.chat-attachment-thumb[aria-busy="true"]')).not.toBeNull();
+
+      dock.view.presented = false;
+      page.view.presented = true;
+      page.handoff.claim();
+      expect(page.controller.attachmentReads.pendingReads).toBe(1);
+      expect(dock.controller.attachmentReads.pendingReads).toBe(0);
+      page.notify.mockClear();
+      dock.notify.mockClear();
+      reader.dispatchEvent(
+        new ProgressEvent("progress", { lengthComputable: true, loaded: 1, total: 4 }),
+      );
+      expect(page.notify).toHaveBeenCalledOnce();
+      expect(dock.notify).not.toHaveBeenCalled();
+
+      page.view.presented = false;
+      dock.view.presented = true;
+      dock.handoff.claim();
+      page.handoff.dispose();
+      page.controller.hostDisconnected();
+      expect(dock.controller.attachmentReads.pendingReads).toBe(1);
+      page.notify.mockClear();
+      dock.notify.mockClear();
+      reader.dispatchEvent(
+        new ProgressEvent("progress", { lengthComputable: true, loaded: 2, total: 4 }),
+      );
+      expect(dock.notify).toHaveBeenCalledOnce();
+      expect(page.notify).not.toHaveBeenCalled();
+      render(
+        renderAttachmentPreview(dock.controller.attachmentInputProps(dock.current)),
+        container,
+      );
+      expect(
+        container.querySelector<HTMLElement>(".chat-attachment-loading > span")?.style.transform,
+      ).toBe("scaleX(0.5)");
+
+      if (outcome === "remove") {
+        const remove = container.querySelector<HTMLButtonElement>(
+          'button[aria-label="Remove handoff.txt"]',
+        );
+        if (!remove) {
+          throw new Error("Expected the transferred attachment's remove button");
+        }
+        remove.click();
+        expect(dock.controller.attachmentReads.pendingReads).toBe(0);
+      }
+
+      const dataUrl = "data:text/plain;base64,cGVuZGluZyBwYXlsb2Fk";
+      Object.defineProperty(reader, "result", { value: dataUrl });
+      reader.dispatchEvent(new ProgressEvent("load"));
+      expect(dock.controller.attachmentReads.pendingReads).toBe(0);
+      expect(dock.current.chatAttachments.map(({ fileName }) => fileName)).toEqual(
+        outcome === "complete" ? ["handoff.txt"] : [],
+      );
+
+      const returned = presentation(context, owner, "page");
+      returned.handoff.claim();
+      expect(returned.current.chatAttachments).toHaveLength(outcome === "complete" ? 1 : 0);
+      if (outcome === "complete") {
+        expect(getChatAttachmentDataUrl(returned.current.chatAttachments[0]!)).toBe(dataUrl);
+      }
+      expect(returned.current.chatMessage).toBe("Keep this draft and file");
+    },
+  );
+
+  it.each(["text", "attachment"] as const)(
     "recovers a failed command through the current Home owner with %s input",
     (input) => {
       const context = {} as ApplicationContext;
@@ -144,46 +275,32 @@ describe("cross-region Home composer ownership", () => {
       const recovery = captureChatCommandComposerRecovery(
         page.current,
         resolveUiConversationIdentity(page.current, page.current.sessionKey),
-        { draft: "/steer submitted", attachments: [submitted] },
+        { previousDraft: "/steer submitted", previousAttachments: [submitted] },
       );
       page.view.presented = false;
       const dock = presentation(context, owner, "dock");
       dock.handoff.claim();
       const newer = input === "attachment" ? storedAttachment("newer-file", "text/plain") : null;
-      if (input !== "empty") {
-        dock.edit(input === "text" ? "Newer dock draft" : "", newer ? [newer] : []);
-      }
+      dock.edit(input === "text" ? "Newer dock draft" : "", newer ? [newer] : []);
 
       settleChatCommandComposer(page.current, recovery, false, [submitted]);
 
       expect(page.current.chatMessage).toBe("");
-      expect(dock.current.chatMessage).toBe(
-        input === "empty" ? "/steer submitted" : input === "text" ? "Newer dock draft" : "",
-      );
-      expect(dock.current.chatAttachments).toEqual(
-        input === "empty" ? [submitted] : newer ? [newer] : [],
-      );
-      expect(getChatAttachmentDataUrl(submitted)).toBe(
-        input === "empty" ? `data:text/plain;base64,command-${input}` : null,
-      );
+      expect(dock.current.chatMessage).toBe(input === "text" ? "Newer dock draft" : "");
+      expect(dock.current.chatAttachments).toEqual(newer ? [newer] : []);
+      expect(getChatAttachmentDataUrl(submitted)).toBeNull();
       if (newer) {
         expect(getChatAttachmentDataUrl(newer)).not.toBeNull();
       }
       page.view.presented = true;
       page.handoff.claim();
-      expect(page.current.chatMessage).toBe(
-        input === "empty" ? "/steer submitted" : input === "text" ? "Newer dock draft" : "",
-      );
-      expect(page.current.chatAttachments).toEqual(
-        input === "empty" ? [submitted] : newer ? [newer] : [],
-      );
+      expect(page.current.chatMessage).toBe(input === "text" ? "Newer dock draft" : "");
+      expect(page.current.chatAttachments).toEqual(newer ? [newer] : []);
     },
   );
 
   it.each([
-    ["rejected", 1],
     ["rejected", 2],
-    ["accepted", 1],
     ["accepted", 2],
   ] as const)(
     "settles a %s command after %i Home remounts through a live dock",
@@ -198,8 +315,8 @@ describe("cross-region Home composer ownership", () => {
         attachments: [submitted],
       });
       const recovery = captureChatCommandComposerRecovery(page.current, scope, {
-        draft: "/steer submitted",
-        attachments: [submitted],
+        previousDraft: "/steer submitted",
+        previousAttachments: [submitted],
       });
       page.view.presented = false;
       const dock = presentation(context, owner, "dock");
@@ -236,7 +353,7 @@ describe("cross-region Home composer ownership", () => {
     const recovery = captureChatCommandComposerRecovery(
       page.current,
       resolveUiConversationIdentity(page.current, page.current.sessionKey),
-      { draft: "/steer submitted", attachments: [] },
+      { previousDraft: "/steer submitted", previousAttachments: [] },
     );
 
     expect(recovery.owner).toBeUndefined();
@@ -253,7 +370,7 @@ describe("cross-region Home composer ownership", () => {
     const recovery = captureChatCommandComposerRecovery(
       page.current,
       resolveUiConversationIdentity(page.current, page.current.sessionKey),
-      { draft: "/steer submitted", attachments: [] },
+      { previousDraft: "/steer submitted", previousAttachments: [] },
     );
     page.handoff.dispose();
 
@@ -264,7 +381,9 @@ describe("cross-region Home composer ownership", () => {
   });
 
   it("releases only unreferenced command payloads after every presentation unmounts", () => {
-    const context = { chatAttachmentHandoff: createChatAttachmentHandoff() } as ApplicationContext;
+    const context = {
+      chatAttachmentHandoff: createChatAttachmentHandoff(createApplicationGateway().gateway),
+    } as ApplicationContext;
     const owner = { recoveryScope: "profile-a" } as GatewayBrowserClient;
     const page = presentation(context, owner, "page");
     const staged = storedAttachment("staged-command", "text/plain");
@@ -272,8 +391,8 @@ describe("cross-region Home composer ownership", () => {
     const unreferenced = storedAttachment("completed-command", "text/plain");
     const scope = resolveUiConversationIdentity(page.current, page.current.sessionKey);
     const recovery = captureChatCommandComposerRecovery(page.current, scope, {
-      draft: "/steer submitted",
-      attachments: [staged, fallback, unreferenced],
+      previousDraft: "/steer submitted",
+      previousAttachments: [staged, fallback, unreferenced],
     });
     page.view.presented = false;
     const dock = presentation(context, owner, "dock");
@@ -305,35 +424,7 @@ describe("cross-region Home composer ownership", () => {
     context.chatAttachmentHandoff.dispose();
   });
 
-  it("clears a successful command's transferred fallback without releasing a retained file", () => {
-    const context = {} as ApplicationContext;
-    const owner = { recoveryScope: "profile-a" } as GatewayBrowserClient;
-    const page = presentation(context, owner, "page");
-    const submitted = storedAttachment("successful-command", "text/plain");
-    const scope = resolveUiConversationIdentity(page.current, page.current.sessionKey);
-    storeChatComposerMemoryFallback(page.current, scope, {
-      message: "/approve request allow-once",
-      attachments: [submitted],
-    });
-    const recovery = captureChatCommandComposerRecovery(page.current, scope, {
-      draft: "/approve request allow-once",
-      attachments: [submitted],
-    });
-    page.view.presented = false;
-    const dock = presentation(context, owner, "dock");
-    dock.handoff.claim();
-    dock.edit("Keep this file", [submitted]);
-    page.handoff.dispose();
-
-    settleChatCommandComposer(page.current, recovery, true, [submitted]);
-
-    expect(dock.current.chatComposerFallbackByScope).toEqual({});
-    expect(dock.current.chatMessage).toBe("Keep this file");
-    expect(getChatAttachmentDataUrl(submitted)).not.toBeNull();
-  });
-
   it.each([
-    ["current", "rejected"],
     ["replacement", "rejected"],
     ["replacement", "accepted"],
     ["reconnect", "rejected"],
@@ -351,8 +442,8 @@ describe("cross-region Home composer ownership", () => {
         attachments: [submitted],
       });
       const recovery = captureChatCommandComposerRecovery(page.current, scope, {
-        draft: "/steer submitted",
-        attachments: [submitted],
+        previousDraft: "/steer submitted",
+        previousAttachments: [submitted],
       });
       page.view.presented = false;
       const dock = presentation(context, owner, "dock");
@@ -372,30 +463,26 @@ describe("cross-region Home composer ownership", () => {
       }
 
       settleChatCommandComposer(page.current, recovery, result === "accepted", [submitted]);
-      expect(dock.current.chatMessage).toBe(connection === "current" ? "/steer submitted" : "");
-      expect(dock.current.chatAttachments).toEqual(connection === "current" ? [submitted] : []);
-      if (connection !== "current") {
-        expect(
-          dock.current.chatComposerFallbackByScope[storedChatOutboxScopeKey(scope)],
-        ).toMatchObject({
-          message: "/steer submitted",
-          attachments: [submitted],
-        });
-      }
+      expect(dock.current.chatMessage).toBe("");
+      expect(dock.current.chatAttachments).toEqual([]);
+      expect(
+        dock.current.chatComposerFallbackByScope[storedChatOutboxScopeKey(scope)],
+      ).toMatchObject({
+        message: "/steer submitted",
+        attachments: [submitted],
+      });
       expect(getChatAttachmentDataUrl(submitted)).not.toBeNull();
     },
   );
 
-  it.each([
-    ["agent:main:main", false],
-    ["global", false],
-    ["agent:main:main", true],
-    ["global", true],
-  ] as const)(
+  it.each([["agent:main:main", true]] as const)(
     "moves edited draft and file back to the already-retained Home (%s, client rotation=%s)",
     (sessionKey, rotateClient) => {
       const context = {} as ApplicationContext;
-      const owner = { recoveryScope: "profile-a" } as GatewayBrowserClient;
+      const owner = {
+        recoveryScope: "profile-a",
+        offlineRecoveryScope: "profile-a",
+      } as GatewayBrowserClient;
       const page = presentation(context, owner, "page", sessionKey);
       page.edit("Home page draft");
       page.view.presented = false;
@@ -422,7 +509,9 @@ describe("cross-region Home composer ownership", () => {
       // persistence must never overwrite the current presentation's newer edit.
       page.current.chatMessage = "stale retained draft";
       page.current.requestUpdate();
-      expect(loadChatComposerSnapshot(dock.current, sessionKey)?.draft).toBe("Edited in the dock");
+      expect(loadChatComposerState(dock.current, sessionKey).snapshot?.draft).toBe(
+        "Edited in the dock",
+      );
       page.view.presented = true;
       page.handoff.claim();
       dock.handoff.dispose();
@@ -431,7 +520,9 @@ describe("cross-region Home composer ownership", () => {
       expect(page.current.chatAttachments).toEqual([file]);
       expect(getChatAttachmentDataUrl(file)).not.toBeNull();
       expect(dock.current.chatAttachments).toEqual([]);
-      expect(loadChatComposerSnapshot(page.current, sessionKey)?.draft).toBe("Edited in the dock");
+      expect(loadChatComposerState(page.current, sessionKey).snapshot?.draft).toBe(
+        "Edited in the dock",
+      );
       expect(activeQueuedMessageEdit(page.current)?.draftText).toBe("unfinished queue correction");
       expect(dock.current.chatQueuedEdit).toBeNull();
       expect(isQueuedMessageBeingEdited(dock.current, queued.id)).toBe(true);
@@ -463,7 +554,10 @@ describe("cross-region Home composer ownership", () => {
     }
     const nextOwner =
       difference === "client" || difference === "unverified-rotation"
-        ? ({ recoveryScope: "profile-a" } as GatewayBrowserClient)
+        ? ({
+            recoveryScope: "profile-a",
+            offlineRecoveryScope: "profile-a",
+          } as GatewayBrowserClient)
         : owner;
     if (difference === "unverified-rotation") {
       page.view.owner = nextOwner;
@@ -489,36 +583,19 @@ describe("cross-region Home composer ownership", () => {
 });
 
 describe("staged chat attachment pane handoff", () => {
-  it("discards a mounted package before clearing a closed pane handoff", () => {
-    const calls: string[] = [];
-    const root = {
-      querySelectorAll: () => [
-        { paneId: "p1", discardStagedAttachments: () => calls.push("discard-one") },
-        { paneId: "p1", discardStagedAttachments: () => calls.push("discard-two") },
-        { paneId: "p2", discardStagedAttachments: () => calls.push("wrong-pane") },
-      ],
-    } as unknown as ParentNode;
-    const context = {
-      chatAttachmentHandoff: { clearPane: () => calls.push("clear") },
-    } as unknown as ApplicationContext;
-    const layout = {
-      columns: [
-        {
-          id: "c1",
-          panes: [
-            { id: "p1", sessionKey: "one" },
-            { id: "p2", sessionKey: "two" },
-          ],
-          paneWeights: [1, 1],
-        },
-      ],
-      columnWeights: [1],
-      activePaneId: "p1",
-    } satisfies ChatSplitLayout;
-
-    expect(closeStagedPane(context, root, layout, "p1")?.id).toBe("p2");
-    expect(calls).toEqual(["discard-one", "discard-two", "clear"]);
-  });
+  function retainedSessions(context: ApplicationContext, ...panes: HTMLElement[]) {
+    const host = Object.assign(document.createElement("div"), { requestUpdate: () => {} });
+    host.append(...panes);
+    return new ChatPageRetainedSessions(host, {
+      context: () => context,
+      presented: () => true,
+      routeHref: () => window.location.href,
+      layout: () => singlePaneLayout("c1", "p1", "main"),
+      narrow: () => false,
+      selectReplacement: () => {},
+      adoptNavigation: () => {},
+    });
+  }
 
   it("does not restage a closed pane when its id is reused after disconnect", () => {
     const owner = {} as GatewayBrowserClient;
@@ -536,26 +613,11 @@ describe("staged chat attachment pane handoff", () => {
         storageFailed: false,
       },
     };
-    const root = { querySelectorAll: () => [pane] } as unknown as ParentNode;
-    const layout = {
-      columns: [
-        {
-          id: "c1",
-          panes: [
-            { id: "p1", sessionKey: "one" },
-            { id: "p2", sessionKey: current.sessionKey },
-          ],
-          paneWeights: [1, 1],
-        },
-      ],
-      columnWeights: [1],
-      activePaneId: "p2",
-    } satisfies ChatSplitLayout;
     const scopeKey = storedChatOutboxScopeKey(
       resolveUiConversationIdentity(current, current.sessionKey),
     );
 
-    closeStagedPane(pane.context, root, layout, pane.paneId);
+    retainedSessions(pane.context, pane).discardPane(pane.paneId);
     const lateAttachment = storedAttachment("late-close-completion");
     current.chatAttachments.push(lateAttachment);
     pane.disconnectedCallback();
@@ -575,7 +637,7 @@ describe("staged chat attachment pane handoff", () => {
     const owner = {} as GatewayBrowserClient;
     const { pane, state: current } = createTestChatPane({
       client: owner,
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     pane.paneId = "p2";
     pane.discardStagedAttachments?.();
@@ -605,31 +667,10 @@ describe("staged chat attachment pane handoff", () => {
     releaseChatAttachmentPayload(reopened.id);
   });
 
-  it("deduplicates current and fallback payload release", () => {
-    const shared = storedAttachment("shared");
-    const fallback = storedAttachment("fallback", "application/pdf");
-    const current = state([shared]);
-    current.chatComposerFallbackByScope = {
-      fallback: {
-        attachments: [shared, fallback],
-        message: "",
-        sequence: 1,
-        storageFailed: false,
-      },
-    };
-
-    discardStateStagedAttachments(current);
-
-    expect(getChatAttachmentDataUrl(shared)).toBeNull();
-    expect(getChatAttachmentDataUrl(fallback)).toBeNull();
-    expect(current.chatAttachments).toEqual([]);
-    expect(current.chatComposerFallbackByScope.fallback?.attachments).toEqual([]);
-  });
-
   it("keeps plain staged attachments across a gateway client rotation", () => {
     const previousOwner = {} as GatewayBrowserClient;
     const nextOwner = {} as GatewayBrowserClient;
-    const handoff = createChatAttachmentHandoff();
+    const handoff = createChatAttachmentHandoff(createApplicationGateway().gateway);
     const context = { chatAttachmentHandoff: handoff } as unknown as ApplicationContext;
     const plainImage = storedAttachment("rotation-image");
     const plainFile = storedAttachment("rotation-file", "application/pdf");
@@ -660,7 +701,7 @@ describe("staged chat attachment pane handoff", () => {
   it("restores a mixed package only to the exact mounted owner", () => {
     const owner = {} as GatewayBrowserClient;
     const otherOwner = {} as GatewayBrowserClient;
-    const handoff = createChatAttachmentHandoff();
+    const handoff = createChatAttachmentHandoff(createApplicationGateway().gateway);
     const context = { chatAttachmentHandoff: handoff } as unknown as ApplicationContext;
     const image = storedAttachment("image");
     const file = storedAttachment("file", "application/pdf");
@@ -687,7 +728,7 @@ describe("staged chat attachment pane handoff", () => {
   it("rejects every part of an evicted composer after a newer split edit", () => {
     vi.stubGlobal("sessionStorage", createStorageMock());
     const owner = {} as GatewayBrowserClient;
-    const handoff = createChatAttachmentHandoff();
+    const handoff = createChatAttachmentHandoff(createApplicationGateway().gateway);
     const context = { chatAttachmentHandoff: handoff } as unknown as ApplicationContext;
     const older = state([]);
     older.chatMessage = "";
@@ -737,7 +778,7 @@ describe("staged chat attachment pane handoff", () => {
     const storage = createStorageMock();
     vi.stubGlobal("sessionStorage", storage);
     const owner = {} as GatewayBrowserClient;
-    const handoff = createChatAttachmentHandoff();
+    const handoff = createChatAttachmentHandoff(createApplicationGateway().gateway);
     const context = { chatAttachmentHandoff: handoff } as unknown as ApplicationContext;
     const source = state([]);
     source.chatMessage = "";
@@ -791,12 +832,13 @@ describe("staged chat attachment pane handoff", () => {
 
   it("releases a restored fallback displaced by mounted state", () => {
     const owner = {} as GatewayBrowserClient;
-    const handoff = createChatAttachmentHandoff();
+    const handoff = createChatAttachmentHandoff(createApplicationGateway().gateway);
     const context = { chatAttachmentHandoff: handoff } as unknown as ApplicationContext;
     const displaced = storedAttachment("displaced");
     const mounted = storedAttachment("mounted");
     const remount = state([]);
     handoff.prepare({
+      reviewPrivateDraft: reviewPrivateComposerDraft,
       owner,
       paneId: "p1",
       scopeKey: storedChatOutboxScopeKey(

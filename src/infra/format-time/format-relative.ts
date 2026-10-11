@@ -1,12 +1,3 @@
-/**
- * Centralized relative-time formatting utilities.
- *
- * Consolidates 7+ scattered implementations (formatAge, formatAgeShort, formatAgo,
- * formatRelativeTime, formatElapsedTime) into two functions:
- *
- * - `formatTimeAgo(durationMs)` — format a duration as "5m ago" / "5m" (for known elapsed time)
- * - `formatRelativeTimestamp(epochMs)` — format an epoch timestamp relative to now (handles future)
- */
 import { bucketRelativeTimeMs } from "@openclaw/normalization-core";
 
 type FormatTimeAgoOptions = {
@@ -41,15 +32,10 @@ export function formatTimeAgo(
   if (minutes < 1) {
     return suffix ? "just now" : `${totalSeconds}s`;
   }
-  if (minutes < 60) {
-    return suffix ? `${minutes}m ago` : `${minutes}m`;
-  }
   const hours = Math.round(minutes / 60);
-  if (hours < 48) {
-    return suffix ? `${hours}h ago` : `${hours}h`;
-  }
-  const days = Math.round(hours / 24);
-  return suffix ? `${days}d ago` : `${days}d`;
+  const label =
+    minutes < 60 ? `${minutes}m` : hours < 48 ? `${hours}h` : `${Math.round(hours / 24)}d`;
+  return suffix ? `${label} ago` : label;
 }
 
 type FormatRelativeTimestampOptions = {
@@ -84,17 +70,11 @@ export function formatRelativeTimestamp(
   if (unit === "second") {
     return isPast ? "just now" : "in <1m";
   }
-  if (unit === "minute") {
-    return isPast ? `${value}m ago` : `in ${value}m`;
-  }
-  if (unit === "hour") {
-    return isPast ? `${value}h ago` : `in ${value}h`;
-  }
-  if (!options?.dateFallback || value <= 7) {
-    return isPast ? `${value}d ago` : `in ${value}d`;
+  const relative = isPast ? `${value}${unit[0]} ago` : `in ${value}${unit[0]}`;
+  if (unit !== "day" || !options?.dateFallback || value <= 7) {
+    return relative;
   }
 
-  // Fall back to short date display for old timestamps
   try {
     return new Intl.DateTimeFormat("en-US", {
       month: "short",
@@ -102,6 +82,6 @@ export function formatRelativeTimestamp(
       ...(options.timezone ? { timeZone: options.timezone } : {}),
     }).format(new Date(timestampMs));
   } catch {
-    return `${value}d ago`;
+    return relative;
   }
 }

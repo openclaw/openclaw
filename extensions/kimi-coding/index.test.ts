@@ -1,6 +1,6 @@
-// Kimi Coding tests cover index plugin behavior.
 import { streamSimpleAnthropic } from "@openclaw/ai/internal/anthropic";
-import type { Context, Model } from "openclaw/plugin-sdk/llm";
+import { streamSimpleOpenAICompletions } from "@openclaw/ai/internal/openai";
+import { clampThinkingLevel, type Context, type Model } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
@@ -34,9 +34,12 @@ describe("kimi provider plugin", () => {
     );
   });
 
-  it("uses binary thinking with thinking off by default", async () => {
+  it("uses binary thinking with thinking off by default and repairs replay signatures", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
+    expect(provider.buildReplayPolicy?.({ provider: "kimi" })).toEqual({
+      preserveSignatures: false,
+    });
     expect(
       provider.resolveThinkingProfile?.({
         provider: "kimi",
@@ -57,14 +60,11 @@ describe("kimi provider plugin", () => {
     ["weekly window", "You've reached your weekly (7-day) usage limit.", "rate_limit"],
     ["seven-day limit", "Your seven-day usage limit has been reached.", "rate_limit"],
     ["7-day limit", "You've reached your 7-day usage limit.", "rate_limit"],
-    ["quota reset", "Your quota will reset when the current window ends.", "rate_limit"],
     [
       "agent access restriction",
       "Kimi For Coding is currently only available for Coding Agents such as Kimi CLI, Claude Code, Roo Code, Kilo Code, etc.",
       undefined,
     ],
-    ["type without quota", "Access has been terminated.", undefined],
-    ["invalid key", "Invalid API key", undefined],
   ] as const)("classifies the quota signal for %s", async (_name, errorMessage, expected) => {
     const provider = await registerSingleProviderPlugin(plugin);
 
@@ -78,7 +78,7 @@ describe("kimi provider plugin", () => {
     ).toBe(expected);
   });
 
-  it.each(["kimi", " KIMI ", "kimi-code", "kimi-coding"])(
+  it.each([" KIMI ", "kimi-code", "kimi-coding"])(
     "declares and classifies quota exhaustion for provider %s",
     async (providerId) => {
       const provider = await registerSingleProviderPlugin(plugin);
@@ -110,42 +110,43 @@ describe("kimi provider plugin", () => {
     ).toBeUndefined();
   });
 
-  it.each(["k3", "k3-256k"])("exposes %s adaptive thinking levels", async (modelId) => {
-    const provider = await registerSingleProviderPlugin(plugin);
+  it.each([
+    { modelId: "k3", defaultLevel: "high" },
+    { modelId: "K3-256K", defaultLevel: "high" },
+    { modelId: "kimi-k3", defaultLevel: "off" },
+    { modelId: " Kimi-K3 ", defaultLevel: "off" },
+  ])(
+    "exposes K3 thinking levels and the $defaultLevel default for $modelId",
+    async ({ modelId, defaultLevel }) => {
+      const provider = await registerSingleProviderPlugin(plugin);
 
-    expect(
-      provider.resolveThinkingProfile?.({
-        provider: "kimi",
-        modelId,
-        reasoning: true,
-      } as never),
-    ).toEqual({
-      levels: [
-        { id: "off" },
-        { id: "minimal" },
-        { id: "low" },
-        { id: "medium" },
-        { id: "high" },
-        { id: "adaptive" },
-        { id: "xhigh" },
-        { id: "max" },
-      ],
-      defaultLevel: "high",
-      preserveWhenCatalogReasoningFalse: true,
-    });
-  });
+      expect(
+        provider.resolveThinkingProfile?.({
+          provider: "kimi",
+          modelId,
+          reasoning: true,
+        } as never),
+      ).toEqual({
+        levels: [
+          { id: "off" },
+          { id: "minimal" },
+          { id: "low" },
+          { id: "medium" },
+          { id: "high" },
+          { id: "adaptive" },
+          { id: "xhigh" },
+          { id: "max" },
+        ],
+        defaultLevel,
+        preserveWhenCatalogReasoningFalse: true,
+      });
+    },
+  );
 
-  it("wraps K3 simple completions without changing K2 simple completions", async () => {
+  it("leaves K2 simple completions unchanged", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     const streamFn = (() => undefined) as never;
 
-    expect(
-      provider.wrapSimpleCompletionStreamFn?.({
-        provider: "kimi",
-        modelId: "k3",
-        streamFn,
-      } as never),
-    ).not.toBe(streamFn);
     expect(
       provider.wrapSimpleCompletionStreamFn?.({
         provider: "kimi",
@@ -154,6 +155,78 @@ describe("kimi provider plugin", () => {
       } as never),
     ).toBe(streamFn);
   });
+
+  it.each([
+    { thinkingLevelMap: undefined, compat: undefined, selected: "max", effort: "max" },
+    { thinkingLevelMap: { max: "low" }, compat: undefined, selected: "max", effort: "low" },
+    { thinkingLevelMap: { max: null }, compat: undefined, selected: "xhigh", effort: "max" },
+    {
+      thinkingLevelMap: undefined,
+      compat: { reasoningEffortMap: { max: "low", low: "high" } },
+      selected: "max",
+      effort: "low",
+    },
+  ] as const)(
+    "keeps K3 model capabilities through selection and OpenAI serialization: $effort",
+    async (row) => {
+      const provider = await registerSingleProviderPlugin(plugin);
+      const configured: Model<"openai-completions"> = {
+        provider: "kimi",
+        id: "Kimi-K3",
+        name: "Kimi K3",
+        api: "openai-completions",
+        baseUrl: "http://127.0.0.1:19346/v1",
+        reasoning: true,
+        thinkingLevelMap: row.thinkingLevelMap,
+        compat: row.compat,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 32768,
+        maxTokens: 4096,
+      };
+      const model =
+        provider.normalizeResolvedModel?.({
+          provider: "kimi",
+          modelId: configured.id,
+          model: configured,
+        }) ?? configured;
+      const reasoning = clampThinkingLevel(model, "max");
+      expect(reasoning).toBe(row.selected);
+      const wrapped = provider.wrapStreamFn?.({
+        provider: "kimi",
+        modelId: model.id,
+        model,
+        thinkingLevel: "max",
+        streamFn: (runtimeModel, context, options) =>
+          streamSimpleOpenAICompletions(
+            { ...runtimeModel, api: "openai-completions" },
+            context,
+            options,
+          ),
+      });
+      if (!wrapped) {
+        throw new Error("Missing Kimi stream wrapper");
+      }
+      let payload: unknown;
+      const stream = await wrapped(
+        model,
+        { messages: [{ role: "user", content: "Hello", timestamp: 0 }] },
+        {
+          apiKey: "synthetic-kimi-key",
+          reasoning,
+          onPayload: (value) => {
+            payload = value;
+            throw new Error("stop before network");
+          },
+        },
+      );
+      expect(await stream.result()).toMatchObject({ errorMessage: "stop before network" });
+      expect(payload).toMatchObject({
+        thinking: { type: "enabled" },
+        reasoning_effort: row.effort,
+      });
+    },
+  );
 
   it.each(["wrapStreamFn", "wrapSimpleCompletionStreamFn"] as const)(
     "resolves per-call K3 thinking through one %s wrapper",

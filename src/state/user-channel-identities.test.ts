@@ -1,0 +1,503 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { afterEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
+import * as stateReads from "./openclaw-state-db-readonly.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "./openclaw-state-db.js";
+import {
+  linkUserChannelIdentity,
+  resolveUserChannelIdentity,
+  unlinkUserChannelIdentity,
+} from "./user-channel-identities.js";
+import {
+  changeCanonicalUserChannelIdentity,
+  listCanonicalUserChannelIdentities,
+  prepareUserChannelIdentityAuthority,
+  prepareUserProfileRoleAuthority,
+  prepareUserProfileRolePolicyAuthority,
+  prepareUserProfileSelectionAuthority,
+} from "./user-channel-identity-operations.js";
+import { readUserProfileAliasRevision } from "./user-profile-events.js";
+import {
+  getUserProfileDisplay,
+  readUserProfileIdentity,
+  prepareUserProfileCatalog,
+} from "./user-profile-list.js";
+import {
+  linkCanonicalUserProfileEmail,
+  setCanonicalUserProfileRole,
+} from "./user-profile-writes.js";
+import {
+  linkEmail,
+  setDisplayName,
+  setUserProfileRole,
+  syncGitHubIdentity,
+} from "./user-profile-writes.worker.js";
+import { userProfilesDb } from "./user-profiles-internal.js";
+import {
+  ensureGatewayOwnerProfile,
+  ensureProfileForEmail,
+  ensureProfileForTailscaleIdentity,
+  resolveUserProfileId,
+} from "./user-profiles.js";
+import type { UserChannelIdentity } from "./user-profiles.types.js";
+
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    cleanup();
+  });
+});
+const identity: UserChannelIdentity = {
+  channelId: "discord",
+  accountId: "team-bot",
+  senderId: "100000000000000001",
+};
+function stateOptions() {
+  return { path: join(tempDirs.make("openclaw-channel-identities-"), "state.sqlite") };
+}
+
+it.each(["email binding", "stale role reply"] as const)(
+  "keeps revoked authority retired after an ABA change to %s",
+  async (change) => {
+    const options = stateOptions();
+    const source = ensureProfileForEmail("source@example.test", options);
+    if (change === "stale role reply") {
+      await setCanonicalUserProfileRole(source.id, "admin", options);
+    } else {
+      await linkCanonicalUserProfileEmail("retained@example.test", source.id, options);
+    }
+    await changeCanonicalUserChannelIdentity("link", source.id, identity, options);
+    const selection = await prepareUserProfileSelectionAuthority(source.id, options);
+    const admin = await prepareUserProfileRoleAuthority(source.id, options);
+    const rolePolicy = await prepareUserProfileRolePolicyAuthority(source.id, options);
+    const channel = await prepareUserChannelIdentityAuthority(identity, options);
+    expect(selection?.isCurrent()).toBe(true);
+    expect(admin?.isCurrent()).toBe(true);
+    expect(rolePolicy?.isCurrent()).toBe(true);
+    expect(channel?.isCurrent()).toBe(true);
+
+    const execute = stateReads.executeExistingOpenClawStateRead;
+    const read =
+      change === "stale role reply"
+        ? vi
+            .spyOn(stateReads, "executeExistingOpenClawStateRead")
+            .mockImplementationOnce(async (...args) => {
+              await setCanonicalUserProfileRole(source.id, "member", options);
+              const reply = await execute(...args);
+              expect(reply).toMatchObject({
+                type: "userProfiles.authority.resolve",
+                profile: { profileId: source.id, role: "member" },
+              });
+              await setCanonicalUserProfileRole(source.id, "admin", options);
+              return reply;
+            })
+        : undefined;
+    try {
+      if (change === "email binding") {
+        const target = ensureProfileForEmail("target@example.test", options);
+        await linkCanonicalUserProfileEmail("source@example.test", target.id, options);
+        await linkCanonicalUserProfileEmail("source@example.test", source.id, options);
+      }
+      const prepared = await prepareUserProfileRoleAuthority(source.id, {
+        ...options,
+        includeProfile: true,
+      });
+      if (change === "stale role reply") {
+        expect(prepared?.role).toBe("admin");
+        expect(prepared?.listItem).toMatchObject({
+          id: source.id,
+          role: "admin",
+          emails: ["source@example.test"],
+        });
+      }
+      expect(prepared?.isCurrent()).toBe(true);
+      expect(resolveUserProfileId(source.id, options)).toBe(source.id);
+      expect(admin?.isCurrent()).toBe(false);
+      expect(rolePolicy?.isCurrent()).toBe(false);
+      expect(channel?.isCurrent()).toBe(false);
+      expect(selection?.isCurrent()).toBe(true);
+      expect((await prepareUserChannelIdentityAuthority(identity, options))?.isCurrent()).toBe(
+        true,
+      );
+    } finally {
+      read?.mockRestore();
+    }
+  },
+);
+
+it("does not create state or identity tables while resolving absent links", async () => {
+  const options = stateOptions();
+  expect(await prepareUserChannelIdentityAuthority(identity, options)).toBeUndefined();
+  expect(await prepareUserProfileRolePolicyAuthority("absent", options)).toBeUndefined();
+  expect(await listCanonicalUserChannelIdentities("absent", options)).toEqual([]);
+  expect(resolveUserChannelIdentity(identity, options)).toBeUndefined();
+  expect(existsSync(options.path)).toBe(false);
+  const { db } = openOpenClawStateDatabase(options);
+  expect(await prepareUserProfileRolePolicyAuthority("absent", options)).toBeUndefined();
+  expect(resolveUserChannelIdentity(identity, options)).toBeUndefined();
+  expect(await listCanonicalUserChannelIdentities("absent", options)).toEqual([]);
+  expect(tableExists(db, "user_profiles")).toBe(false);
+  expect(tableExists(db, "user_profile_identities")).toBe(false);
+});
+
+it("revokes the exact prepared binding before worker commit acknowledgement", async () => {
+  const options = stateOptions();
+  const otherOptions = stateOptions();
+  const ada = ensureProfileForEmail("ada@example.test", options);
+  const grace = ensureProfileForEmail("grace@example.test", options);
+  const other = ensureProfileForEmail("other@example.test", otherOptions);
+  setUserProfileRole(ada.id, "admin", options);
+  linkUserChannelIdentity(ada.id, identity, options);
+  const prepared = await prepareUserChannelIdentityAuthority(identity, options);
+  expect(prepared?.linked.profileId).toBe(ada.id);
+  const { db } = openOpenClawStateDatabase(options);
+  const releaseCatalog = (await prepareUserProfileCatalog(options)).release;
+  const queries = vi.spyOn(db, "prepare");
+  try {
+    expect(prepared?.isCurrent()).toBe(true);
+    expect(queries).not.toHaveBeenCalled();
+    setDisplayName(ada.id, "Updated name", options);
+    setUserProfileRole(ada.id, "admin", options);
+    setUserProfileRole(grace.id, "admin", options);
+    setUserProfileRole(other.id, "admin", otherOptions);
+    linkUserChannelIdentity(ada.id, { ...identity, accountId: "other-bot" }, options);
+    queries.mockClear();
+    expect(prepared?.isCurrent()).toBe(true);
+    expect(queries).not.toHaveBeenCalled();
+    await changeCanonicalUserChannelIdentity("link", ada.id, identity, options);
+    expect(prepared?.isCurrent()).toBe(true);
+    let observedCommitGrant = false;
+    const admissionSpy = probe.admission(operationAdmission, (request, grant, admit) => {
+      admit(request, () => {
+        if (request.stage === "commit") {
+          observedCommitGrant = true;
+          // This executes before the worker receives permission to COMMIT.
+          expect(prepared?.isCurrent()).toBe(false);
+        }
+        return grant();
+      });
+    });
+    try {
+      await changeCanonicalUserChannelIdentity("unlink", ada.id, identity, options);
+      expect(observedCommitGrant).toBe(true);
+    } finally {
+      admissionSpy.mockRestore();
+    }
+    await changeCanonicalUserChannelIdentity("link", ada.id, identity, options);
+    expect(prepared?.isCurrent()).toBe(false);
+    const renewed = await prepareUserChannelIdentityAuthority(identity, options);
+    expect(renewed?.isCurrent()).toBe(true);
+    setUserProfileRole(ada.id, "member", options);
+    setUserProfileRole(ada.id, "admin", options);
+    expect(renewed?.isCurrent()).toBe(false);
+
+    const admin = await prepareUserProfileRoleAuthority(ada.id, options);
+    const rolePolicy = await prepareUserProfileRolePolicyAuthority(ada.id, options);
+    const selectedSource = await prepareUserProfileSelectionAuthority(ada.id, options);
+    const selectedTarget = await prepareUserProfileSelectionAuthority(grace.id, options);
+    expect(admin?.role).toBe("admin");
+    expect(rolePolicy).toMatchObject({ profileId: ada.id, role: "admin" });
+    expect(rolePolicy?.isCurrent()).toBe(true);
+    expect(selectedSource?.isCurrent()).toBe(true);
+    expect(selectedTarget?.isCurrent()).toBe(true);
+    let mutation: "demote" | "reject" | "rollback" | "recover" | "merge" = "demote";
+    let actorCurrent = true;
+    let rejectedBeforeAdmission = false;
+    let rollbackGranted = false;
+    let pendingRole: ReturnType<typeof prepareUserProfileRoleAuthority> | undefined;
+    let pendingSelection: ReturnType<typeof prepareUserProfileSelectionAuthority> | undefined;
+    const mutationAdmissionSpy = probe.admission(operationAdmission, (request, grant, admit) => {
+      if (request.stage === "commit" && mutation === "reject") {
+        actorCurrent = false;
+        rejectedBeforeAdmission = true;
+      }
+      admit(request, () => {
+        if (request.stage === "commit" && mutation === "rollback") {
+          rollbackGranted = true;
+        } else if (request.stage === "commit" && mutation === "demote") {
+          queries.mockClear();
+          expect(admin?.isCurrent()).toBe(false);
+          expect(rolePolicy?.isCurrent()).toBe(false);
+          expect(selectedSource?.isCurrent()).toBe(true);
+          expect(queries).not.toHaveBeenCalled();
+          pendingRole = prepareUserProfileRoleAuthority(ada.id, options);
+          void pendingRole.catch(() => undefined);
+        } else if (request.stage === "commit" && mutation === "merge") {
+          queries.mockClear();
+          expect(selectedSource?.isCurrent()).toBe(false);
+          expect(selectedTarget?.isCurrent()).toBe(true);
+          expect(queries).not.toHaveBeenCalled();
+          pendingSelection = prepareUserProfileSelectionAuthority(ada.id, options);
+          void pendingSelection.catch(() => undefined);
+        }
+        return grant();
+      });
+    });
+    try {
+      await expect(
+        setCanonicalUserProfileRole(ada.id, "member", {
+          ...options,
+          assertCurrent: () => {
+            if (!admin?.isCurrent()) {
+              throw new Error("Administrative authority was revoked");
+            }
+          },
+        }),
+      ).resolves.toMatchObject({ id: ada.id, role: "member" });
+      expect(admin?.isCurrent()).toBe(false);
+      expect(rolePolicy?.isCurrent()).toBe(false);
+      expect(await prepareUserProfileRolePolicyAuthority(ada.id, options)).toMatchObject({
+        profileId: ada.id,
+        role: "member",
+      });
+      expect(selectedSource?.isCurrent()).toBe(true);
+      expect(pendingRole).toBeDefined();
+      await expect(pendingRole).resolves.toMatchObject({ profileId: ada.id, role: "member" });
+
+      setUserProfileRole(ada.id, "admin", options);
+      mutation = "reject";
+      await expect(
+        setCanonicalUserProfileRole(ada.id, "member", {
+          ...options,
+          assertCurrent: () => {
+            if (!actorCurrent) {
+              throw new Error("Original actor was revoked");
+            }
+          },
+        }),
+      ).rejects.toThrow("Original actor was revoked");
+      expect(rejectedBeforeAdmission).toBe(true);
+      expect((await prepareUserProfileRoleAuthority(ada.id, options))?.role).toBe("admin");
+
+      mutation = "rollback";
+      const beforeRollback = getUserProfileDisplay(ada.id, options);
+      runOpenClawStateWriteTransaction(({ db: fixtureDb }) => {
+        // Deferred integrity failure occurs at real COMMIT, after the worker receives its grant.
+        fixtureDb.exec(`
+          CREATE TABLE profile_rollback_parent (id INTEGER PRIMARY KEY);
+          CREATE TABLE profile_rollback_child (
+            parent_id INTEGER REFERENCES profile_rollback_parent(id) DEFERRABLE INITIALLY DEFERRED
+          );
+          CREATE TRIGGER profile_rollback_at_commit AFTER UPDATE OF role ON user_profiles
+          WHEN NEW.role = 'member'
+          BEGIN INSERT INTO profile_rollback_child VALUES (1); END;
+        `);
+      }, options);
+      try {
+        await expect(setCanonicalUserProfileRole(ada.id, "member", options)).rejects.toThrow(
+          /FOREIGN KEY constraint failed/i,
+        );
+        expect(rollbackGranted).toBe(true);
+        expect(resolveUserChannelIdentity(identity, options)?.role).toBe("admin");
+        queries.mockClear();
+        expect(readUserProfileIdentity(ada.id, options)?.role).toBe("admin");
+        expect(getUserProfileDisplay(ada.id, options)).toEqual(beforeRollback);
+        expect(queries).not.toHaveBeenCalled();
+        const afterRollback = await prepareUserProfileRoleAuthority(ada.id, options);
+        expect(afterRollback?.role).toBe("admin");
+        expect(afterRollback?.isCurrent()).toBe(true);
+      } finally {
+        runOpenClawStateWriteTransaction(({ db: fixtureDb }) => {
+          fixtureDb.exec(
+            "DROP TRIGGER profile_rollback_at_commit; DROP TABLE profile_rollback_child; DROP TABLE profile_rollback_parent;",
+          );
+        }, options);
+      }
+      mutation = "recover";
+      await expect(setCanonicalUserProfileRole(ada.id, "member", options)).resolves.toMatchObject({
+        id: ada.id,
+        role: "member",
+      });
+
+      mutation = "merge";
+      const linked = await linkCanonicalUserProfileEmail("ada@example.test", grace.id, options);
+      expect(selectedSource?.isCurrent()).toBe(false);
+      expect(selectedTarget?.isCurrent()).toBe(true);
+      expect(pendingSelection).toBeDefined();
+      await expect(pendingSelection).resolves.toMatchObject({ profileId: grace.id });
+      expect(linked.profile.id).toBe(grace.id);
+      expect(linked.display.id).toBe(linked.profile.id);
+      expect(getUserProfileDisplay(ada.id, options)).toEqual(linked.display);
+      expect(getUserProfileDisplay(grace.id, options)).toEqual(linked.display);
+    } finally {
+      mutationAdmissionSpy.mockRestore();
+      await Promise.allSettled([pendingRole, pendingSelection]);
+    }
+    const latest = await prepareUserChannelIdentityAuthority(identity, options);
+    await closeOpenClawStateDatabaseAsync();
+    expect(latest?.isCurrent()).toBe(false);
+    const reopened = await prepareUserChannelIdentityAuthority(identity, options);
+    expect(reopened?.isCurrent()).toBe(true);
+    expect(latest?.isCurrent()).toBe(false);
+  } finally {
+    queries.mockRestore();
+    releaseCatalog();
+  }
+});
+
+it.each([false, true])(
+  "commits account-scoped links and refuses conflicting assignments (merged=%s)",
+  async (merged) => {
+    const options = stateOptions();
+    const ada = ensureProfileForEmail("ada@example.test", options);
+    const grace = ensureProfileForEmail("grace@example.test", options);
+    const intruder = ensureProfileForEmail("intruder@example.test", options);
+    setUserProfileRole(ada.id, "admin", options);
+    setUserProfileRole(grace.id, "member", options);
+    const revision = readUserProfileAliasRevision();
+    expect(() =>
+      runOpenClawStateWriteTransaction(() => {
+        linkUserChannelIdentity(ada.id, identity, options);
+        expect(readUserProfileAliasRevision()).toBe(revision);
+        throw new Error("rollback");
+      }, options),
+    ).toThrow("rollback");
+    expect(readUserProfileAliasRevision()).toBe(revision);
+    expect(resolveUserChannelIdentity(identity, options)).toBeUndefined();
+    const link = { profileId: ada.id, identity };
+    expect(linkUserChannelIdentity(ada.id, identity, options)).toEqual(link);
+    expect(readUserProfileAliasRevision()).toBe(revision + 1);
+    expect(linkUserChannelIdentity(ada.id, identity, options)).toEqual(link);
+    expect(readUserProfileAliasRevision()).toBe(revision + 1);
+    if (merged) {
+      linkEmail("ada@example.test", grace.id, options);
+    }
+    const profileId = merged ? grace.id : ada.id;
+    await closeOpenClawStateDatabaseAsync();
+    expect(resolveUserChannelIdentity(identity, options)).toMatchObject({
+      profileId,
+      role: merged ? "member" : "admin",
+      emails: merged ? ["ada@example.test", "grace@example.test"] : ["ada@example.test"],
+      loginIdentities: merged ? ["ada@example.test", "grace@example.test"] : ["ada@example.test"],
+    });
+    expect(await listCanonicalUserChannelIdentities(ada.id, options)).toEqual([
+      { profileId, identity },
+    ]);
+    expect(() => linkUserChannelIdentity(intruder.id, identity, options)).toThrow(
+      "linked to another profile",
+    );
+    expect(() => unlinkUserChannelIdentity(intruder.id, identity, options)).toThrow(
+      "linked to another profile",
+    );
+    for (const other of [
+      { ...identity, accountId: "personal-bot" },
+      { ...identity, channelId: "another-channel" },
+    ]) {
+      expect(resolveUserChannelIdentity(other, options)).toBeUndefined();
+      linkUserChannelIdentity(intruder.id, other, options);
+      expect(resolveUserChannelIdentity(other, options)?.profileId).toBe(intruder.id);
+    }
+    const beforeUnlink = readUserProfileAliasRevision();
+    expect(() =>
+      runOpenClawStateWriteTransaction(() => {
+        unlinkUserChannelIdentity(ada.id, identity, options);
+        throw new Error("rollback");
+      }, options),
+    ).toThrow("rollback");
+    expect(readUserProfileAliasRevision()).toBe(beforeUnlink);
+    expect(resolveUserChannelIdentity(identity, options)?.profileId).toBe(profileId);
+    expect(unlinkUserChannelIdentity(ada.id, identity, options)).toBe(true);
+    expect(readUserProfileAliasRevision()).toBe(beforeUnlink + 1);
+    expect(unlinkUserChannelIdentity(ada.id, identity, options)).toBe(false);
+    expect(resolveUserChannelIdentity(identity, options)).toBeUndefined();
+  },
+);
+
+it("reads current roles and only canonical login identities, including the current verified GitHub login", () => {
+  const options = stateOptions();
+  const passkey = ensureProfileForTailscaleIdentity({ login: "ada@passkey" }, options);
+  linkEmail("ada@example.test", passkey.id, options);
+  const profile = syncGitHubIdentity(
+    {
+      identity: { accountId: 123, login: "old-login" },
+      authenticationAlias: { kind: "email", email: "ada@example.test" },
+    },
+    options,
+  );
+  linkUserChannelIdentity(profile.id, identity, options);
+  setUserProfileRole(profile.id, "admin", options);
+  const { db } = openOpenClawStateDatabase(options);
+  executeSqliteQuerySync(
+    db,
+    userProfilesDb(db).insertInto("user_profile_emails").values({
+      email: "old-login@github",
+      profile_id: profile.id,
+      created_at: 1,
+    }),
+  );
+  executeSqliteQuerySync(
+    db,
+    userProfilesDb(db)
+      .insertInto("user_profile_identities")
+      .values([
+        {
+          provider: "github-attribution",
+          subject: "123",
+          profile_id: profile.id,
+          canonical_login: "retired-login",
+          created_at: 1,
+        },
+        {
+          provider: "github-attribution",
+          subject: "456",
+          profile_id: profile.id,
+          canonical_login: null,
+          created_at: 1,
+        },
+      ]),
+  );
+  syncGitHubIdentity(
+    {
+      identity: { accountId: 123, login: "new-login" },
+      authenticationAlias: { kind: "github-login", login: "new-login" },
+    },
+    options,
+  );
+  expect(resolveUserChannelIdentity(identity, options)).toMatchObject({
+    profileId: profile.id,
+    role: "admin",
+    emails: ["ada@example.test", "old-login@github"],
+    githubLogin: "new-login",
+    loginIdentities: ["ada@example.test", "ada@passkey", "new-login@github"],
+  });
+  setUserProfileRole(profile.id, "member", options);
+  expect(resolveUserChannelIdentity(identity, options)?.role).toBe("member");
+  syncGitHubIdentity(
+    {
+      identity: { accountId: 789, login: "new-person" },
+      authenticationAlias: { kind: "email", email: "ada@example.test" },
+    },
+    options,
+  );
+  expect(resolveUserChannelIdentity(identity, options)).toMatchObject({
+    profileId: profile.id,
+    role: "member",
+    emails: ["old-login@github"],
+    loginIdentities: ["ada@passkey", "new-login@github"],
+  });
+});
+
+it("rejects the shared owner and malformed identities without linking a person", async () => {
+  const options = stateOptions();
+  const owner = ensureGatewayOwnerProfile("Owner", options);
+  const profile = ensureProfileForEmail("ada@example.test", options);
+  expect(() => linkUserChannelIdentity(owner.id, identity, options)).toThrow("shared owner");
+  expect(() => linkUserChannelIdentity("missing", identity, options)).toThrow(
+    "user profile not found",
+  );
+  for (const senderId of ["", " trimmed ", "x".repeat(513)]) {
+    expect(() => linkUserChannelIdentity(profile.id, { ...identity, senderId }, options)).toThrow(
+      "invalid channel identity",
+    );
+  }
+  expect(await listCanonicalUserChannelIdentities(profile.id, options)).toEqual([]);
+});

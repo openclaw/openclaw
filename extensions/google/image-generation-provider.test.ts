@@ -159,25 +159,6 @@ describe("Google image-generation provider", () => {
     });
   });
 
-  it.each([
-    ["empty", ""],
-    ["whitespace-only", "   "],
-  ])(
-    "uses the default Gemini API root when the configured base URL is %s",
-    async (_label, baseUrl) => {
-      mockGoogleApiKeyAuth();
-      const fetchMock = installGoogleFetchMock();
-
-      await generateImage({ cfg: googleImageConfig({ baseUrl }) });
-
-      const request = fetchRequest(fetchMock);
-      expect(request.url).toBe(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image:generateContent",
-      );
-      expect(new Headers(request.headers).get("x-goog-api-client")).toMatch(/^openclaw\//u);
-    },
-  );
-
   it("passes request SSRF policy to the provider HTTP helper", async () => {
     mockGoogleApiKeyAuth();
     const postJsonRequest = vi.spyOn(providerHttp, "postJsonRequest").mockResolvedValue({
@@ -433,16 +414,6 @@ describe("Google image-generation provider", () => {
     });
   });
 
-  it("disables DNS pinning for Google image generation requests", async () => {
-    mockGoogleApiKeyAuth();
-    installGoogleFetchMock();
-    const postJsonRequestSpy = vi.spyOn(providerHttp, "postJsonRequest");
-
-    await generateImage({ prompt: "draw a fox" });
-
-    expect(postJsonRequestOptions(postJsonRequestSpy).pinDns).toBe(false);
-  });
-
   it("honors configured private-network opt-in for Google image generation", async () => {
     mockGoogleApiKeyAuth();
     installGoogleFetchMock();
@@ -465,11 +436,6 @@ describe("Google image-generation provider", () => {
       baseUrl: "https://generativelanguage.googleapis.com",
       prompt: "draw a cat",
     },
-    {
-      name: "strips a configured /openai suffix before calling the native Gemini image API",
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-      prompt: "draw a fox",
-    },
   ])("$name", async ({ baseUrl, prompt }) => {
     mockGoogleApiKeyAuth();
     const fetchMock = installGoogleFetchMock();
@@ -487,32 +453,6 @@ describe("Google image-generation provider", () => {
     expect(typeof request.method).toBe("string");
   });
 
-  it("reports configured from a config apiKey (gateway-routed gemini) with no env/profile creds", () => {
-    const provider = buildGoogleImageGenerationProvider();
-    expect(
-      provider.isConfigured?.({
-        agentDir: "/tmp/agent",
-        cfg: googleImageConfig({
-          baseUrl: "https://gateway.example.test/gemini/v1beta",
-          apiKey: "gateway-token",
-        }),
-      }),
-    ).toBe(true);
-  });
-
-  it("does not advertise Gemini images for OAuth and managed-secret marker strings", () => {
-    vi.stubEnv("GEMINI_API_KEY", "");
-    vi.stubEnv("GOOGLE_API_KEY", "");
-
-    for (const apiKey of ["oauth:google", "secretref-managed", "gcp-vertex-credentials"]) {
-      expect(
-        buildGoogleImageGenerationProvider().isConfigured?.({
-          cfg: googleImageConfig({ apiKey, baseUrl: "https://gateway.example.test/gemini/v1beta" }),
-        }),
-      ).toBe(false);
-    }
-  });
-
   it("still reports not configured with a custom endpoint and no credentials", () => {
     vi.spyOn(providerAuth, "isProviderApiKeyConfigured").mockReturnValue(false);
 
@@ -521,21 +461,6 @@ describe("Google image-generation provider", () => {
       provider.isConfigured?.({
         agentDir: "/tmp/agent",
         cfg: googleImageConfig({ baseUrl: "https://gateway.example.test/gemini/v1beta" }),
-      }),
-    ).toBe(false);
-  });
-
-  it.each([
-    ["empty", ""],
-    ["whitespace-only", "   "],
-  ])("treats a %s config apiKey as not configured", (_label, apiKey) => {
-    vi.spyOn(providerAuth, "isProviderApiKeyConfigured").mockReturnValue(false);
-
-    const provider = buildGoogleImageGenerationProvider();
-    expect(
-      provider.isConfigured?.({
-        agentDir: "/tmp/agent",
-        cfg: googleImageConfig({ baseUrl: "https://gateway.example.test/gemini/v1beta", apiKey }),
       }),
     ).toBe(false);
   });

@@ -9,7 +9,14 @@ import type { ConfigSnapshot, ConfigUiHints } from "../../api/types.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { normalizeAgentId } from "../sessions/session-key.ts";
 
-export type ConfigAutoSaveStatus = "idle" | "saving" | "saved" | "error" | "conflict" | "paused";
+export type ConfigAutoSaveStatus =
+  | "idle"
+  | "saving"
+  | "saved"
+  | "rejected"
+  | "error"
+  | "conflict"
+  | "paused";
 
 type RuntimeConfigGatewaySnapshot = {
   client: GatewayBrowserClient | null;
@@ -47,9 +54,6 @@ export function createInitialConfigState(snapshot?: Partial<RuntimeConfigGateway
     configFormOriginal: initialConfigValue<Record<string, unknown> | null>(null),
     configFormDirty: false,
     configFormMode: initialConfigValue<"form" | "raw">("form"),
-    configSearchQuery: "",
-    configActiveSection: initialConfigValue<string | null>(null),
-    configActiveSubsection: initialConfigValue<string | null>(null),
     lastError: initialConfigValue<string | null>(null),
   };
 }
@@ -107,6 +111,7 @@ export type RuntimeConfigGateway = {
 };
 
 export type LoadConfigOptions = {
+  preservePendingChanges?: boolean;
   discardPendingChanges?: boolean;
 };
 
@@ -223,11 +228,8 @@ export function resolveAgentConfigEntryTarget(
       AGENT_CONFIG_ENTRY_ID_PATTERN.test(candidate) &&
       normalizeAgentId(candidate) === normalizedAgentId,
   );
-  if (!entries || !authoredAgentId) {
-    return null;
-  }
-  const entry = entries[authoredAgentId];
-  if (!isRecord(entry)) {
+  const entry = authoredAgentId ? entries?.[authoredAgentId] : undefined;
+  if (!authoredAgentId || !isRecord(entry)) {
     return null;
   }
   return {
@@ -253,6 +255,5 @@ export function agentConfigEntry(
   if (!options.ensure) {
     return null;
   }
-  const path = ["agents", "entries", normalizedAgentId] as const;
-  return { path: [...path], entry: {} };
+  return { path: ["agents", "entries", normalizedAgentId], entry: {} };
 }

@@ -6,9 +6,9 @@ import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { isJavaScriptModulePath } from "./native-module-require.js";
 import { getPluginMetadataSnapshotCache, withPluginCache } from "./plugin-cache.js";
 import { withProfile } from "./plugin-load-profile.js";
-import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import { preparePluginModule } from "./plugin-module-loader-cache.js";
 import { resolvePluginRuntimeArtifact } from "./plugin-runtime-artifact-resolution.js";
 import {
@@ -23,6 +23,9 @@ import type {
 } from "./provider-discovery.js";
 import { resolveDiscoveredProviderPluginIds } from "./providers.js";
 import { resolvePluginProvidersCore } from "./providers.runtime.js";
+import { loadValidatedPublicSurfaceModule } from "./public-surface-loader.js";
+import { resolvePluginRuntimeRecord } from "./runtime-context.js";
+import { getPluginRegistryForContext } from "./runtime/gateway-request-scope.js";
 import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
 import { getPluginRuntimeLoadContext } from "./runtime/load-context.js";
 import type { ProviderPlugin } from "./types.js";
@@ -88,6 +91,34 @@ function loadProviderDiscoveryProviders(manifest: PluginManifestRecord): Provide
         registry,
       })
     : { source: manifest.providerDiscoverySource!, rootDir: manifest.rootDir };
+  const load = (modulePath: string, loadModule: () => ProviderDiscoveryModule) =>
+    normalizeDiscoveryModule(
+      withProfile(
+        { pluginId: manifest.id, source: modulePath },
+        "provider-discovery-entry",
+        loadModule,
+      ),
+    ).map((provider) =>
+      Object.assign({}, provider, { pluginId: manifest.id, pluginRoot: rootDir }),
+    );
+  if (
+    // Native bundled libraries do not bind callbacks; their setup inventory owns SDK resolution.
+    !(manifest.origin === "bundled" && isJavaScriptModulePath(source)) &&
+    registry &&
+    getPluginRegistryForContext() === registry &&
+    resolvePluginRuntimeRecord({ pluginRoot: rootDir, pluginId: manifest.id })?.status === "loaded"
+  ) {
+    // Discovery belongs to the selected generation, including its captured lazy imports.
+    return load(source, () =>
+      loadValidatedPublicSurfaceModule({
+        modulePath: source,
+        boundaryRoot: rootDir,
+        surfaceLabel: `plugin provider discovery ${manifest.id}`,
+        origin: manifest.origin,
+        pluginId: manifest.id,
+      }),
+    );
+  }
   const modulePath = registry
     ? preparePluginModule({
         modulePath: source,
@@ -102,16 +133,9 @@ function loadProviderDiscoveryProviders(manifest: PluginManifestRecord): Provide
       }).modulePath
     : source;
   const moduleLoader = getPluginSetupModuleLoader(manifest, modulePath, rootDir);
-  return moduleLoader.initialize(() => {
-    const loaded = withProfile(
-      { pluginId: manifest.id, source: modulePath },
-      "provider-discovery-entry",
-      () => moduleLoader(modulePath) as ProviderDiscoveryModule,
-    );
-    return normalizeDiscoveryModule(loaded).map((provider) =>
-      Object.assign({}, provider, { pluginId: manifest.id, pluginRoot: rootDir }),
-    );
-  });
+  return moduleLoader.initialize(() =>
+    load(modulePath, () => moduleLoader(modulePath) as ProviderDiscoveryModule),
+  );
 }
 
 function hasLiveProviderDiscoveryHook(provider: ProviderPlugin): boolean {
@@ -190,17 +214,9 @@ function prepareManifestCatalogDiscovery(
   return { providers, runtimeManifestCatalogPluginIds };
 }
 
-function resolveProviderDiscoveryEntryPlugins(params: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  onlyPluginIds?: string[];
-  includeUntrustedWorkspacePlugins?: boolean;
-  requireCompleteDiscoveryEntryCoverage?: boolean;
-  discoveryEntriesOnly?: boolean;
-  includeManifestModelCatalogProviders?: boolean;
-  pluginMetadataSnapshot?: PluginMetadataRegistryView;
-}): ProviderDiscoveryEntryResult {
+function resolveProviderDiscoveryEntryPlugins(
+  params: Omit<ResolveRuntimePluginDiscoveryProvidersParams, "includeSyntheticAuthProviders">,
+): ProviderDiscoveryEntryResult {
   const metadataSnapshot =
     params.pluginMetadataSnapshot ??
     loadManifestMetadataSnapshot({
@@ -353,10 +369,9 @@ export function planPluginDiscoveryRuntime(
         providers: retainSyntheticAuthProviders(runtimeEntryProviders, authProviders),
       };
     }
-    const fullPluginIdSet = new Set(fullPluginIds);
-    retainedProviders = runtimeEntryProviders.filter(
-      (provider) => !provider.pluginId || !fullPluginIdSet.has(provider.pluginId),
-    );
+    // Replace catalogs by provider id below, not by plugin: a mixed owner can
+    // expose a native discovery entry alongside a different runtime provider.
+    retainedProviders = runtimeEntryProviders;
   } else if (entryProviders.length > 0) {
     const entryPluginIds = sortUniqueStrings(
       entryProviders
@@ -397,7 +412,9 @@ export function resolvePluginDiscoveryProvidersRuntime(
       // Runtime owns catalog replacement and its auth pair. A lightweight-only
       // auth contribution survives without keeping a superseded catalog hook.
       providers[index] =
-        provider.resolveSyntheticAuth || provider.prepareSyntheticAuth
+        !params.includeSyntheticAuthProviders ||
+        provider.resolveSyntheticAuth ||
+        provider.prepareSyntheticAuth
           ? provider
           : {
               ...provider,

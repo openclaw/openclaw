@@ -29,7 +29,7 @@ beforeAll(async () => {
             message_id: 42,
             date: 1_700_000_000,
             chat: { id: 123, type: "private" },
-            text: body.text,
+            ...(body.caption !== undefined ? { caption: body.caption } : { text: body.text }),
           },
         }),
       );
@@ -181,7 +181,7 @@ it.each([false, true])(
           skip_entity_detection: true,
           blocks: [
             { type: "paragraph", text: { type: "bold", text: "Working" } },
-            { type: "paragraph", text: { type: "code", text: command } },
+            { type: "paragraph", text: command },
             {
               type: "list",
               items: [
@@ -207,12 +207,52 @@ it.each([false, true])(
         expect(fields.rich_message).toBeUndefined();
         expect(fields.parse_mode).toBe("HTML");
         expect(fields.text).toContain(
-          "<code>printf '&lt;ready&gt;&amp;' &amp;&amp; ./verify --flag=\"&lt;value&gt;\"</code>",
+          "printf '&lt;ready&gt;&amp;' &amp;&amp; ./verify --flag=\"&lt;value&gt;\"",
         );
         expect(fields.text).toContain("[x] Inspect &lt;source&gt; &amp; config");
         expect(fields.text).toContain("[ ] <b>Verify the result (in progress)</b>");
         expect(fields.text).not.toContain("&amp;lt;");
+        expect(fields.text).not.toContain("<code>");
       }
     });
   },
 );
+
+it.each([
+  { name: "nonempty", caption: "Updated **caption**", expected: "Updated <b>caption</b>" },
+  { name: "empty", caption: "", expected: "" },
+])("routes registered $name caption edits to Telegram captions", async ({ caption, expected }) => {
+  await withOpenClawTestState({ prefix: "telegram-action-caption-edit-" }, async () => {
+    resetTelegramClientOptionsCacheForTests();
+    requests.length = 0;
+
+    await telegramPlugin.actions?.handleAction?.({
+      channel: "telegram",
+      action: "edit",
+      cfg: {
+        channels: {
+          telegram: { botToken: "123456:caption-edit", apiRoot, richMessages: true },
+        },
+      },
+      params: {
+        to: "123",
+        messageId: "42",
+        message: "The caption must take precedence over text.",
+        caption,
+      },
+      conversationReadOrigin: "direct-operator",
+    });
+
+    expect(requests).toEqual([
+      {
+        method: "editMessageCaption",
+        fields: {
+          chat_id: "123",
+          message_id: 42,
+          caption: expected,
+          parse_mode: "HTML",
+        },
+      },
+    ]);
+  });
+});

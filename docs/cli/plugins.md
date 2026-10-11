@@ -12,6 +12,19 @@ sidebarTitle: "Plugins"
 
 Manage Gateway plugins, hook packs, and compatible bundles.
 
+Install, uninstall, enable, disable, and reload use their existing Gateway routes
+when a Gateway is running. Local fallbacks require exclusive offline state ownership.
+Stop the Gateway through its service owner before running `plugins update`,
+`plugins registry --refresh`, marketplace feed refreshes, or hook-pack install
+fallbacks. `plugins marketplace entries --offline` reads the saved feed without
+refreshing it. Refused commands report how to retry.
+
+`plugins enable` and `plugins disable` accept case-insensitive plugin IDs, including
+when the Gateway is stopped. Reported IDs retain their manifest spelling; plugin
+policy keys in config use the required lowercase form.
+The same policy applies to live activation and the next Gateway start. Runtime
+IDs and Gateway method names retain the plugin's declared spelling.
+
 <CardGroup cols={2}>
   <Card title="Plugin system" href="/tools/plugin">
     End-user guide for installing, enabling, and troubleshooting plugins.
@@ -35,13 +48,13 @@ Manage Gateway plugins, hook packs, and compatible bundles.
 ```bash
 openclaw plugins list [--enabled] [--verbose] [--json]
 openclaw plugins search <query> [--limit <n>] [--json]
-openclaw plugins install <path-or-spec> [--link] [--force] [--pin] [--accept-capabilities] [--acknowledge-install-policy-warning] [--marketplace <source>]
+openclaw plugins install <path-or-spec> [--link] [--force] [--pin] [--no-enable] [--accept-capabilities] [--acknowledge-install-policy-warning] [--marketplace <source>]
 openclaw plugins inspect <id> [--runtime] [--json]
 openclaw plugins inspect --all [--runtime] [--json]
 openclaw plugins info <id>                    # alias for inspect
 openclaw plugins enable <ids...> [--accept-capabilities]
 openclaw plugins disable <ids...>
-openclaw plugins reload <ids...> [--accept-capabilities] [--json]
+openclaw plugins reload <ids...> [--wait] [--accept-capabilities] [--json]
 openclaw plugins uninstall <ids...> [--dry-run] [--keep-files] [--force]
 openclaw plugins update <ids-or-npm-specs...> | --all [--dry-run]
 openclaw plugins registry [--refresh] [--json]
@@ -64,7 +77,7 @@ In Nix mode (`OPENCLAW_NIX_MODE=1`), `openclaw.json` is immutable. `install`, `u
 </Note>
 
 <Note>
-Bundled plugins ship with OpenClaw. Some are enabled by default (for example bundled model providers, bundled speech providers, and the bundled browser plugin); others require `plugins enable`.
+Bundled plugins ship with OpenClaw. A little over half are enabled by default — mostly model and speech providers, plus a few others such as the bundled browser plugin. Other bundled plugins need explicit enablement or relevant configuration. Enabled does not mean currently in use. Provider use depends on configuration and requests. Providers that require authentication need credentials; keyless providers such as Microsoft speech do not. An enabled entry in `plugins list` does not mean the plugin is doing work.
 
 Native OpenClaw plugins ship `openclaw.plugin.json` with an inline JSON Schema (`configSchema`, even if empty). Compatible bundles use their own bundle manifests instead.
 
@@ -78,7 +91,7 @@ reader job. Open the page that matches your task.
 
 | Page                                                              | Read it when                                                                     |
 | ----------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| [Author plugins](/cli/plugins/authoring)                          | You are scaffolding, building, validating, or packing a plugin project.          |
+| [Author plugins](/cli/plugins/authoring)                          | You are creating, building, validating, or packing a plugin project.             |
 | [Install plugins](/cli/plugins/install)                           | You are installing from ClawHub, npm, git, a path, an archive, or a marketplace. |
 | [List installed plugins](/cli/plugins/list)                       | You want the installed inventory, discovery diagnostics, or the plugin index.    |
 | [Uninstall and update plugins](/cli/plugins/uninstall-and-update) | You are removing or reloading a plugin, or updating its version and source.      |

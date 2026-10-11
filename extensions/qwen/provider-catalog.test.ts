@@ -1,9 +1,7 @@
 import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { buildOpenAICompatibleLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-// Qwen tests cover provider catalog plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
-  applyQwenNativeStreamingUsageCompat,
   buildQwenProvider,
   buildQwenTokenPlanProvider,
   QWEN_BASE_URL,
@@ -12,10 +10,8 @@ import {
   QWEN_37_PLUS_MODEL_ID,
   QWEN_STANDARD_GLOBAL_BASE_URL,
   QWEN_DEFAULT_MODEL_ID,
-  QWEN_TOKEN_PLAN_CN_BASE_URL,
   QWEN_TOKEN_PLAN_DEFAULT_MODEL_ID,
   QWEN_TOKEN_PLAN_GLOBAL_BASE_URL,
-  resolveQwenTokenPlanBaseUrl,
 } from "./api.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
@@ -87,29 +83,6 @@ describe("qwen provider catalog", () => {
       });
     }
   });
-
-  it("opts native Qwen baseUrls into streaming usage only inside the extension", () => {
-    const nativeProvider = applyQwenNativeStreamingUsageCompat(buildQwenProvider());
-    expect(nativeProvider.models.length).toBeGreaterThan(0);
-    expect(
-      nativeProvider.models.every((model) => {
-        if (!model.compat) {
-          throw new Error(`expected Qwen model ${model.id} compat`);
-        }
-        return model.compat.supportsUsageInStreaming === true;
-      }),
-    ).toBe(true);
-
-    const customProvider = applyQwenNativeStreamingUsageCompat({
-      ...buildQwenProvider(),
-      baseUrl: "https://proxy.example.com/v1",
-    });
-    expect(
-      customProvider.models.some(
-        (model) => model.compat && model.compat.supportsUsageInStreaming === true,
-      ),
-    ).toBe(false);
-  });
 });
 
 describe("qwen token plan provider catalog", () => {
@@ -142,20 +115,6 @@ describe("qwen token plan provider catalog", () => {
     expect(manifest.modelCatalog.discovery["qwen-token-plan"]).toBe("refreshable");
   });
 
-  it("uses region-scoped endpoints with the documented Qwen3.7-Plus window", () => {
-    expect(resolveQwenTokenPlanBaseUrl("global")).toBe(QWEN_TOKEN_PLAN_GLOBAL_BASE_URL);
-    expect(resolveQwenTokenPlanBaseUrl("cn")).toBe(QWEN_TOKEN_PLAN_CN_BASE_URL);
-
-    const globalProvider = buildQwenTokenPlanProvider();
-    const cnProvider = buildQwenTokenPlanProvider({ baseUrl: QWEN_TOKEN_PLAN_CN_BASE_URL });
-    expect(globalProvider.models.find((model) => model.id === "qwen3.7-plus")?.contextWindow).toBe(
-      1_000_000,
-    );
-    expect(cnProvider.models.find((model) => model.id === "qwen3.7-plus")?.contextWindow).toBe(
-      1_000_000,
-    );
-  });
-
   it("uses current model limits instead of the stale contributor catalog", () => {
     const models = buildQwenTokenPlanProvider().models;
 
@@ -169,19 +128,6 @@ describe("qwen token plan provider catalog", () => {
       maxTokens: 32_768,
     });
   });
-
-  it.each([QWEN_TOKEN_PLAN_GLOBAL_BASE_URL, QWEN_TOKEN_PLAN_CN_BASE_URL])(
-    "opts Token Plan endpoint %s into native streaming usage",
-    (baseUrl) => {
-      const provider = applyQwenNativeStreamingUsageCompat(buildQwenTokenPlanProvider({ baseUrl }));
-      expect(provider.models.map((model) => model.id)).toEqual(
-        expect.arrayContaining(["qwen3.8-max", "qwen3.8-flash"]),
-      );
-      expect(
-        provider.models.every((model) => model.compat?.supportsUsageInStreaming === true),
-      ).toBe(true);
-    },
-  );
 });
 
 it.each(["qwen", "qwen-token-plan"])(

@@ -16,7 +16,10 @@ import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
 
-function publicationFixture() {
+function publicationFixture({
+  releaseVersion = "2026.9.4",
+  toolingVersion = "2026.9.5",
+}: { releaseVersion?: string; toolingVersion?: string } = {}) {
   const root = realpathSync(createTempDir("release-publish-historical-tooling-"));
   const repository = resolve(".");
   mkdirSync(join(root, "scripts"));
@@ -26,7 +29,7 @@ function publicationFixture() {
   );
   writeFileSync(
     join(root, "CHANGELOG.md"),
-    "# Changelog\n\n## 2026.9.4\n\n### Fixes\n\n- Frozen release fix.\n",
+    `# Changelog\n\n## ${releaseVersion}\n\n### Fixes\n\n- Frozen release fix.\n`,
   );
   const git = (args: string[]) =>
     execFileSync("git", args, {
@@ -50,41 +53,121 @@ function publicationFixture() {
   const targetSha = git(["rev-parse", "HEAD"]);
   writeFileSync(join(root, "CHANGELOG.md"), "Working tree content must not be published.\n");
   mkdirSync(join(root, ".release-harness/scripts/lib"), { recursive: true });
+  writeFileSync(
+    join(root, ".release-harness/package.json"),
+    `${JSON.stringify({ version: toolingVersion }, null, 2)}\n`,
+  );
   for (const source of [
     "scripts/render-github-release-notes.mts",
+    "scripts/tsx.mjs",
+    "scripts/lib/tsx-cli-shim.mjs",
+    "scripts/lib/local-check-runtime.mts",
+    "scripts/lib/managed-cleanup-handoff.mts",
+    "scripts/openclaw-npm-extended-stable-release.mjs",
     "scripts/lib/release-changelog.mjs",
     "scripts/lib/release-notes-compaction.mjs",
+    "scripts/lib/release-version.mjs",
     "scripts/lib/release-publish-children.sh",
   ]) {
     copyFileSync(join(repository, source), join(root, ".release-harness", source));
   }
-  symlinkSync(join(repository, "node_modules"), join(root, "node_modules"), "dir");
+  symlinkSync(
+    join(repository, "scripts/full-release-validation-policy.mjs"),
+    join(root, ".release-harness/scripts/full-release-validation-policy.mjs"),
+  );
+  // Publication installs tooling in the harness, then links the frozen target cwd to it.
+  symlinkSync(join(repository, "node_modules"), join(root, ".release-harness/node_modules"), "dir");
+  symlinkSync(".release-harness/node_modules", join(root, "node_modules"), "dir");
   return { root, repository, targetSha };
 }
 
-it("renders and verifies an old pinned target using trusted publication tooling", () => {
-  const { root, repository, targetSha } = publicationFixture();
-  const workflow = parse(
-    readFileSync(join(repository, ".github/workflows/openclaw-release-publish.yml"), "utf8"),
-  );
-  const prepare = workflow.jobs.publish.steps.find(
-    (step: { name?: string }) => step.name === "Prepare GitHub release notes",
-  );
-  const notes = join(root, "helper-notes.md");
-  const proof = join(root, "proof.md");
-  writeFileSync(proof, `### Release verification\n\n- Source: ${targetSha}\n`);
-  const result = spawnSync(
-    process.platform === "darwin" ? "/bin/bash" : "bash",
-    [
-      "-c",
-      `
+it.each([true, false])(
+  "renders and verifies an old pinned target with manifest present=%s",
+  (hasManifest) => {
+    const { root, repository, targetSha } = publicationFixture();
+    const workflow = parse(
+      readFileSync(join(repository, ".github/workflows/openclaw-release-publish.yml"), "utf8"),
+    );
+    for (const name of [
+      "Dispatch publish workflows",
+      "Start core npm publication",
+      "Complete publish workflows",
+    ]) {
+      const step = workflow.jobs.publish.steps.find(
+        (candidate: { name?: string }) => candidate.name === name,
+      );
+      expect(step?.env.FULL_RELEASE_VALIDATION_MANIFEST_DIR).toBe(
+        "${{ runner.temp }}/full-release-validation-manifest",
+      );
+    }
+    const prepare = workflow.jobs.publish.steps.find(
+      (step: { name?: string }) => step.name === "Prepare GitHub release notes",
+    );
+    const notes = join(root, "helper-notes.md");
+    const proof = join(root, "proof.md");
+    writeFileSync(proof, `### Release verification\n\n- Source: ${targetSha}\n`);
+    if (hasManifest) {
+      writeFileSync(
+        join(root, "full-release-validation-manifest.json"),
+        JSON.stringify({
+          childRuns: {},
+          childEvidence: {},
+          advisoryJobs: [],
+        }),
+      );
+    }
+    const result = spawnSync(
+      process.platform === "darwin" ? "/bin/bash" : "bash",
+      [
+        "-c",
+        `
 set -euo pipefail
 ${prepare.run}
 source "$GITHUB_WORKSPACE/.release-harness/scripts/lib/release-publish-children.sh"
 render_github_release_notes "$NOTES_FILE" "$PROOF_FILE"
 canonical_release_body_matches "$NOTES_FILE"
 `,
-    ],
+      ],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...createNestedGitEnv(),
+          GITHUB_WORKSPACE: root,
+          RUNNER_TEMP: root,
+          GITHUB_REPOSITORY: "fixture/repository",
+          RELEASE_TAG: "v2026.9.4",
+          TARGET_SHA: targetSha,
+          GITHUB_REF: "refs/tags/release-publish/aaaaaaaaaaaa-1",
+          PARENT_WORKFLOW_SHA: "a".repeat(40),
+          NOTES_FILE: notes,
+          PROOF_FILE: proof,
+          RELEASE_EVIDENCE_MODE: "full-release-validation",
+          ...(hasManifest ? { FULL_RELEASE_VALIDATION_MANIFEST_DIR: root } : {}),
+        },
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const prepared = readFileSync(join(root, "release-notes.md"), "utf8");
+    const verified = readFileSync(notes, "utf8");
+    expect(prepared).toContain("Frozen release fix.");
+    expect(verified).toBe(`${prepared}\n\n${readFileSync(proof, "utf8").trimEnd()}`);
+  },
+);
+
+it("renders the extended-stable context through the real publication entry point", () => {
+  const releaseVersion = "2026.8.35";
+  const toolingVersion = "2026.9.5";
+  const { root, repository, targetSha } = publicationFixture({ releaseVersion, toolingVersion });
+  const workflow = parse(
+    readFileSync(join(repository, ".github/workflows/openclaw-release-publish.yml"), "utf8"),
+  );
+  const prepare = workflow.jobs.publish.steps.find(
+    (step: { name?: string }) => step.name === "Prepare GitHub release notes",
+  );
+  const result = spawnSync(
+    process.platform === "darwin" ? "/bin/bash" : "bash",
+    ["-c", prepare.run],
     {
       cwd: root,
       encoding: "utf8",
@@ -92,21 +175,26 @@ canonical_release_body_matches "$NOTES_FILE"
         ...createNestedGitEnv(),
         GITHUB_WORKSPACE: root,
         RUNNER_TEMP: root,
-        GITHUB_REPOSITORY: "fixture/repository",
-        RELEASE_TAG: "v2026.9.4",
+        GITHUB_REPOSITORY: "openclaw/openclaw",
+        RELEASE_TAG: `v${releaseVersion}`,
+        RELEASE_NPM_DIST_TAG: "extended-stable",
         TARGET_SHA: targetSha,
         GITHUB_REF: "refs/tags/release-publish/aaaaaaaaaaaa-1",
         PARENT_WORKFLOW_SHA: "a".repeat(40),
-        NOTES_FILE: notes,
-        PROOF_FILE: proof,
       },
     },
   );
+
   expect(result.status, result.stderr).toBe(0);
-  const prepared = readFileSync(join(root, "release-notes.md"), "utf8");
-  const verified = readFileSync(notes, "utf8");
-  expect(prepared).toContain("Frozen release fix.");
-  expect(verified).toBe(`${prepared}\n\n${readFileSync(proof, "utf8").trimEnd()}`);
+  expect(
+    readFileSync(join(root, "release-notes.md"), "utf8").startsWith(
+      "This is a gateway-only `extended-stable` release, which is our current equivalent to LTS. " +
+        "This release is OpenClaw from the end of August 2026, plus critical security updates, " +
+        "reliability and performance fixes, and features like new model support. " +
+        "The latest version of OpenClaw at the time of this release is " +
+        "[2026.9.5](https://github.com/openclaw/openclaw/releases#release-v2026.9.5)\n\n",
+    ),
+  ).toBe(true);
 });
 
 it.each([
@@ -254,6 +342,7 @@ it.each([
     }),
   );
   writeFileSync(join(root, "manifest.json"), '{"source":"frozen"}');
+  writeFileSync(join(root, "full-release-validation-manifest.json"), "{}");
   writeFileSync(
     join(root, "existing.json"),
     state === "different" ? '{"source":"changed"}' : '{"source":"frozen"}',
@@ -302,6 +391,8 @@ attach_or_verify_release_asset "$RUNNER_TEMP/manifest.json" "$ASSET_NAME"
         PARENT_WORKFLOW_SHA: "a".repeat(40),
         PUBLISH_OPENCLAW_NPM: "true",
         RELEASE_NPM_DIST_TAG: "latest",
+        RELEASE_EVIDENCE_MODE: "full-release-validation",
+        FULL_RELEASE_VALIDATION_MANIFEST_DIR: root,
         ASSET_NAME: assetName,
       },
     },

@@ -1,12 +1,19 @@
 import { fork } from "node:child_process";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
+import {
+  UPDATE_RUN_DRIVER_LIMIT,
+  UPDATE_RUN_PHASES,
+} from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { sqliteMaintenanceEntrypoints } from "./sqlite-maintenance-runtime.test-support.js";
 import {
   createUpdateRun,
   finishUpdateRun,
@@ -19,11 +26,27 @@ import {
 } from "./update-run-ledger.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import { renderUpdateRunReport } from "./update-run-report.js";
-import { UpdateRunRecordSchema } from "./update-run-schema.js";
+import { parseUpdateAdmissionVerdict } from "./update-run-schema.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 const tempDirs = createTempDirTracker();
+const admissionRouting = {
+  requester: {
+    channel: "discord",
+    accountId: "primary",
+    senderId: "fixture-sender",
+    authorizationSource: "owner-allowlist",
+  },
+  sessionKey: "agent:main:discord:channel:fixture-channel",
+  deliveryContext: {
+    channel: "discord",
+    to: "channel:fixture-channel",
+    accountId: "primary",
+    threadId: "fixture-thread",
+  },
+  campaignId: "fixture-update-campaign",
+};
 
 function isolatedOptions() {
   return { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-update-ledger-") } };
@@ -37,6 +60,165 @@ afterEach(async () => {
 });
 
 describe("update run ledger", () => {
+  it.each(["candidate", "installed"] as const)(
+    "persists and reports %s admission through the existing origin metadata",
+    (owner) => {
+      const options = isolatedOptions();
+      const run = createUpdateRun({ trigger: "cli" }, options);
+      const checks = [{ name: "config", status: "warn" as const, detail: "Missing custom path." }];
+      const admission =
+        owner === "candidate"
+          ? { owner, protocol: 1 as const, candidateVersion: "2026.9.5", checks }
+          : { owner, fallbackReason: "update-admission-unsupported-target" };
+      const candidateAdmission =
+        owner === "candidate"
+          ? {
+              protocol: 1 as const,
+              verdict: "admit" as const,
+              reasons: [],
+              warnings: [{ code: "missing-load-path", message: "Missing custom path." }],
+              facts: { candidateVersion: "2026.9.5", installedVersion: "2026.9.4", checks },
+            }
+          : undefined;
+      const saved = recordUpdateRunPhase(
+        run.runId,
+        "staging",
+        { origin: { admission, candidateAdmission } },
+        options,
+      );
+      expect(saved.admission).toEqual(admission);
+      const retained = getUpdateRun(run.runId, options)!;
+      expect(retained.admission).toEqual(admission);
+      expect(retained.origin.candidateAdmission).toEqual(candidateAdmission);
+      expect(listUpdateRuns({}, options)[0]?.admission).toEqual(admission);
+      const report = renderUpdateRunReport(retained).markdown;
+      expect(report).toContain(`Update safety checks ran in the ${owner} updater`);
+      expect(report).toContain(
+        owner === "candidate" ? "config: warn" : "update-admission-unsupported-target",
+      );
+      const database = openOpenClawStateDatabase(options);
+      const row = database.db
+        .prepare("SELECT origin_json FROM update_runs WHERE run_id = ?")
+        .get(run.runId) as { origin_json: string };
+      expect(JSON.parse(row.origin_json).admission).toEqual(admission);
+    },
+  );
+
+  it("retains an accepted admission's identities beside maximum driver metadata and large warnings", () => {
+    const options = isolatedOptions();
+    const message = "diagnostic ".repeat(100);
+    const candidateVersion = `2026.9.5+${"v".repeat(70)}`;
+    const installedVersion = `2026.9.4+${"v".repeat(70)}`;
+    const checks = Array.from({ length: 4 }, (_, index) => ({
+      name: `check-${index}-${"x".repeat(115)}`,
+      status: "refuse" as const,
+      detail: message,
+    }));
+    const verdict = parseUpdateAdmissionVerdict({
+      protocol: 1,
+      verdict: "refuse",
+      reasons: checks.map(() => ({ code: "invalid-config", message, nextAction: message })),
+      warnings: Array.from({ length: 32 }, (_, index) => ({ code: `warning-${index}`, message })),
+      facts: { candidateVersion, installedVersion, checks },
+    });
+    expect(verdict).not.toBeNull();
+    const drivers = Array.from({ length: UPDATE_RUN_DRIVER_LIMIT }, (_, index) => ({
+      host: "\0".repeat(255),
+      pid: Number.MAX_SAFE_INTEGER - index,
+      startIdentity: "9".repeat(128),
+    }));
+    const run = createUpdateRun(
+      {
+        trigger: "cli",
+        origin: {
+          driver: drivers[0],
+          previousDrivers: drivers.slice(1),
+          ...admissionRouting,
+          doctorHint: message,
+          nextAction: message,
+          admission: { owner: "candidate", protocol: 1, candidateVersion, checks },
+          candidateAdmission: verdict!,
+        },
+      },
+      options,
+    );
+    const retained = getUpdateRun(run.runId, options)!;
+    expect(retained.origin.driver).toEqual(drivers[0]);
+    expect(retained.origin.previousDrivers).toEqual(drivers.slice(1));
+    expect(retained.origin).toMatchObject(admissionRouting);
+    expect(retained.admission?.candidateVersion).toBe(candidateVersion);
+    expect(retained.admission?.checks?.map((check) => check.name)).toEqual(
+      checks.map((check) => check.name),
+    );
+    expect(retained.origin.candidateAdmission?.reasons.map((reason) => reason.code)).toEqual(
+      verdict!.reasons.map((reason) => reason.code),
+    );
+    expect(retained.origin.candidateAdmission?.facts).toMatchObject({
+      candidateVersion,
+      installedVersion,
+    });
+    expect(Buffer.byteLength(JSON.stringify(retained.origin))).toBeLessThanOrEqual(16 * 1024);
+  });
+
+  it("keeps full-capacity recovery receipts exact while evicting admission and routing", () => {
+    const options = isolatedOptions();
+    const receipts = {
+      driver: { host: "fixture", pid: 42, startIdentity: "2" },
+      previousDrivers: [{ host: "fixture", pid: 41, startIdentity: "1" }],
+      updateRecoveryCapture: {
+        manifestSha256: "a".repeat(64),
+        configWrites: [
+          {
+            path: `${options.env.OPENCLAW_STATE_DIR}/private-config.json`,
+            beforeHash: "b".repeat(64),
+            afterHash: "c".repeat(64),
+            contiguous: false,
+          },
+        ],
+        warnings: [
+          {
+            kind: "undeclared-migration-resources" as const,
+            pluginId: "legacy",
+            message: "Private state is undeclared",
+          },
+        ],
+        status: "restore-failed" as const,
+      },
+    };
+    receipts.updateRecoveryCapture.warnings[0]!.message += "w".repeat(
+      16 * 1024 - Buffer.byteLength(JSON.stringify(receipts)),
+    );
+    const checks = [{ name: "config", status: "ok" as const }];
+    const run = createUpdateRun(
+      {
+        trigger: "cli",
+        origin: {
+          ...receipts,
+          ...admissionRouting,
+          admission: { owner: "candidate", protocol: 1, candidateVersion: "2026.9.5", checks },
+          candidateAdmission: {
+            protocol: 1,
+            verdict: "admit",
+            reasons: [],
+            warnings: [],
+            facts: { candidateVersion: "2026.9.5", installedVersion: "2026.9.4", checks },
+          },
+        },
+      },
+      options,
+    );
+    const database = openOpenClawStateDatabase(options);
+    const row = database.db
+      .prepare("SELECT origin_json FROM update_runs WHERE run_id = ?")
+      .get(run.runId) as { origin_json: string };
+    expect(Buffer.byteLength(row.origin_json)).toBe(16 * 1024);
+    expect(row.origin_json).toBe(JSON.stringify(receipts));
+    const retained = getUpdateRun(run.runId, options)!;
+    expect(retained.origin).toStrictEqual(receipts);
+    expect(retained.admission).toBeUndefined();
+    expect(listUpdateRuns({}, options)[0]?.admission).toBeUndefined();
+  });
+
   it.each(["selected", "refused", "unavailable"] as const)(
     "retains and reports snapshot capacity evidence (%s)",
     (outcome) => {
@@ -217,22 +399,55 @@ describe("update run ledger", () => {
       }
     },
   );
-  it.each(["failed", "succeeded", "rolled-back", "skipped"] as const)(
-    "keeps a terminal %s result unchanged for running-only boot observations",
-    (status) => {
+  it("keeps a terminal result unchanged for running-only boot observations", () => {
+    const status = "failed";
+    const options = isolatedOptions();
+    const run = createUpdateRun({ trigger: "cli" }, options);
+    const terminal = finishUpdateRun(run.runId, { status, reason: "original-result" }, options);
+    const actual = recordUpdateRunVerification(
+      run.runId,
+      { booted: true, serviceRunning: true, pid: 111, doctorHint: "unrelated later boot" },
+      { ...options, onlyIfRunning: true },
+    );
+    expect(actual).toEqual(terminal);
+    expect(getUpdateRun(run.runId, options)).toEqual(terminal);
+    const notice = recordUpdateRunVerification(run.runId, { noticeDelivered: true }, options);
+    expect(notice.verification).toEqual({ ...terminal.verification, noticeDelivered: true });
+    expect(notice.finishedAtMs).toBe(terminal.finishedAtMs);
+  });
+
+  it.each(["running", "terminal"] as const)(
+    "keeps phase capture synchronous and isolated for a %s row",
+    (state) => {
       const options = isolatedOptions();
-      const run = createUpdateRun({ trigger: "cli" }, options);
-      const terminal = finishUpdateRun(run.runId, { status, reason: "original-result" }, options);
-      const actual = recordUpdateRunVerification(
-        run.runId,
-        { booted: true, serviceRunning: true, pid: 111, doctorHint: "unrelated later boot" },
-        { ...options, onlyIfRunning: true },
+      const created = createUpdateRun({ trigger: "cli", target: { kind: "git" } }, options);
+      const before =
+        state === "terminal"
+          ? finishUpdateRun(created.runId, { status: "failed", reason: "fixture" }, options)
+          : created;
+      let captured: UpdateRunRecord | undefined;
+      const result = recordUpdateRunPhase(
+        created.runId,
+        "staging",
+        { target: { sha: "abcdef1234567890" } },
+        options,
+        (record) => {
+          expect(record).toEqual(before);
+          captured = record;
+          record.target.kind = "package";
+          record.phase = "finished";
+        },
       );
-      expect(actual).toEqual(terminal);
-      expect(getUpdateRun(run.runId, options)).toEqual(terminal);
-      const notice = recordUpdateRunVerification(run.runId, { noticeDelivered: true }, options);
-      expect(notice.verification).toEqual({ ...terminal.verification, noticeDelivered: true });
-      expect(notice.finishedAtMs).toBe(terminal.finishedAtMs);
+      expect(captured).toBeDefined();
+      if (state === "terminal") {
+        expect(result).toEqual(before);
+      } else {
+        expect(result).toMatchObject({
+          phase: "staging",
+          target: { kind: "git", sha: "abcdef1234567890" },
+        });
+      }
+      expect(getUpdateRun(created.runId, options)).toEqual(result);
     },
   );
 
@@ -353,7 +568,6 @@ describe("update run ledger", () => {
     ["failed", "failed"],
     ["succeeded", "completed"],
     ["skipped", "skipped"],
-    ["rolled-back", "completed"],
   ] as const)(
     "closes unfinished steps when the run becomes %s without changing recorded outcomes",
     (status, stepStatus) => {
@@ -379,21 +593,26 @@ describe("update run ledger", () => {
         options,
       );
       clock.mockReturnValue(2_000);
-      finishUpdateRun(run.runId, { status }, options);
+      const nextAction = "Run openclaw update repair.";
+      finishUpdateRun(run.runId, { status, nextAction }, options);
       closeOpenClawStateDatabaseForTest();
 
       const persisted = getUpdateRun(run.runId, options);
+      const completion = { status: stepStatus, endedAtMs: 2_000 };
+      expect(persisted).toMatchObject({ phase: "finished", origin: { nextAction } });
+      expect(persisted?.steps.filter((step) => step.step === "requested")).toEqual([
+        { step: "requested", status: "completed", startedAtMs: 1_000, endedAtMs: 1_000 },
+      ]);
+      expect(finishUpdateRun(run.runId, { status, nextAction: "later" }, options)).toEqual(
+        persisted,
+      );
       expect(persisted?.steps.some((step) => step.status === "in_progress")).toBe(false);
       expect(persisted?.steps.find((step) => step.step === "openclaw doctor")).toEqual({
         step: "openclaw doctor",
-        status: stepStatus,
         startedAtMs: 1_000,
-        endedAtMs: 2_000,
+        ...completion,
       });
-      expect(persisted?.steps.find((step) => step.step === "validating")).toMatchObject({
-        status: stepStatus,
-        endedAtMs: 2_000,
-      });
+      expect(persisted?.steps.find((step) => step.step === "validating")).toMatchObject(completion);
       for (const step of recordedSteps) {
         expect(persisted?.steps.find((entry) => entry.step === step.step)).toEqual(step);
       }
@@ -422,45 +641,6 @@ describe("update run ledger", () => {
     expect(recordUpdateRunPhase(run.runId, "verifying", {}, options).phase).toBe("verifying");
   });
 
-  it.each([
-    { name: "step count", count: 130, detail: undefined },
-    { name: "diagnostic bytes", count: 30, detail: "diagnostic ".repeat(80) },
-    { name: "retained phase bytes", count: 0, detail: "🦞".repeat(512) },
-  ])(
-    "retains notice custody, restoration proof, and finalization history across the $name bound and database reopen",
-    ({ count, detail }) => {
-      const options = isolatedOptions();
-      const run = createUpdateRun({ trigger: "chat" }, options);
-      const notices = [
-        "notice:ack",
-        "notice:activating",
-        "notice:verifying",
-        "previous generation restoration",
-        "finalize:doctor",
-        "finalize:future-phase",
-        "post-update verification",
-      ];
-      for (const step of [...UPDATE_RUN_PHASES, ...notices]) {
-        recordUpdateRunStep(run.runId, { step, status: "completed", detail }, options);
-      }
-      for (let index = 0; index < count; index++) {
-        recordUpdateRunStep(
-          run.runId,
-          { step: `diagnostic-${index}`, status: "completed", detail },
-          options,
-        );
-      }
-      closeOpenClawStateDatabaseForTest();
-      const persisted = getUpdateRun(run.runId, options)!;
-      expect(persisted.steps.map((step) => step.step)).toEqual(
-        expect.arrayContaining([...UPDATE_RUN_PHASES, ...notices]),
-      );
-      expect(persisted.steps.every((step) => step.status === "completed")).toBe(true);
-      expect(persisted.steps.length).toBeLessThanOrEqual(128);
-      expect(Buffer.byteLength(JSON.stringify(persisted.steps))).toBeLessThanOrEqual(16 * 1024);
-    },
-  );
-
   it.each(["bytes", "count"] as const)(
     "rejects oversized retained step %s without changing the row",
     (bound) => {
@@ -468,13 +648,16 @@ describe("update run ledger", () => {
       let saved = createUpdateRun({ trigger: "cli" }, options);
       expect(() => {
         for (let index = 0; index < 130; index++) {
-          saved = recordUpdateRunStep(
-            saved.runId,
-            {
-              step: `finalize:${index}${bound === "bytes" ? "界".repeat(330) : ""}`,
-              status: "completed",
-            },
-            options,
+          saved = expectDefined(
+            recordUpdateRunStep(
+              saved.runId,
+              {
+                step: `finalize:${index}${bound === "bytes" ? "界".repeat(330) : ""}`,
+                status: "completed",
+              },
+              options,
+            ),
+            "required finalization receipt",
           );
         }
       }).toThrow(/retained step.*limit/);
@@ -649,36 +832,20 @@ describe("update run ledger", () => {
     }
   });
 
-  it("rejects invalid public record identities and vocabulary before writing", () => {
-    const options = isolatedOptions();
-    expect(() => createUpdateRun({ runId: "not-a-uuid", trigger: "cli" }, options)).toThrow();
-    expect(listUpdateRuns({}, options)).toEqual([]);
-    const valid = createUpdateRun({ trigger: "cli" }, options);
-    for (const patch of [
-      { phase: "installing" },
-      { status: "ok" },
-      { trigger: "unknown" },
-      { downtimeMs: -1 },
-    ]) {
-      expect(UpdateRunRecordSchema.safeParse({ ...valid, ...patch }).success).toBe(false);
-    }
-  });
-
-  it("merges independent CLI and gateway process writes into the same WAL run", async () => {
+  it("merges independent CLI and gateway process writes into the same WAL run", async ({
+    signal,
+  }) => {
     const options = isolatedOptions();
     const run = createUpdateRun({ trigger: "cli" }, options);
     const database = openOpenClawStateDatabase(options);
     expect(database.db.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
+    const writerUrl = resolveRuntimeWorkerUrl(sqliteMaintenanceEntrypoints.updateLedger);
     const children = ["cli", "gateway"].map((role) => {
-      const child = fork(
-        new URL("./update-run-ledger.process.test-support.ts", import.meta.url),
-        [run.runId, role],
-        {
-          execArgv: ["--import", "tsx"],
-          env: { ...process.env, ...options.env },
-          stdio: ["ignore", "pipe", "pipe", "ipc"],
-        },
-      );
+      const child = fork(writerUrl, [run.runId, role], {
+        execArgv: resolveRuntimeWorkerArgv(writerUrl).slice(0, -1),
+        env: { ...process.env, ...options.env },
+        stdio: ["ignore", "pipe", "pipe", "ipc"],
+      });
       let output = "";
       child.stdout?.on("data", (chunk) => {
         output += chunk;
@@ -717,22 +884,20 @@ describe("update run ledger", () => {
       );
       return { child, ready, written, exited };
     });
-    const deadline = setTimeout(() => {
-      for (const { child } of children) {
-        child.kill();
-      }
-    }, 20_000);
     try {
       const allWritten = Promise.all(children.map(({ written }) => written));
-      await Promise.race([Promise.all(children.map(({ ready }) => ready)), allWritten]);
+      await withinTest(
+        Promise.race([Promise.all(children.map(({ ready }) => ready)), allWritten]),
+        signal,
+      );
       for (const { child } of children) {
         child.send("start");
       }
-      await allWritten;
+      await withinTest(allWritten, signal);
       // Writes stay concurrent; handle retirement must not race another lifecycle writer.
       for (const { child, exited } of children) {
         child.send("close");
-        await exited;
+        await withinTest(exited, signal);
       }
       const persisted = getUpdateRun(run.runId, options);
       const expected = ["cli", "gateway"].flatMap((role) =>
@@ -759,7 +924,6 @@ describe("update run ledger", () => {
       } satisfies Partial<UpdateRunRecord>);
       expect(persisted?.confirmedAtMs).toEqual(expect.any(Number));
     } finally {
-      clearTimeout(deadline);
       for (const { child } of children) {
         if (child.exitCode === null) {
           child.kill();

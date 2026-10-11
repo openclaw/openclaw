@@ -5,6 +5,7 @@ import {
   type AgentMessage,
   type EmbeddedRunAttemptParamsV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { applyCodexTranscriptTaint } from "./transcript-mirror-attestation.js";
 import { codexTranscriptMirrorRuntime } from "./transcript-mirror.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
@@ -21,8 +22,7 @@ export class CodexTranscriptCheckpoint {
   private lastTimestamp = 0;
   private writing = Promise.resolve();
   private tainted = false;
-  private closed = false;
-  private abandoned = false;
+  private state: "open" | "closed" | "abandoned" = "open";
 
   constructor(
     private readonly params: EmbeddedRunAttemptParamsV2,
@@ -57,21 +57,21 @@ export class CodexTranscriptCheckpoint {
   };
 
   enqueue = (entry: CodexTranscriptCheckpointEntry): void => {
-    if (this.params.sessionTarget && !this.closed) {
+    if (this.params.sessionTarget && this.state === "open") {
       this.pending.push(entry);
     }
   };
 
   abandon(): void {
-    this.closed = this.abandoned = true;
+    this.state = "abandoned";
     this.pending.length = 0;
   }
 
   flush(close = false): Promise<void> {
-    if (this.closed) {
+    if (this.state !== "open") {
       return this.writing;
     }
-    this.closed = close;
+    this.state = close ? "closed" : "open";
     this.writing = this.writing.then(async () => {
       // An unfinished commentary item or linked raw patch output owns its place
       // in history. Later work cannot overtake it; teardown records what arrived.
@@ -95,11 +95,11 @@ export class CodexTranscriptCheckpoint {
       });
       try {
         await codexTranscriptMirrorRuntime.mirror({
-          assertWriteCurrent: () => {
-            if (this.abandoned) {
+          assertWriteCurrent: createNativeSessionBindingAuthority([], () => {
+            if (this.state === "abandoned") {
               throw new Error("Codex transcript checkpoint was retired before write");
             }
-          },
+          }).assertLegacyCurrent,
           ...this.params.sessionTarget,
           sessionId: this.params.sessionId,
           cwd: this.params.workspaceDir,

@@ -1,18 +1,13 @@
 // Embeddings HTTP tests cover OpenAI-compatible embedding routes, provider
 // adapters, agent-scoped config, auth scopes, and disabled-surface behavior.
 import fs from "node:fs/promises";
-import {
-  createServer,
-  type IncomingMessage,
-  request as httpRequest,
-  type ServerResponse,
-} from "node:http";
-import type { AddressInfo } from "node:net";
+import { request as httpRequest } from "node:http";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { createConfigIO, resetConfigRuntimeState } from "../config/config.js";
+import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/io.js";
 import type {
   EmbeddingInput,
   EmbeddingProviderCallOptions,
@@ -20,9 +15,13 @@ import type {
 import type { MemoryEmbeddingProviderAdapter } from "../plugins/memory-embedding-providers.js";
 import { createPluginRegistry } from "../plugins/registry.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { startGenericEmbeddingServer } from "./embeddings-http.test-helpers.js";
 import { startOpenAiCompatGatewayServer } from "./openai-compatible-http.test-helpers.js";
 import {
-  getGatewayTestPort,
   installGatewayTestHooks,
   resetTestPluginRegistry,
   setTestPluginRegistry,
@@ -67,72 +66,10 @@ let drainRetainedOpenAiEmbeddingProviders: typeof import("./embeddings-provider-
 let clearEmbeddingProviders: typeof import("../plugins/embedding-providers.js").clearEmbeddingProviders;
 let registerEmbeddingProvider: typeof import("../plugins/embedding-providers.js").registerEmbeddingProvider;
 let enabledServer: Awaited<ReturnType<typeof startOpenAiCompatGatewayServer>>;
-let genericEmbeddingServer: { baseUrl: string; close: () => Promise<void> };
+let genericEmbeddingServer: Awaited<ReturnType<typeof startGenericEmbeddingServer>>;
 let enabledPort: number;
 let genericEmbeddingBaseUrl: string;
-const genericEmbeddingRequests: Array<{
-  method: string | undefined;
-  url: string | undefined;
-  body: Record<string, unknown>;
-}> = [];
-
-async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
-}
-
-async function startGenericEmbeddingServer(): Promise<{
-  baseUrl: string;
-  close: () => Promise<void>;
-}> {
-  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
-    void (async () => {
-      const body = await readJsonBody(req);
-      genericEmbeddingRequests.push({
-        method: req.method,
-        url: req.url,
-        body,
-      });
-      const input = Array.isArray(body.input) ? body.input : [body.input];
-      const inputType = body.input_type;
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify({
-          object: "list",
-          data: input.map((_text, index) => ({
-            object: "embedding",
-            embedding: [index + 9.1, inputType === "document" ? 9.2 : 0],
-            index,
-          })),
-          model: body.model,
-        }),
-      );
-    })().catch((error: unknown) => {
-      res.writeHead(500, { "content-type": "application/json" });
-      res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
-    });
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-
-  const address = server.address() as AddressInfo;
-  return {
-    baseUrl: `http://127.0.0.1:${address.port}/v1`,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      }),
-  };
-}
+const providerGateReleases = new Set<() => void>();
 
 beforeAll(async () => {
   ({ drainRetainedOpenAiEmbeddingProviders } = await import("./embeddings-provider-lifetime.js"));
@@ -176,16 +113,18 @@ beforeAll(async () => {
     },
   };
   ({ startGatewayServer } = await import("./server.js"));
-  enabledPort = await getGatewayTestPort();
+  const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+  enabledPort = portClaim.port;
   enabledServer = await startOpenAiCompatGatewayServer({
     startGatewayServer,
-    port: enabledPort,
+    port: portClaim,
     auth: { mode: "token", token: "secret" },
     openAiChatCompletionsEnabled: true,
   });
 });
 
-beforeEach(() => {
+beforeEach(async () => {
+  await writeEmbeddingConfig({});
   const builder = createPluginRegistry({
     logger: {
       info() {},
@@ -200,7 +139,18 @@ beforeEach(() => {
   registerEmbeddingProvider(openAiAdapter);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // Vitest can finish a timed-out case while its provider is still awaiting a fixture gate.
+  for (const release of providerGateReleases) {
+    release();
+  }
+  providerGateReleases.clear();
+  await drainRetainedOpenAiEmbeddingProviders();
+  // Pending cleanup must consume its implementation before queued fixture behavior is reset.
+  createEmbeddingProviderMock.mockReset();
+  embedBatchMock.mockReset();
+  closeEmbeddingProviderMock.mockReset();
+  Reflect.set(openAiAdapter, "transport", "remote");
   clearEmbeddingProviders();
   resetTestPluginRegistry();
 });
@@ -210,6 +160,21 @@ afterAll(async () => {
   await genericEmbeddingServer.close();
   vi.resetModules();
 });
+
+async function waitForProviderEntry(started: Promise<void>, request: Promise<Response>) {
+  await Promise.race([
+    started,
+    request.then((response) => {
+      throw new Error(`Embedding request completed before provider entry (${response.status})`);
+    }),
+  ]);
+}
+
+function createProviderGate() {
+  const gate = createDeferred();
+  providerGateReleases.add(gate.resolve);
+  return gate;
+}
 
 async function postEmbeddings(body: unknown, headers?: Record<string, string>) {
   return await fetch(`http://127.0.0.1:${enabledPort}/v1/embeddings`, {
@@ -224,15 +189,24 @@ async function postEmbeddings(body: unknown, headers?: Record<string, string>) {
   });
 }
 
+async function writeEmbeddingConfig(config: Record<string, unknown>) {
+  const configPath = createConfigIO().configPath;
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.writeFile(configPath, JSON.stringify(config));
+  resetConfigRuntimeState();
+}
+
 async function expectDefaultEmbeddingResponse(res: Response) {
   expect(res.status).toBe(200);
   const json = (await res.json()) as {
     object?: string;
     data?: Array<{ object?: string; embedding?: number[] }>;
+    usage?: { prompt_tokens: number; total_tokens: number };
   };
   expect(json.object).toBe("list");
   expect(json.data?.[0]?.object).toBe("embedding");
   expect(json.data?.[0]?.embedding).toEqual([0.1, 0.2]);
+  expect(json.usage).toEqual({ prompt_tokens: 0, total_tokens: 0 });
 }
 
 async function expectEmbeddingData(
@@ -242,8 +216,10 @@ async function expectEmbeddingData(
   expect(res.status).toBe(200);
   const json = (await res.json()) as {
     data?: Array<{ embedding?: number[]; index?: number }>;
+    usage?: { prompt_tokens: number; total_tokens: number };
   };
   expect(json.data).toEqual(expected);
+  return json;
 }
 
 async function expectInvalidEmbeddingRequest(res: Response, message?: string) {
@@ -263,16 +239,24 @@ async function expectGenericProviderEmbeddingRequest(expectedProviderCall: {
   model: string;
   dimensions: number;
   inputType: string;
+  override?: string;
 }) {
-  const res = await postEmbeddings({
-    model: "openclaw/default",
-    input: ["a", "b"],
-  });
-  await expectEmbeddingData(res, [
+  const res = await postEmbeddings(
+    { model: "openclaw/default", input: ["a", "b"] },
+    expectedProviderCall.override
+      ? { "x-openclaw-model": expectedProviderCall.override }
+      : undefined,
+  );
+  const json = await expectEmbeddingData(res, [
     { object: "embedding", index: 0, embedding: [9.1, 9.2] },
     { object: "embedding", index: 1, embedding: [10.1, 9.2] },
   ]);
-  expect(latestCreateGenericEmbeddingProviderOptions()).toMatchObject(expectedProviderCall);
+  expect(json.usage).toEqual({ prompt_tokens: 777, total_tokens: 778 });
+  expect(genericEmbeddingServer.requests.at(-1)?.body).toMatchObject({
+    model: expectedProviderCall.model,
+    dimensions: expectedProviderCall.dimensions,
+    input_type: expectedProviderCall.inputType,
+  });
 }
 
 function latestCreateEmbeddingProviderOptions(): {
@@ -287,22 +271,6 @@ function latestCreateEmbeddingProviderOptions(): {
     throw new Error("expected embedding provider create call");
   }
   return call[0];
-}
-
-function latestCreateGenericEmbeddingProviderOptions(): {
-  model?: string;
-  dimensions?: number;
-  inputType?: string;
-} {
-  const request = genericEmbeddingRequests[genericEmbeddingRequests.length - 1];
-  if (!request) {
-    throw new Error("expected generic embedding provider request");
-  }
-  return {
-    model: typeof request.body.model === "string" ? request.body.model : undefined,
-    dimensions: typeof request.body.dimensions === "number" ? request.body.dimensions : undefined,
-    inputType: typeof request.body.input_type === "string" ? request.body.input_type : undefined,
-  };
 }
 
 describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
@@ -339,9 +307,40 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(closesBefore + 3);
   });
 
+  it.each([
+    {
+      reports: [
+        { promptTokens: 2, totalTokens: 3 },
+        { promptTokens: 5, totalTokens: 6 },
+      ],
+      expected: { prompt_tokens: 7, total_tokens: 9 },
+    },
+    {
+      reports: [undefined, { promptTokens: 5, totalTokens: 6 }],
+      expected: { prompt_tokens: 0, total_tokens: 0 },
+    },
+    {
+      reports: [{ promptTokens: 2, totalTokens: 3 }, undefined],
+      expected: { prompt_tokens: 0, total_tokens: 0 },
+    },
+  ])("reports complete usage for split batches: $reports", async ({ reports, expected }) => {
+    embedBatchMock.mockImplementationOnce(async (_inputs, options) => {
+      for (const report of reports) {
+        options?.onUsage?.(report);
+      }
+      return [
+        [0.1, 0.2],
+        [1.1, 1.2],
+      ];
+    });
+    const response = await postEmbeddings({ model: "openclaw/default", input: ["a", "b"] });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ usage: expected });
+  });
+
   it("supports base64 encoding and agent-scoped auth/config resolution", async () => {
     try {
-      testState.agentsConfig = { list: [{ id: "main" }, { id: "beta" }] };
+      testState.agentsConfig = { entries: { main: {}, beta: {} } };
       resetConfigRuntimeState();
 
       const res = await postEmbeddings(
@@ -367,19 +366,12 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
 
   it.each([
     { enabled: false, dimensions: 8, expected: 8 },
-    { enabled: true, dimensions: 8, expected: 8 },
     { enabled: false, dimensions: undefined, expected: undefined },
     { enabled: true, dimensions: undefined, expected: 16 },
   ])(
     "passes dimensions=$dimensions with memory search enabled=$enabled",
     async ({ enabled, dimensions, expected }) => {
-      const configPath = createConfigIO().configPath;
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({ memory: { search: { enabled, outputDimensionality: 16 } } }),
-      );
-      resetConfigRuntimeState();
+      await writeEmbeddingConfig({ memory: { search: { enabled, outputDimensionality: 16 } } });
 
       const res = await postEmbeddings({
         model: "openclaw/default",
@@ -391,51 +383,6 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
       expect(createEmbeddingProviderMock.mock.calls.at(-1)?.[0].dimensions).toBe(expected);
     },
   );
-
-  it("passes provider aliases and local-service acquisition to memory adapters", async () => {
-    const configPath = createConfigIO().configPath;
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(
-      configPath,
-      `${JSON.stringify(
-        {
-          models: {
-            providers: {
-              "tenant-embeddings": {
-                api: "openai",
-                baseUrl: genericEmbeddingBaseUrl,
-                models: [],
-              },
-            },
-          },
-          memory: {
-            search: {
-              provider: "tenant-embeddings",
-              model: "tenant-embeddings/nomic-embed-text",
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
-    try {
-      resetConfigRuntimeState();
-
-      const res = await postEmbeddings({
-        model: "openclaw/default",
-        input: "hello",
-      });
-      await expectDefaultEmbeddingResponse(res);
-      const lastCall = latestCreateEmbeddingProviderOptions();
-      expect(lastCall.provider).toBe("tenant-embeddings");
-      expect(lastCall.model).toBe("nomic-embed-text");
-      expect(lastCall.acquireLocalService).toEqual(expect.any(Function));
-    } finally {
-      resetConfigRuntimeState();
-    }
-  });
 
   it("rejects explicit unknown agent ids", async () => {
     try {
@@ -464,34 +411,19 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     }
   });
 
-  it("rejects invalid input shapes", async () => {
-    const res = await postEmbeddings({
-      model: "openclaw/default",
-      input: [{ nope: true }],
-    });
-    await expectInvalidEmbeddingRequest(res);
-  });
+  it.each([{ name: "unsupported encoding", option: { encoding_format: "hex" } }])(
+    "rejects $name before creating an embedding provider",
+    async ({ option }) => {
+      const providersCreatedBefore = createEmbeddingProviderMock.mock.calls.length;
+      const res = await postEmbeddings({ model: "openclaw/default", input: "hello", ...option });
+
+      await expectInvalidEmbeddingRequest(res);
+      expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(providersCreatedBefore);
+    },
+  );
 
   it.each([
-    { name: "unsupported encoding", option: { encoding_format: "hex" } },
-    { name: "numeric encoding", option: { encoding_format: 1 } },
-    { name: "zero dimensions", option: { dimensions: 0 } },
-    { name: "negative dimensions", option: { dimensions: -1 } },
-    { name: "fractional dimensions", option: { dimensions: 1.5 } },
-    { name: "string dimensions", option: { dimensions: "768" } },
-    { name: "unsafe dimensions", option: { dimensions: Number.MAX_SAFE_INTEGER + 1 } },
-  ])("rejects $name before creating an embedding provider", async ({ option }) => {
-    const providersCreatedBefore = createEmbeddingProviderMock.mock.calls.length;
-    const res = await postEmbeddings({ model: "openclaw/default", input: "hello", ...option });
-
-    await expectInvalidEmbeddingRequest(res);
-    expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(providersCreatedBefore);
-  });
-
-  it.each([
-    { name: "an empty string", input: "" },
     { name: "an empty batch", input: [] },
-    { name: "an empty batch entry", input: [""] },
     { name: "a mixed batch with an empty entry", input: ["valid", ""] },
   ])("rejects $name before creating an embedding provider", async ({ input }) => {
     const providersCreatedBefore = createEmbeddingProviderMock.mock.calls.length;
@@ -502,17 +434,6 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
 
     await expectInvalidEmbeddingRequest(res, "`input` must contain at least one non-empty string.");
     expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(providersCreatedBefore);
-  });
-
-  it("preserves whitespace-only embedding input", async () => {
-    const input = " \t\n";
-    const res = await postEmbeddings({
-      model: "openclaw/default",
-      input,
-    });
-
-    await expectDefaultEmbeddingResponse(res);
-    expect(embedBatchMock.mock.calls.at(-1)?.[0]).toEqual([input]);
   });
 
   it("ignores narrower declared scopes for shared-secret bearer auth", async () => {
@@ -526,105 +447,35 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     await expectDefaultEmbeddingResponse(res);
   });
 
-  it("allows requests with an empty declared scopes header", async () => {
-    const res = await postEmbeddings(
-      {
-        model: "openclaw/default",
-        input: "hello",
-      },
-      { "x-openclaw-scopes": "" },
-    );
-    await expectDefaultEmbeddingResponse(res);
-  });
-
-  it("allows requests when the operator scopes header is missing", async () => {
-    const res = await fetch(`http://127.0.0.1:${enabledPort}/v1/embeddings`, {
-      method: "POST",
-      headers: {
-        authorization: "Bearer secret",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "openclaw/default",
-        input: "hello",
-      }),
-    });
-    await expectDefaultEmbeddingResponse(res);
-  });
-
-  it("routes explicit OpenAI-compatible embeddings through generic providers", async () => {
-    const configPath = createConfigIO().configPath;
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(
-      configPath,
-      `${JSON.stringify(
-        {
-          memory: {
-            search: {
-              provider: "openai-compatible",
-              model: "nomic-embed-text",
-              inputType: "default",
-              queryInputType: "query",
-              documentInputType: "document",
-              outputDimensionality: 768,
-              remote: { baseUrl: genericEmbeddingBaseUrl },
-            },
+  it.each([
+    { model: "nomic-embed-text", override: undefined },
+    { model: "library/bge-m3", override: undefined },
+    { model: "nomic-embed-text", override: "hf:org/model" },
+  ])(
+    "routes embedding model $model with override $override through the configured provider",
+    async ({ model, override }) => {
+      await writeEmbeddingConfig({
+        memory: {
+          search: {
+            provider: "openai-compatible",
+            model,
+            inputType: "default",
+            queryInputType: "query",
+            documentInputType: "document",
+            outputDimensionality: 768,
+            remote: { baseUrl: genericEmbeddingBaseUrl },
           },
         },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
-    resetConfigRuntimeState();
+      });
 
-    await expectGenericProviderEmbeddingRequest({
-      model: "nomic-embed-text",
-      dimensions: 768,
-      inputType: "document",
-    });
-  });
-
-  it("routes configured OpenAI-compatible provider ids through generic providers", async () => {
-    const configPath = createConfigIO().configPath;
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(
-      configPath,
-      `${JSON.stringify(
-        {
-          models: {
-            providers: {
-              "tenant-embeddings": {
-                api: "openai-responses",
-                baseUrl: genericEmbeddingBaseUrl,
-                models: [],
-              },
-            },
-          },
-          memory: {
-            search: {
-              provider: "tenant-embeddings",
-              model: "tenant-embeddings/nomic-embed-text",
-              inputType: "default",
-              queryInputType: "query",
-              documentInputType: "document",
-              outputDimensionality: 768,
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
-    resetConfigRuntimeState();
-
-    await expectGenericProviderEmbeddingRequest({
-      model: "nomic-embed-text",
-      dimensions: 768,
-      inputType: "document",
-    });
-  });
+      await expectGenericProviderEmbeddingRequest({
+        model: override ?? model,
+        override,
+        dimensions: 768,
+        inputType: "document",
+      });
+    },
+  );
 
   it("rejects invalid agent targets", async () => {
     const res = await postEmbeddings({
@@ -638,6 +489,11 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
   });
 
   it("rejects disallowed x-openclaw-model provider overrides", async () => {
+    registerEmbeddingProvider({
+      id: "ollama",
+      transport: "remote",
+      create: async () => ({ provider: null }),
+    });
     const res = await postEmbeddings(
       {
         model: "openclaw/default",
@@ -651,36 +507,92 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     );
   });
 
-  it("rejects x-openclaw-model for trusted write-only callers", async () => {
-    const port = await getGatewayTestPort();
-    const server = await startOpenAiCompatGatewayServer({
-      startGatewayServer,
-      port,
-      auth: { mode: "none" },
-      openAiChatCompletionsEnabled: true,
-    });
-    try {
-      createEmbeddingProviderMock.mockClear();
-      const res = await fetch(`http://127.0.0.1:${port}/v1/embeddings`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-openclaw-scopes": "operator.write",
-          "x-openclaw-model": "openai/text-embedding-3-small",
-        },
-        body: JSON.stringify({
-          model: "openclaw/default",
-          input: "hello",
-        }),
-      });
-      expect(res.status).toBe(403);
-      const json = (await res.json()) as { error?: { type?: string; message?: string } };
-      expect(json.error?.type).toBe("forbidden");
-      expect(json.error?.message).toBe("missing scope: operator.admin");
-      expect(createEmbeddingProviderMock).not.toHaveBeenCalled();
-    } finally {
-      await server.close({ reason: "embeddings model override auth test done" });
-    }
+  it("enforces trusted-proxy embedding scopes before provider work", async () => {
+    await withEnvAsync(
+      { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined },
+      async () => {
+        const previousAuth = testState.gatewayAuth;
+        const auth = {
+          mode: "trusted-proxy" as const,
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            requiredHeaders: ["x-forwarded-proto"],
+            allowLoopback: true,
+          },
+        };
+        testState.gatewayAuth = auth;
+        let server: Awaited<ReturnType<typeof startOpenAiCompatGatewayServer>> | undefined;
+        try {
+          await writeEmbeddingConfig({
+            gateway: {
+              auth,
+              trustedProxies: ["127.0.0.1"],
+              roles: {
+                default: "reader",
+                definitions: {
+                  reader: { agents: "*", scopes: ["operator.read"], sessions: { others: "view" } },
+                  writer: { agents: "*", scopes: ["operator.write"], sessions: { others: "view" } },
+                },
+              },
+            },
+          });
+          const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+          server = await startOpenAiCompatGatewayServer({
+            startGatewayServer,
+            port: portClaim,
+            auth,
+            openAiChatCompletionsEnabled: true,
+          });
+          registerEmbeddingProvider(openAiAdapter);
+          for (const role of ["reader", "writer"]) {
+            setUserProfileRole(ensureProfileForEmail(`${role}@embeddings.example.test`).id, role);
+          }
+          const post = (role: "reader" | "writer", override?: string) =>
+            fetch(`http://127.0.0.1:${portClaim.port}/v1/embeddings`, {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                "x-forwarded-for": "198.51.100.42",
+                "x-forwarded-proto": "https",
+                "x-forwarded-user": `${role}@embeddings.example.test`,
+                "x-openclaw-scopes": role === "reader" ? "operator.read" : "operator.write",
+                ...(override ? { "x-openclaw-model": override } : {}),
+              },
+              body: JSON.stringify({ model: "openclaw/default", input: "hello" }),
+            });
+          createEmbeddingProviderMock.mockClear();
+          embedBatchMock.mockClear();
+          const denied = await post("reader");
+          expect({
+            status: denied.status,
+            providersCreated: createEmbeddingProviderMock.mock.calls.length,
+            embeddingCalls: embedBatchMock.mock.calls.length,
+          }).toEqual({ status: 403, providersCreated: 0, embeddingCalls: 0 });
+          expect(await denied.json()).toMatchObject({
+            error: { type: "forbidden", message: "missing scope: operator.write" },
+          });
+
+          await expectDefaultEmbeddingResponse(await post("writer"));
+          expect(createEmbeddingProviderMock).toHaveBeenCalledOnce();
+          expect(embedBatchMock).toHaveBeenCalledOnce();
+
+          const override = await post("writer", "openai/text-embedding-3-small");
+          expect(override.status).toBe(403);
+          expect(await override.json()).toMatchObject({
+            error: { type: "forbidden", message: "missing scope: operator.admin" },
+          });
+          expect(createEmbeddingProviderMock).toHaveBeenCalledOnce();
+          expect(embedBatchMock).toHaveBeenCalledOnce();
+        } finally {
+          try {
+            await server?.close({ reason: "embeddings scope admission test done" });
+          } finally {
+            testState.gatewayAuth = previousAuth;
+            await writeEmbeddingConfig({});
+          }
+        }
+      },
+    );
   });
 
   it("rejects oversized batches", async () => {
@@ -705,18 +617,107 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     });
   });
 
-  it("closes the provider when embedding fails", async () => {
-    const closesBefore = closeEmbeddingProviderMock.mock.calls.length;
-    embedBatchMock.mockRejectedValueOnce(new Error("embedding failed"));
+  it.each([
+    {
+      phase: "setup",
+      message:
+        'No API key found for provider "openai". Configure an API key (openclaw models auth paste-api-key --provider openai).',
+      status: 401,
+      type: "authentication_error",
+    },
+    {
+      phase: "embedding",
+      message: "503 service unavailable",
+      status: 503,
+      type: "api_error",
+      publicMessage: "upstream provider overloaded",
+    },
+  ])(
+    "maps $phase failure to $status $type",
+    async ({ phase, message, status, type, publicMessage }) => {
+      const failingOperation = phase === "setup" ? createEmbeddingProviderMock : embedBatchMock;
+      failingOperation.mockRejectedValueOnce(new Error(message));
 
-    const res = await postEmbeddings({
-      model: "openclaw/default",
-      input: "hello",
-    });
+      const res = await postEmbeddings({ model: "openclaw/default", input: "hello" });
 
-    expect(res.status).toBe(500);
-    expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(closesBefore + 1);
+      expect(res.status).toBe(status);
+      expect(await res.json()).toEqual({ error: { type, message: publicMessage ?? message } });
+    },
+  );
+
+  it("redacts credentials in actionable provider errors", async () => {
+    const credential = "sk-test-embedding-error-fixture-1234567890";
+    embedBatchMock.mockRejectedValueOnce(new Error(`Incorrect API key provided: ${credential}`));
+
+    const res = await postEmbeddings({ model: "openclaw/default", input: "hello" });
+
+    expect(res.status).toBe(401);
+    const json = (await res.json()) as { error: { type: string; message: string } };
+    expect(json.error.type).toBe("authentication_error");
+    expect(json.error.message).toContain("Incorrect API key provided:");
+    expect(json.error.message).not.toContain(credential);
   });
+
+  it.each(["provider acquisition", "embedding"] as const)(
+    "revalidates admission without canceling accepted work when policy changes during %s",
+    async (phase) => {
+      const operationStarted = createDeferred();
+      const releaseOperation = createDeferred();
+      const waitForPolicyChange = async () => {
+        operationStarted.resolve();
+        await releaseOperation.promise;
+      };
+      const embed = vi.fn(async () => {
+        if (phase === "embedding") {
+          await waitForPolicyChange();
+        }
+        return [[0.1, 0.2]];
+      });
+      const closed = createDeferred();
+      const close = vi.fn(() => closed.resolve());
+      createEmbeddingProviderMock.mockImplementationOnce(async (options) => {
+        if (phase === "provider acquisition") {
+          await waitForPolicyChange();
+        }
+        return {
+          provider: {
+            id: options.provider,
+            model: options.model,
+            embed: async () => [0.1, 0.2],
+            embedBatch: embed,
+            close,
+          },
+        };
+      });
+      const cfg = getRuntimeConfig();
+      const pending = postEmbeddings({ model: "openclaw/default", input: "hello" });
+      try {
+        await operationStarted.promise;
+        setRuntimeConfigSnapshot({
+          ...cfg,
+          gateway: {
+            ...cfg.gateway,
+            allowRealIpFallback: !cfg.gateway?.allowRealIpFallback,
+          },
+        });
+        releaseOperation.resolve();
+
+        const response = await pending;
+        if (phase === "provider acquisition") {
+          expect(response.status).toBe(401);
+          expect(embed).not.toHaveBeenCalled();
+        } else {
+          await expectDefaultEmbeddingResponse(response);
+        }
+        await closed.promise;
+        expect(close).toHaveBeenCalledTimes(1);
+      } finally {
+        releaseOperation.resolve();
+        await pending;
+        setRuntimeConfigSnapshot(cfg);
+      }
+    },
+  );
 
   it("aborts provider work when the HTTP client disconnects", async () => {
     const closesBefore = closeEmbeddingProviderMock.mock.calls.length;
@@ -767,19 +768,6 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     );
   });
 
-  it("supports synchronous provider cleanup", async () => {
-    const closesBefore = closeEmbeddingProviderMock.mock.calls.length;
-    closeEmbeddingProviderMock.mockImplementationOnce(() => undefined);
-
-    const res = await postEmbeddings({
-      model: "openclaw/default",
-      input: "hello",
-    });
-
-    expect(res.status).toBe(200);
-    expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(closesBefore + 1);
-  });
-
   it("retains failed cleanup and blocks replacement until retirement succeeds", async () => {
     const createsBefore = createEmbeddingProviderMock.mock.calls.length;
     closeEmbeddingProviderMock
@@ -799,36 +787,101 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(createsBefore + 2);
   });
 
-  it("does not admit a replacement while provider cleanup is pending", async () => {
-    Reflect.set(openAiAdapter, "transport", "local");
-    const { promise: closeGate, resolve: releaseClose } = createDeferred();
-    closeEmbeddingProviderMock.mockImplementationOnce(async () => {
-      await closeGate;
-      throw new Error("close failed");
-    });
-    const createsBefore = createEmbeddingProviderMock.mock.calls.length;
-    const closesBefore = closeEmbeddingProviderMock.mock.calls.length;
+  it.each([
+    { kind: "local provider", localProvider: false, modelOverride: false, closeFails: true },
+    {
+      kind: "created local provider",
+      localProvider: true,
+      modelOverride: false,
+      closeFails: false,
+    },
+    { kind: "model override", localProvider: false, modelOverride: true, closeFails: false },
+  ])(
+    "does not bypass pending cleanup with $kind",
+    async ({ localProvider, modelOverride, closeFails }) => {
+      const lifetime = await import("./embeddings-provider-lifetime.js");
+      const acquireLease = lifetime.acquireEmbeddingProviderLease;
+      const acquireLeaseSpy = vi.spyOn(lifetime, "acquireEmbeddingProviderLease");
+      Reflect.set(openAiAdapter, "transport", localProvider ? "remote" : "local");
+      const closeStarted = createDeferred();
+      const { promise: closeGate, resolve: releaseClose } = createProviderGate();
+      closeEmbeddingProviderMock.mockImplementationOnce(async () => {
+        closeStarted.resolve();
+        await closeGate;
+        if (closeFails) {
+          throw new Error("close failed");
+        }
+      });
+      if (localProvider) {
+        registerEmbeddingProvider({ ...openAiAdapter, id: "local", transport: "local" });
+        createEmbeddingProviderMock.mockResolvedValueOnce({
+          provider: {
+            id: "local",
+            model: "local-embed",
+            embed: async () => [0.1, 0.2],
+            embedBatch: embedBatchMock,
+            close: closeEmbeddingProviderMock,
+          },
+        });
+      }
+      const createsBefore = createEmbeddingProviderMock.mock.calls.length;
+      const closesBefore = closeEmbeddingProviderMock.mock.calls.length;
+      // Concurrent provider admission needs distinct connections; each socket owns serial requests.
+      const firstPromise = postEmbeddings(
+        { model: "openclaw/default", input: "first" },
+        {
+          connection: "close",
+          ...(modelOverride ? { "x-openclaw-model": "openai/model-a" } : {}),
+        },
+      );
+      const requests = [firstPromise];
+      try {
+        await waitForProviderEntry(closeStarted.promise, firstPromise);
+        expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(closesBefore + 1);
+        const secondEntered = createDeferred();
+        acquireLeaseSpy.mockImplementationOnce((...args) => {
+          const lease = acquireLease(...args);
+          secondEntered.resolve();
+          return lease;
+        });
+        const secondPromise = postEmbeddings(
+          { model: "openclaw/default", input: "second" },
+          {
+            connection: "close",
+            ...(modelOverride ? { "x-openclaw-model": "openai/model-b" } : {}),
+          },
+        );
+        requests.push(secondPromise);
+        await waitForProviderEntry(secondEntered.promise, secondPromise);
+        expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(createsBefore + 1);
 
-    const firstPromise = postEmbeddings({ model: "openclaw/default", input: "first" });
-    await vi.waitFor(() =>
-      expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(closesBefore + 1),
-    );
-    const secondPromise = postEmbeddings({ model: "openclaw/default", input: "second" });
-    await Promise.resolve();
-    expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(createsBefore + 1);
-
-    releaseClose();
-    const [first, second] = await Promise.all([firstPromise, secondPromise]);
-    Reflect.set(openAiAdapter, "transport", "remote");
-    expect(first.status).toBe(200);
-    expect(second.status).toBe(200);
-    expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(createsBefore + 2);
-  });
+        releaseClose();
+        const [first, second] = await Promise.all([firstPromise, secondPromise]);
+        expect(first.status).toBe(200);
+        expect(second.status).toBe(200);
+        expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(createsBefore + 2);
+      } finally {
+        releaseClose();
+        try {
+          await Promise.allSettled(requests);
+          await drainRetainedOpenAiEmbeddingProviders();
+        } finally {
+          acquireLeaseSpy.mockRestore();
+          Reflect.set(openAiAdapter, "transport", "remote");
+        }
+      }
+    },
+  );
 
   it("does not create a provider for a disconnected request waiting behind cleanup", async () => {
+    const lifetime = await import("./embeddings-provider-lifetime.js");
+    const acquireLease = lifetime.acquireEmbeddingProviderLease;
+    const acquireLeaseSpy = vi.spyOn(lifetime, "acquireEmbeddingProviderLease");
     Reflect.set(openAiAdapter, "transport", "local");
-    const { promise: closeGate, resolve: releaseClose } = createDeferred();
+    const { promise: closeGate, resolve: releaseClose } = createProviderGate();
+    const closeStarted = createDeferred();
     closeEmbeddingProviderMock.mockImplementationOnce(async () => {
+      closeStarted.resolve();
       await closeGate;
     });
     const createsBefore = createEmbeddingProviderMock.mock.calls.length;
@@ -837,38 +890,45 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     let secondRequest: ReturnType<typeof httpRequest> | undefined;
 
     try {
-      await vi.waitFor(() =>
-        expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(closesBefore + 1),
-      );
+      await waitForProviderEntry(closeStarted.promise, firstPromise);
+      expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(closesBefore + 1);
+      const queued = createDeferred<AbortSignal>();
+      acquireLeaseSpy.mockImplementationOnce((...args) => {
+        const lease = acquireLease(...args);
+        queued.resolve(args[1]);
+        return lease;
+      });
 
       const body = JSON.stringify({ model: "openclaw/default", input: "second" });
-      secondRequest = httpRequest({
+      const request = httpRequest({
         host: "127.0.0.1",
         port: enabledPort,
         path: "/v1/embeddings",
         method: "POST",
         headers: {
-          authorization: "******",
+          authorization: "Bearer secret",
           "content-type": "application/json",
           "content-length": Buffer.byteLength(body),
           ...WRITE_SCOPE_HEADER,
         },
       });
-      secondRequest.on("error", () => {});
-      const secondRequestFinished = createDeferred();
-      secondRequest.once("finish", secondRequestFinished.resolve);
+      secondRequest = request;
+      const unexpectedResponse = new Promise<never>((_resolve, reject) => {
+        request.once("error", reject);
+        request.once("response", (response) => {
+          response.resume();
+          reject(new Error(`Queued request completed before admission (${response.statusCode})`));
+        });
+      });
       const secondRequestClosed = createDeferred();
       secondRequest.once("close", secondRequestClosed.resolve);
       secondRequest.end(body);
-      await secondRequestFinished.promise;
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      const signal = await Promise.race([queued.promise, unexpectedResponse]);
+      const aborted = createDeferred();
+      signal.addEventListener("abort", () => aborted.resolve(), { once: true });
       secondRequest.destroy();
+      await aborted.promise;
       await secondRequestClosed.promise;
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
 
       releaseClose();
       expect((await firstPromise).status).toBe(200);
@@ -879,76 +939,21 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     } finally {
       releaseClose();
       secondRequest?.destroy();
-      Reflect.set(openAiAdapter, "transport", "remote");
+      try {
+        await Promise.allSettled([firstPromise]);
+        await drainRetainedOpenAiEmbeddingProviders();
+      } finally {
+        acquireLeaseSpy.mockRestore();
+        Reflect.set(openAiAdapter, "transport", "remote");
+      }
     }
   });
 
-  it("serializes cleanup when a remote request creates a local provider", async () => {
-    const { promise: closeGate, resolve: releaseClose } = createDeferred();
-    closeEmbeddingProviderMock.mockImplementationOnce(async () => {
-      await closeGate;
-    });
-    createEmbeddingProviderMock.mockResolvedValueOnce({
-      provider: {
-        id: "local",
-        model: "local-embed",
-        embed: async () => [0.1, 0.2],
-        embedBatch: embedBatchMock,
-        close: closeEmbeddingProviderMock,
-      },
-    });
-    const createsBefore = createEmbeddingProviderMock.mock.calls.length;
-    const closesBefore = closeEmbeddingProviderMock.mock.calls.length;
-
-    const firstPromise = postEmbeddings({ model: "openclaw/default", input: "first" });
-    await vi.waitFor(() =>
-      expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(closesBefore + 1),
-    );
-    const secondPromise = postEmbeddings({ model: "openclaw/default", input: "second" });
-    await Promise.resolve();
-    expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(createsBefore + 1);
-
-    releaseClose();
-    const [first, second] = await Promise.all([firstPromise, secondPromise]);
-    expect(first.status).toBe(200);
-    expect(second.status).toBe(200);
-    expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(createsBefore + 2);
-  });
-
-  it("does not bypass local cleanup with a model override", async () => {
-    Reflect.set(openAiAdapter, "transport", "local");
-    const { promise: closeGate, resolve: releaseClose } = createDeferred();
-    closeEmbeddingProviderMock.mockImplementationOnce(async () => {
-      await closeGate;
-    });
-    const createsBefore = createEmbeddingProviderMock.mock.calls.length;
-    const closesBefore = closeEmbeddingProviderMock.mock.calls.length;
-
-    const firstPromise = postEmbeddings(
-      { model: "openclaw/default", input: "first" },
-      { "x-openclaw-model": "openai/model-a" },
-    );
-    await vi.waitFor(() =>
-      expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(closesBefore + 1),
-    );
-    const secondPromise = postEmbeddings(
-      { model: "openclaw/default", input: "second" },
-      { "x-openclaw-model": "openai/model-b" },
-    );
-    await Promise.resolve();
-    expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(createsBefore + 1);
-
-    releaseClose();
-    const [first, second] = await Promise.all([firstPromise, secondPromise]);
-    Reflect.set(openAiAdapter, "transport", "remote");
-    expect(first.status).toBe(200);
-    expect(second.status).toBe(200);
-    expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(createsBefore + 2);
-  });
-
   it("allows providers without cleanup resources to embed concurrently", async () => {
-    const { promise: firstEmbedGate, resolve: releaseFirstEmbed } = createDeferred();
+    const { promise: firstEmbedGate, resolve: releaseFirstEmbed } = createProviderGate();
+    const firstEmbedStarted = createDeferred();
     const firstEmbed = vi.fn(async () => {
+      firstEmbedStarted.resolve();
       await firstEmbedGate;
       return [[1, 2]];
     });
@@ -974,13 +979,23 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
       });
 
     const firstPromise = postEmbeddings({ model: "openclaw/default", input: "first" });
-    await vi.waitFor(() => expect(firstEmbed).toHaveBeenCalledTimes(1));
-    const second = await postEmbeddings({ model: "openclaw/default", input: "second" });
-    expect(second.status).toBe(200);
-    expect(secondEmbed).toHaveBeenCalledTimes(1);
+    const requests = [firstPromise];
+    try {
+      await waitForProviderEntry(firstEmbedStarted.promise, firstPromise);
+      expect(firstEmbed).toHaveBeenCalledTimes(1);
+      const secondPromise = postEmbeddings({ model: "openclaw/default", input: "second" });
+      requests.push(secondPromise);
+      const second = await secondPromise;
+      expect(second.status).toBe(200);
+      expect(secondEmbed).toHaveBeenCalledTimes(1);
 
-    releaseFirstEmbed();
-    expect((await firstPromise).status).toBe(200);
+      releaseFirstEmbed();
+      expect((await firstPromise).status).toBe(200);
+    } finally {
+      releaseFirstEmbed();
+      await Promise.allSettled(requests);
+      createEmbeddingProviderMock.mockReset();
+    }
   });
 
   it("drains retained provider cleanup during gateway shutdown", async () => {

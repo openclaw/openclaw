@@ -1,29 +1,36 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
-import {
-  appendAssistantMessageToSessionTranscript,
-  type SessionTranscriptDeliveryMirror,
-} from "../../config/sessions/transcript.js";
+import type { SessionTranscriptDeliveryMirror } from "../../config/sessions/transcript-mirror.js";
+import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
-import type { ReplyDispatchDeliveryOutcome } from "./reply-dispatcher.js";
+import {
+  getReplyPayloadMetadata,
+  type ReplyPayload,
+  type ReplyPayloadMetadata,
+} from "../reply-payload.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 
-type SourceReplyTranscriptMirror = NonNullable<
-  NonNullable<ReturnType<typeof getReplyPayloadMetadata>>["sourceReplyTranscriptMirror"]
->;
-
-type TranscriptMirror = SourceReplyTranscriptMirror & {
-  expectedSessionId?: string;
+type TranscriptMirror = NonNullable<ReplyPayloadMetadata["sourceReplyTranscriptMirror"]> & {
   expectedLifecycleRevision?: string;
   expectedWriterRunId?: string;
   storePath?: string;
   preferText?: boolean;
   deliveryMirror?: SessionTranscriptDeliveryMirror;
-  transcriptOwner?: boolean;
 };
+
+function transcriptMirrorExpectations(mirror: TranscriptMirror) {
+  return {
+    ...(mirror.expectedSessionId ? { expectedSessionId: mirror.expectedSessionId } : {}),
+    ...(mirror.expectedLifecycleRevision !== undefined
+      ? { expectedLifecycleRevision: mirror.expectedLifecycleRevision }
+      : {}),
+    ...(mirror.expectedWriterRunId !== undefined
+      ? { expectedWriterRunId: mirror.expectedWriterRunId }
+      : {}),
+  };
+}
 
 export async function mirrorDeliveredReplyToTranscript(params: {
   metadata?: TranscriptMirror;
@@ -37,13 +44,7 @@ export async function mirrorDeliveredReplyToTranscript(params: {
     const result = await appendAssistantMessageToSessionTranscript({
       sessionKey: mirror.sessionKey,
       agentId: mirror.agentId,
-      ...(mirror.expectedSessionId ? { expectedSessionId: mirror.expectedSessionId } : {}),
-      ...(mirror.expectedLifecycleRevision !== undefined
-        ? { expectedLifecycleRevision: mirror.expectedLifecycleRevision }
-        : {}),
-      ...(mirror.expectedWriterRunId !== undefined
-        ? { expectedWriterRunId: mirror.expectedWriterRunId }
-        : {}),
+      ...transcriptMirrorExpectations(mirror),
       text: mirror.text,
       mediaUrls: mirror.preferText && mirror.text ? undefined : mirror.mediaUrls,
       idempotencyKey: mirror.idempotencyKey,
@@ -94,11 +95,11 @@ export function captureDeliveredTranscriptMirror(params: {
     if (info.kind !== "final") {
       return payload;
     }
-    if (getReplyPayloadMetadata(payload)?.finalDeliveryCapture !== params.captureToken) {
+    const payloadMetadata = getReplyPayloadMetadata(payload);
+    if (payloadMetadata?.finalDeliveryCapture !== params.captureToken) {
       return payload;
     }
     observedFinal = true;
-    const payloadMetadata = getReplyPayloadMetadata(payload);
     const payloadMirror = payloadMetadata?.sourceReplyTranscriptMirror;
     if (
       payloadMirror &&
@@ -108,13 +109,7 @@ export function captureDeliveredTranscriptMirror(params: {
       deliveredMetadata = transcriptMirrorForDeliveredPayload(
         {
           ...payloadMirror,
-          ...(metadata.expectedSessionId ? { expectedSessionId: metadata.expectedSessionId } : {}),
-          ...(metadata.expectedLifecycleRevision !== undefined
-            ? { expectedLifecycleRevision: metadata.expectedLifecycleRevision }
-            : {}),
-          ...(metadata.expectedWriterRunId !== undefined
-            ? { expectedWriterRunId: metadata.expectedWriterRunId }
-            : {}),
+          ...transcriptMirrorExpectations(metadata),
           storePath: metadata.storePath,
         },
         payload,
@@ -130,22 +125,4 @@ export function captureDeliveredTranscriptMirror(params: {
   });
   return () =>
     observedFinal ? deliveredMetadata : metadata.transcriptOwner ? undefined : metadata;
-}
-
-export async function mirrorTranscriptAfterDispatcherSettled(params: {
-  outcome: Promise<ReplyDispatchDeliveryOutcome>;
-  metadata: () => TranscriptMirror | undefined;
-  cfg: OpenClawConfig;
-}): Promise<void> {
-  if ((await params.outcome) !== "delivered") {
-    return;
-  }
-  const metadata = params.metadata();
-  if (!metadata) {
-    return;
-  }
-  await mirrorDeliveredReplyToTranscript({
-    metadata,
-    cfg: params.cfg,
-  });
 }

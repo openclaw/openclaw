@@ -20,7 +20,16 @@ openclaw gateway restart
 - `src/call-lifecycle.ts` owns the closed carrier/model state machine,
   generation fencing, serialized native commands, and the complete alias index.
 - `src/pending-dial-store.ts` persists the one exact approved pending dial in
-  plugin-owned SQLite state.
+  plugin-owned SQLite state. Current hosts execute these operations in the
+  shared-state worker, preserving write order and conditional dial-ID cleanup.
+  Runtime startup, helper dispatch, and shutdown await the required publications.
+  Pending outbound calls reserve admission while persistence waits, preserving the
+  same incoming-call policy before and after durable publication.
+  The declared `openclaw.install.minHostVersion` remains `>=2026.9.4`: startup
+  selects `openKeyedStore` only when `openKeyedStoreV2` is absent, and those older
+  hosts use atomic `deleteIf` when comparisons are unavailable. Selection happens
+  before store operations; worker failures never retry through the legacy API.
+  Remove this compatibility path when the declared host floor requires V2.
 - `src/helper-rpc.ts` owns bounded loopback IPC with mutual authentication,
   connection-epoch message MACs, replay sequencing, and typed native
   postcondition projection.

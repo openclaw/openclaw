@@ -1,11 +1,12 @@
 import type { SendHandle, Serializable } from "node:child_process";
 import { deserialize, serialize } from "node:v8";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import type { SpawnInitiation } from "../spawn-initiation.js";
 import { SpawnBrokerError } from "./protocol.js";
 
 const FRAME_BYTES = 1024 * 1024;
-const MAX_PENDING_BYTES = 256 * 1024 * 1024;
-const MAX_PENDING_MESSAGES = 1024;
+export const MAX_PENDING_BYTES = 256 * 1024 * 1024;
+export const MAX_PENDING_MESSAGES = 1024;
 const FRAME_KIND = "openclaw-spawn-broker-frame";
 
 type IpcSender = (
@@ -22,10 +23,15 @@ export function createBrokerSender(send: IpcSender) {
   let messages = 0;
   let sequence = 0;
   let previous = Promise.resolve();
-  const write = (message: Serializable, handle?: SendHandle) =>
+  const write = (message: Serializable, handle?: SendHandle, initiateSpawn?: SpawnInitiation) =>
     new Promise<void>((resolve, reject) => {
       try {
-        send(message, handle, (error) => (error ? reject(error) : resolve()));
+        const launch = () => send(message, handle, (error) => (error ? reject(error) : resolve()));
+        if (initiateSpawn) {
+          initiateSpawn(launch);
+        } else {
+          launch();
+        }
       } catch (error) {
         reject(toErrorObject(error, "Spawn broker IPC write failed"));
       }
@@ -46,7 +52,11 @@ export function createBrokerSender(send: IpcSender) {
       messages -= 1;
     });
   };
-  const sender = (message: Serializable, handle?: SendHandle): Promise<void> => {
+  const sender = (
+    message: Serializable,
+    handle?: SendHandle,
+    initiateSpawn?: SpawnInitiation,
+  ): Promise<void> => {
     const payload = serialize(message);
     const size = payload.byteLength;
     if (size > FRAME_BYTES && handle) {
@@ -57,7 +67,7 @@ export function createBrokerSender(send: IpcSender) {
     const id = ++sequence;
     const operation = async () => {
       if (size <= FRAME_BYTES) {
-        await write(message, handle);
+        await write(message, handle, initiateSpawn);
         return;
       }
       for (let offset = 0; offset < size; offset += FRAME_BYTES) {
@@ -69,7 +79,7 @@ export function createBrokerSender(send: IpcSender) {
           bytes: payload.subarray(offset, offset + FRAME_BYTES),
         };
         // Finish the request before its cancellation or later IPC messages can arrive.
-        await write(frame);
+        await write(frame, undefined, offset + FRAME_BYTES >= size ? initiateSpawn : undefined);
       }
     };
     return enqueue(size, operation);
@@ -79,19 +89,27 @@ export function createBrokerSender(send: IpcSender) {
       // Prepay a frame before effects begin; later messages cannot consume its capacity.
       return enqueue(FRAME_BYTES, async () => {
         let active = true;
+        let publishing = false;
         let publication: Promise<void> | undefined;
         const publish: BrokerPublisher = (message) => {
-          if (!active || publication) {
+          if (!active || publishing) {
             return Promise.reject(
               new SpawnBrokerError("Spawn broker publication reservation is closed"),
             );
           }
+          publishing = true;
           publication = (async () => {
             if (serialize(message).byteLength > FRAME_BYTES) {
               throw new SpawnBrokerError("Spawn broker reserved publication exceeds one IPC frame");
             }
             await write(message);
           })();
+          void publication.then(
+            () => {
+              publishing = false;
+            },
+            () => {},
+          );
           void publication.catch(() => {});
           return publication;
         };
@@ -109,8 +127,10 @@ export function createBrokerSender(send: IpcSender) {
 
 /** Only the version-matched private peer can supply frames on this channel. */
 export function createBrokerReceiver() {
-  const pending = new Map<number, { total: number; received: number; chunks: Buffer[] }>();
-  let reserved = 0;
+  let pending: { id: number; total: number; received: number; chunks: Buffer[] } | undefined;
+  const clear = () => {
+    pending = undefined;
+  };
   return {
     receive(message: unknown): unknown {
       if (
@@ -119,6 +139,7 @@ export function createBrokerReceiver() {
         !("kind" in message) ||
         message.kind !== FRAME_KIND
       ) {
+        clear();
         return message;
       }
       // SAFETY: Private-peer frame fields are validated below before allocation or decoding.
@@ -135,18 +156,13 @@ export function createBrokerReceiver() {
       ) {
         throw new SpawnBrokerError("Invalid spawn broker IPC frame");
       }
-      let assembly = pending.get(frame.id);
+      let assembly = pending?.id === frame.id ? pending : undefined;
       if (!assembly) {
-        if (
-          frame.offset !== 0 ||
-          pending.size >= MAX_PENDING_MESSAGES ||
-          reserved + frame.total > MAX_PENDING_BYTES
-        ) {
+        if (frame.offset !== 0) {
           throw new SpawnBrokerError("Spawn broker receive capacity exceeded");
         }
-        assembly = { total: frame.total, received: 0, chunks: [] };
-        pending.set(frame.id, assembly);
-        reserved += frame.total;
+        // The serialized producer owns one assembly; a new message abandons its predecessor.
+        pending = assembly = { id: frame.id, total: frame.total, received: 0, chunks: [] };
       }
       if (
         assembly.total !== frame.total ||
@@ -160,13 +176,9 @@ export function createBrokerReceiver() {
       if (assembly.received < assembly.total) {
         return undefined;
       }
-      pending.delete(frame.id);
-      reserved -= assembly.total;
+      clear();
       return deserialize(Buffer.concat(assembly.chunks, assembly.total));
     },
-    clear() {
-      pending.clear();
-      reserved = 0;
-    },
+    clear,
   };
 }

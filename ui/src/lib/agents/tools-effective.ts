@@ -7,12 +7,11 @@ import {
   normalizeChatModelOverrideValue,
   resolvePreferredServerChatModelValue,
 } from "../chat/model-ref.ts";
-// Shared effective-tools loading for agent and Chat model changes.
 import { formatUiError } from "../format-error.ts";
 import type { SessionCapability } from "../sessions/index.ts";
 import { resolveAgentIdFromSessionKey } from "../sessions/session-key.ts";
 
-type ToolsEffectiveState = {
+export type ToolsEffectiveState = {
   chatModelCatalog?: ModelCatalogEntry[];
   client: {
     request<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T>;
@@ -26,9 +25,6 @@ type ToolsEffectiveState = {
   toolsEffectiveResult: ToolsEffectiveResult | null;
   toolsEffectiveResultKey?: string | null;
 };
-
-// Session/model keys can recur; only the exact dispatch may publish or retire its owner.
-const requestOwners = new WeakMap<ToolsEffectiveState, symbol>();
 
 export function buildToolsEffectiveRequestKey(
   state: Pick<ToolsEffectiveState, "sessions" | "sessionsResult" | "chatModelCatalog">,
@@ -44,8 +40,6 @@ export async function loadToolsEffective(
   state: ToolsEffectiveState,
   params: { agentId: string; sessionKey: string },
   options: {
-    isCurrent?: () => boolean;
-    ignoreResponse?: (agentId: string, requestKey: string) => boolean;
     onError?: (error: unknown) => string;
   } = {},
 ) {
@@ -65,46 +59,34 @@ export async function loadToolsEffective(
   ) {
     return;
   }
-  const requestOwner = Symbol("effective-tools-request");
-  requestOwners.set(state, requestOwner);
-  const isCurrentRequest = () =>
-    state.client === client &&
-    state.connected &&
-    requestOwners.get(state) === requestOwner &&
-    (options.isCurrent?.() ?? true);
-  const shouldIgnoreResponse = () =>
-    !isCurrentRequest() || (options.ignoreResponse?.(resolvedAgentId, requestKey) ?? false);
   state.toolsEffectiveLoading = true;
   state.toolsEffectiveLoadingKey = requestKey;
   state.toolsEffectiveResultKey = null;
   state.toolsEffectiveError = null;
   state.toolsEffectiveResult = null;
-  try {
-    const result = await client.request<ToolsEffectiveResult>("tools.effective", {
+  const outcome = await client
+    .request<ToolsEffectiveResult>("tools.effective", {
       agentId: resolvedAgentId,
       sessionKey: resolvedSessionKey,
-    });
-    if (shouldIgnoreResponse()) {
-      return;
-    }
+    })
+    .then(
+      (result) => ({ result }),
+      (error: unknown) => ({ error }),
+    );
+  if (state.client !== client || state.toolsEffectiveLoadingKey !== requestKey) {
+    return;
+  }
+  state.toolsEffectiveLoadingKey = null;
+  state.toolsEffectiveLoading = false;
+  if ("error" in outcome) {
+    state.toolsEffectiveError = options.onError?.(outcome.error) ?? formatUiError(outcome.error);
+  } else {
     state.toolsEffectiveResultKey = requestKey;
-    state.toolsEffectiveResult = result;
-  } catch (error) {
-    if (shouldIgnoreResponse()) {
-      return;
-    }
-    state.toolsEffectiveError = options.onError?.(error) ?? formatUiError(error);
-  } finally {
-    if (isCurrentRequest() && state.toolsEffectiveLoadingKey === requestKey) {
-      requestOwners.delete(state);
-      state.toolsEffectiveLoadingKey = null;
-      state.toolsEffectiveLoading = false;
-    }
+    state.toolsEffectiveResult = outcome.result;
   }
 }
 
 export function resetToolsEffectiveState(state: ToolsEffectiveState) {
-  requestOwners.delete(state);
   state.toolsEffectiveResult = null;
   state.toolsEffectiveResultKey = null;
   state.toolsEffectiveError = null;
@@ -124,7 +106,7 @@ export function refreshVisibleToolsEffectiveForCurrentSession(
     return undefined;
   }
   const sessionAgentId = resolveAgentIdFromSessionKey(resolvedSessionKey);
-  if (!sessionAgentId || state.agentsSelectedId !== sessionAgentId) {
+  if (state.agentsSelectedId !== sessionAgentId) {
     return undefined;
   }
   return loadToolsEffective(state, {
@@ -137,12 +119,11 @@ function resolveEffectiveToolsModelKey(
   state: Pick<ToolsEffectiveState, "sessions" | "sessionsResult" | "chatModelCatalog">,
   sessionKey: string,
 ): string {
-  const resolvedSessionKey = sessionKey.trim();
-  if (!resolvedSessionKey) {
+  if (!sessionKey) {
     return "";
   }
   const catalog = state.chatModelCatalog ?? [];
-  const cachedOverride = state.sessions.state.modelOverrides[resolvedSessionKey];
+  const cachedOverride = state.sessions.state.modelOverrides[sessionKey];
   const defaults = state.sessionsResult?.defaults;
   const defaultModel = resolvePreferredServerChatModelValue(
     defaults?.model,
@@ -155,7 +136,7 @@ function resolveEffectiveToolsModelKey(
   if (cachedOverride) {
     return normalizeChatModelOverrideValue(cachedOverride, catalog);
   }
-  const activeRow = state.sessionsResult?.sessions?.find((row) => row.key === resolvedSessionKey);
+  const activeRow = state.sessionsResult?.sessions.find((row) => row.key === sessionKey);
   if (activeRow?.model) {
     return resolvePreferredServerChatModelValue(activeRow.model, activeRow.modelProvider, catalog);
   }

@@ -45,7 +45,7 @@ Slack's limits are enforced before native rendering:
 Every native chart also carries a top-level text representation for screen
 readers, notifications, session mirroring, and clients that cannot render the
 block. Standard presentation sends to other OpenClaw channels receive that same
-deterministic chart data as text unless they advertise native chart support. If
+chart data as text unless they advertise native chart support. If
 Slack rejects the chart with `invalid_blocks`, OpenClaw
 removes the rejected native data blocks, keeps any sibling controls, and sends
 the complete chart representation as visible text.
@@ -103,7 +103,7 @@ Slack's published `data_table` limits are enforced before native rendering:
 
 Multiple valid table blocks can render natively while the message remains
 within the aggregate character limit. A table that cannot render within the
-native envelope becomes complete deterministic text instead of losing rows or
+native envelope becomes complete text instead of losing rows or
 cells. If that text exceeds one Slack message, sends and slash responses use
 ordered text chunks. Table edits fail with an explicit size error instead of
 silently truncating rows from an existing message.
@@ -163,13 +163,13 @@ Slack can act as a native approval client with interactive buttons and interacti
 - Exec and plugin approvals can render as Slack-native Block Kit prompts.
 - `channels.slack.execApprovals.*` remains the native exec approval client enablement and DM/channel routing config.
 - Exec approval DMs use `channels.slack.execApprovals.approvers` or `commands.ownerAllowFrom`.
-- Plugin approvals use Slack-native buttons when Slack is enabled as a native approval client for the originating session, or when `approvals.plugin` routes to the originating Slack session or a Slack target.
-- Plugin approval DMs use Slack plugin approvers from `channels.slack.allowFrom`, named-account `allowFrom`, or the account default route.
+- Plugin approvals use Slack-native buttons when Slack is enabled as a native approval client for the originating session, when `approvals.plugin` routes to the originating Slack session or a Slack target, or when an explicit nonempty `approvals.plugin.slack` reviewer list applies to the request.
+- Plugin approval DMs use `approvals.plugin.slack` reviewers when configured for the request. An omitted default reviewer list retains `channels.slack.allowFrom`, named-account `allowFrom`, or the account default route.
 - Approver authorization is still enforced: exec-only approvers cannot approve plugin requests unless they are also plugin approvers.
 
 For Enterprise Grid org installs, the originating event's validated workspace
 is retained for the approval prompt, approver DM, button callback, and final
-message update. Approval delivery fails closed when an org-installed account
+message update. Approval delivery is blocked when an org-installed account
 does not have that event-owned workspace scope.
 
 This uses the same shared approval button surface as other channels. When `interactivity` is enabled in your Slack app settings, approval prompts render as Block Kit buttons directly in the conversation.
@@ -190,7 +190,13 @@ native exec approval delivery. Slack can also handle native plugin approvals
 through this native-client path when Slack plugin approvers resolve and the
 request matches its filters. Disabling Slack exec approvals does not disable
 native plugin approval delivery enabled through `approvals.plugin`, which uses
-Slack plugin approvers instead.
+Slack plugin approvers instead. `approvals.plugin.slack.approvers` sets the
+default Slack plugin reviewer list; `approvals.plugin.slack.plugins` can override
+it for a selected native tool plugin and individual tools. Reviewer IDs can be raw
+`U…`/`W…` IDs within the selected account or `team:<workspace-id>:user:<user-id>`.
+An explicit empty list denies Slack
+decisions for that scope. See [Plugin permission requests](/plugins/plugin-permission-requests#route-approval-prompts)
+for the precedence and tool-key format.
 
 Minimal Slack-native configuration using command owners as approvers:
 

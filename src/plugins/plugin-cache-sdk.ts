@@ -28,8 +28,6 @@ type PreparedPluginAliases = {
   cacheKey: string;
   sdkRoots: string[];
   getAliasMap: () => PluginSdkAliasMap;
-  mayResolveSourceSdk: () => boolean;
-  hasSourceSdkAliases: () => boolean;
   getSourceTransformAliasMap: () => PluginSdkAliasMap;
   resolveAlias: (specifier: string) => string | undefined;
 };
@@ -71,6 +69,13 @@ export function createPluginCacheSdk() {
         { resolveAlias: (specifier: string) => string | undefined; order?: number }
       >(),
       nextSdkProviderOrder: 0,
+      parents: new Map<
+        string,
+        {
+          roots: Set<string>;
+          targets: Map<string, string | undefined>;
+        }
+      >(),
       aliases: new Map<string, Array<{ parentRoot: string; target: string }>>(),
       registeredHosts: new Set<string>(),
       hostRoots: new Map<string, string>(),

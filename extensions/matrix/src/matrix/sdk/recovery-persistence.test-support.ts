@@ -9,6 +9,7 @@ import { vi } from "vitest";
 import { getMatrixRuntime } from "../../runtime.js";
 import {
   readMatrixRecoveryKeyStateForPathAsync,
+  writeMatrixRecoveryKeyStateForPathAsync,
   type MatrixSnapshotStateRuntime,
 } from "../crypto-state-store.js";
 
@@ -16,11 +17,29 @@ export async function readStoredRecoveryKey(recoveryKeyPath: string) {
   return readMatrixRecoveryKeyStateForPathAsync(recoveryKeyPath, getMatrixRuntime().state);
 }
 
+export async function seedRecoveryKeyState(
+  recoveryKeyPath: string,
+  privateKey: Uint8Array,
+  encodedPrivateKey?: string,
+): Promise<void> {
+  await writeMatrixRecoveryKeyStateForPathAsync({
+    recoveryKeyPath,
+    stateRuntime: getMatrixRuntime().state,
+    payload: {
+      version: 1,
+      createdAt: new Date().toISOString(),
+      keyId: "SSSSKEY",
+      encodedPrivateKey,
+      privateKeyBase64: Buffer.from(privateKey).toString("base64"),
+    },
+  });
+}
+
 export function holdRecoveryKeyPersistence() {
   const admitted = createDeferred<void>();
   const release = createDeferred<void>();
   const stateRuntime: MatrixSnapshotStateRuntime = {
-    openKeyedStore<T>(options: OpenAsyncKeyedStoreOptions): PluginStateKeyedStore<T> {
+    openKeyedStoreV2<T>(options: OpenAsyncKeyedStoreOptions): PluginStateKeyedStore<T, 2> {
       const store = createPluginStateKeyedStoreForTests<T>("matrix", options);
       const compareAndApply = store.compareAndApply;
       if (!compareAndApply) {

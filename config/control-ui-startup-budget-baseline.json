@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 364912,
-  "reason": "PR153238 landing continuation approved the bounded 512 B cap increase for cold clipboard image custody; measured Node24 gzip baseline, preserving current main route-label changes. The 512 B growth and 64 B build-variance allowances are unchanged.",
-  "updatedAt": "2026-09-20"
+  "startupJsGzipBytes": 374285,
+  "reason": "Personal backgrounds: Peter authorized fix and landing on 2026-10-10 after the scoped 1,407 B (0.38%) cap proposal. Paired candidate measured 374,285 B before the final deferred-drain repair and 374,327 B afterward; the 42 B difference stays within the existing 512 B growth allowance. Retain the 64 B build-variance allowance and all request, CSS, asset, and route budgets.",
+  "updatedAt": "2026-10-10"
 }

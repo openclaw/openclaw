@@ -3,13 +3,13 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "./api/gateway.ts";
-import { createWorkboardCatalogRuntime } from "./catalog.ts";
+import { WorkboardCatalog } from "./catalog.ts";
 import { createWorkboardCapability } from "./lib/workboard/capability.ts";
 import { loadWorkboard } from "./lib/workboard/loading.ts";
 import { moveWorkboardCard } from "./lib/workboard/mutations.ts";
 import { getWorkboardState } from "./lib/workboard/runtime.ts";
-import { createWorkboardCard, createWorkboardTask } from "./lib/workboard/test/index-helpers.ts";
-type WorkboardCatalogSnapshot = Parameters<Parameters<typeof createWorkboardCatalogRuntime>[0]>[0];
+import { createWorkboardCard } from "./lib/workboard/test/index-helpers.ts";
+type WorkboardCatalogSnapshot = Parameters<ConstructorParameters<typeof WorkboardCatalog>[0]>[0];
 
 const board = (id: string) => ({
   id,
@@ -27,128 +27,26 @@ afterEach(() => {
 });
 
 describe("Workboard catalog", () => {
-  it("hydrates shared cards without completing task readiness or clearing recovery state", async () => {
-    const card = createWorkboardCard({ sessionKey: "agent:writer:captured" });
-    const request = vi.fn().mockResolvedValue({ cards: [card], boards: [board("ops")] });
-    const host = createHost();
-    const runtime = createWorkboardCatalogRuntime(() => {}, host);
-    const client = { request } as unknown as GatewayBrowserClient;
-    try {
-      runtime.sync(client, true);
-      await vi.waitFor(() => expect(host.boardsReady).toBe(true));
-      expect(host.state.cards).toEqual([card]);
-      expect(host.state.loaded).toBe(false);
-      expect(host.state.loadAttempted).toBe(false);
-
-      Object.assign(host.state, {
-        loaded: true,
-        loadAttempted: true,
-        lifecycleTasksPrepared: true,
-        mutationReadiness: "canonical_reload_required",
-        error: "Recover the previous save",
-        lastRefreshError: "Task refresh unavailable",
-      });
-      request.mockResolvedValueOnce({
-        cards: [{ ...card, title: "Updated title" }],
-        boards: [board("ops")],
-      });
-      runtime.handleGatewayEvent("plugin.workboard.changed");
-      await vi.waitFor(() => expect(host.state.cards[0]?.title).toBe("Updated title"));
-      expect(host.state).toMatchObject({
-        loaded: true,
-        loadAttempted: true,
-        lifecycleTasksPrepared: true,
-        mutationReadiness: "canonical_reload_required",
-        error: "Recover the previous save",
-        lastRefreshError: "Task refresh unavailable",
-      });
-      expect(request.mock.calls.map(([method]) => method)).toEqual([
-        "workboard.cards.list",
-        "workboard.cards.list",
-      ]);
-    } finally {
-      runtime.dispose();
-      host.dispose();
-    }
-  });
-
-  it("does not satisfy a full page load with pending catalog hydration", async () => {
-    const pending = createDeferred<{ cards: []; boards: ReturnType<typeof board>[] }>();
-    const request = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue({ cards: [] });
-    const host = createHost();
-    const runtime = createWorkboardCatalogRuntime(() => {}, host);
-    const client = { request } as unknown as GatewayBrowserClient;
-    try {
-      runtime.sync(client, true);
-      const fullLoad = loadWorkboard({ host, client });
-      pending.resolve({ cards: [], boards: [board("ops")] });
-      await expect(fullLoad).resolves.toBe(true);
-      expect(request).toHaveBeenCalledTimes(2);
-      expect(host.state.loaded).toBe(true);
-      expect(host.state.loadAttempted).toBe(true);
-    } finally {
-      runtime.dispose();
-      host.dispose();
-    }
-  });
-
-  it.each(["before request", "during request"])(
-    "updates queued board metadata while retaining a draft opened %s",
-    async (timing) => {
-      const card = createWorkboardCard({ taskId: "task-1" });
-      const pending = createDeferred<unknown>();
-      const refreshedCard = {
-        ...card,
-        title: "Updated remotely",
-        taskId: "task-2",
-        updatedAt: 2,
-      };
-      const request = vi
-        .fn()
-        .mockResolvedValueOnce({ cards: [card], boards: [board("ops")] })
-        .mockReturnValueOnce(pending.promise)
-        .mockResolvedValue({
-          cards: [refreshedCard],
-          boards: [{ ...board("ops"), name: "Latest board name" }],
-        });
+  it.each([false, true])(
+    "loads the full page after catalog hydration (failed=%s)",
+    async (failed) => {
+      const pending = createDeferred<{ cards: []; boards: ReturnType<typeof board>[] }>();
+      const request = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue({ cards: [] });
       const host = createHost();
-      const runtime = createWorkboardCatalogRuntime(() => {}, host);
+      const runtime = new WorkboardCatalog(() => {}, host);
       const client = { request } as unknown as GatewayBrowserClient;
-      const openDraft = () => {
-        host.state.draftOpen = true;
-        host.state.editingCardId = card.id;
-        host.state.editingCardBase = host.state.cards[0]!;
-        host.state.draftTitle = "Keep my unsaved title";
-      };
       try {
         runtime.sync(client, true);
-        await vi.waitFor(() => expect(host.boardsReady).toBe(true));
-        host.state.tasksByCardId.set(card.id, createWorkboardTask());
-        const cachedCards = host.state.cards;
-        const cachedTasks = new Map(host.state.tasksByCardId);
-        if (timing === "before request") {
-          openDraft();
+        const fullLoad = loadWorkboard({ host, client });
+        if (failed) {
+          pending.reject(new Error("Catalog unavailable"));
+        } else {
+          pending.resolve({ cards: [], boards: [board("ops")] });
         }
-        runtime.handleGatewayEvent("plugin.workboard.changed");
-        await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-        if (timing === "during request") {
-          openDraft();
-        }
-        runtime.handleGatewayEvent("plugin.workboard.changed");
-        pending.resolve({
-          cards: [refreshedCard],
-          boards: [{ ...board("ops"), name: "Earlier board name" }],
-        });
-        await vi.waitFor(() => expect(host.state.boards[0]?.name).toBe("Latest board name"));
-        expect(request).toHaveBeenCalledTimes(3);
-        expect(host.state.cards).toEqual(cachedCards);
-        expect(host.state.tasksByCardId).toEqual(cachedTasks);
-        expect(host.state.draftTitle).toBe("Keep my unsaved title");
-
-        host.state.draftOpen = false;
-        host.state.editingCardId = null;
-        runtime.handleGatewayEvent("plugin.workboard.changed");
-        await vi.waitFor(() => expect(host.state.cards[0]?.title).toBe(refreshedCard.title));
+        await expect(fullLoad).resolves.toBe(true);
+        expect(request).toHaveBeenCalledTimes(2);
+        expect(host.state.loaded).toBe(true);
+        expect(host.state.loadAttempted).toBe(true);
       } finally {
         runtime.dispose();
         host.dispose();
@@ -166,7 +64,7 @@ describe("Workboard catalog", () => {
       .mockReturnValueOnce(pending.promise)
       .mockResolvedValueOnce({ card: moved });
     const host = createHost();
-    const runtime = createWorkboardCatalogRuntime(() => {}, host);
+    const runtime = new WorkboardCatalog(() => {}, host);
     const client = { request } as unknown as GatewayBrowserClient;
     try {
       runtime.sync(client, true);
@@ -190,7 +88,7 @@ describe("Workboard catalog", () => {
       boards: [{ ...board("ops"), name: "Operations", icon: "⚙", color: "#22c55e" }],
     });
     const host = createHost();
-    const runtime = createWorkboardCatalogRuntime((snapshot) => snapshots.push(snapshot), host);
+    const runtime = new WorkboardCatalog((snapshot) => snapshots.push(snapshot), host);
 
     runtime.sync({ request } as unknown as GatewayBrowserClient, true);
     await vi.waitFor(() => expect(snapshots.at(-1)?.ready).toBe(true));
@@ -210,10 +108,7 @@ describe("Workboard catalog", () => {
       .mockReturnValueOnce(first.promise)
       .mockResolvedValueOnce({ cards: [], boards: [board("ops")] });
     const snapshots: WorkboardCatalogSnapshot[] = [];
-    const runtime = createWorkboardCatalogRuntime(
-      (snapshot) => snapshots.push(snapshot),
-      createHost(),
-    );
+    const runtime = new WorkboardCatalog((snapshot) => snapshots.push(snapshot), createHost());
     const client = { request } as unknown as GatewayBrowserClient;
 
     runtime.sync(client, true);
@@ -234,10 +129,7 @@ describe("Workboard catalog", () => {
     const firstClient = { request: firstRequest } as unknown as GatewayBrowserClient;
     const secondClient = { request: secondRequest } as unknown as GatewayBrowserClient;
     const snapshots: WorkboardCatalogSnapshot[] = [];
-    const runtime = createWorkboardCatalogRuntime(
-      (snapshot) => snapshots.push(snapshot),
-      createHost(),
-    );
+    const runtime = new WorkboardCatalog((snapshot) => snapshots.push(snapshot), createHost());
 
     runtime.sync(firstClient, true);
     runtime.handleGatewayEvent("plugin.workboard.changed");
@@ -260,7 +152,7 @@ describe("Workboard catalog", () => {
       .mockResolvedValueOnce({ cards: [], boards: [board("platform")] });
     const snapshots: WorkboardCatalogSnapshot[] = [];
     const host = createHost();
-    const runtime = createWorkboardCatalogRuntime((snapshot) => snapshots.push(snapshot), host);
+    const runtime = new WorkboardCatalog((snapshot) => snapshots.push(snapshot), host);
     const client = { request } as unknown as GatewayBrowserClient;
 
     runtime.sync(client, true);
@@ -293,7 +185,7 @@ describe("Workboard catalog", () => {
       .mockResolvedValueOnce({ cards: [], boards: [board("platform")] });
     const snapshots: WorkboardCatalogSnapshot[] = [];
     const host = createHost();
-    const runtime = createWorkboardCatalogRuntime((snapshot) => snapshots.push(snapshot), host);
+    const runtime = new WorkboardCatalog((snapshot) => snapshots.push(snapshot), host);
     const client = { request } as unknown as GatewayBrowserClient;
 
     runtime.sync(client, true);
@@ -314,7 +206,6 @@ describe("Workboard catalog", () => {
     expect(snapshots.at(-1)?.boards[0]?.id).toBe("platform");
     expect(getWorkboardState(host).boards[0]?.id).toBe("platform");
     expect(host.boardsReady).toBe(true);
-    expect(request).toHaveBeenCalledTimes(3);
     runtime.dispose();
   });
 
@@ -326,10 +217,7 @@ describe("Workboard catalog", () => {
       .mockResolvedValueOnce({ ok: true })
       .mockResolvedValueOnce({ cards: [], boards: [board("platform")] });
     const snapshots: WorkboardCatalogSnapshot[] = [];
-    const runtime = createWorkboardCatalogRuntime(
-      (snapshot) => snapshots.push(snapshot),
-      createHost(),
-    );
+    const runtime = new WorkboardCatalog((snapshot) => snapshots.push(snapshot), createHost());
     const client = { request } as unknown as GatewayBrowserClient;
 
     runtime.sync(client, true);
@@ -340,28 +228,6 @@ describe("Workboard catalog", () => {
     await vi.advanceTimersByTimeAsync(2_000);
 
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
-    await vi.waitFor(() => expect(snapshots.at(-1)?.boards[0]?.id).toBe("platform"));
-    runtime.dispose();
-  });
-
-  it("forces a catalog refresh after reconnect", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({ cards: [], boards: [board("ops")] })
-      .mockResolvedValueOnce({ cards: [], boards: [board("platform")] });
-    const snapshots: WorkboardCatalogSnapshot[] = [];
-    const runtime = createWorkboardCatalogRuntime(
-      (snapshot) => snapshots.push(snapshot),
-      createHost(),
-    );
-    const client = { request } as unknown as GatewayBrowserClient;
-
-    runtime.sync(client, true);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    runtime.sync(client, false);
-    runtime.sync(client, true);
-
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
     await vi.waitFor(() => expect(snapshots.at(-1)?.boards[0]?.id).toBe("platform"));
     runtime.dispose();
   });

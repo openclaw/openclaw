@@ -3,6 +3,8 @@ import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-con
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import type { CronStoreFile } from "../types.js";
+import { readCronJobNamesInDatabase } from "./job-name.kernel.js";
+import { readCronStoreFingerprints } from "./row-codec.js";
 import { serializeCronSaveError } from "./save-error.js";
 import type { CronStoreSaveWorkerOperations } from "./save-worker.types.js";
 import { saveCronStoreChangesInDatabase, saveCronStoreInDatabase } from "./save.kernel.js";
@@ -39,12 +41,16 @@ export function executeCronStoreSaveCommand(command: SaveCommand, database: Open
         deferSqlitePostCommitPublication(db, () => {
           committed = true;
         });
-        return value;
+        return {
+          value,
+          names: readCronJobNamesInDatabase(db, undefined, command.input.storeKey),
+          ...readCronStoreFingerprints(db, command.input.storeKey),
+        };
       },
       { database, env: getSqliteWorkerStateContext().environment },
       command.type === "cron.saveChanges" ? { operationLabel: "cron.config-mutation" } : undefined,
     );
-    return { ok: true as const, value: result, committed };
+    return { ok: true as const, ...result, committed };
   } catch (error) {
     return {
       ok: false as const,

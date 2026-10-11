@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
 import { z } from "zod";
 import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import type {
@@ -42,30 +42,8 @@ const memoryHostRecallResultSchema = z.looseObject({
   endLine: memoryHostFiniteNumberSchema,
   score: memoryHostFiniteNumberSchema,
 });
-const memoryHostRecallResultsSchema = z.array(memoryHostRecallResultSchema);
 const memoryHostSkippedRecallResultSchema = memoryHostRecallResultSchema.extend({
   reason: z.literal("non-short-term-memory-path"),
-});
-const memoryHostSkippedRecallResultsSchema = z.array(memoryHostSkippedRecallResultSchema);
-const boundedRecallResultsSchema = z.array(z.unknown()).transform((values, context) => {
-  const parsed = memoryHostRecallResultsSchema.safeParse(
-    values.slice(0, MAX_MEMORY_HOST_EVENT_ITEMS),
-  );
-  if (!parsed.success) {
-    context.addIssue({ code: "custom", message: "invalid recall result" });
-    return z.NEVER;
-  }
-  return { items: parsed.data, truncated: values.length > MAX_MEMORY_HOST_EVENT_ITEMS };
-});
-const boundedSkippedRecallResultsSchema = z.array(z.unknown()).transform((values, context) => {
-  const parsed = memoryHostSkippedRecallResultsSchema.safeParse(
-    values.slice(0, MAX_MEMORY_HOST_EVENT_ITEMS),
-  );
-  if (!parsed.success) {
-    context.addIssue({ code: "custom", message: "invalid skipped recall result" });
-    return z.NEVER;
-  }
-  return { items: parsed.data, truncated: values.length > MAX_MEMORY_HOST_EVENT_ITEMS };
 });
 const memoryHostPromotionCandidateSchema = z.looseObject({
   key: z.string(),
@@ -75,17 +53,19 @@ const memoryHostPromotionCandidateSchema = z.looseObject({
   score: memoryHostFiniteNumberSchema,
   recallCount: memoryHostFiniteNumberSchema,
 });
-const memoryHostPromotionCandidatesSchema = z.array(memoryHostPromotionCandidateSchema);
-const boundedPromotionCandidatesSchema = z.array(z.unknown()).transform((values, context) => {
-  const parsed = memoryHostPromotionCandidatesSchema.safeParse(
-    values.slice(0, MAX_MEMORY_HOST_EVENT_ITEMS),
-  );
-  if (!parsed.success) {
-    context.addIssue({ code: "custom", message: "invalid promotion candidate" });
-    return z.NEVER;
-  }
-  return { items: parsed.data, truncated: values.length > MAX_MEMORY_HOST_EVENT_ITEMS };
-});
+
+function boundedEventItems<T extends z.ZodType>(itemSchema: T, message: string) {
+  const itemsSchema = z.array(itemSchema);
+  return z.array(z.unknown()).transform((values, context) => {
+    const parsed = itemsSchema.safeParse(values.slice(0, MAX_MEMORY_HOST_EVENT_ITEMS));
+    if (!parsed.success) {
+      context.addIssue({ code: "custom", message });
+      return z.NEVER;
+    }
+    return { items: parsed.data, truncated: values.length > MAX_MEMORY_HOST_EVENT_ITEMS };
+  });
+}
+
 const memoryHostEventRecordSchema = z.discriminatedUnion("type", [
   z.looseObject({
     type: z.literal("memory.recall.recorded"),
@@ -93,7 +73,7 @@ const memoryHostEventRecordSchema = z.discriminatedUnion("type", [
     storageTruncated: z.unknown().optional(),
     query: z.string(),
     resultCount: memoryHostFiniteNumberSchema,
-    results: boundedRecallResultsSchema,
+    results: boundedEventItems(memoryHostRecallResultSchema, "invalid recall result"),
   }),
   z.looseObject({
     type: z.literal("memory.recall.skipped"),
@@ -103,7 +83,10 @@ const memoryHostEventRecordSchema = z.discriminatedUnion("type", [
     reason: z.literal("non-short-term-memory-path"),
     eligibleResultCount: memoryHostFiniteNumberSchema,
     skippedResultCount: memoryHostFiniteNumberSchema,
-    results: boundedSkippedRecallResultsSchema,
+    results: boundedEventItems(
+      memoryHostSkippedRecallResultSchema,
+      "invalid skipped recall result",
+    ),
   }),
   z.looseObject({
     type: z.literal("memory.promotion.applied"),
@@ -111,7 +94,10 @@ const memoryHostEventRecordSchema = z.discriminatedUnion("type", [
     storageTruncated: z.unknown().optional(),
     memoryPath: z.string(),
     applied: memoryHostFiniteNumberSchema,
-    candidates: boundedPromotionCandidatesSchema,
+    candidates: boundedEventItems(
+      memoryHostPromotionCandidateSchema,
+      "invalid promotion candidate",
+    ),
   }),
   z.looseObject({
     type: z.literal("memory.dream.completed"),
@@ -135,10 +121,7 @@ function normalizeMemoryHostWorkspaceKey(workspaceDir: string): string {
 }
 
 function memoryHostWorkspacePrefix(workspaceDir: string): string {
-  return createHash("sha256")
-    .update(normalizeMemoryHostWorkspaceKey(workspaceDir))
-    .digest("hex")
-    .slice(0, WORKSPACE_HASH_BYTES);
+  return sha256HexPrefixCore(normalizeMemoryHostWorkspaceKey(workspaceDir), WORKSPACE_HASH_BYTES);
 }
 
 function truncateUtf8(value: string, maxBytes: number): { value: string; truncated: boolean } {
@@ -168,54 +151,45 @@ export function normalizeMemoryHostEventRecordForStorage(
     return null;
   }
   const event = parsed.data;
-  const timestamp = truncateUtf8(event.timestamp, 128);
-  let truncated = timestamp.truncated || event.storageTruncated === true;
+  let truncated = event.storageTruncated === true;
+  const boundText = (text: string, maxBytes: number) => {
+    const bounded = truncateUtf8(text, maxBytes);
+    truncated ||= bounded.truncated;
+    return bounded.value;
+  };
+  const timestamp = boundText(event.timestamp, 128);
 
   if (event.type === "memory.recall.recorded" || event.type === "memory.recall.skipped") {
-    const query = truncateUtf8(event.query, MAX_MEMORY_HOST_EVENT_TEXT_BYTES);
-    truncated ||= query.truncated || event.results.truncated;
+    const query = boundText(event.query, MAX_MEMORY_HOST_EVENT_TEXT_BYTES);
+    truncated ||= event.results.truncated;
     const results = event.results.items.map((result) => {
-      const resultPath = truncateUtf8(result.path, MAX_MEMORY_HOST_EVENT_PATH_BYTES);
-      truncated ||= resultPath.truncated;
       return {
-        path: resultPath.value,
+        path: boundText(result.path, MAX_MEMORY_HOST_EVENT_PATH_BYTES),
         startLine: result.startLine,
         endLine: result.endLine,
         score: result.score,
-        ...(event.type === "memory.recall.skipped"
-          ? { reason: "non-short-term-memory-path" as const }
-          : {}),
       };
     });
     const normalized =
       event.type === "memory.recall.recorded"
         ? {
             type: "memory.recall.recorded" as const,
-            timestamp: timestamp.value,
-            query: query.value,
+            timestamp,
+            query,
             resultCount: event.resultCount,
-            results: results.map((result) => ({
-              path: result.path,
-              startLine: result.startLine,
-              endLine: result.endLine,
-              score: result.score,
-            })),
+            results,
             ...(truncated ? { storageTruncated: true as const } : {}),
           }
         : {
             type: "memory.recall.skipped" as const,
-            timestamp: timestamp.value,
-            query: query.value,
+            timestamp,
+            query,
             reason: "non-short-term-memory-path" as const,
             eligibleResultCount: event.eligibleResultCount,
             skippedResultCount: event.skippedResultCount,
-            results: results.map((result) => ({
-              path: result.path,
-              startLine: result.startLine,
-              endLine: result.endLine,
-              score: result.score,
-              reason: "non-short-term-memory-path" as const,
-            })),
+            results: results.map((result) =>
+              Object.assign(result, { reason: "non-short-term-memory-path" as const }),
+            ),
             ...(truncated ? { storageTruncated: true as const } : {}),
           };
     return Buffer.byteLength(JSON.stringify(normalized), "utf8") <= MAX_MEMORY_HOST_EVENT_JSON_BYTES
@@ -224,15 +198,12 @@ export function normalizeMemoryHostEventRecordForStorage(
   }
 
   if (event.type === "memory.promotion.applied") {
-    const memoryPath = truncateUtf8(event.memoryPath, MAX_MEMORY_HOST_EVENT_PATH_BYTES);
-    truncated ||= memoryPath.truncated || event.candidates.truncated;
+    const memoryPath = boundText(event.memoryPath, MAX_MEMORY_HOST_EVENT_PATH_BYTES);
+    truncated ||= event.candidates.truncated;
     const candidates = event.candidates.items.map((candidate) => {
-      const key = truncateUtf8(candidate.key, MAX_MEMORY_HOST_EVENT_PATH_BYTES);
-      const candidatePath = truncateUtf8(candidate.path, MAX_MEMORY_HOST_EVENT_PATH_BYTES);
-      truncated ||= key.truncated || candidatePath.truncated;
       return {
-        key: key.value,
-        path: candidatePath.value,
+        key: boundText(candidate.key, MAX_MEMORY_HOST_EVENT_PATH_BYTES),
+        path: boundText(candidate.path, MAX_MEMORY_HOST_EVENT_PATH_BYTES),
         startLine: candidate.startLine,
         endLine: candidate.endLine,
         score: candidate.score,
@@ -241,8 +212,8 @@ export function normalizeMemoryHostEventRecordForStorage(
     });
     const normalized = {
       type: "memory.promotion.applied" as const,
-      timestamp: timestamp.value,
-      memoryPath: memoryPath.value,
+      timestamp,
+      memoryPath,
       applied: event.applied,
       candidates,
       ...(truncated ? { storageTruncated: true as const } : {}),
@@ -252,32 +223,25 @@ export function normalizeMemoryHostEventRecordForStorage(
       : { ...normalized, candidates: [], storageTruncated: true as const };
   }
 
-  if (event.type === "memory.dream.completed") {
-    const error = event.error
-      ? truncateUtf8(event.error, MAX_MEMORY_HOST_EVENT_TEXT_BYTES)
-      : undefined;
-    const inlinePath = event.inlinePath
-      ? truncateUtf8(event.inlinePath, MAX_MEMORY_HOST_EVENT_PATH_BYTES)
-      : undefined;
-    const reportPath = event.reportPath
-      ? truncateUtf8(event.reportPath, MAX_MEMORY_HOST_EVENT_PATH_BYTES)
-      : undefined;
-    truncated ||= Boolean(error?.truncated || inlinePath?.truncated || reportPath?.truncated);
-    return {
-      type: event.type,
-      timestamp: timestamp.value,
-      phase: event.phase,
-      ...(event.outcome ? { outcome: event.outcome } : {}),
-      ...(error ? { error: error.value } : {}),
-      ...(inlinePath ? { inlinePath: inlinePath.value } : {}),
-      ...(reportPath ? { reportPath: reportPath.value } : {}),
-      lineCount: event.lineCount,
-      storageMode: event.storageMode,
-      ...(truncated ? { storageTruncated: true } : {}),
-    };
-  }
-
-  return null;
+  const error = event.error ? boundText(event.error, MAX_MEMORY_HOST_EVENT_TEXT_BYTES) : undefined;
+  const inlinePath = event.inlinePath
+    ? boundText(event.inlinePath, MAX_MEMORY_HOST_EVENT_PATH_BYTES)
+    : undefined;
+  const reportPath = event.reportPath
+    ? boundText(event.reportPath, MAX_MEMORY_HOST_EVENT_PATH_BYTES)
+    : undefined;
+  return {
+    type: event.type,
+    timestamp,
+    phase: event.phase,
+    ...(event.outcome ? { outcome: event.outcome } : {}),
+    ...(error ? { error } : {}),
+    ...(inlinePath ? { inlinePath } : {}),
+    ...(reportPath ? { reportPath } : {}),
+    lineCount: event.lineCount,
+    storageMode: event.storageMode,
+    ...(truncated ? { storageTruncated: true } : {}),
+  };
 }
 
 export async function registerMemoryHostEvent(params: {

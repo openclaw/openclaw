@@ -28,6 +28,41 @@ struct GatewayOperatorFleetTests {
     }
 
     @Test
+    func `Access retirement drains managed sockets and preserves ordinary siblings`() async throws {
+        try await self.withFleet { fleet, fixture, ordinary in
+            try await self.waitUntil { fixture.activeConnectionCount == 1 }
+            let originURL = try #require(URL(string: "https://gateway.example.test"))
+            let origin = try CloudflareAccessOrigin(originURL)
+            let authorization = GatewayIngressAuthorization(
+                origin: origin,
+                revision: 1,
+                registrationID: UUID(),
+                headers: { _ in [:] },
+                isCurrent: { false },
+                checkResponse: { _ in },
+                load: { request, operation in try await operation(request) })
+            let managed = GatewayConnectConfig(
+                url: ordinary.url,
+                stableID: "managed-fleet-test",
+                tls: GatewayTLSParams(required: false, expectedFingerprint: nil, allowTOFU: false, storeKey: nil),
+                token: nil,
+                bootstrapToken: nil,
+                password: nil,
+                nodeOptions: ordinary.nodeOptions,
+                ingressAuthorization: authorization)
+            fleet.reconcile(desiredStableIDs: [ordinary.stableID, managed.stableID], configs: [ordinary, managed])
+            try await self.waitUntil { fixture.activeConnectionCount == 2 }
+            // TCP acceptance can precede the WebSocket upgrade and Gateway connect frame.
+            try await self.waitUntil { fixture.capturedAuth(at: 1) != nil }
+            // Retirement follows captured ownership after the old grant becomes invalid.
+            await fleet.retire(origin: origin)
+            try await self.waitUntil { fixture.activeConnectionCount == 1 }
+            #expect(fleet._test_runtimeStableIDs() == [ordinary.stableID])
+            #expect(fixture.capturedAuth(at: 2) == nil)
+        }
+    }
+
+    @Test
     func `stale socket replacement invalidates only the old connect admission`() async throws {
         let transport = GatewayTestWebSocketSession()
         let gateway = GatewayNodeSession()
@@ -133,11 +168,14 @@ struct GatewayOperatorFleetTests {
         }
     }
 
-    private func waitUntil(_ condition: () -> Bool) async throws {
+    private func waitUntil(
+        sourceLocation: SourceLocation = #_sourceLocation,
+        _ condition: () -> Bool) async throws
+    {
         let deadline = ContinuousClock.now + .seconds(5)
         while !condition(), ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(10))
         }
-        try #require(condition())
+        try #require(condition(), sourceLocation: sourceLocation)
     }
 }

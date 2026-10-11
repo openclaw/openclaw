@@ -1,4 +1,3 @@
-/** Prepared plugin metadata handoff for runtime model normalization. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core";
 import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
@@ -12,10 +11,7 @@ import {
   normalizeProviderId,
 } from "../../agents/model-selection.js";
 import { RUNTIME_MODEL_VISIBILITY_NORMALIZATION } from "../../agents/model-visibility-policy.js";
-import {
-  needsThinkHydration,
-  resolveEffectiveAgentRuntime,
-} from "../../agents/thinking-runtime.js";
+import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
@@ -30,10 +26,7 @@ import {
 
 export function normalizeRuntimeChoiceId(runtime: string | undefined): string {
   const normalized = normalizeLowercaseStringOrEmpty(runtime);
-  if (!normalized || normalized === "auto" || normalized === "default") {
-    return "openclaw";
-  }
-  return normalized;
+  return !normalized || normalized === "auto" || normalized === "default" ? "openclaw" : normalized;
 }
 
 export type RuntimeModelNormalization = NonNullable<Parameters<typeof normalizeModelRef>[2]>;
@@ -47,14 +40,6 @@ export function resolveRuntimeNormalization(cfg: OpenClawConfig): RuntimeModelNo
       allowWorkspaceScopedSnapshot: true,
     }),
   };
-}
-
-export function normalizeRuntimeRef(
-  provider: string,
-  model: string,
-  normalization: RuntimeModelNormalization = RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-) {
-  return normalizeModelRef(provider, model, normalization);
 }
 
 export function findSelectedCatalogEntry(params: {
@@ -114,6 +99,9 @@ export async function prepareModelSelectionRuntime(params: {
   model: string;
   catalog: readonly ModelCatalogEntry[];
   rawRuntime?: string;
+  hydrateThinkingCatalog?: boolean;
+  /** Idle model-only host changes need no thinking policy refresh. */
+  thinkingPolicyRequired?: boolean;
   profileOverride?: string;
   sessionEntry?: Pick<
     SessionEntry,
@@ -149,14 +137,14 @@ export async function prepareModelSelectionRuntime(params: {
   let harness: AgentHarness | undefined;
   let inheritedCliRuntime: string | undefined;
   let needsRuntimeChoice = runtime.kind === "set";
+  const runtimeFacts = {
+    agentId: params.agentId,
+    provider: params.provider,
+    modelId: params.model,
+    modelApi: selected?.api,
+    modelBaseUrl: selected?.baseUrl,
+  };
   if (!params.rawRuntime) {
-    const runtimeFacts = {
-      agentId: params.agentId,
-      provider: params.provider,
-      modelId: params.model,
-      modelApi: selected?.api,
-      modelBaseUrl: selected?.baseUrl,
-    };
     const policy = resolveAgentHarnessPolicy({ ...runtimeFacts, config: params.cfg });
     const effectiveRuntime = resolveEffectiveAgentRuntime({
       ...runtimeFacts,
@@ -205,42 +193,41 @@ export async function prepareModelSelectionRuntime(params: {
       ? runtime.runtime
       : resolveEffectiveAgentRuntime({
           cfg: params.cfg,
-          agentId: params.agentId,
-          provider: params.provider,
-          modelId: params.model,
-          modelApi: selected?.api,
-          modelBaseUrl: selected?.baseUrl,
+          ...runtimeFacts,
           sessionEntry: runtimeEntry,
         });
-  if (!needsThinkHydration(params.catalog, params.provider, params.model, agentRuntime)) {
-    return {
-      status: "ready",
-      runtime,
-      catalog: [...params.catalog],
-      validateRuntimeSelection,
-      harness,
-    };
+  let hydratedSelection: ModelCatalogEntry | undefined;
+  const needsThinkingObservation =
+    params.thinkingPolicyRequired !== false ||
+    agentRuntime !== "openclaw" ||
+    !selected ||
+    (selected.nativeRuntime !== undefined && selected.nativeRuntime !== "openclaw");
+  if (
+    params.hydrateThinkingCatalog !== false &&
+    params.cfg.plugins?.enabled !== false &&
+    needsThinkingObservation
+  ) {
+    // The selected route owns its capabilities. A prepared default-provider row cannot
+    // supply thinking or context metadata for an explicit cross-provider selection.
+    const { loadProviderScopedThinkingCatalog } =
+      await import("../../agents/model-catalog.runtime.js");
+    const catalog = await loadProviderScopedThinkingCatalog({
+      config: params.cfg,
+      agentId: params.agentId,
+      provider: params.provider,
+      model: params.model,
+      agentRuntime,
+      workspaceDir: params.workspaceDir,
+    });
+    hydratedSelection = findSelectedCatalogEntry({ ...params, catalog });
   }
-  // The selected route owns its capabilities. A prepared default-provider row cannot
-  // supply thinking or context metadata for an explicit cross-provider selection.
-  const { loadProviderScopedThinkingCatalog } =
-    await import("../../agents/model-catalog.runtime.js");
-  const catalog = await loadProviderScopedThinkingCatalog({
-    config: params.cfg,
-    agentId: params.agentId,
-    provider: params.provider,
-    model: params.model,
-    agentRuntime,
-    workspaceDir: params.workspaceDir,
-  });
-  const resolved = findSelectedCatalogEntry({ ...params, catalog });
   return {
     status: "ready",
     runtime,
     validateRuntimeSelection,
     harness,
-    catalog: resolved
-      ? [resolved, ...params.catalog.filter((entry) => entry !== selected)]
+    catalog: hydratedSelection
+      ? [hydratedSelection, ...params.catalog.filter((entry) => entry !== selected)]
       : [...params.catalog],
   };
 }

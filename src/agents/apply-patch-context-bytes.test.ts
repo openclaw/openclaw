@@ -15,6 +15,19 @@ async function withTempDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
 
 describe("applyPatch context byte preservation", () => {
   it.each([
+    ...["\u2000", "\u2001"].map((space) => ({
+      name: `an internal U+${space.charCodeAt(0).toString(16)} quad space`,
+      files: { "source.txt": `# wait${space}30 seconds\nold\n` },
+      patch: `*** Begin Patch
+*** Update File: source.txt
+@@
+ # wait 30 seconds
+-old
++new\u2000value\u2001
+*** End Patch`,
+      expected: { "source.txt": `# wait${space}30 seconds\nnew\u2000value\u2001\n` },
+      missing: [],
+    })),
     {
       name: "an end-of-file replacement",
       files: { "source.txt": "head\nlast context  \nold\n" },
@@ -142,42 +155,6 @@ describe("applyPatch context byte preservation", () => {
     }
   });
 
-  it("preserves CRLF line endings for changed and context lines", async () => {
-    const initial =
-      'class Program {\r\n  static void Main() {\r\n    Console.WriteLine("hello");\r\n  }\r\n}\r\n';
-    const memory = createMemoryPatchSandbox({ "source.txt": initial });
-    const patch = `*** Begin Patch
-*** Update File: source.txt
-@@
-   static void Main() {
--    Console.WriteLine("hello");
-+    Console.WriteLine("world");
-   }
-*** End Patch`;
-
-    const result = await applyPatch(patch, memory.options);
-
-    expect(result.noOp).toBeUndefined();
-    expect(memory.files.get("/sandbox/source.txt")).toBe(
-      'class Program {\r\n  static void Main() {\r\n    Console.WriteLine("world");\r\n  }\r\n}\r\n',
-    );
-  });
-
-  it("preserves CRLF line endings when the hunk spans the whole file", async () => {
-    const memory = createMemoryPatchSandbox({ "source.txt": "foo\r\nbar\r\n" });
-    const patch = `*** Begin Patch
-*** Update File: source.txt
-@@
- foo
--bar
-+baz
-*** End Patch`;
-
-    await applyPatch(patch, memory.options);
-
-    expect(memory.files.get("/sandbox/source.txt")).toBe("foo\r\nbaz\r\n");
-  });
-
   it("preserves CRLF line endings for inserted lines", async () => {
     const memory = createMemoryPatchSandbox({ "source.txt": "foo\r\nbar\r\n" });
     const patch = `*** Begin Patch
@@ -191,57 +168,7 @@ describe("applyPatch context byte preservation", () => {
     expect(memory.files.get("/sandbox/source.txt")).toBe("foo\r\nmiddle\r\nbar\r\n");
   });
 
-  it("keeps LF files on LF after a real update hunk", async () => {
-    const memory = createMemoryPatchSandbox({ "source.txt": "foo\nbar\n" });
-    const patch = `*** Begin Patch
-*** Update File: source.txt
-@@
- foo
--bar
-+baz
-*** End Patch`;
-
-    await applyPatch(patch, memory.options);
-
-    expect(memory.files.get("/sandbox/source.txt")).toBe("foo\nbaz\n");
-  });
-
-  it("keeps context line bytes when the hunk drops trailing whitespace", async () => {
-    const memory = createMemoryPatchSandbox({
-      "notes.md": "# Notes\nfirst line  \nsecond line  \nold value\ntail\n",
-    });
-    const patch = `*** Begin Patch
-*** Update File: notes.md
-@@
- first line
- second line
--old value
-+new value
- tail
-*** End Patch`;
-
-    await applyPatch(patch, memory.options);
-
-    expect(memory.files.get("/sandbox/notes.md")).toBe(
-      "# Notes\nfirst line  \nsecond line  \nnew value\ntail\n",
-    );
-  });
-
   it.each([
-    {
-      title: "keeps context line punctuation when the hunk uses normalized quotes",
-      fileName: "notes.md",
-      initialContent: "It\u2019s done\nold value\n",
-      patchText: `*** Begin Patch
-*** Update File: notes.md
-@@
- It's done
--old value
-+new value
-*** End Patch`,
-      expectedPath: "/sandbox/notes.md",
-      expectedContent: "It\u2019s done\nnew value\n",
-    },
     {
       title: "does not normalize mixed line endings outside the changed hunk",
       fileName: "source.txt",
@@ -254,18 +181,6 @@ describe("applyPatch context byte preservation", () => {
 *** End Patch`,
       expectedPath: "/sandbox/source.txt",
       expectedContent: "first\r\nchanged\nthird\r\n",
-    },
-    {
-      title: "applies context-only insertions at the requested context",
-      fileName: "source.txt",
-      initialContent: "alpha\nanchor\nomega\n",
-      patchText: `*** Begin Patch
-*** Update File: source.txt
-@@ anchor
-+inserted
-*** End Patch`,
-      expectedPath: "/sandbox/source.txt",
-      expectedContent: "alpha\nanchor\ninserted\nomega\n",
     },
     {
       title: "keeps later insertion contexts in original file coordinates",

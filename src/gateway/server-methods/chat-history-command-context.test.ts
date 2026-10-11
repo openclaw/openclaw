@@ -4,9 +4,9 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import {
   appendTranscriptMessage,
   replaceSessionEntry,
-  replaceTranscriptEvents,
 } from "../../config/sessions/session-accessor.js";
 import { readTranscriptDisplayDelta } from "../../config/sessions/session-accessor.sqlite-history-events.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -110,7 +110,7 @@ it.each([
     messageId: undefined,
     ignoreCliSessionImports: true,
   });
-  const delta = readChatHistoryDelta({
+  const delta = await readChatHistoryDelta({
     agentId: "main",
     cursor,
     scope,

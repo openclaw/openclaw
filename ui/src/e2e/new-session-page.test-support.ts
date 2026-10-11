@@ -49,6 +49,12 @@ export async function openEnvironmentPicker(page: Page) {
   await afterShow;
 }
 
+export function checkoutBaseRefInput(scope: Page | Locator): Locator {
+  return scope
+    .getByRole("combobox", { name: "From", exact: true })
+    .or(scope.getByRole("textbox", { name: "From", exact: true }));
+}
+
 export const NEW_SESSION_MODEL_CATALOG = [
   { id: "gpt-5.5", name: "GPT 5.5", provider: "openai" },
   { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
@@ -262,7 +268,7 @@ export async function expectPendingSessionPlacementStartupBeforeRuntime(
   );
   await expect
     .poll(() => page.locator(".agent-chat__composer-combobox textarea").isDisabled())
-    .toBe(true);
+    .toBe(false);
   expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
   expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
   await captureUiProof(owner, page, "02-cloud-startup-chunk-pending.png");

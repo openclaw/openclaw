@@ -77,7 +77,8 @@ vi.mock("./embeddings.js", () => ({
 }));
 
 import { MemoryIndexDatabase } from "./manager-database-context.js";
-import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
+import { loadMemorySourceFileState } from "./manager-source-state.js";
+import { MemorySyncTestHarness } from "./manager-sync-ops.test-support.js";
 
 type MemoryIndexEntry = {
   path: string;
@@ -100,13 +101,10 @@ function createDb(): DatabaseSync {
   return db;
 }
 
-class SessionSyncYieldHarness extends MemoryManagerSyncOps {
+class SessionSyncYieldHarness extends MemorySyncTestHarness {
   protected readonly createProvider = (): never => {
     throw new Error("Sync yield harness does not acquire embedding providers");
   };
-  protected releaseProvider(): never {
-    throw new Error("Sync yield harness does not own embedding providers");
-  }
   protected readonly cfg = {} as OpenClawConfig;
   protected readonly agentId = "main";
   protected readonly workspaceDir = "/tmp/openclaw-test-workspace";
@@ -141,13 +139,17 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
   ) {
     super();
     this.publishedDatabase = new MemoryIndexDatabase(db);
+    // Keep this scheduler fixture microtask-only; worker I/O could hide a missing yield.
+    this.publishedDatabase.readSourceState = async (query) =>
+      loadMemorySourceFileState({ db, ...query });
   }
 
-  async syncTargetArchiveFiles(files: string[]): Promise<void> {
+  async reindexArchiveFiles(files: string[]): Promise<void> {
     this.corpusFiles = files;
+    // Source-wide reindexing reads one in-memory hash snapshot. Worker round trips
+    // in targeted sync would yield on their own and hide a missing scheduler yield.
     await this.syncArchiveFiles({
-      needsFullReindex: false,
-      targetArchiveFiles: files,
+      needsFullReindex: true,
     });
   }
 
@@ -188,10 +190,7 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
 
   protected assertRequiredProviderAvailable(): void {}
 
-  protected async indexFile(
-    entry: MemoryIndexEntry,
-    _options: { source: MemorySource; content?: string },
-  ): Promise<void> {
+  protected async indexFile(entry: MemoryIndexEntry, _source: MemorySource): Promise<void> {
     this.indexedPaths.push(entry.path);
     this.onIndexFile(this.indexedPaths.length);
   }
@@ -252,7 +251,7 @@ describe("session sync responsiveness", () => {
       );
 
       try {
-        await harness.syncTargetArchiveFiles(files);
+        await harness.reindexArchiveFiles(files);
         expect(harness.indexedPaths).toEqual(
           files.map((file) => `sessions/${path.basename(file)}`),
         );

@@ -1,61 +1,66 @@
 import AppKit
-import AVFoundation
-import Dispatch
+import IOKit.hidsystem
 import OSLog
-import Speech
 
 /// Observes right Option and starts a push-to-talk capture while it is held.
-final class VoicePushToTalkHotkey: @unchecked Sendable {
-    static let shared = VoicePushToTalkHotkey()
-
+@MainActor
+final class VoicePushToTalkHotkey {
     private var globalMonitor: Any?
     private var localMonitor: Any?
-    private var optionDown = false // right option only
     private var active = false
+    private var enabled = false
+    private var talkSuppressed = false
 
-    private let beginAction: @Sendable () async -> Void
-    private let endAction: @Sendable () async -> Void
+    private let beginAction: @MainActor () -> Void
+    private let endAction: @MainActor (_ cancelled: Bool) -> Void
 
     init(
-        beginAction: @escaping @Sendable () async -> Void = { await VoicePushToTalk.shared.begin() },
-        endAction: @escaping @Sendable () async -> Void = { await VoicePushToTalk.shared.end() })
+        beginAction: @escaping @MainActor () -> Void = { VoicePushToTalk.shared.begin() },
+        endAction: @escaping @MainActor (Bool) -> Void = { VoicePushToTalk.shared.end(cancelled: $0) })
     {
         self.beginAction = beginAction
         self.endAction = endAction
     }
 
     func setEnabled(_ enabled: Bool) {
-        if ProcessInfo.processInfo.isRunningTests { return }
-        self.withMainThread { [weak self] in
-            guard let self else { return }
-            if enabled {
-                self.startMonitoring()
-            } else {
-                self.stopMonitoring()
-            }
+        self.enabled = enabled
+        self.reconcile()
+    }
+
+    func setTalkSuppressed(_ suppressed: Bool) {
+        self.talkSuppressed = suppressed
+        self.reconcile()
+    }
+
+    private func reconcile() {
+        if self.enabled, !self.talkSuppressed, voiceWakeSupported {
+            self.startMonitoring()
+        } else {
+            self.stopMonitoring()
         }
     }
 
     private func startMonitoring() {
-        // assert(Thread.isMainThread) - Removed for Swift 6
+        if ProcessInfo.processInfo.isRunningTests { return }
         guard self.globalMonitor == nil, self.localMonitor == nil else { return }
         // Listen-only global monitor; we rely on Input Monitoring permission to receive events.
         self.globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            let keyCode = event.keyCode
             let flags = event.modifierFlags
-            self?.handleFlagsChanged(keyCode: keyCode, modifierFlags: flags)
+            MainActor.assumeIsolated {
+                self?.updateModifierState(modifierFlags: flags)
+            }
         }
         // Also listen locally so we still catch events when the app is active/focused.
         self.localMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            let keyCode = event.keyCode
             let flags = event.modifierFlags
-            self?.handleFlagsChanged(keyCode: keyCode, modifierFlags: flags)
+            MainActor.assumeIsolated {
+                self?.updateModifierState(modifierFlags: flags)
+            }
             return event
         }
     }
 
     private func stopMonitoring() {
-        // assert(Thread.isMainThread) - Removed for Swift 6
         if let globalMonitor {
             NSEvent.removeMonitor(globalMonitor)
             self.globalMonitor = nil
@@ -64,64 +69,59 @@ final class VoicePushToTalkHotkey: @unchecked Sendable {
             NSEvent.removeMonitor(localMonitor)
             self.localMonitor = nil
         }
-        self.optionDown = false
         self.active = false
+        // Teardown also cancels a pending start or a released session still draining Speech.
+        self.endAction(true)
     }
 
-    private func handleFlagsChanged(keyCode: UInt16, modifierFlags: NSEvent.ModifierFlags) {
-        self.withMainThread { [weak self] in
-            self?.updateModifierState(keyCode: keyCode, modifierFlags: modifierFlags)
-        }
-    }
-
-    private func withMainThread(_ block: @escaping @Sendable () -> Void) {
-        DispatchQueue.main.async(execute: block)
-    }
-
-    private func updateModifierState(keyCode: UInt16, modifierFlags: NSEvent.ModifierFlags) {
-        // assert(Thread.isMainThread)  - Removed for Swift 6
-
-        // Right Option (keyCode 61) acts as a hold-to-talk modifier.
-        if keyCode == 61 {
-            self.optionDown = modifierFlags.contains(.option)
-        }
-
-        let chordActive = self.optionDown
+    private func updateModifierState(modifierFlags: NSEvent.ModifierFlags) {
+        guard self.enabled, !self.talkSuppressed else { return }
+        // Aggregate Option stays set when the other Option key remains held.
+        let chordActive = modifierFlags.rawValue & UInt(NX_DEVICERALTKEYMASK) != 0
         if chordActive, !self.active {
             self.active = true
-            Task {
-                Logger(subsystem: "ai.openclaw", category: "voicewake.ptt")
-                    .info("ptt hotkey down")
-                await self.beginAction()
-            }
+            self.beginAction()
         } else if !chordActive, self.active {
             self.active = false
-            Task {
-                Logger(subsystem: "ai.openclaw", category: "voicewake.ptt")
-                    .info("ptt hotkey up")
-                await self.endAction()
-            }
+            self.endAction(false)
         }
     }
 
-    func _testUpdateModifierState(keyCode: UInt16, modifierFlags: NSEvent.ModifierFlags) {
-        self.updateModifierState(keyCode: keyCode, modifierFlags: modifierFlags)
+    func _testUpdateModifierState(modifierFlags: NSEvent.ModifierFlags) {
+        self.updateModifierState(modifierFlags: modifierFlags)
     }
 }
 
 /// Records speech while the hotkey is held.
-actor VoicePushToTalk {
-    static let shared = VoicePushToTalk()
+@MainActor
+final class VoicePushToTalk {
+    static var shared: VoicePushToTalk {
+        AppStateStore.shared.voiceRuntime.ptt
+    }
+
+    private let state: AppVoiceRuntime.State
+    private let wake: VoiceWakeRuntime
+    private let sessions: VoiceSessionCoordinator
+    private let permissions: VoicePermissions
+
+    init(
+        state: @escaping AppVoiceRuntime.State,
+        wake: VoiceWakeRuntime,
+        sessions: VoiceSessionCoordinator,
+        permissions: VoicePermissions)
+    {
+        self.state = state
+        self.wake = wake
+        self.sessions = sessions
+        self.permissions = permissions
+    }
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "voicewake.ptt")
 
-    private var recognizerCache = SpeechRecognizerCache()
-    // Lazily created on begin() to avoid creating an AVAudioEngine at app launch, which can switch Bluetooth
-    // headphones into the low-quality headset profile even if push-to-talk is never used.
-    private var audioEngine: AVAudioEngine?
-    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
-    private var recognitionTask: SFSpeechRecognitionTask?
-    private var tapInstalled = false
+    private let capture = SpeechCaptureResources(mode: .pushToTalk)
+    private var holdID: UUID?
+    private var startupTask: Task<Void, Never>?
+    private var pauseLease: UUID?
 
     /// Session token used to drop stale callbacks when a new capture starts.
     private var sessionID = UUID()
@@ -130,162 +130,133 @@ actor VoicePushToTalk {
     private var volatile: String = ""
     private var activeConfig: Config?
     private var isCapturing = false
-    private var triggerChimePlayed = false
-    private var finalized = false
+    private var finalized = true
     private var timeoutTask: Task<Void, Never>?
     private var overlayToken: UUID?
     private var adoptedPrefix: String = ""
 
     private struct Config {
-        let micID: String?
         let localeID: String?
         let triggerChime: VoiceWakeChime
         let sendChime: VoiceWakeChime
     }
 
-    func begin() async {
-        guard voiceWakeSupported else { return }
-        guard !self.isCapturing else { return }
-
-        // Start a fresh session and invalidate any in-flight callbacks tied to an older one.
+    func begin() {
+        guard self.permissions.supported(), self.state() != nil, self.holdID == nil else { return }
+        let snapshot = self.sessions.snapshot()
+        // Retire the old capture, but retain its overlay and wake lease until admission
+        // commits or cancels. Dismissing here would animate out the replacement overlay.
+        self.retireCapture()
         let sessionID = UUID()
+        self.holdID = sessionID
         self.sessionID = sessionID
+        self.finalized = false
+        self.adoptedPrefix = snapshot.visible ? snapshot.text.trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        self.startupTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.holdID == sessionID { self.startupTask = nil }
+            }
+            let granted = await self.permissions.ensure(true)
+            guard !Task.isCancelled, self.holdID == sessionID else { return }
+            guard granted, self.sessions.snapshot().token == snapshot.token else {
+                self.end(cancelled: true)
+                return
+            }
 
-        // Ensure permissions up front.
-        let granted = await PermissionManager.ensureVoiceWakePermissions(interactive: true)
-        guard granted else { return }
+            // The startup task owns acquisition until its acknowledgement; end must not remove
+            // a lease before the wake actor has inserted it.
+            await self.wake.pauseForPushToTalk(lease: sessionID)
+            guard !Task.isCancelled, self.holdID == sessionID else {
+                await self.wake.resumeAfterPushToTalk(lease: sessionID)
+                return
+            }
+            let previousLease = self.pauseLease
+            self.pauseLease = sessionID
+            if let previousLease {
+                // Acquisition precedes release so wake cannot restart between held sessions.
+                Task { [wake] in await wake.resumeAfterPushToTalk(lease: previousLease) }
+            }
+            guard self.sessions.snapshot().token == snapshot.token else {
+                self.end(cancelled: true)
+                return
+            }
+            self.startCapture(sessionID: sessionID)
+        }
+    }
 
-        let config = await MainActor.run { self.makeConfig() }
+    private func startCapture(sessionID: UUID) {
+        guard let config = self.makeConfig() else {
+            self.end(cancelled: true)
+            return
+        }
         self.activeConfig = config
         self.isCapturing = true
-        self.triggerChimePlayed = false
-        self.finalized = false
-        self.timeoutTask?.cancel()
-        self.timeoutTask = nil
-        let snapshot = await MainActor.run { VoiceSessionCoordinator.shared.snapshot() }
-        self.adoptedPrefix = snapshot.visible ? snapshot.text.trimmingCharacters(in: .whitespacesAndNewlines) : ""
         self.logger.info("ptt begin adopted_prefix_len=\(self.adoptedPrefix.count, privacy: .public)")
         if config.triggerChime != .none {
-            self.triggerChimePlayed = true
-            await MainActor.run { VoiceWakeChimePlayer.play(config.triggerChime, reason: "ptt.trigger") }
+            VoiceWakeChimePlayer.play(config.triggerChime, reason: "ptt.trigger")
         }
-        // Pause the always-on wake word recognizer so both pipelines don't fight over the mic tap.
-        await VoiceWakeRuntime.shared.pauseForPushToTalk()
         let adoptedPrefix = self.adoptedPrefix
         let adoptedAttributed: NSAttributedString? = adoptedPrefix.isEmpty ? nil : VoiceOverlayTextFormatting
             .makeAttributed(
                 committed: adoptedPrefix,
                 volatile: "",
                 isFinal: false)
-        self.overlayToken = await MainActor.run {
-            VoiceSessionCoordinator.shared.startSession(
-                source: .pushToTalk,
-                text: adoptedPrefix,
-                attributed: adoptedAttributed,
-                forwardEnabled: true)
-        }
+        self.overlayToken = self.sessions.startSession(
+            source: .pushToTalk,
+            text: adoptedPrefix,
+            attributed: adoptedAttributed,
+            forwardEnabled: true)
 
         do {
-            try await self.startRecognition(localeID: config.localeID, sessionID: sessionID)
-        } catch {
-            await MainActor.run {
-                VoiceWakeOverlayController.shared.dismiss()
+            try self.capture.start(localeID: config.localeID ?? Locale.current.identifier) { [weak self] update in
+                let message = update.error?.localizedDescription
+                Task { @MainActor [weak self] in
+                    if let message {
+                        self?.logger.debug("push-to-talk error: \(message, privacy: .public)")
+                    }
+                    self?.handle(transcript: update.transcript, isFinal: update.isFinal, sessionID: sessionID)
+                }
             }
-            self.isCapturing = false
-            // If push-to-talk fails to start after pausing wake-word, ensure we resume listening.
-            await VoiceWakeRuntime.shared.applyPushToTalkCooldown()
-            await VoiceWakeRuntime.shared.refresh(state: AppStateStore.shared)
+        } catch {
+            self.logger.debug("push-to-talk failed to start: \(error.localizedDescription, privacy: .public)")
+            self.finalize(transcriptOverride: nil, reason: "startFailed", forward: false)
         }
     }
 
-    func end() async {
+    func end(cancelled: Bool = false) {
+        let wasStarting = self.startupTask != nil
+        self.holdID = nil
+        SimpleTaskSupport.stop(task: &self.startupTask)
+        if cancelled || wasStarting {
+            self.finalize(transcriptOverride: nil, reason: "cancelled", forward: false)
+            return
+        }
         guard self.isCapturing else { return }
         self.isCapturing = false
         let sessionID = self.sessionID
 
         // Stop feeding Speech buffers first, then end the request. Stopping the engine here can race with
         // Speech draining its converter chain (and we already stop/cancel in finalize).
-        if self.tapInstalled {
-            self.audioEngine?.inputNode.removeTap(onBus: 0)
-            self.tapInstalled = false
-        }
-        self.recognitionRequest?.endAudio()
+        self.capture.finishAudio()
 
         // If we captured nothing, dismiss immediately when the user lets go.
         if self.committed.isEmpty, self.volatile.isEmpty, self.adoptedPrefix.isEmpty {
-            await self.finalize(transcriptOverride: "", reason: "emptyOnRelease", sessionID: sessionID)
+            self.finalize(transcriptOverride: "", reason: "emptyOnRelease")
             return
         }
 
         // Otherwise, give Speech a brief window to deliver the final result; then fall back.
-        self.timeoutTask?.cancel()
-        self.timeoutTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 1_500_000_000) // 1.5s grace period to await final result
-            await self?.finalize(transcriptOverride: nil, reason: "timeout", sessionID: sessionID)
+        SimpleTaskSupport.schedule(task: &self.timeoutTask, delay: 1.5) { [weak self] in
+            guard let self, self.sessionID == sessionID else { return }
+            self.finalize(transcriptOverride: nil, reason: "timeout")
         }
     }
 
     // MARK: - Private
 
-    private func startRecognition(localeID: String?, sessionID: UUID) async throws {
-        let recognizer = self.recognizerCache.recognizer(localeID: localeID ?? Locale.current.identifier)
-        guard let recognizer, recognizer.isAvailable else {
-            throw NSError(
-                domain: "VoicePushToTalk",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Recognizer unavailable"])
-        }
-
-        self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        guard let request = self.recognitionRequest else { return }
-        SpeechRecognitionRequestPolicy.configureInteractiveTranscription(request)
-
-        // Lazily create the engine here so app launch doesn't grab audio resources / trigger Bluetooth HFP.
-        if self.audioEngine == nil {
-            self.audioEngine = AVAudioEngine()
-        }
-        guard let audioEngine = self.audioEngine else { return }
-
-        guard AudioInputDeviceObserver.hasUsableDefaultInputDevice() else {
-            self.audioEngine = nil
-            throw NSError(
-                domain: "VoicePushToTalk",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "No usable audio input device available"])
-        }
-
-        let input = audioEngine.inputNode
-        let format = input.outputFormat(forBus: 0)
-        if self.tapInstalled {
-            input.removeTap(onBus: 0)
-            self.tapInstalled = false
-        }
-        // Pipe Speech-compatible mic buffers into the request while the chord is held.
-        input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak request] buffer, _ in
-            request?.append(SpeechAudioBufferNormalizer.speechCompatibleBuffer(from: buffer))
-        }
-        self.tapInstalled = true
-
-        audioEngine.prepare()
-        try audioEngine.start()
-
-        self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
-            guard let self else { return }
-            if let error {
-                self.logger.debug("push-to-talk error: \(error.localizedDescription, privacy: .public)")
-            }
-            let transcript = result?.bestTranscription.formattedString
-            let isFinal = result?.isFinal ?? false
-            // Hop to a Task so UI updates stay off the Speech callback thread.
-            Task.detached { [weak self, transcript, isFinal, sessionID] in
-                guard let self else { return }
-                await self.handle(transcript: transcript, isFinal: isFinal, sessionID: sessionID)
-            }
-        }
-    }
-
-    private func handle(transcript: String?, isFinal: Bool, sessionID: UUID) async {
-        guard sessionID == self.sessionID else {
+    private func handle(transcript: String?, isFinal: Bool, sessionID: UUID) {
+        guard !self.finalized, sessionID == self.sessionID else {
             self.logger.debug("push-to-talk drop transcript for stale session")
             return
         }
@@ -304,87 +275,59 @@ actor VoicePushToTalk {
             volatile: self.volatile,
             isFinal: isFinal)
         if let token = self.overlayToken {
-            await MainActor.run {
-                VoiceSessionCoordinator.shared.updatePartial(
-                    token: token,
-                    text: snapshot,
-                    attributed: attributed)
-            }
+            self.sessions.updatePartial(token: token, text: snapshot, attributed: attributed)
         }
     }
 
-    private func finalize(transcriptOverride: String?, reason: String, sessionID: UUID?) async {
+    private func finalize(
+        transcriptOverride: String?,
+        reason: String,
+        forward: Bool = true)
+    {
         if self.finalized { return }
-        if let sessionID, sessionID != self.sessionID {
-            self.logger.debug("push-to-talk drop finalize for stale session")
-            return
-        }
         self.finalized = true
-        self.isCapturing = false
-        self.timeoutTask?.cancel()
-        self.timeoutTask = nil
 
-        let finalRecognized: String = {
-            if let override = transcriptOverride?.trimmingCharacters(in: .whitespacesAndNewlines) {
-                return override
-            }
-            return (self.committed + self.volatile).trimmingCharacters(in: .whitespacesAndNewlines)
-        }()
+        let finalRecognized = (transcriptOverride ?? (self.committed + self.volatile))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         let finalText = Self.join(self.adoptedPrefix, finalRecognized)
         let chime = finalText.isEmpty ? .none : (self.activeConfig?.sendChime ?? .none)
 
         let token = self.overlayToken
-        let logger = self.logger
-        await MainActor.run {
-            logger.info("ptt finalize reason=\(reason, privacy: .public) len=\(finalText.count, privacy: .public)")
-            if let token {
-                VoiceSessionCoordinator.shared.finalize(
-                    token: token,
-                    text: finalText,
-                    sendChime: chime,
-                    autoSendAfter: nil)
-                VoiceSessionCoordinator.shared.sendNow(token: token, reason: reason)
-            } else if !finalText.isEmpty {
-                if chime != .none {
-                    VoiceWakeChimePlayer.play(chime, reason: "ptt.fallback_send")
-                }
-                Task.detached {
-                    await VoiceWakeForwarder.forwardToSelectedSession(transcript: finalText)
-                }
-            }
-        }
-
-        self.recognitionTask?.cancel()
-        self.recognitionRequest = nil
-        self.recognitionTask = nil
-        if self.tapInstalled {
-            self.audioEngine?.inputNode.removeTap(onBus: 0)
-            self.tapInstalled = false
-        }
-        if self.audioEngine?.isRunning == true {
-            self.audioEngine?.stop()
-            self.audioEngine?.reset()
-        }
-        // Release the engine so we also release any audio session/resources when push-to-talk ends.
-        self.audioEngine = nil
-
-        self.committed = ""
-        self.volatile = ""
-        self.activeConfig = nil
-        self.triggerChimePlayed = false
+        let lease = self.pauseLease
+        self.pauseLease = nil
+        self.retireCapture()
         self.overlayToken = nil
         self.adoptedPrefix = ""
 
-        // Resume the wake-word runtime after push-to-talk finishes.
-        await VoiceWakeRuntime.shared.applyPushToTalkCooldown()
-        _ = await MainActor.run { Task { await VoiceWakeRuntime.shared.refresh(state: AppStateStore.shared) } }
+        // All old audio and mutable session state are retired before UI callbacks or awaited cleanup.
+        self.logger.info("ptt finalize reason=\(reason, privacy: .public) len=\(finalText.count, privacy: .public)")
+        if let token {
+            if forward {
+                self.sessions.finalize(
+                    token: token, text: finalText, sendChime: chime, autoSendAfter: nil)
+                self.sessions.sendNow(token: token, reason: reason)
+            } else {
+                self.sessions.dismiss(token: token, reason: .explicit, outcome: .empty)
+            }
+        }
+        if let lease {
+            Task { [wake] in await wake.resumeAfterPushToTalk(lease: lease) }
+        }
+    }
+
+    private func retireCapture() {
+        self.isCapturing = false
+        SimpleTaskSupport.stop(task: &self.timeoutTask)
+        self.capture.stop()
+        self.committed = ""
+        self.volatile = ""
+        self.activeConfig = nil
     }
 
     @MainActor
-    private func makeConfig() -> Config {
-        let state = AppStateStore.shared
+    private func makeConfig() -> Config? {
+        guard let state = self.state() else { return nil }
         return Config(
-            micID: state.voiceWakeMicID.isEmpty ? nil : state.voiceWakeMicID,
             localeID: state.voiceWakeLocaleID,
             triggerChime: state.voiceWakeTriggerChime,
             sendChime: state.voiceWakeSendChime)

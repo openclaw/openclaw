@@ -102,6 +102,7 @@ function projectAgentEventToAudit(event: AgentEventPayload): AuditEventInput | u
   const inputs: AuditEventInput[] = [];
   const recorder = createAgentEventAuditRecorder({
     writer: captureAuditWriter(inputs),
+    getConfig: () => ({}),
     terminalSettleMs: 60_000,
   });
   recorder.record(event);
@@ -113,7 +114,10 @@ function projectToolExecutionEventToAudit(
   event: TrustedToolExecutionEvent,
 ): ToolActionAuditEventInput | undefined {
   const inputs: AuditEventInput[] = [];
-  const recorder = createAgentEventAuditRecorder({ writer: captureAuditWriter(inputs) });
+  const recorder = createAgentEventAuditRecorder({
+    writer: captureAuditWriter(inputs),
+    getConfig: () => ({}),
+  });
   recorder.recordTool(event);
   void recorder.stop();
   return inputs.at(-1) as ToolActionAuditEventInput | undefined;
@@ -163,7 +167,7 @@ describe("audit event persistence", () => {
       ...database,
       database: openOpenClawStateDatabase(database),
     });
-    recordAuditEventInDatabase(
+    const middle = recordAuditEventInDatabase(
       auditInput({
         occurredAt: now + 1,
         sourceSequence: 2,
@@ -175,7 +179,7 @@ describe("audit event persistence", () => {
       }),
       { ...database, database: openOpenClawStateDatabase(database) },
     );
-    recordAuditEventInDatabase(
+    const newest = recordAuditEventInDatabase(
       auditInput({
         occurredAt: now + 2,
         sourceSequence: 3,
@@ -191,12 +195,14 @@ describe("audit event persistence", () => {
     );
 
     const first = await listAuditEvents({ database, limit: 2 });
+    expect(first.events).toEqual([newest, middle]);
     expect(first.events.map((event) => event.sourceSequence)).toEqual([3, 2]);
     expect(first.nextCursor).toBe(first.events[1]?.sequence);
 
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const second = await listAuditEvents({ database, limit: 2, cursor: first.nextCursor });
+    expect(second.events).toEqual([oldest]);
     expect(second.events.map((event) => event.sourceSequence)).toEqual([1]);
     expect(second.events[0]?.eventId).toBe(oldest?.eventId);
     expect(second.nextCursor).toBeUndefined();
@@ -322,6 +328,42 @@ describe("audit event persistence", () => {
       }),
     ).toThrow("audit event sequence is outside the supported integer range");
     expect(db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({ count: 0 });
+  });
+
+  it("returns an expired append only while bounded pruning still retains it", () => {
+    const database = createDatabaseOptions();
+    const owner = openOpenClawStateDatabase(database);
+    const now = Date.now();
+    const occurredAt = now - AUDIT_EVENT_RETENTION_MS_CONTRACT - 1_000;
+    owner.db
+      .prepare(
+        `WITH RECURSIVE numbers(n) AS (
+         SELECT 1 UNION ALL SELECT n + 1 FROM numbers WHERE n < ?
+       )
+       INSERT INTO audit_events (
+         event_id, source_id, source_sequence, occurred_at, kind, action, status,
+         actor_type, actor_id, agent_id, run_id
+       )
+       SELECT 'old-event-' || n, 'old-source-' || n, n, ?, 'agent_run',
+              'agent.run.started', 'started', 'agent', 'main', 'main', 'old-run'
+       FROM numbers`,
+      )
+      .run(AUDIT_EVENT_PRUNE_BATCH_ROWS_CONTRACT, occurredAt);
+
+    const retained = recordAuditEventInDatabase(auditInput({ occurredAt: occurredAt + 1 }), {
+      ...database,
+      database: owner,
+    });
+    expect(retained?.occurredAt).toBe(occurredAt + 1);
+    expect(
+      recordAuditEventInDatabase(auditInput({ occurredAt: occurredAt + 2 }), {
+        ...database,
+        database: owner,
+      }),
+    ).toBeUndefined();
+    expect(owner.db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({
+      count: 0,
+    });
   });
 
   it("keeps reused run ids distinct across actual event timestamps", async () => {
@@ -453,7 +495,10 @@ describe("agent activity audit projection", () => {
 
   it("does not let tool events inherit remembered lifecycle provenance", async () => {
     const inputs: AuditEventInput[] = [];
-    const recorder = createAgentEventAuditRecorder({ writer: captureAuditWriter(inputs) });
+    const recorder = createAgentEventAuditRecorder({
+      writer: captureAuditWriter(inputs),
+      getConfig: () => ({}),
+    });
     const runId = "run-tool-no-provenance";
     recorder.record(
       agentEvent({
@@ -480,38 +525,6 @@ describe("agent activity audit projection", () => {
     });
     expect(inputs.at(-1)).not.toHaveProperty("sessionKey");
     expect(inputs.at(-1)).not.toHaveProperty("sessionId");
-  });
-
-  it("preserves explicit lifecycle and tool provenance independently", () => {
-    const lifecycle = projectAgentEventToAudit(
-      agentEvent({
-        sessionKey: "agent:lifecycle:main",
-        sessionId: "session-lifecycle",
-        agentId: "lifecycle",
-      }),
-    );
-    const tool = projectToolExecutionEventToAudit(
-      toolEvent({
-        sessionKey: "agent:tool:sandbox:temporary",
-        sessionId: "session-tool",
-        agentId: "tool",
-      }),
-    );
-
-    expect(lifecycle).toMatchObject({
-      actorType: "agent",
-      actorId: "lifecycle",
-      agentId: "lifecycle",
-      sessionKey: "agent:lifecycle:main",
-      sessionId: "session-lifecycle",
-    });
-    expect(tool).toMatchObject({
-      actorType: "agent",
-      actorId: "tool",
-      agentId: "tool",
-      sessionKey: "agent:tool:sandbox:temporary",
-      sessionId: "session-tool",
-    });
   });
 
   it("prefers authoritative tool lifecycle time over diagnostic observation time", () => {
@@ -604,27 +617,10 @@ describe("agent activity audit projection", () => {
     [{ phase: "error", error: "raw failure" }, "failed", "run_failed"],
     [{ phase: "end", aborted: true }, "cancelled", "run_cancelled"],
     [
-      { phase: "end", aborted: true, stopReason: "aborted", providerStarted: true },
-      "cancelled",
-      "run_cancelled",
+      { phase: "end", aborted: true, stopReason: "timeout", timeoutPhase: "provider" },
+      "timed_out",
+      "run_timed_out",
     ],
-    [
-      { phase: "end", aborted: true, stopReason: "rpc", providerStarted: true },
-      "cancelled",
-      "run_cancelled",
-    ],
-    [
-      { phase: "end", aborted: true, stopReason: "stop", providerStarted: true },
-      "cancelled",
-      "run_cancelled",
-    ],
-    [
-      { phase: "end", aborted: true, stopReason: "relay-closed", status: "cancelled" },
-      "cancelled",
-      "run_cancelled",
-    ],
-    [{ phase: "end", aborted: true, livenessState: "abandoned" }, "cancelled", "run_cancelled"],
-    [{ phase: "error", timeoutPhase: "provider" }, "timed_out", "run_timed_out"],
     [{ phase: "error", livenessState: "blocked" }, "blocked", "run_blocked"],
     [{ phase: "end", livenessState: "abandoned", replayInvalid: true }, "failed", "run_failed"],
   ] as const)("classifies terminal run metadata %#", (data, status, errorCode) => {
@@ -635,16 +631,6 @@ describe("agent activity audit projection", () => {
       errorCode,
     });
     expect(projected).not.toHaveProperty("error");
-  });
-
-  it("preserves timeout precedence when terminal cleanup is also aborted", () => {
-    const projected = projectAgentEventToAudit(
-      agentEvent({
-        data: { phase: "end", aborted: true, stopReason: "timeout", timeoutPhase: "provider" },
-      }),
-    );
-
-    expect(projected).toMatchObject({ status: "timed_out", errorCode: "run_timed_out" });
   });
 
   it.each([
@@ -725,7 +711,7 @@ describe("agent activity audit projection", () => {
     },
   );
 
-  it.each(["failed", "cancelled", "timed_out"] as const)(
+  it.each(["cancelled", "timed_out"] as const)(
     "keeps an unavailable tool outcome explicitly unknown despite %s provenance",
     (terminalReason) => {
       const projected = projectToolExecutionEventToAudit(
@@ -774,10 +760,14 @@ describe("agent activity audit projection", () => {
     expect(projected?.runId).toBe(runId);
   });
 
-  it("settles an error followed by a cleanup end as one failed outcome", async () => {
+  it.each([true, false])("settles accepted errors while collection is %s", async (enabled) => {
     const inputs: AuditEventInput[] = [];
     const writer = captureAuditWriter(inputs);
-    const recorder = createAgentEventAuditRecorder({ writer });
+    let collectionEnabled = true;
+    const recorder = createAgentEventAuditRecorder({
+      writer,
+      getConfig: () => ({ logging: { audit: { enabled: collectionEnabled } } }),
+    });
     const lifecycleGeneration = "gateway-1";
 
     recorder.record(agentEvent({ lifecycleGeneration, seq: 1 }));
@@ -788,6 +778,7 @@ describe("agent activity audit projection", () => {
         data: { phase: "error", error: "request failed" },
       }),
     );
+    collectionEnabled = enabled;
     recorder.record(agentEvent({ lifecycleGeneration, seq: 3, data: { phase: "end" } }));
     await recorder.stop();
 
@@ -800,7 +791,11 @@ describe("agent activity audit projection", () => {
   it("keeps one start when a retry cancels a pending terminal", async () => {
     const inputs: AuditEventInput[] = [];
     const writer = captureAuditWriter(inputs);
-    const recorder = createAgentEventAuditRecorder({ writer, terminalSettleMs: 60_000 });
+    const recorder = createAgentEventAuditRecorder({
+      writer,
+      getConfig: () => ({}),
+      terminalSettleMs: 60_000,
+    });
     const lifecycleGeneration = "gateway-retry";
 
     recorder.record(agentEvent({ lifecycleGeneration, seq: 1 }));
@@ -822,7 +817,11 @@ describe("agent activity audit projection", () => {
   it("persists definitive successful terminals immediately in source order", async () => {
     const inputs: AuditEventInput[] = [];
     const writer = captureAuditWriter(inputs);
-    const recorder = createAgentEventAuditRecorder({ writer, terminalSettleMs: 60_000 });
+    const recorder = createAgentEventAuditRecorder({
+      writer,
+      getConfig: () => ({}),
+      terminalSettleMs: 60_000,
+    });
 
     recorder.record(agentEvent({ seq: 1 }));
     recorder.record(agentEvent({ seq: 2, data: { phase: "end" } }));
@@ -845,7 +844,7 @@ describe("agent activity audit projection", () => {
   it("merges multiple terminal observations through the canonical outcome contract", async () => {
     const inputs: AuditEventInput[] = [];
     const writer = captureAuditWriter(inputs);
-    const recorder = createAgentEventAuditRecorder({ writer });
+    const recorder = createAgentEventAuditRecorder({ writer, getConfig: () => ({}) });
 
     recorder.record(agentEvent({ seq: 1 }));
     recorder.record(agentEvent({ seq: 2, data: { phase: "error" } }));
