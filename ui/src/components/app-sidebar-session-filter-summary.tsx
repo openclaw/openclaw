@@ -1,7 +1,7 @@
 import { createMemo, For } from "solid-js";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import type { SessionListHost } from "./app-sidebar-session-row-render.tsx";
+import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
 import { sessionSelfOwner } from "./session-owner-chip.ts";
 import { Icon } from "./solid/icon.tsx";
 import { renderNewSessionLink } from "./solid/new-session-link.tsx";

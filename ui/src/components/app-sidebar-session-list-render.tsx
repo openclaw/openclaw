@@ -19,34 +19,22 @@ import {
   renderSessionListToolbar,
   renderSessionMutationError,
 } from "./app-sidebar-session-filter-summary.tsx";
-import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
+import type {
+  SessionListHost,
+  RenderableSessionSection,
+  SidebarSessionListHost,
+  PersonHeaders,
+} from "./app-sidebar-session-render-types.ts";
 import {
   renderChildSessionLoadError,
   renderRecentSession,
-  type SessionListHost,
 } from "./app-sidebar-session-row-render.tsx";
 import { renderSessionSection } from "./app-sidebar-session-section-render.tsx";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { SIDEBAR_SESSION_PAGE_SIZE } from "./app-sidebar-session-types.ts";
 import { areSessionCatalogsSettled } from "./session-data-controller-catalog.ts";
-import type { SessionDataController } from "./session-data-controller.ts";
+
 registerEnglishCatalog(registerSessionOrganizationEnglish);
-export type RenderableSessionSection = SidebarVisibleSections["sections"][number];
-export type SidebarSessionListHost = SessionListHost & {
-  readonly sidebarAgentsMode: "chip" | "roster";
-  readonly sessionData: SessionListHost["sessionData"] &
-    Pick<
-      SessionDataController,
-      | "context"
-      | "sessionsLoading"
-      | "sessionsStartingUp"
-      | "sessionsResult"
-      | "sessionCatalogs"
-      | "sessionCatalogLive"
-      | "loadingMoreSessionCatalogIds"
-    >;
-  projectHomeSession(row: GatewaySessionRow, agentId: string): SidebarRecentSession;
-};
 type SessionCatalogRenderSnapshot = {
   catalogs: readonly SidebarSessionCatalog[];
   basePath: string;
@@ -59,10 +47,6 @@ type SessionCatalogRenderSnapshot = {
   toSidebarSession: (row: GatewaySessionRow) => SidebarRecentSession;
   catalogOpenTarget: CatalogOpenTarget;
   terminalAvailable: boolean;
-};
-export type PersonHeaders = {
-  presence: ReadonlyMap<string, PresenceActivity>;
-  selfProfileId?: string;
 };
 /** Fetching a page is useless if the new rows land behind a section's local cap,
  *  so an explicit roster load reveals a page in every section too -- otherwise

@@ -1,4 +1,3 @@
-import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import type {
   SessionCatalog,
@@ -6,86 +5,26 @@ import type {
   SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
-import type { NavigationRouteId } from "../app-navigation.ts";
-import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { isSessionRunActive } from "../lib/session-run-state.ts";
-import { type CatalogSessionKey, buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
+import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import {
   groupCatalogSessionsByPerson,
   groupCatalogSessionsByProject,
-  type CatalogProjectGrouping,
 } from "../lib/sessions/catalog-project-grouping.ts";
 import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
-import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { renderCatalogSessionRow } from "./app-sidebar-session-catalog-row.tsx";
 import {
   catalogErrorMessages,
-  type CatalogBackingSessionDisplay,
-  type CatalogSessionMenuRequest,
   type SidebarSessionCatalog,
 } from "./app-sidebar-session-catalogs.ts";
+import type { SessionCatalogGroupsParams } from "./app-sidebar-session-render-types.ts";
 import { renderSidebarSessionSectionHeader } from "./app-sidebar-session-section-header.tsx";
 import { hasProviderBrandIcon } from "./provider-icon-data.ts";
 import { Icon } from "./solid/icon.tsx";
 import { renderNewSessionLink } from "./solid/new-session-link.tsx";
 import { ProviderBrandIcon } from "./solid/provider-icon.tsx";
-export type SessionCatalogGroupsParams = {
-  catalogs: readonly SidebarSessionCatalog[];
-  basePath: string;
-  routeSessionKey: string;
-  newSessionAgentId: string;
-  mainKey: string;
-  collapsedSections: ReadonlySet<string>;
-  loadingMoreCatalogIds: ReadonlySet<string>;
-  visibleSessionLimits: ReadonlyMap<string, number>;
-  projectGrouping: CatalogProjectGrouping;
-  liveRows: readonly GatewaySessionRow[];
-  renderLiveRow: (
-    row: () => GatewaySessionRow,
-    display: CatalogBackingSessionDisplay,
-  ) => JSX.Element;
-  onToggleSection: (sectionId: string) => void;
-  draggingSectionId: string | null;
-  sectionDropTarget: {
-    sectionId: string;
-    position: "before" | "after";
-  } | null;
-  onSectionDragOver: (event: DragEvent, sectionId: string) => void;
-  onSectionDragLeave: (event: DragEvent, sectionId: string) => void;
-  onSectionDrop: (event: DragEvent, sectionId: string) => void;
-  onStartSectionDrag: (sectionId: string) => void;
-  onFinishSectionDrag: () => void;
-  onReorderSection: (source: string, target: string, position: "before" | "after") => Promise<void>;
-  viewMenuOpenCatalogId: string | null;
-  ownerFilterActive: boolean;
-  onOpenViewMenu: (
-    catalogId: string,
-    trigger: HTMLElement,
-    position?: {
-      x: number;
-      y: number;
-    },
-  ) => void;
-  onLoadMore: (catalogId: string) => void;
-  onSetVisibleSessionLimit: (sectionId: string, limit: number) => void;
-  onOpenNewSession?: (agentId: string, target?: NewSessionTarget) => void;
-  newSessionDisabledReason?: string;
-  sectionDragDisabledReason?: string;
-  onNavigate?: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
-  catalogOpenTarget: "viewer" | "terminal";
-  terminalAvailable: boolean;
-  onOpenTerminal: (key: CatalogSessionKey, agentId: string) => void;
-  onOpenMenu: (
-    request: CatalogSessionMenuRequest,
-    x: number,
-    y: number,
-    trigger?: HTMLElement,
-  ) => void;
-  onCatalogMenuTriggerRendered: (key: CatalogSessionKey, element: Element | undefined) => void;
-  isMenuOpen: (key: CatalogSessionKey) => boolean;
-};
 const CATALOG_SESSION_GROUP_LIMIT = 5;
 function renderCatalogHeaderStatus(hasActiveRun: boolean, hasUnread: boolean) {
   if (hasActiveRun) {

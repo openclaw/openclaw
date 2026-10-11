@@ -6,7 +6,7 @@ import { presenceMatchesProfile, projectPresencePayload } from "../lib/presence-
 import { t } from "../lib/reactive/i18n.ts";
 import { formatSessionSnoozeWakeTime, isSessionSnoozed } from "../lib/sessions/session-snooze.ts";
 import type { CatalogBackingSessionDisplay } from "./app-sidebar-session-catalogs.ts";
-import type { SessionListHost } from "./app-sidebar-session-row-render.tsx";
+import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { sidebarSessionMetaId, sidebarSessionStateId } from "./app-sidebar-session-types.ts";
 import { describeSessionState } from "./session-leading-indicator.ts";

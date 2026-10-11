@@ -9,9 +9,9 @@ import { formatUiExternalText } from "./format-error.ts";
 type ToastDismissReason = "action" | "dismiss" | "disconnected" | "replaced" | "timeout";
 
 export type ToastOptions = {
-  /** A template lets a message name a destination the operator can actually open,
+  /** Rich content lets a message name a destination the operator can actually open,
    * instead of spelling out a settings path the toast then makes them find. */
-  message: string | TemplateResult;
+  message: string | TemplateResult | Node;
   /** Positions a compact toast at the top center of the owning surface. */
   anchor?: Element;
   /** Bottom placement suits settings feedback without covering the page heading. */

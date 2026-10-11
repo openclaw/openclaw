@@ -36,10 +36,7 @@ import {
 import { gatewayHelloForMethods, SESSION_MUTATION_TEST_METHODS } from "./gateway-methods.ts";
 import { waitForSolid } from "./solid-settle.ts";
 
-// The attention widget owns independent health RPC tests. Keep those requests
-// out of sidebar client call-order assertions.
-// Sidebar attention is inert in this harness; cover attention rendering in
-// sidebar-attention.test.ts, not app-sidebar cases.
+// mock-isolation: Keep attention health RPCs out of sidebar call-order assertions; sidebar-attention.test.ts owns its rendering.
 vi.mock("../components/sidebar-attention.tsx", () => ({
   SidebarAttention: () => document.createElement("openclaw-sidebar-attention"),
 }));

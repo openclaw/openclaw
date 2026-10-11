@@ -1,4 +1,3 @@
-import type { ReactiveController } from "lit";
 import { createMemo, Show } from "solid-js";
 import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
 import {
@@ -60,7 +59,7 @@ export type SidebarFilterMenuView = "root" | "specific-owner";
 type SidebarMenusRenderer = typeof import("./sidebar-menus-render.tsx");
 
 /** Popup ownership and stateless menu-renderer wiring. */
-export class SidebarMenusController implements ReactiveController {
+export class SidebarMenusController {
   customizeMenuPosition: { x: number; y: number } | null = null;
   moreMenuPosition: { x: number; y: number } | null = null;
   pluginNavigationMenuPosition:

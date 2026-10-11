@@ -4,10 +4,10 @@ import { presenceActivityLabel, presenceViewerLabel } from "../lib/presence-user
 import { t } from "../lib/reactive/i18n.ts";
 import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import type {
-  SidebarSessionListHost,
   RenderableSessionSection,
+  SidebarSessionListHost,
   PersonHeaders,
-} from "./app-sidebar-session-list-render.tsx";
+} from "./app-sidebar-session-render-types.ts";
 import { renderSessionTree } from "./app-sidebar-session-row-render.tsx";
 import { renderSidebarSessionSectionHeader } from "./app-sidebar-session-section-header.tsx";
 import {

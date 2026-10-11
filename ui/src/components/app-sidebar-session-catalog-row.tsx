@@ -14,11 +14,11 @@ import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
-import type { SessionCatalogGroupsParams } from "./app-sidebar-session-catalog-render.tsx";
 import {
   formatSidebarTimestamp,
   normalizeCatalogTimestamp,
 } from "./app-sidebar-session-catalogs.ts";
+import type { SessionCatalogGroupsParams } from "./app-sidebar-session-render-types.ts";
 import { Icon } from "./solid/icon.tsx";
 import {
   renderSessionGlyph,

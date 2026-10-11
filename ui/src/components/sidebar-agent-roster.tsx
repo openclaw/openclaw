@@ -1,5 +1,4 @@
 import type { WaSelectEvent } from "@awesome.me/webawesome/dist/events/select.js";
-import type { ReactiveController } from "lit";
 import { createEffect, createMemo, createSignal, For, onSettled, Show, untrack } from "solid-js";
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { loadSettings, patchSettings } from "../app/settings.ts";
@@ -23,11 +22,11 @@ import {
   renderSessionSection,
 } from "./app-sidebar-session-list-render.tsx";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
+import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
 import {
   renderChildSessionLoadError,
   renderSessionTree,
   renderSidebarSessionIndicators,
-  type SessionListHost,
 } from "./app-sidebar-session-row-render.tsx";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { Icon } from "./solid/icon.tsx";
@@ -80,8 +79,8 @@ function useRoster(props: RosterProps) {
   );
   const [avatarRevision, setAvatarRevision] = createSignal(0, { ownedWrite: true });
   const avatars = new IdentityAvatarController({
-    addController: (_controller: ReactiveController) => {},
-    removeController: (_controller: ReactiveController) => {},
+    addController: () => {},
+    removeController: () => {},
     requestUpdate: () => setAvatarRevision((value) => value + 1),
     updateComplete: Promise.resolve(true),
   });

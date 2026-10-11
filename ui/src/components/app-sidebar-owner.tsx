@@ -1,5 +1,4 @@
 import { dynamic, type JSX } from "@solidjs/web";
-import { html } from "lit";
 import { createEffect, createMemo, Show } from "solid-js";
 import type {
   FsListDirResult,
@@ -18,15 +17,15 @@ import {
   buildCatalogSessionKey,
   catalogSessionKeyFromSearch,
 } from "../lib/sessions/catalog-key.ts";
+import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import "./session-menu.ts";
 import "./mcp-app-catalog.ts";
 import "./sidebar-agent-card.tsx";
 import "./sidebar-attention.tsx";
-import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import { showToast } from "../lib/toast.ts";
+import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
-import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
 import {
   renderAppSidebarOnline,
@@ -35,9 +34,9 @@ import {
 } from "./app-sidebar-online.tsx";
 import { renderSidebarRail, renderSidebarPages, renderSidebarScope } from "./app-sidebar-rail.tsx";
 import { renderAppSidebarBrand } from "./app-sidebar-render.tsx";
+import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
 import "../styles/app-sidebar.css";
 import "../styles/sidebar-rail.css";
-import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
 import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
 import { renderSessionList } from "./app-sidebar-session-list-render.tsx";
 import type {
@@ -45,11 +44,8 @@ import type {
   SidebarSessionNarrationController,
 } from "./app-sidebar-session-narration.ts";
 import { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
-import {
-  renderSessionTree,
-  type SessionListHost,
-  visibleSessionChildren,
-} from "./app-sidebar-session-row-render.tsx";
+import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
+import { renderSessionTree, visibleSessionChildren } from "./app-sidebar-session-row-render.tsx";
 import {
   loadStoredHiddenSessionCatalogIds,
   loadStoredSidebarCatalogGrouping,
@@ -547,20 +543,21 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     // page, so the outcome is announced where the action happened: undo here, plus a
     // link that opens the re-enable block for after the toast is gone. Longer than the
     // 6s default because that text is a recovery instruction, not an acknowledgement.
+    const message = this.ownerDocument.createDocumentFragment();
+    const recoveryLink = this.ownerDocument.createElement("a");
+    recoveryLink.className = "session-link";
+    recoveryLink.href = recoveryHref;
+    recoveryLink.textContent = t("chat.sidebar.sectionHiddenRecovery");
+    recoveryLink.addEventListener("click", (event) => {
+      if (!shouldHandleNavigationClick(event)) {
+        return;
+      }
+      event.preventDefault();
+      this.onNavigate?.(recovery.routeId, { search: recovery.search, hash: recovery.hash });
+    });
+    message.append(t("chat.sidebar.sectionHidden", { section: label }), " ", recoveryLink);
     showToast({
-      message: html`${t("chat.sidebar.sectionHidden", { section: label })}
-        <a
-          class="session-link"
-          href=${recoveryHref}
-          @click=${(event: MouseEvent) => {
-            if (!shouldHandleNavigationClick(event)) {
-              return;
-            }
-            event.preventDefault();
-            this.onNavigate?.(recovery.routeId, { search: recovery.search, hash: recovery.hash });
-          }}
-          >${t("chat.sidebar.sectionHiddenRecovery")}</a
-        >`,
+      message,
       actionLabel: t("common.undo"),
       onAction: () => setStoredSessionCatalogHidden(catalogId, false),
       durationMs: 12_000,

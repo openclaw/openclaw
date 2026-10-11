@@ -1,151 +1,22 @@
 import type { JSX } from "@solidjs/web";
 import { createEffect, createMemo, For, Show } from "solid-js";
-import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
-import type { GatewaySessionRow } from "../api/types.ts";
-import type { NavigationRouteId } from "../app-navigation.ts";
-import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import type {
-  SessionMethodAccess,
-  SessionMethodAccessRequest,
-} from "../lib/session-method-access.ts";
 import { writeSessionDragData } from "../lib/sessions/drag.ts";
-import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import { canArchiveSessionRow, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
 import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
-import type { NewSessionTarget } from "../pages/new-session/location.ts";
-import type {
-  CatalogBackingSessionDisplay,
-  CatalogSessionMenuRequest,
-} from "./app-sidebar-session-catalogs.ts";
+import type { CatalogBackingSessionDisplay } from "./app-sidebar-session-catalogs.ts";
 import { renderSidebarSessionIndicators } from "./app-sidebar-session-indicators.tsx";
-import type { SessionPullRequestIndicatorsController } from "./app-sidebar-session-pr-indicators.ts";
-import type { SidebarSessionProjection } from "./app-sidebar-session-projection.ts";
-import type {
-  SidebarRecentSession,
-  SidebarToolActivity,
-  SidebarSessionStatusFilter,
-} from "./app-sidebar-session-types.ts";
+import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
+import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { rowDemandsVisibility } from "./app-sidebar-session-types.ts";
-import type { SessionDataController } from "./session-data-controller.ts";
-import type { SessionOrganizerController } from "./session-organizer-controller.ts";
-import type { SessionOwnerOption } from "./session-owner-chip.ts";
 import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
-import type { SidebarMenusController } from "./sidebar-menus-controller.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { renderSidebarSessionSubtitle } from "./solid/session-presentation.tsx";
 import "./elapsed-time.ts";
 import "./tooltip.ts";
 const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
-export interface SessionListHost {
-  readonly sidebarSnapshot?: import("./sidebar-snapshot-model.ts").SidebarSnapshotModel | null;
-  readonly sidebarAgentsMode?: "chip" | "roster";
-  readonly basePath: string;
-  readonly sessionDataContext:
-    | Pick<ApplicationContext, "gateway" | "agentSelection" | "agents" | "sessions">
-    | undefined;
-  readonly sidebarLiveActivity: boolean;
-  readonly sessionsShowCron: boolean;
-  readonly sessionsShowPreview: boolean;
-  readonly sessionsShowSystem: boolean;
-  readonly sidebarNarrationLines: ReadonlyMap<string, string>;
-  readonly sidebarTools: ReadonlyMap<string, SidebarToolActivity>;
-  readonly sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest>;
-  readonly sessionProjection: Pick<SidebarSessionProjection, "resolveSubtitle">;
-  readonly selectedSessionKeys: ReadonlySet<string>;
-  readonly connected: boolean;
-  readonly sessionData: Pick<
-    SessionDataController,
-    | "childSessionErrorsByParent"
-    | "dismissSessionMutationError"
-    | "loadMoreSessionCatalog"
-    | "loadMoreSidebarSessions"
-    | "presenceInstanceId"
-    | "presencePayload"
-    | "refreshSessionCatalogs"
-    | "retryChildSessions"
-    | "sessionCatalogRefreshStatus"
-    | "sessionMutationError"
-    | "visibleSessionLimits"
-  >;
-  readonly sessionsGrouping: SidebarSessionsGrouping;
-  readonly collapsedSessionSections: ReadonlySet<string>;
-  readonly sessionOrganizer: Pick<
-    SessionOrganizerController,
-    | "draggingSidebarSection"
-    | "draggingSessionKey"
-    | "isDraggingChildSession"
-    | "finishSessionDrag"
-    | "finishSidebarSectionDrag"
-    | "handleSessionListDragLeave"
-    | "handleSessionListDragOver"
-    | "handleSessionListDrop"
-    | "sectionDragLeave"
-    | "sectionDragOver"
-    | "sectionDrop"
-    | "sessionDropTarget"
-    | "sidebarSectionDropTarget"
-    | "sessionListRemovalDrop"
-    | "setSessionsStatusFilter"
-    | "startSessionDrag"
-    | "startSidebarSectionDrag"
-    | "archiveSessionWithUndo"
-    | "patchSession"
-    | "isPersonalSessionPin"
-    | "reorderSidebarSection"
-  >;
-  readonly sidebarMenus: Pick<
-    SidebarMenusController,
-    | "catalogMenu"
-    | "catalogViewMenuPosition"
-    | "openCatalogViewMenu"
-    | "openSessionGroupMenu"
-    | "openSessionMenu"
-    | "sessionGroupMenu"
-    | "sessionMenu"
-    | "sessionSortMenuPosition"
-    | "toggleCatalogViewMenu"
-    | "togglePositionedMenu"
-  >;
-  readonly sessionsStatusFilter: SidebarSessionStatusFilter;
-  readonly sessionOwnerFilterActive: boolean;
-  readonly sessionOwnerFilterId: string | null;
-  readonly sessionInvolvingMeFilterActive: boolean;
-  readonly sessionOwnerOptions: readonly SessionOwnerOption[];
-  readonly sessionOwnershipVisibility: {
-    filters: boolean;
-    avatars: boolean;
-  };
-  readonly onOpenNewSession?: (agentId: string, target?: NewSessionTarget) => void;
-  readonly onNavigate?: (
-    routeId: NavigationRouteId,
-    options?: ApplicationNavigationOptions,
-  ) => void;
-  readonly sessionPullRequests: Pick<SessionPullRequestIndicatorsController, "summary">;
-  mainSessionRow(): GatewaySessionRow | null;
-  setSessionOwnerFilter(ownerId: string | null, involvingMe?: boolean): void;
-  isSessionChildrenExpanded(session: SidebarRecentSession): boolean;
-  isSessionChildrenFullyShown(sessionKey: string): boolean;
-  sidebarSessionHref(session: SidebarRecentSession): string;
-  handleSessionRowClick(event: MouseEvent, session: SidebarRecentSession): void;
-  toggleSessionChildren(session: SidebarRecentSession): void;
-  toggleSessionPin(session: SidebarRecentSession): void;
-  toggleSessionMenu(
-    session: SidebarRecentSession,
-    trigger: HTMLElement,
-    catalogMenu?: CatalogSessionMenuRequest,
-  ): void;
-  showMoreChildren(sessionKey: string): void;
-  toggleSection(sectionId: string): void;
-  expandedAgentId(): string;
-  readNewSessionAccess(): SessionMethodAccess;
-  readSessionMutationAccess(request: SessionMethodAccessRequest): SessionMethodAccess;
-  requestOpenNewSession(agentId: string, target?: NewSessionTarget): void;
-  setVisibleSessionLimit(sectionId: string, limit: number): void;
-  clearSessionSelection(): void;
-}
 export function visibleSessionChildren(params: {
   session: SidebarRecentSession;
   fullyShown: boolean;
