@@ -1,25 +1,21 @@
 import type { CDPSession } from "@vitest/browser-playwright";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cdp } from "vitest/browser";
-import { CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS } from "../../../../src/gateway/control-ui-plugin-frame-contract.js";
+import {
+  CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS,
+  CONTROL_UI_PLUGIN_AUTH_PROBE_MESSAGE,
+  CONTROL_UI_PLUGIN_AUTH_PROBE_QUERY,
+} from "../../../../src/gateway/control-ui-plugin-frame-contract.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../../api/gateway.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { ControlUiPluginSessionOpenMessage } from "./plugin-frame-session-navigation.ts";
-import { PluginPage } from "./plugin-page.ts";
+import { PluginPage } from "./plugin-page.tsx";
 
-class SessionNavigationPluginPage extends PluginPage {
-  protected override probeExternalTabAuth(): Promise<boolean> {
-    // The existing auth suite owns cookie probes. This suite exercises the actual
-    // mounted frame, window-message listener, route builder, and selection owner.
-    return Promise.resolve(true);
-  }
-}
-
-const tag = "openclaw-plugin-session-navigation-test";
-customElements.define(tag, SessionNavigationPluginPage);
 const pluginPath = "/plugins/example/panel";
 const sessionKey = "agent:writer:subagent:11111111-2222-4333-8444-555555555555";
 const message: ControlUiPluginSessionOpenMessage = {
@@ -28,10 +24,28 @@ const message: ControlUiPluginSessionOpenMessage = {
 };
 const dispose: Array<() => void | Promise<void>> = [];
 
+beforeEach(() => {
+  const append = document.body.append.bind(document.body);
+  vi.spyOn(document.body, "append").mockImplementation((...nodes) => {
+    append(...nodes);
+    for (const node of nodes) {
+      if (!(node instanceof HTMLIFrameElement) || !node.hidden) {
+        continue;
+      }
+      const nonce = new URL(node.src).searchParams.get(CONTROL_UI_PLUGIN_AUTH_PROBE_QUERY);
+      if (nonce) {
+        // Deliver the probe document's response through the real source/nonce boundary.
+        dispatch(node.contentWindow, { type: CONTROL_UI_PLUGIN_AUTH_PROBE_MESSAGE, nonce });
+      }
+    }
+  });
+});
+
 afterEach(async () => {
   try {
     await Promise.all(dispose.splice(0).map(async (cleanup) => cleanup()));
   } finally {
+    cleanupSolid();
     vi.restoreAllMocks();
   }
 });
@@ -41,7 +55,7 @@ async function mount(
     requiresGatewayAuth?: boolean;
     path?: string;
     boardFace?: "dashboard";
-    view?: SessionNavigationPluginPage;
+    container?: HTMLElement;
   } = {},
 ) {
   const descriptor: GatewayControlUiPluginTab = {
@@ -120,14 +134,21 @@ async function mount(
     },
     navigate,
   } as unknown as ApplicationContext;
-  const provider = createApplicationContextProvider(context);
-  const view = options.view ?? (document.createElement(tag) as SessionNavigationPluginPage);
-  view.pluginId = descriptor.pluginId;
-  view.tabId = descriptor.id;
-  provider.append(view);
-  document.body.append(provider);
-  dispose.push(() => provider.remove());
-  await expect.poll(() => view.querySelector("iframe")).not.toBeNull();
+  const container = options.container ?? document.createElement("div");
+  document.body.append(container);
+  const provider = createSolidApplicationContextProvider(context);
+  const mounted = mountSolid(
+    () => <PluginPage pluginId={descriptor.pluginId} tabId={descriptor.id} />,
+    { container, wrapper: provider.wrapper },
+  );
+  const unmount = () => {
+    mounted.unmount();
+    container.remove();
+  };
+  dispose.push(unmount);
+  flush();
+  await waitForSolid(() => expect(container.querySelector("iframe")).not.toBeNull());
+  const view = container.querySelector<HTMLElement>("openclaw-plugin-page")!;
   const frame = view.querySelector("iframe")!;
   return {
     view,
@@ -138,6 +159,7 @@ async function mount(
     setSessionKey,
     selectAgent,
     navigate,
+    unmount,
     notify: () => listeners.forEach((listener) => listener()),
   };
 }
@@ -151,7 +173,7 @@ function dispatch(
   window.dispatchEvent(new MessageEvent("message", { source, data, origin, ports }));
 }
 
-async function prepareClickDocument(view: SessionNavigationPluginPage, signal: AbortSignal) {
+async function prepareClickDocument(view: HTMLElement, signal: AbortSignal) {
   signal.throwIfAborted();
   const session: CDPSession = cdp();
   // Vitest initializes its CDP handler lazily; finish that before listener and command RPCs race.
@@ -219,12 +241,12 @@ describe("authenticated plugin-frame session navigation", () => {
   it("routes a real sandbox-frame click with the canonical base path and ordered selection", async ({
     signal,
   }) => {
-    const view = document.createElement(tag) as SessionNavigationPluginPage;
-    const clickDocument = await prepareClickDocument(view, signal);
-    const [fixture] = await Promise.all([mount({ view }), clickDocument.ready]);
+    const container = document.createElement("div");
+    const clickDocument = await prepareClickDocument(container, signal);
+    const [fixture] = await Promise.all([mount({ container }), clickDocument.ready]);
     expect(fixture.frame.getAttribute("sandbox")).toBe("allow-scripts");
     fixture.frame.contentWindow!.postMessage("test-click", "*");
-    await expect.poll(() => fixture.navigate.mock.calls.length).toBe(1);
+    await waitForSolid(() => expect(fixture.navigate.mock.calls.length).toBe(1));
     expect(fixture.selectAgent).toHaveBeenCalledExactlyOnceWith("writer");
     expect(fixture.setSessionKey).toHaveBeenCalledExactlyOnceWith(sessionKey);
     expect(fixture.selectAgent.mock.invocationCallOrder[0]).toBeLessThan(
@@ -352,22 +374,21 @@ describe("authenticated plugin-frame session navigation", () => {
         fixture.notify();
         dispatch(staleWindow);
         expect(fixture.navigate).not.toHaveBeenCalled();
-        await expect
-          .poll(() => {
-            const frame = fixture.view.querySelector("iframe");
-            return frame !== null && frame !== fixture.frame;
-          })
-          .toBe(true);
+        await waitForSolid(() => {
+          const frame = fixture.view.querySelector("iframe");
+          expect(frame !== null && frame !== fixture.frame).toBe(true);
+        });
       } else {
         for (const path of ["/plugins/example/other", pluginPath]) {
           fixture.descriptor.path = path;
-          fixture.view.requestUpdate();
-          await expect
-            .poll(() => fixture.view.querySelector("iframe")?.getAttribute("src"))
-            .toBe(path);
+          fixture.notify();
+          flush();
+          await waitForSolid(() =>
+            expect(fixture.view.querySelector("iframe")?.getAttribute("src")).toBe(path),
+          );
         }
       }
-      await fixture.view.updateComplete;
+      flush();
       const currentFrame = fixture.view.querySelector("iframe")!;
       expect(currentFrame).not.toBe(fixture.frame);
       dispatch(staleWindow);
@@ -375,7 +396,7 @@ describe("authenticated plugin-frame session navigation", () => {
       dispatch(currentFrame.contentWindow);
       expect(fixture.navigate).toHaveBeenCalledOnce();
       const currentWindow = currentFrame.contentWindow;
-      fixture.view.remove();
+      fixture.unmount();
       dispatch(currentWindow);
       expect(fixture.navigate).toHaveBeenCalledOnce();
     },

@@ -1,12 +1,14 @@
-import { render } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import { i18n } from "../../i18n/index.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import "../../styles/base.css";
 import { getLogbookState } from "./logbook-controller.ts";
-import { renderLogbook } from "./logbook-view.ts";
+import { Logbook } from "./logbook-view.tsx";
 
 let container: HTMLDivElement;
+let dispose: (() => void) | undefined;
 
 beforeEach(() => {
   container = document.createElement("div");
@@ -14,7 +16,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  render(null, container);
+  dispose?.();
+  dispose = undefined;
   container.remove();
   vi.restoreAllMocks();
 });
@@ -62,7 +65,10 @@ it.each([
       ],
       stats: { trackedMs: 0, distractionMs: 0, categories: [], apps: [] },
     };
-    render(renderLogbook({ host, client: null, connected: false }), container);
+    dispose = mountSolid(() => <Logbook host={host} client={null} connected={false} />, {
+      container,
+    }).unmount;
+    flush();
 
     const header = container.querySelector<HTMLElement>(".logbook-card__header")!;
     const time = header.querySelector<HTMLElement>(".logbook-card__time")!;
