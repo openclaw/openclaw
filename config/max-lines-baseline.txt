@@ -442,7 +442,6 @@ src/infra/diagnostic-events.ts
 src/infra/exec-approvals-allowlist.ts
 src/infra/exec-authorization-plan.ts
 src/infra/infra-runtime.test.ts
-src/infra/npm-managed-root.test.ts
 src/infra/npm-managed-root.ts
 src/infra/outbound/deliver.test.ts
 src/infra/outbound/delivery-queue-recovery.ts

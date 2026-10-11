@@ -23,8 +23,6 @@ import {
 } from "./session-accessor.pending-input-request.js";
 import {
   prepareCurrentSessionPendingInputDedupeRecovery,
-  isFinalInputCompletion,
-  parseSessionPendingInputMessage,
   hasRegisteredSessionPendingInputOwner,
   registerSessionPendingInputOwner,
   releaseSessionPendingInputOwner,
@@ -54,6 +52,10 @@ import type { PendingInputCustodyGrant } from "./session-pending-input-operation
 import type { SessionPendingInputReceipt } from "./session-pending-input-receipt.types.js";
 import { readPendingInputSource } from "./session-pending-input-source.js";
 import { preparePendingInputStore, type PendingInputScope } from "./session-pending-input-store.js";
+import {
+  isFinalInputCompletion,
+  parseSessionPendingInputMessage,
+} from "./session-pending-input-value.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 

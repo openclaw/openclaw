@@ -31,7 +31,7 @@ type ChatCommentControllerProps = {
 };
 
 /** Owns comment mutations even when plugins or history errors replace the transcript. */
-export const ChatCommentController = defineSolidBridge<ChatCommentControllerProps>(
+defineSolidBridge<ChatCommentControllerProps>(
   "openclaw-chat-comment-controller",
   (view, host) => {
     let root: HTMLElement | null = null;

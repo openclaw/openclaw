@@ -3,6 +3,7 @@ import type { Server } from "node:http";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { sessionNavigationTarget } from "../../ui/src/lib/sessions/route-navigation.ts";
 import { computeInlineScriptHashes } from "./control-ui-csp.js";
 import { AUTH_TOKEN, createTestGatewayServer, sendRequest } from "./server-http.test-harness.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
@@ -87,6 +88,26 @@ afterEach(() => {
 });
 
 describe("canonical anonymous HTTP entry", () => {
+  it("reloads the exact Incognito address produced by in-app navigation", async () => {
+    const sessionKey = "agent:main:dashboard:incognito-12345678-aaaa-4000-8000-000000000001";
+    const target = sessionNavigationTarget({
+      face: "chat",
+      sessionKey,
+      navigationKey: sessionKey,
+      fallbackAgentId: "main",
+      basePath: "/control",
+    });
+    const response = await sendRequest(server(), {
+      path: target.options.pathname + (target.options.search ?? ""),
+      host: "gateway.lan:18789",
+      remoteAddress: "192.168.1.25",
+    });
+    expect(response.res.statusCode).toBe(200);
+    expect(response.getBody()).toContain("<openclaw-app>");
+    expect(resolveSession).not.toHaveBeenCalled();
+    expect(reader).not.toHaveBeenCalled();
+  });
+
   it.each(["token", "password"] as const)(
     "serves the %s app on non-secure ingress without reading a transcript",
     async (mode) => {

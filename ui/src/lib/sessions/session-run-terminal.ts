@@ -10,10 +10,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "./session-key.ts";
-import {
-  createSessionWriteObservation,
-  type createSessionRowProvenance,
-} from "./session-row-provenance.ts";
+import type { createSessionRowProvenance } from "./session-row-provenance.ts";
 
 export type SessionRunTerminal = {
   sessionKeys: readonly string[];
@@ -28,7 +25,7 @@ export type SessionRunTerminal = {
 type SessionRunTerminalObservation = {
   agentId: (row: GatewaySessionRow) => string | null;
   project: (row: GatewaySessionRow) => GatewaySessionRow;
-  observe: (row: GatewaySessionRow, previous: GatewaySessionRow, fields: readonly string[]) => void;
+  observe: (row: GatewaySessionRow, previous: GatewaySessionRow) => void;
 };
 
 function createSessionRunTerminalReconciler(
@@ -84,7 +81,7 @@ function createSessionRunTerminalReconciler(
         hasActiveRun: true,
         status: "running" as const,
       };
-      observation?.observe(next, row, ["activeRunIds", "hasActiveRun", "status"]);
+      observation?.observe(next, row);
       return next;
     }
     // Exact active ownership can precede the persisted lifecycle update. Replace
@@ -110,24 +107,6 @@ function createSessionRunTerminalReconciler(
         : replacementRunId || terminal.status === "running"
           ? false
           : row.abortedLastRun;
-    const fields = ["hasActiveRun", "status"];
-    if (activeRunIds !== undefined) {
-      fields.push("activeRunIds");
-    }
-    if (!failed || errorMessage || replacementRunId) {
-      fields.push("lastRunError");
-    }
-    if (replacementRunId) {
-      fields.push("lastRunId", "startedAt", "endedAt", "runtimeMs");
-    } else if (row.endedAt == null) {
-      fields.push("endedAt");
-      if (typeof row.startedAt === "number") {
-        fields.push("runtimeMs");
-      }
-    }
-    if (replacementRunId || terminal.status === "killed" || terminal.status === "running") {
-      fields.push("abortedLastRun");
-    }
     const next =
       !replacementRunId &&
       row.hasActiveRun === false &&
@@ -149,8 +128,7 @@ function createSessionRunTerminalReconciler(
             runtimeMs,
             abortedLastRun,
           };
-    // Same-value terminal facts still precede an already-issued list response.
-    observation?.observe(next, row, fields);
+    observation?.observe(next, row);
     return next;
   };
 }
@@ -179,7 +157,7 @@ type SessionTerminalRosterHost = {
   };
   provenance: Pick<
     ReturnType<typeof createSessionRowProvenance>,
-    "owner" | "inheritRow" | "observeFields"
+    "owner" | "inheritRow" | "observeReadRow"
   >;
   stage: (
     scope: GatewayConnectionScope | null,
@@ -189,7 +167,7 @@ type SessionTerminalRosterHost = {
       row: GatewaySessionRow | null;
     }) => {
       row: GatewaySessionRow | null;
-      invalidateRevision?: number;
+      invalidate?: "now" | "later";
     },
   ) => { changed: boolean; notify: () => void };
 };
@@ -199,15 +177,15 @@ export function createSessionRunTerminalStaging(host: SessionTerminalRosterHost)
     terminal: SessionRunTerminal,
     event: { scope: GatewayConnectionScope | null; revision: number },
   ): { result: SessionsListResult | null; changed: boolean; notify: () => void } => {
-    const { owner, inheritRow, observeFields } = host.provenance;
+    const { owner, inheritRow, observeReadRow } = host.provenance;
     const { projectFields: project } = host.prepareProjection();
     const observation = (agentId: string | null): SessionRunTerminalObservation => ({
       agentId: (row) => owner(row, agentId),
       project: (row) => project(row, agentId),
-      observe: (row, source, fields) => {
+      observe: (row, source) => {
         inheritRow(row, source);
         // Terminal time is local; only Gateway rows supply the updatedAt clock.
-        observeFields(row, fields, createSessionWriteObservation(event.revision, null), agentId);
+        observeReadRow(row, event.revision, agentId);
       },
     });
     const reconcile = (result: SessionsListResult | null, agentId: string | null) =>
@@ -236,7 +214,7 @@ export function createSessionRunTerminalStaging(host: SessionTerminalRosterHost)
                   observation(entry.target.agentId),
                 )(entry.row)
               : entry.row,
-          ...(!entry.row && matches ? { invalidateRevision: event.revision } : {}),
+          ...(!entry.row && matches ? { invalidate: "now" as const } : {}),
         };
       },
     );

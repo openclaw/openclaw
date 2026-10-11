@@ -17,8 +17,8 @@ import { authorizeGatewayRequestPreDispatch } from "./server-methods/request-aut
 import { sessionSubscriptionHandlers } from "./server-methods/sessions-subscriptions.js";
 import type { GatewayRequestContext, GatewayRequestHandler } from "./server-methods/types.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
+import * as rowFacts from "./session-row-database-facts.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
-import * as rowFacts from "./session-row-projection-read.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { sharingPolicyClient } from "./session-sharing.test-utils.js";
 
