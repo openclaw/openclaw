@@ -215,16 +215,25 @@ function makeTool(parameters: TSchema, overrides: Partial<AnyAgentTool> = {}): A
 
 describe("normalizeToolParameters", () => {
   it("keeps deeply nested plugin tools callable through argument validation", async () => {
-    let parameters: TSchema = { type: "string" };
+    let metadata: TSchema = { type: "string" };
     for (let depth = 0; depth < 5_000; depth++) {
-      parameters = { type: "object", properties: { nested: parameters } };
+      metadata = { type: "object", properties: { next: metadata } };
     }
     const execute = vi.fn().mockResolvedValue({ content: [], details: { called: true } });
-    const normalized = normalizeToolParameters(makeTool(parameters, { execute }));
+    const normalized = normalizeToolParameters(
+      makeTool(
+        {
+          type: "object",
+          properties: { message: { type: "string" }, metadata },
+          required: ["message"],
+        },
+        { execute },
+      ),
+    );
 
     const { messages } = await runToolCall(
       normalized,
-      { type: "toolCall", id: "deep-call", name: normalized.name, arguments: {} },
+      { type: "toolCall", id: "deep-call", name: normalized.name, arguments: { message: "proof" } },
       "Call the tool",
     );
 

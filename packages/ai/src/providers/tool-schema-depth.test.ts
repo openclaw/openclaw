@@ -1,5 +1,11 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../../../src/infra/runtime-worker-url.js";
 import { configureAiTransportHost } from "../host.js";
 import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
 import { cleanSchemaForGemini } from "./clean-for-gemini.js";
@@ -14,7 +20,10 @@ import {
 } from "./openai-tool-schema-compat.js";
 import { normalizeStrictOpenAIJsonSchema } from "./openai-tool-schema.js";
 import { stripUnsupportedSchemaKeywords } from "./schema-keyword-strip.js";
+import { toolSchemaDepthEntrypoint } from "./tool-schema-depth-runtime.test-support.js";
 import { MAX_TOOL_SCHEMA_DEPTH, truncateToolSchemaDepth } from "./tool-schema-depth.js";
+
+const execFileAsync = promisify(execFile);
 
 function nestedSchema(depth: number, strict = false): Record<string, unknown> {
   let schema: Record<string, unknown> = { type: "string" };
@@ -41,6 +50,15 @@ function nestedLeaf(schema: unknown): { depth: number; leaf: unknown } {
 afterEach(() => configureAiTransportHost({}));
 
 describe("shared tool schema depth budget", () => {
+  // Vitest's worker stack can accept validators that overflow a cold CLI main thread.
+  it("compiles model-emitted arguments on a cold main-thread stack", async () => {
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      [...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(toolSchemaDepthEntrypoint))],
+      { cwd: process.cwd(), encoding: "utf8", timeout: 20_000 },
+    );
+    expect(stdout).toBe("ok");
+  }, 30_000);
   it.each([
     ["parameters", normalizeToolParameterSchema],
     ["strict", normalizeStrictOpenAIJsonSchema],

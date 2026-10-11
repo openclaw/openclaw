@@ -3,7 +3,8 @@ import { getAiTransportHost } from "../host.js";
 import { SCHEMA_ARRAY_KEYS, SCHEMA_MAP_KEYS, SCHEMA_OBJECT_KEYS } from "./schema-walk.js";
 
 /** Schema nodes and expanded references share this budget; containers are transparent. */
-export const MAX_TOOL_SCHEMA_DEPTH = 512;
+// Leave stack headroom for TypeBox's generated validators and native grammar compilers.
+export const MAX_TOOL_SCHEMA_DEPTH = 128;
 
 export type ToolSchemaPosition = {
   kind: "schema" | "map" | "array" | "dependencies";

@@ -119,7 +119,7 @@ export default defineToolPlugin({
 Tool names are the stable API. Pick names that are unique, lowercase, and
 specific enough to avoid collisions with core tools or other plugins.
 
-OpenClaw bounds tool input schemas to 512 nested schema levels, including
+OpenClaw bounds tool input schemas to 128 nested schema levels, including
 expanded local references. Deeper subschemas become permissive `{}` schemas
 so the tool remains callable. A one-time warning names the affected tool;
 validation beyond the cutoff is unavailable. Keep schemas shallow enough to
