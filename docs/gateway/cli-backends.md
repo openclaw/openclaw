@@ -35,6 +35,8 @@ Deprecated catalog models are not added at sign-in; an existing entry for one is
 
 `main` is the default agent id when no explicit agent list is configured. Swap in your own agent id otherwise.
 
+When you switch an existing chat away from Claude CLI and back, the first resumed turn includes a short count, time range, and model summary of messages since the last saved Claude CLI reply—not their contents. The note prefixes that native user prompt; OpenClaw's transcript keeps the original user text. When `sessions_history` is available, the note includes the current chat's session key and call shape so Claude can read those messages on demand. An empty Claude reply leaves no saved reply boundary, so the note can repeat on the following turn.
+
 The gateway service must have the CLI on its `PATH`. If a deployment needs a
 nonstandard executable path or arguments, register that adapter in a
 [CLI backend plugin](/plugins/cli-backend-plugins) instead of putting launch
@@ -160,8 +162,10 @@ for shell work. Native `Bash` is disabled for those turns. A command still runni
 after the default 10-second yield window returns a managed process handle instead
 of holding the tool call until it finishes. When completion notifications are
 enabled, the result wakes the originating conversation; a busy conversation handles
-it after its current turn. If only waiting remains, the agent reports that the job
-is running and ends its turn instead of repeatedly polling. Exec policy, configured
+it after its current turn. The continuation retains the originating turn’s tool
+policy, including native and other MCP tools, subject to current session policy.
+Restricted turns keep their original limits. If only waiting remains, the agent
+reports that the job is running and ends its turn instead of repeatedly polling. Exec policy, configured
 yield windows, command deadlines, and explicit notification settings still apply.
 
 Exact tool selections, tool-free side questions, standalone CLI runs without
@@ -370,6 +374,10 @@ Automatic durable recovery requires a resolved static credential or a named OAut
 This uses existing session metadata and transcript generation/sequence counters. No SQLite schema migration or transcript deletion occurs. Existing conversations are not backfilled from their latest native binding. Older binaries do not enforce this new recovery boundary. After a downgrade and subsequent transcript writes, upgrading again refuses automatic replay because those writes are not covered. Do not rely on a downgrade to preserve the new security behavior.
 
 Explicit caller-owned in-memory context remains caller-supplied input, not permission to read a durable conversation carrying the same identifiers. Authentication invalidations still refuse its recovery prompt and saved session notes. When automatic recovery is refused, the saved transcript remains intact. The next CLI process receives the current request without the saved history or notes.
+
+An admitted resume of the same native Claude session can still receive the count, time range, and models of intervening messages, plus a `sessions_history` call for the current chat when that tool is available. This notice contains no transcript text or saved notes, does not authorize automatic replay, and is never added to a fresh session or after an authentication-profile or epoch change.
+
+The notice prefixes only that native user turn. OpenClaw keeps the original user text; native-history imports correlate the prefixed turn with its existing local row instead of adding a duplicate.
 
 Serialization: `serialize: true` keeps same-lane runs ordered (most CLIs serialize on one provider lane). OpenClaw also drops stored CLI session reuse when the selected auth identity changes. A changed auth profile id, static API key, static token, or OAuth account identity all count, when the CLI exposes one. OAuth access and refresh token rotation alone does not cut the session. If a CLI has no stable OAuth account id, OpenClaw lets that CLI enforce its own resume permissions.
 

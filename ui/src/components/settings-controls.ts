@@ -5,7 +5,7 @@ export type SettingsToggleControl = {
   onAct?: (checked: boolean) => void;
 };
 
-export type SettingsSegmentedOption<T extends string, Label> = {
+type SettingsSegmentedOption<T extends string, Label> = {
   value: T;
   label: Label;
   title?: string;

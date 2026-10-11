@@ -20,6 +20,33 @@ function writeClaudeEntries(filePath: string, entries: readonly Record<string, u
 }
 
 describe("routed CLI prompts in chat history", () => {
+  it.each(["string", "text block"])(
+    "preserves unmatched routed %s provenance beneath switch-back context",
+    async (shape) => {
+      await withClaudeProjectsDir(async ({ filePath, readMessages }) => {
+        const provenance: InputProvenance = {
+          kind: "inter_session",
+          sourceSessionKey: "agent:ops:main",
+          sourceTool: "sessions_send",
+        };
+        const note =
+          '[OpenClaw: 2 messages occurred outside this Claude session from 2026-10-10T22:30:29.302Z to 2026-10-10T22:30:43.592Z, using "mock/mock-model". Their contents are not included here. Before answering a question that may depend on these messages, call mcp__openclaw__sessions_history({"sessionKey":"agent:main:switch-back","limit":100}) to read them; page older messages with offset if needed.]';
+        const raw = `${note}\n\n${buildInterSessionPromptContext(provenance).text}\nPlease check the build.`;
+        const content = shape === "string" ? raw : [{ type: "text", text: raw }];
+        await writeClaudeEntries(filePath, [claudeUser(content, { uuid: "routed-switch-back" })]);
+
+        const merged = mergeImportedChatHistoryMessages({
+          localMessages: [],
+          importedMessages: await readMessages(),
+        });
+
+        expect(merged).toHaveLength(1);
+        expect(merged[0]).toMatchObject({ role: "user", content, provenance });
+        expect(merged[0]).not.toMatchObject({ senderIsOwner: true });
+      });
+    },
+  );
+
   it("records inter-session provenance from the routed prompt envelope", async () => {
     await withClaudeProjectsDir(async ({ filePath, readMessages }) => {
       const envelope = buildInterSessionPromptContext({
