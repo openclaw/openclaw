@@ -186,9 +186,9 @@ export function retainGatewayPluginMetadata(
           const previous = owner.cache;
           owner.cache = undefined;
           releaseCache(previous);
-          return await waitForRetirement([
-            ...(retireRegistry ? [Promise.resolve().then(retireRegistry)] : []),
-          ]);
+          return await waitForRetirement(
+            retireRegistry ? [Promise.resolve().then(retireRegistry)] : [],
+          );
         }));
       owner.closing = Promise.resolve().then(async () => {
         try {

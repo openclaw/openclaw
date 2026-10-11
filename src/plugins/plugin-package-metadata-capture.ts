@@ -587,10 +587,11 @@ export function createPluginPackageMetadataCapture(params: {
             }
             return parsed;
           };
-        } else {
-          if (scopeDirectory !== boundary && isPathInside(boundary, path.dirname(scopeDirectory))) {
-            scope = captureScopeMetadata(path.dirname(scopeDirectory));
-          }
+        } else if (
+          scopeDirectory !== boundary &&
+          isPathInside(boundary, path.dirname(scopeDirectory))
+        ) {
+          scope = captureScopeMetadata(path.dirname(scopeDirectory));
         }
         capturedScopes.set(scopeDirectory, scope);
         return scope;

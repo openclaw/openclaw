@@ -16,7 +16,6 @@ import { setTestEnvValue, withEnvAsync } from "../test-utils/env.js";
 import {
   createPluginCliLoadSession,
   loadPluginCliDescriptors,
-  loadPluginCliRegistrationEntriesWithDefaults,
   resolvePluginCliRootOwnerIds,
 } from "./cli-registry-loader.js";
 import { registerPluginCliCommandsFromValidatedConfig } from "./cli.js";

@@ -415,7 +415,7 @@ export function createPluginReloadCleanup({
         generation && getPreparedModelRuntimeBorrowedSnapshot(generation)
           ? new Set(
               [generation.pluginRegistry, generation.inboundPluginRegistry].flatMap((registry) =>
-                registry ? [...collectRegistryInvocationInstances(registry)] : [],
+                registry ? Array.from(collectRegistryInvocationInstances(registry)) : [],
               ),
             )
           : undefined;

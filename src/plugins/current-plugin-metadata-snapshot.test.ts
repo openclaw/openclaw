@@ -19,7 +19,6 @@ import { withPluginInstallRoots } from "./install-root-context.js";
 import * as installedPluginIndexPolicy from "./installed-plugin-index-policy.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import {
-  bindPluginMetadataSnapshotCache,
   createPluginCache,
   invalidatePluginCacheMetadata,
   withPluginCache,
