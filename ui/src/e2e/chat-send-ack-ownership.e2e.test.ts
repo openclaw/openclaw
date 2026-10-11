@@ -1,22 +1,36 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createControlUiE2eSuite({ name: "Control UI failed input ACK ownership" });
+const suite = createControlUiE2eSuite({ name: "Control UI input ACK ownership" });
 
 suite.define(() => {
   it.each([
     {
       name: "keeps the active response and Stop target after a steer timeout ACK",
       ownership: "adopted-a",
+      status: "timeout",
     },
     {
       name: "keeps unadopted successor tool activity after a steer timeout ACK",
       ownership: "unadopted-c",
+      status: "timeout",
     },
-  ] as const)("$name", async ({ ownership }) => {
+    {
+      name: "keeps the active response and Stop target after a replayed steer ACK",
+      ownership: "adopted-a",
+      status: "ok",
+    },
+    {
+      name: "keeps unadopted successor tool activity after a replayed steer ACK",
+      ownership: "unadopted-c",
+      status: "ok",
+    },
+  ] as const)("$name", async ({ ownership, status }) => {
     await suite.withPage({ viewport: { width: 1200, height: 800 } }, async ({ page }) => {
       const sessionKey = "agent:main:main";
       const gateway = await installMockGateway(page, { sessionKey });
@@ -54,7 +68,7 @@ suite.define(() => {
       const successorTool = page
         .locator(".chat-tool-msg-summary")
         .filter({ hasText: "Successor C tool proof" });
-      const captureName = ownership === "adopted-a" ? "steer-timeout" : "unadopted-c-timeout";
+      const captureName = `${ownership}-${status}`;
       if (ownership === "unadopted-c") {
         await gateway.emitChatFinal({ runId, text: "Original task completed." });
         await page
@@ -88,24 +102,35 @@ suite.define(() => {
         expect(await successorTool.count()).toBe(1);
         await successorTool.scrollIntoViewIfNeeded();
       }
-      await page.screenshot({
-        path: path.join(suite.artifactDir, `before-${captureName}.png`),
-        fullPage: false,
-      });
-
-      // Mirrors a targeted cancellation of the separate pre-ACK steer controller.
+      const capture = async (stage: string) => {
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          page.locator(".agent-chat__input"),
+          [composer],
+          { animations: "disabled" },
+        );
+        await writeFile(path.join(suite.artifactDir, `${stage}-${captureName}.png`), frame.png);
+      };
+      await capture("before");
+      const historyRequests = (await gateway.getRequests("chat.history")).length;
+      if (status === "ok") {
+        // Receipt reconciliation must not hide loss of another live run's state.
+        await gateway.deferNext("chat.history");
+      }
+      // A replayed receipt and a targeted cancellation both belong to input B.
       await gateway.resolveDeferred("chat.send", {
         runId: steerRunId,
-        status: "timeout",
-        stopReason: "rpc",
+        status,
+        ...(status === "timeout" ? { stopReason: "rpc" } : {}),
       });
-      await page
-        .getByTitle("The run ended before the message was accepted.", { exact: true })
-        .waitFor();
-      await page.screenshot({
-        path: path.join(suite.artifactDir, `after-${captureName}.png`),
-        fullPage: false,
-      });
+      if (status === "timeout") {
+        await page
+          .getByTitle("The run ended before the message was accepted.", { exact: true })
+          .waitFor();
+      } else {
+        await gateway.waitForRequest("chat.history", { after: historyRequests });
+      }
+      await capture("after");
       expect(await composer.inputValue()).toBe("Keep this next message draft.");
 
       if (ownership === "adopted-a") {
@@ -132,6 +157,9 @@ suite.define(() => {
         );
       }
       expect(await gateway.getRequests("chat.send")).toHaveLength(2);
+      if (status === "ok") {
+        await gateway.resolveDeferred("chat.history");
+      }
     });
   });
 });
