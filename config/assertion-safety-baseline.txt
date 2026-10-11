@@ -1878,7 +1878,6 @@ src/context-engine/registry.ts	4
 src/cron/delivery-channel-validation.ts	2
 src/cron/delivery-context.ts	1
 src/cron/delivery-target-validation.ts	3
-src/cron/delivery.ts	1
 src/cron/isolated-agent/delivery-target.ts	1
 src/cron/isolated-agent/helpers.ts	1
 src/cron/isolated-agent/job-fixtures.ts	3
