@@ -15,10 +15,9 @@ type QueuedBootstrapTask = {
   run: () => Promise<unknown>;
 };
 
-/** Owns the queue and revokes pending work synchronously with its connection epoch. */
+/** Owns the queue and clears pending work when its connection ends. */
 export function createConnectionBootstrapCoordinator() {
   let client: object | null = null;
-  let generation = 0;
   let active = 0;
   let foregroundRoute: string | null | undefined = null;
   let foregroundPane:
@@ -42,14 +41,11 @@ export function createConnectionBootstrapCoordinator() {
       }
       task.started = true;
       active++;
-      const taskGeneration = generation;
       const finish = () => {
-        if (taskGeneration === generation) {
+        task.resolve();
+        if (tasks.get(key) === task) {
           tasks.delete(key);
           active--;
-        }
-        task.resolve();
-        if (taskGeneration === generation) {
           drain();
         }
       };
@@ -62,7 +58,6 @@ export function createConnectionBootstrapCoordinator() {
   };
 
   const reset = () => {
-    generation += 1;
     client = null;
     active = 0;
     foregroundPane = undefined;

@@ -108,7 +108,7 @@ type SessionContextTokenProjectionParams = SessionContextSelection & {
 };
 
 /** Projects the selected capacity and records the owner that supplied it. */
-export function resolveProjectedSessionContextTokenBudget(
+function resolveProjectedSessionContextTokenBudget(
   params: SessionContextTokenProjectionParams,
 ): { contextTokens: number; contextTokensSource: SessionEntry["contextTokensSource"] } | undefined {
   if (params.ownerCapacity && params.entry?.contextTokensSource === "synthetic") {

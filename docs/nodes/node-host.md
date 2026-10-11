@@ -140,6 +140,23 @@ openclaw node restart
 
 `node install` also accepts `--context-path`, `--tls`, `--tls-fingerprint`, `--node-id` (legacy client instance ID only), `--share-installed-apps` / `--no-share-installed-apps`, `--runtime <node|bun>` (default: `node`), and `--force` to reinstall. Bun requires version 1.4+ with WAL-reset-safe `node:sqlite` and is an explicit opt-in; Node remains recommended. `node status`, `node stop`, and `node uninstall` are also available.
 
+For `npx openclaw node install` or `npx openclaw connect <join-url> --service`,
+OpenClaw installs the selected release into `<state-dir>/npm` before writing
+the service. The state directory respects `OPENCLAW_STATE_DIR` and profiles.
+Both launchd and systemd run the durable package after npm clears its `_npx`
+cache. Installation prints the package version, chosen runtime, service command,
+and a node update command:
+
+```bash
+npx -y openclaw@latest node install --force
+```
+
+Use the same profile and state-directory settings. Replace `latest` with `beta`
+or an exact version when needed. This installs into the same managed prefix,
+rewrites the service, and reuses the saved pairing. Reinstalling the same version
+repairs missing package files. It does not accumulate a directory per release.
+The automatic node-runtime updates below remain independent of this CLI package.
+
 Node shutdown waits for plugin availability watchers and active computer executions
 to finish cleanup, and reports failures from those cleanup operations. If a command
 reports `Node disconnect cleanup failed`, reconnect the node to retry disconnect cleanup

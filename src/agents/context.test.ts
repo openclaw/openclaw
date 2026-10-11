@@ -134,6 +134,7 @@ describe("context token resolution", () => {
       contextTokens: 128_000,
       authoredContextTokens: 1_000_000,
       configuredContextTokenLimits: {
+        configuredContextTokens: 1_000_000,
         effectiveConfiguredTokens: 128_000,
         authoredContextTokenCap: 128_000,
         configuredContextWindow: 128_000,
@@ -249,6 +250,7 @@ describe("native owner isolation", () => {
       contextTokens: undefined,
       authoredContextTokens: undefined,
       configuredContextTokenLimits: {
+        configuredContextTokens: undefined,
         effectiveConfiguredTokens: undefined,
         authoredContextTokenCap: undefined,
         configuredContextWindow: undefined,
