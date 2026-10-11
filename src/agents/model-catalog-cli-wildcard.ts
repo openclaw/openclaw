@@ -33,18 +33,23 @@ export function projectClaudeCliNativeCatalog(
       .filter((entry) => entry.provider === "anthropic")
       .map((entry) => [entry.id, entry]),
   );
-  const enrichedNativeRows = nativeRows.map((entry) => ({
-    ...entry,
-    ...metadata.get(entry.id),
-    id: entry.id,
-    provider: CLAUDE_CLI_RUNTIME_ID,
-    name: entry.name,
-    reasoning: entry.reasoning,
-    thinkingLevelMap: entry.thinkingLevelMap,
-  }));
-  const canonical = nativeOnly
-    ? enrichedNativeRows.map((entry) => ({ ...entry, provider: "anthropic" }))
-    : [];
+  const enrichedNativeRows: ModelCatalogEntry[] = [];
+  const canonical: ModelCatalogEntry[] = [];
+  for (const entry of nativeRows) {
+    const enriched = {
+      ...entry,
+      ...metadata.get(entry.id),
+      id: entry.id,
+      provider: CLAUDE_CLI_RUNTIME_ID,
+      name: entry.name,
+      reasoning: entry.reasoning,
+      thinkingLevelMap: entry.thinkingLevelMap,
+    };
+    enrichedNativeRows.push(enriched);
+    if (nativeOnly) {
+      canonical.push({ ...enriched, provider: "anthropic" });
+    }
+  }
   const replaced = new Set(canonical.map((entry) => entry.id));
   const keep = (entry: ModelCatalogEntry) =>
     entry.provider !== CLAUDE_CLI_RUNTIME_ID &&
@@ -93,7 +98,7 @@ export function createUnlistedClaudeCliWildcardCheck(params: {
         .outcomes()
         ?.flatMap((outcome) =>
           outcome.provider === CLAUDE_CLI_RUNTIME_ID && outcome.status === "ready"
-            ? [...(outcome.listedModelIds ?? [])]
+            ? (outcome.listedModelIds ?? [])
             : [],
         ),
     );
