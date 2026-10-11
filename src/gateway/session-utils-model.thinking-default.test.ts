@@ -36,6 +36,22 @@ import {
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import { buildGatewaySessionRow } from "./session-utils-row.js";
 
+it("keeps runtime capacity reads separate from cached API capability donors", () => {
+  const context = buildSessionListRowMetadataContext({ now: 1 });
+  const entry: ModelCatalogEntry = {
+    provider: "fixture",
+    id: "local-model",
+    name: "Local model",
+    contextTokens: 32_768,
+  };
+  const selection = { entry, routeVariants: [entry], runtimeId: "native-fixture" };
+  expect(context.selectModelCatalogRuntimeEntry(selection).entry.contextTokens).toBe(32_768);
+  expect(
+    context.selectModelCatalogRuntimeEntry({ ...selection, allowApiFallback: false }).entry
+      .contextTokens,
+  ).toBeUndefined();
+});
+
 describe("Gateway stored thinking levels", () => {
   it("keeps stored Ultra for supported harnesses and clamps unavailable native profiles", () => {
     // A synthetic model lets observed native efforts define the capability set.

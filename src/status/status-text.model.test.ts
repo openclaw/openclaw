@@ -120,6 +120,12 @@ describe("buildStatusText prepared context windows", () => {
       nativeRuntime: "other-runtime",
       expected: "45k/?",
     },
+    {
+      name: "API limits for a native runtime",
+      window: 262_144,
+      resolvedHarness: "fixture-native",
+      expected: "45k/?",
+    },
   ])("renders $name without reusing a stale cache or estimate", async (scenario) => {
     const provider = "ollama";
     const model = "qwen3:8b";
@@ -134,6 +140,7 @@ describe("buildStatusText prepared context windows", () => {
       const parts = await renderPreparedStatus({
         provider,
         model,
+        resolvedHarness: scenario.resolvedHarness ?? "openclaw",
         contextTokens: 200_000,
         thinkingCatalog: [
           {

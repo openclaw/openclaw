@@ -3,6 +3,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { ModelsListResult } from "../../packages/gateway-protocol/src/schema/model-catalog.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
@@ -16,6 +17,7 @@ import {
   prepareCliProviderClassifier,
   type CliProviderClassifier,
 } from "../agents/model-selection.js";
+import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { resolveRuntimePolicySessionKey } from "../auto-reply/reply/runtime-policy-session-key.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
@@ -246,6 +248,8 @@ export async function sessionsCommand(
   const cfg = getRuntimeConfig();
   const { resolveModelContextTokenProjection } = await import("../agents/context.js");
   const { loadPreparedModelCatalogSnapshot } = await import("../agents/prepared-model-catalog.js");
+  const { callGateway, isImplicitLocalGatewayTarget } = await import("../gateway/call.js");
+  const { readActiveGatewayLockIdentity } = await import("../infra/gateway-lock.js");
   const targets = resolveCommandSessionStoreTargets({ cfg, opts });
 
   let activeMinutes: number | undefined;
@@ -301,6 +305,13 @@ export async function sessionsCommand(
     })),
   });
   const catalogs = new Map<string, Promise<ModelCatalogSnapshot | undefined>>();
+  const gatewayOwner =
+    opts.store === undefined &&
+    sessionEntries.length > 0 &&
+    (await isImplicitLocalGatewayTarget({ config: cfg }))
+      ? await readActiveGatewayLockIdentity({ requireInspection: true })
+      : undefined;
+  let catalogWarningShown = false;
   const rows = await Promise.all(
     sessionEntries.map(async ({ acpSessionKey, agentId, entry, row }) => {
       const acpMeta = acpSessionMetaByEntry.get(entry);
@@ -325,13 +336,53 @@ export async function sessionsCommand(
       const catalogKey = `${agentId}\0${entry.spawnedWorkspaceDir ?? ""}\0${modelRef.provider}`;
       let pendingCatalog = catalogs.get(catalogKey);
       if (!pendingCatalog) {
-        pendingCatalog = loadPreparedModelCatalogSnapshot({
-          config: cfg,
-          agentId,
-          workspaceDir: entry.spawnedWorkspaceDir,
-          readOnly: true,
-          providerDiscoveryProviderIds: [modelRef.provider],
-        }).catch(() => undefined);
+        const readSavedCatalog = () =>
+          loadPreparedModelCatalogSnapshot({
+            config: cfg,
+            agentId,
+            workspaceDir: entry.spawnedWorkspaceDir,
+            readOnly: true,
+            providerDiscoveryProviderIds: [modelRef.provider],
+          }).catch(() => undefined);
+        pendingCatalog = gatewayOwner
+          ? callGateway<ModelsListResult>({
+              config: cfg,
+              localPortOverride: gatewayOwner.port,
+              method: "models.list",
+              params: {
+                agentId,
+                provider: modelRef.provider,
+                view: "all",
+                includeDetails: true,
+                includeDefaultModels: false,
+                preparedOnly: true,
+              },
+            })
+              .then(({ models }) => ({
+                entries: models.map((model) => ({
+                  id: model.id,
+                  name: model.name,
+                  provider: model.provider,
+                  contextWindow: model.contextWindow,
+                  contextTokens: model.contextTokens,
+                  contextWindows: model.contextWindows,
+                  contextWindowDefault: model.contextWindowDefault,
+                  ...(model.agentRuntime && !["auto", "openclaw"].includes(model.agentRuntime.id)
+                    ? { nativeRuntime: model.agentRuntime.id }
+                    : {}),
+                })),
+                routeVariants: [],
+              }))
+              .catch(() => {
+                if (!catalogWarningShown) {
+                  catalogWarningShown = true;
+                  runtime.error(
+                    "Could not read the active Gateway model catalog; showing configured or last verified capacity. Retry when the Gateway is reachable.",
+                  );
+                }
+                return readSavedCatalog();
+              })
+          : readSavedCatalog();
         catalogs.set(catalogKey, pendingCatalog);
       }
       const catalog = await pendingCatalog;
@@ -340,18 +391,26 @@ export async function sessionsCommand(
         modelRef.provider,
         modelRef.model,
       );
-      const runtimeEntry =
+      if (agentRuntime.id === "auto") {
+        agentRuntime.id = resolveEffectiveAgentRuntime({
+          cfg,
+          agentScope: { kind: "prepared", agentId },
+          sessionKey: acpSessionKey,
+          sessionEntry: entry,
+          provider: modelRef.provider,
+          modelId: modelRef.model,
+          modelApi: logicalEntry?.api,
+          modelBaseUrl: logicalEntry?.baseUrl,
+        });
+      }
+      const catalogEntry =
         logicalEntry &&
         selectModelCatalogRuntimeEntry({
           entry: logicalEntry,
           routeVariants: catalog?.routeVariants ?? [],
           runtimeId: agentRuntime.id,
+          allowApiFallback: false,
         }).entry;
-      const catalogEntry =
-        runtimeEntry?.nativeRuntime ||
-        ["openclaw", "auto", modelRef.provider].includes(agentRuntime.id)
-          ? runtimeEntry
-          : undefined;
       const modelContext = resolveModelContextTokenProjection({
         cfg,
         provider: modelRef.provider,

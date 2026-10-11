@@ -24,6 +24,7 @@ import {
 } from "../agents/model-selection-shared.js";
 import { parseModelRef, resolvePersistedSelectedModelRef } from "../agents/model-selection.js";
 import { getPreparedModelCatalogSnapshot } from "../agents/prepared-model-catalog.js";
+import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -74,10 +75,8 @@ async function createStatusModelContextResolver(cfg: OpenClawConfig) {
           entry: logicalEntry,
           routeVariants: catalog.routeVariants,
           runtimeId,
+          allowApiFallback: false,
         }).entry;
-      if (!entry?.nativeRuntime && !["openclaw", "auto", provider].includes(runtimeId)) {
-        return {};
-      }
       return {
         modelContextWindow: resolveModelContextWindowProfile({
           catalogEntry: entry,
@@ -308,7 +307,18 @@ function resolveSessionRuntime(params: {
     acpRuntime: acpMeta != null,
     acpBackend: acpMeta?.backend,
   });
-  const id = normalizeOptionalLowercaseString(runtime.id);
+  const id = normalizeOptionalLowercaseString(
+    runtime.id === "auto"
+      ? resolveEffectiveAgentRuntime({
+          cfg: params.cfg,
+          agentId: params.agentId ?? acpAgentId,
+          provider: params.provider,
+          modelId: params.model,
+          sessionKey: acpSessionKey,
+          sessionEntry: params.entry,
+        })
+      : runtime.id,
+  );
   // OpenClaw/auto are generic labels; concrete harness ids give better operator signal.
   const resolvedHarness = id && id !== "openclaw" && id !== "auto" ? id : undefined;
   return {

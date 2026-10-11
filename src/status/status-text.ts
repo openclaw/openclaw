@@ -511,12 +511,15 @@ export async function buildStatusReplyParts(
             entry,
             routeVariants: catalog.routeVariants,
             runtimeId: effectiveHarness ?? "openclaw",
+            allowApiFallback: false,
           }).entry,
       )
     : owner
       ? []
-      : (thinkingCatalog ?? []).filter(
-          (entry) => !entry.nativeRuntime || entry.nativeRuntime === effectiveHarness,
+      : (thinkingCatalog ?? []).filter((entry) =>
+          entry.nativeRuntime
+            ? entry.nativeRuntime === effectiveHarness
+            : ["openclaw", "auto", entry.provider].includes(effectiveHarness ?? "openclaw"),
         );
   const selectedCatalogEntry = findModelInCatalog(
     contextCatalog,

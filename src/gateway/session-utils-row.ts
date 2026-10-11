@@ -260,7 +260,7 @@ export function readSessionRowInputs(params: {
         entry,
         provider,
         model,
-        agentHarnessId: thinkingProjection.agentRuntime.id,
+        agentHarnessId: thinkingProjection.capacityRuntime,
         resolvedContextTokens: contextWindowProfile.contextTokens
           ? Math.min(
               resolvedModelContextTokens ?? contextWindowProfile.contextTokens,

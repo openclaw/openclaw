@@ -199,12 +199,15 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         entry,
         routeVariants: catalog?.routeVariants ?? [],
         runtimeId: runtime,
+        allowApiFallback: false,
       }).entry
     : catalog
       ? undefined
       : findModelInCatalog(
-          (params.thinkingCatalog ?? []).filter(
-            (candidate) => !candidate.nativeRuntime || candidate.nativeRuntime === runtime,
+          (params.thinkingCatalog ?? []).filter((candidate) =>
+            candidate.nativeRuntime
+              ? candidate.nativeRuntime === runtime
+              : ["openclaw", "auto", candidate.provider].includes(runtime),
           ),
           params.provider,
           params.model,

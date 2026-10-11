@@ -242,6 +242,15 @@ export function resolveGatewaySessionThinkingProjectionInternal(
   return {
     acpMeta,
     catalogEntry,
+    capacityCatalogEntry: logicalEntry
+      ? (params.rowContext?.selectModelCatalogRuntimeEntry ?? selectModelCatalogRuntimeEntry)({
+          entry: logicalEntry,
+          routeVariants: params.modelCatalogRouteVariants ?? [],
+          runtimeId: thinkingRuntime,
+          allowApiFallback: false,
+        }).entry
+      : undefined,
+    capacityRuntime: thinkingRuntime,
     agentRuntime,
     runtimeSelectionLocked,
     thinkingLevel,

@@ -36,13 +36,27 @@ mockSessionsConfig();
 
 const catalogState = vi.hoisted(() => ({
   catalog: { entries: [], routeVariants: [] } as ModelCatalogSnapshot,
+  callGateway: vi.fn<typeof import("../gateway/call.js").callGateway>(),
+  readActiveGatewayLockIdentity:
+    vi.fn<typeof import("../infra/gateway-lock.js").readActiveGatewayLockIdentity>(),
 }));
 // mock-isolation: Supply catalog I/O without provider discovery or prepared-runtime startup.
 vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadPreparedModelCatalogSnapshot: vi.fn(async () => catalogState.catalog),
 }));
+vi.mock("../gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/call.js")>()),
+  callGateway: catalogState.callGateway,
+  isImplicitLocalGatewayTarget: vi.fn(async () => true),
+}));
+vi.mock("../infra/gateway-lock.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/gateway-lock.js")>()),
+  readActiveGatewayLockIdentity: catalogState.readActiveGatewayLockIdentity,
+}));
 beforeEach(() => {
   catalogState.catalog = { entries: [], routeVariants: [] };
+  catalogState.callGateway.mockReset();
+  catalogState.readActiveGatewayLockIdentity.mockReset().mockResolvedValue(undefined);
 });
 
 import { sessionsCleanupCommand } from "./sessions-cleanup.js";
@@ -244,18 +258,15 @@ describe("sessionsCommand", () => {
   });
 
   it.each([32_768, undefined])(
-    "reports the selected local model's discovered capacity (%s) without a default denominator",
+    "reports the selected local model's admitted Gateway capacity (%s) without a default denominator",
     async (capacity) => {
-      setMockSessionsConfig(() => ({
-        agents: { defaults: { model: { primary: "ollama/qwen3:8b" } } },
-        models: {
-          providers: {
-            ollama: { models: [{ id: "qwen3:8b", contextTokens: 128_000 }] },
-          },
-        },
-      }));
-      catalogState.catalog = {
-        entries:
+      catalogState.readActiveGatewayLockIdentity.mockResolvedValue({
+        pid: 123,
+        port: 19461,
+        createdAt: "fixture",
+      });
+      catalogState.callGateway.mockResolvedValue({
+        models:
           capacity === undefined
             ? []
             : [
@@ -267,8 +278,7 @@ describe("sessionsCommand", () => {
                   contextTokens: capacity,
                 },
               ],
-        routeVariants: [],
-      };
+      });
       const store = await writeStore({
         "agent:main:main": {
           sessionId: "local-model-switch",
@@ -282,14 +292,80 @@ describe("sessionsCommand", () => {
           contextTokensSource: "resolved-v1",
         },
       });
-
-      const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
+      setMockSessionsConfig(() => ({
+        session: { store },
+        agents: { defaults: { model: { primary: "ollama/qwen3:8b" } } },
+        models: {
+          providers: {
+            ollama: { models: [{ id: "qwen3:8b", contextTokens: 128_000 }] },
+          },
+        },
+      }));
+      const payload = await runSessionsJson<SessionsJsonPayload>(
+        (options, runtime) => sessionsCommand({ ...options, store: undefined }, runtime),
+        store,
+      );
 
       expect(payload.sessions?.[0]).toMatchObject({
         modelProvider: "ollama",
         model: "qwen3:4b",
         contextTokens: capacity ?? null,
       });
+      expect(catalogState.callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "models.list",
+          localPortOverride: 19461,
+          params: expect.objectContaining({
+            preparedOnly: true,
+            agentId: "main",
+            provider: "ollama",
+          }),
+        }),
+      );
+    },
+  );
+
+  it.each([false, true])(
+    "preserves verified offline capacity for auto runtime (Gateway failure=%s)",
+    async (gatewayFailure) => {
+      if (gatewayFailure) {
+        catalogState.readActiveGatewayLockIdentity.mockResolvedValue({
+          pid: 123,
+          port: 19461,
+          createdAt: "fixture",
+        });
+        catalogState.callGateway.mockRejectedValue(new Error("Gateway unavailable"));
+      }
+      const store = await writeStore({
+        "agent:main:main": {
+          sessionId: "saved-local-capacity",
+          updatedAt: Date.now(),
+          modelProvider: "llama-cpp",
+          model: "local-llama",
+          agentHarnessId: "openclaw",
+          contextTokens: 16_384,
+          contextTokensSource: "resolved-v1",
+        },
+      });
+      setMockSessionsConfig(() => ({
+        session: { store },
+        agents: { defaults: { model: { primary: "llama-cpp/local-llama" } } },
+      }));
+      const { runtime, logs, errors } = makeRuntime();
+      try {
+        await sessionsCommand({ json: true }, runtime);
+        const payload = JSON.parse(logs[0] ?? "{}") as SessionsJsonPayload;
+        expect(payload.sessions?.[0]).toMatchObject({
+          contextTokens: 16_384,
+          agentRuntime: { id: "openclaw" },
+        });
+        expect(errors).toHaveLength(gatewayFailure ? 1 : 0);
+        if (gatewayFailure) {
+          expect(errors[0]).toContain("showing configured or last verified capacity");
+        }
+      } finally {
+        cleanupStore(store);
+      }
     },
   );
 
