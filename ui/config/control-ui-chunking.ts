@@ -167,7 +167,7 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 // Shared boot needs a smaller partition cap because its dense chat
                 // modules can exceed the compressed-size budget after regrouping.
                 minSize: 16 * 1024,
-                maxSize: (route === "shared" ? 1344 : 1408) * 1024,
+                maxSize: (route === "shared" ? 1280 : 1408) * 1024,
               };
             }),
             ...(["shared", "new", "chat"] as const).map((route) => {
