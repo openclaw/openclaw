@@ -125,6 +125,18 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
     ]);
     expect(textDeltas(events)).toEqual(textDeltas(unsplit));
   });
+
+  it.each([
+    ["replays a false prefix that a cumulative text_end completes", "hello\n[read]\n{}", "hello\n[read]\n{}\nX\n  "],
+    ["hides a split function marker completed only by a cumulative text_end", "hello\n[read]\n{}", "hello\n[read]\n{}\n<function=read>"],
+    ["hides a split function call completed only by a cumulative text_end", "hello\n[read]\n{}", "hello\n[read]\n{}\n<function=read></function>"],
+  ])("%s", async (_name, delta, full) => {
+    const split = await normalize([streamTextDelta(delta), textEnd(full)]);
+    const unsplit = await normalize([streamTextDelta(full), textEnd(full)]);
+    expect(textDeltas(split).join("")).toBe(textDeltas(unsplit).join(""));
+    expect(eventTypes(split).includes("text_end")).toBe(eventTypes(unsplit).includes("text_end"));
+    expect(JSON.stringify(split)).not.toContain("<function=read>");
+  });
   it("preserves prose that invalidates an over-cap XML prefix", async () => {
     const prefix = overCapXml.slice(0, -"</function>".length);
     const visible = "Visible answer";

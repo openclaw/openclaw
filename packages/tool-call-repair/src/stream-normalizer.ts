@@ -1160,6 +1160,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
   const heldTextStarts = new Map<number, Record<string, unknown>>();
   const lineStarts = new Map<number, boolean>();
   const emittedTextUnits = new Map<number, number>();
+  const blockTextUnits = new Map<number, number>();
   const protectionChunks: string[] = [];
   let protectionContextLength = 0;
   let protectionContextOverflow = false;
@@ -1380,6 +1381,13 @@ export async function* normalizePlainTextToolCallStreamEvents(
               ? record.content
               : undefined;
         const key = eventContentIndex(record);
+        const blockLengthBefore = blockTextUnits.get(key) ?? 0;
+        if (text !== undefined) {
+          blockTextUnits.set(
+            key,
+            type === "text_delta" ? blockLengthBefore + text.length : text.length,
+          );
+        }
         if (type === "text_start" && (text === undefined || text === "") && !pending) {
           const previous = heldTextStarts.get(key);
           if (previous) {
@@ -1570,7 +1578,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
               candidateText,
               held,
               sequenceOverCap || overCapSequenceOpen,
-              authoritative ? callStart : emittedUnits + callStart,
+              authoritative ? callStart : blockLengthBefore + callStart,
             );
             overCapSequenceOpen = false;
           } else if (pending.kind === "candidate") {
@@ -1612,9 +1620,8 @@ export async function* normalizePlainTextToolCallStreamEvents(
                           end: entry.end + lengthDelta,
                         },
                 );
-                if (part.start === 0) {
-                  pending.snapshotOffset = 0;
-                }
+                // The extended buffer still starts where it did in the content block, so
+                // keep its block offset: replay slicing and later snapshots share that origin.
                 pending.template = eventTemplate(incomingRecord);
               } else {
                 // A text_end snapshot is authoritative for its own content block. Carry a
@@ -1644,6 +1651,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
             pending,
             options.matcher,
             options.resolveProtectedRanges,
+            closesText,
           );
           pending.nextScanChars = Math.max(pending.buffer.length + 1, pending.nextScanChars * 2);
           if (classification.kind === "pending") {
@@ -1726,6 +1734,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
         }
         if (closesText) {
           emittedTextUnits.delete(key);
+          blockTextUnits.delete(key);
           protectionBlockContentIndex = undefined;
           protectionBlockStart = protectionContextLength;
         }
@@ -1836,6 +1845,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
         heldTextStarts.clear();
         lineStarts.clear();
         emittedTextUnits.clear();
+        blockTextUnits.clear();
         protectionChunks.length = 0;
         protectionContextLength = 0;
         protectionContextOverflow = false;
