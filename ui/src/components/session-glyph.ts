@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import type { DirectiveResult } from "lit/directive.js";
 import { t } from "../i18n/index.ts";
 import "./tooltip.ts";
 
@@ -12,7 +13,12 @@ export type SessionGlyphRing = "circle" | "pair";
 // in components.css); the cusps sit at x = 0, y = ±sqrt(11² − 5²).
 const PAIR_TRACE_PATH = "M0,-9.798A11,11 0 1 1 0,9.798A11,11 0 1 1 0,-9.798Z";
 
-function renderRunRing(ring: SessionGlyphRing, queued: boolean, label: string): TemplateResult {
+function renderRunRing(
+  ring: SessionGlyphRing,
+  queued: boolean,
+  label: string,
+  visibility?: DirectiveResult,
+): TemplateResult {
   if (ring === "pair") {
     return html`<svg
       class="session-glyph__trace${queued ? " session-glyph__trace--queued" : ""}"
@@ -21,22 +27,27 @@ function renderRunRing(ring: SessionGlyphRing, queued: boolean, label: string): 
       aria-label=${label}
     >
       <path class="session-glyph__trace-track" d=${PAIR_TRACE_PATH}></path>
-      <path class="session-glyph__trace-run" d=${PAIR_TRACE_PATH} pathLength="100"></path>
+      <path
+        class="session-glyph__trace-run"
+        d=${PAIR_TRACE_PATH}
+        pathLength="100"
+        ${visibility ?? nothing}
+      ></path>
     </svg>`;
   }
   return html`<span
     class="session-glyph__ring${queued ? " session-glyph__ring--queued" : ""}"
     role="img"
     aria-label=${label}
+    ${visibility ?? nothing}
   ></span>`;
 }
 
 /**
  * Persistent artwork in the sidebar's leading slot (owner avatar, page icon,
  * attention glyph). Callers can carry run state as a ring when that surface
- * owns activity in the leading slot. Circular content already fits the ring;
- * arbitrary square icons and thumbnails scale down so their corners stay
- * inside it.
+ * owns activity in the leading slot. Artwork keeps its resting size inside
+ * a consistent circle; owner pairs retain their fitted two-face trace.
  */
 export function renderSessionGlyph(options: {
   content: SessionGlyphContent;
@@ -46,6 +57,7 @@ export function renderSessionGlyph(options: {
   circular?: boolean;
   badge?: SessionGlyphContent;
   ring?: SessionGlyphRing;
+  runVisibility?: DirectiveResult;
 }): TemplateResult {
   const {
     content,
@@ -57,11 +69,11 @@ export function renderSessionGlyph(options: {
     ring = "circle",
   } = options;
   // A glyph-less row still owns its run state in the lead slot; the bare
-  // modifier lets CSS draw a compact ring there instead of a 24px empty circle.
+  // modifier lets CSS draw a compact ring there instead of a full-size empty circle.
   const modifiers = `${circular ? " session-glyph--circular" : ""}${running ? " session-glyph--running" : ""}${content === nothing ? " session-glyph--bare" : ""}`;
   const glyph = html`<span class="session-glyph${modifiers}">
     <span class="session-glyph__content">${content}</span>
-    ${running ? renderRunRing(ring, queued, runningLabel ?? t(queued ? "sessionsView.statusQueued" : "sessionsView.activeRun")) : nothing}
+    ${running ? renderRunRing(ring, queued, runningLabel ?? t(queued ? "sessionsView.statusQueued" : "sessionsView.activeRun"), options.runVisibility) : nothing}
     ${badge}
   </span>`;
   return running && runningLabel

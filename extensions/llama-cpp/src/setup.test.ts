@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -6,33 +7,7 @@ import type {
   ProviderAppGuidedSetupContext,
   ProviderAuthContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-const mocks = vi.hoisted(() => ({
-  ensureModel: vi.fn(),
-  prepareServer: vi.fn(),
-  removeProfiles: vi.fn(),
-  progressUpdate: vi.fn(),
-  hardware: vi.fn(),
-  downloadFetch: vi.fn(),
-}));
-
-vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-runtime")>()),
-  removeProviderAuthProfilesWithLock: mocks.removeProfiles,
-}));
-
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
-  fetchWithSsrFGuard: mocks.downloadFetch,
-}));
-
-vi.mock("./managed-server.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./managed-server.js")>()),
-  ensureLlamaCppModel: mocks.ensureModel,
-  prepareManagedLlamaServer: mocks.prepareServer,
-}));
-
+import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
   DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE,
@@ -42,88 +17,17 @@ import {
   DEFAULT_LLAMA_CPP_MODEL_URI,
   LLAMA_CPP_PROVIDER_ID,
 } from "./defaults.js";
-vi.mock("./hardware.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./hardware.js")>()),
-  detectLlamaCppHardware: mocks.hardware,
-}));
-import { downloadVerifiedFile, type LlamaDownloadProgress } from "./llama-server-install.js";
-import { resolveLlamaCppCatalogArtifact, resolveLlamaCppModelCandidates } from "./model-catalog.js";
-import { detectLlamaCppSetup, prepareLlamaCppSetup, runLlamaCppSetup } from "./setup.js";
+import type { LlamaDownloadProgress } from "./llama-server-install.js";
+import { resolveLlamaCppModelCandidates } from "./model-catalog.js";
+import { authContext, config, GIB, mocks, modelPath, tempRoot } from "./setup.test-support.js";
 
-const GIB = 1024 ** 3;
+const { detectLlamaCppSetup, prepareLlamaCppSetup, runLlamaCppSetup } = await import("./setup.js");
+const { downloadVerifiedFile } = await import("./llama-server-install.js");
+
 const CUSTOM_EMBEDDING_MODEL =
   "hf:ggml-org/embeddinggemma-300M-qat-q4_0-GGUF/embeddinggemma-300M-qat-Q4_0.gguf";
 const OTHER_CUSTOM_EMBEDDING_MODEL = "hf:example/other-embedding-GGUF/other-Q4_K_M.gguf";
 const NON_LOCAL_EMBEDDING_MODEL = "hf:example/non-local-embedding-GGUF/non-local-Q4.gguf";
-let tempRoot: string;
-let modelPath: string;
-
-beforeEach(async () => {
-  vi.spyOn(os, "totalmem").mockReturnValue(16 * GIB);
-  vi.spyOn(os, "hostname").mockReturnValue("gateway-host");
-  mocks.hardware.mockReset().mockImplementation(async () => ({
-    platform: "darwin",
-    arch: "arm64",
-    accelerator: { kind: "metal" },
-    totalMemoryBytes: os.totalmem(),
-    availableMemoryBytes: os.totalmem(),
-    availableDiskBytes: 100 * GIB,
-    availableRuntimeDiskBytes: 100 * GIB,
-    sharedDisk: true,
-  }));
-  tempRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "llama-server-setup-")));
-  modelPath = path.join(tempRoot, "model.gguf");
-  mocks.ensureModel.mockReset().mockImplementation(async ({ source, download }) => {
-    if (!download) {
-      throw new Error("not cached");
-    }
-    return resolveLlamaCppCatalogArtifact(source)
-      ? modelPath
-      : path.join(tempRoot, "embedding.gguf");
-  });
-  mocks.prepareServer.mockReset().mockResolvedValue({
-    command: path.join(tempRoot, "llama-server"),
-    baseUrl: "http://127.0.0.1:19432/v1",
-    healthUrl: "http://127.0.0.1:19432/health",
-    args: ["--host", "127.0.0.1", "--port", "19432"],
-  });
-  mocks.removeProfiles.mockReset().mockResolvedValue({ version: 1, profiles: {} });
-  mocks.progressUpdate.mockReset();
-  mocks.downloadFetch.mockReset();
-});
-
-afterEach(async () => {
-  vi.restoreAllMocks();
-  await fs.rm(tempRoot, { recursive: true, force: true });
-});
-
-function config(): ProviderAppGuidedSetupContext["config"] {
-  return {
-    models: {
-      providers: {
-        [LLAMA_CPP_PROVIDER_ID]: {
-          baseUrl: "http://127.0.0.1:19432/v1",
-          api: "openai-completions",
-          params: { modelCacheDir: tempRoot },
-          models: [],
-        },
-      },
-    },
-  };
-}
-
-function authContext(confirm: boolean): ProviderAuthContext {
-  return {
-    config: config(),
-    prompter: {
-      confirm: vi.fn(async () => confirm),
-      note: vi.fn(async () => {}),
-      progress: vi.fn(() => ({ update: mocks.progressUpdate, stop: vi.fn() })),
-    },
-    runtime: {},
-  } as unknown as ProviderAuthContext;
-}
-
 function requestUnconfiguredLocalMemory(ctx: ProviderAuthContext): void {
   ctx.config.memory = { search: { provider: "local" } };
   delete ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
@@ -277,7 +181,7 @@ describe("llama.cpp managed setup", () => {
 
       await runLlamaCppSetup(ctx);
 
-      expect(await fs.readFile(destination)).toEqual(payload);
+      assert.deepStrictEqual(await fs.readFile(destination), payload);
       expect(release).toHaveBeenCalledOnce();
       expect(stopped).toHaveBeenCalledExactlyOnceWith("Managed llama.cpp server prepared");
       expect(mocks.downloadFetch).toHaveBeenCalledOnce();
@@ -323,7 +227,10 @@ describe("llama.cpp managed setup", () => {
       sharedDisk: true,
     });
     const recipe = resolveLlamaCppModelCandidates(await mocks.hardware(), "metal").recipes.at(-1)!;
-    mocks.ensureModel.mockImplementation(async ({ source }) => {
+    mocks.ensureModel.mockImplementation(async ({ source, cacheDir }) => {
+      if (cacheDir !== tempRoot) {
+        throw new Error("not cached here");
+      }
       if (source === recipe.model.params?.modelPath) {
         return modelPath;
       }
@@ -333,6 +240,9 @@ describe("llama.cpp managed setup", () => {
       throw new Error("not cached");
     });
     const ctx = authContext(true);
+    const provider = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+    assert.ok(provider);
+    provider.localService = { command: path.join(tempRoot, "llama-server") };
     const result = await runLlamaCppSetup(ctx);
     expect(result.defaultModel).toBe(`llama-cpp/${recipe.model.id}`);
     expect(ctx.prompter.confirm).toHaveBeenCalledWith(
@@ -433,6 +343,54 @@ describe("llama.cpp managed setup", () => {
     expect(mocks.removeProfiles).not.toHaveBeenCalled();
   });
 
+  it("does not suggest retrying setup on a host the verified build cannot run on", async () => {
+    const ctx = authContext(true);
+    const { UnsupportedLlamaServerHostError } = await import("./llama-server-install.js");
+    mocks.prepareServer.mockRejectedValue(
+      new UnsupportedLlamaServerHostError("The verified llama-server build requires macOS 13.3+"),
+    );
+
+    const setup = runLlamaCppSetup(ctx);
+    await expect(setup).rejects.toThrow(
+      "Managed llama.cpp setup is unavailable on this host. The verified llama-server build requires macOS 13.3+",
+    );
+    await expect(setup).rejects.not.toThrow("retry");
+  });
+
+  it("refuses an unsupported host before downloading any model files", async () => {
+    const ctx = authContext(true);
+    const { UnsupportedLlamaServerHostError } = await import("./llama-server-install.js");
+    // ensureLlamaServerInstalled refuses because no validating install exists and the
+    // host cannot run a fresh download; nothing should be fetched afterwards.
+    mocks.ensureServerInstalled.mockRejectedValueOnce(
+      new UnsupportedLlamaServerHostError(
+        "The verified llama-server build requires macOS 13.3+; this Mac runs macOS 12.7.6.",
+      ),
+    );
+
+    await expect(runLlamaCppSetup(ctx)).rejects.toThrow(
+      "Managed llama.cpp setup is unavailable on this host. The verified llama-server build requires macOS 13.3+; this Mac runs macOS 12.7.6.",
+    );
+    expect(mocks.ensureModel).not.toHaveBeenCalledWith(expect.objectContaining({ download: true }));
+    expect(mocks.prepareServer).not.toHaveBeenCalled();
+  });
+
+  it("reuses a validating installed server through guided setup without refusing by OS version", async () => {
+    const ctx = authContext(true);
+    // Simulates installLlamaServer's reuse branch: an already-installed, validating
+    // binary is returned on any macOS version (installer never asserts the OS floor
+    // for a valid reuse). Guided setup must proceed instead of pre-refusing.
+    mocks.ensureServerInstalled.mockResolvedValueOnce({
+      command: path.join(tempRoot, "existing-llama-server"),
+      asset: {} as never,
+    });
+
+    await expect(runLlamaCppSetup(ctx)).resolves.toBeDefined();
+    expect(mocks.ensureServerInstalled).toHaveBeenCalledTimes(1);
+    expect(mocks.ensureModel).toHaveBeenCalledWith(expect.objectContaining({ download: true }));
+    expect(mocks.prepareServer).toHaveBeenCalled();
+  });
+
   it("pins the default model identity and integrity", () => {
     expect(DEFAULT_LLAMA_CPP_MODEL_URI).toBe(
       "hf:unsloth/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q4_K_M.gguf",
@@ -517,6 +475,12 @@ describe("llama.cpp managed setup", () => {
     const ctx = authContext(true);
 
     await expect(runLlamaCppSetup(ctx)).resolves.toEqual({ profiles: [] });
+    expect(ctx.prompter.note).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /embedding-only.*0\.3 GB.*memory\.search\.provider.*local.*models auth login --provider llama-cpp --method local/su,
+      ),
+      "Setup skipped",
+    );
     expect(ctx.prompter.confirm).not.toHaveBeenCalled();
     expect(mocks.ensureModel).not.toHaveBeenCalledWith(expect.objectContaining({ download: true }));
   });
@@ -545,7 +509,6 @@ describe("llama.cpp managed setup", () => {
       expect.objectContaining({
         chatModel: { mode: "remove" },
         configuredChatModelIds: [],
-        embeddingModelIsDefault: true,
         embeddingModelPath: path.join(tempRoot, "embedding.gguf"),
         isolated: true,
       }),
@@ -587,7 +550,6 @@ describe("llama.cpp managed setup", () => {
     );
     expect(mocks.prepareServer).toHaveBeenCalledWith(
       expect.objectContaining({
-        embeddingModelIsDefault: false,
         embeddingModelPath: path.join(tempRoot, "embedding.gguf"),
       }),
     );
@@ -688,9 +650,6 @@ describe("llama.cpp managed setup", () => {
     );
     expect(mocks.ensureModel).not.toHaveBeenCalledWith(
       expect.objectContaining({ source: NON_LOCAL_EMBEDDING_MODEL }),
-    );
-    expect(mocks.prepareServer).toHaveBeenCalledWith(
-      expect.objectContaining({ embeddingModelIsDefault: false }),
     );
   });
 
@@ -803,7 +762,7 @@ describe("llama.cpp managed setup", () => {
 
       expect(ctx.prompter.confirm).not.toHaveBeenCalled();
       expect(ctx.prompter.note).toHaveBeenCalledWith(
-        expect.stringContaining("chat routes"),
+        expect.stringContaining("Check params.modelPath"),
         "Setup skipped",
       );
       expect(ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID]).toBe(provider);

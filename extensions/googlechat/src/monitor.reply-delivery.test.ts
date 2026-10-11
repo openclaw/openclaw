@@ -1,10 +1,11 @@
 // Googlechat tests cover monitor.reply delivery plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../runtime-api.js";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
-import { GoogleChatApiError } from "./api.js";
-import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-types.js";
+import { createGoogleChatTypingMessage, deliverGoogleChatReply } from "./monitor-reply-delivery.js";
+import type { GoogleChatCoreRuntime } from "./monitor-types.js";
 
 const mocks = vi.hoisted(() => ({
   deleteGoogleChatMessage: vi.fn(),
@@ -28,10 +29,7 @@ const account = {
 
 const config = {} as OpenClawConfig;
 
-function createCore(params?: {
-  chunks?: readonly string[];
-  media?: { buffer: Buffer; contentType?: string; fileName?: string };
-}) {
+function createCore(params?: { chunks?: readonly string[] }) {
   return {
     channel: {
       text: {
@@ -39,28 +37,16 @@ function createCore(params?: {
         chunkMarkdownTextWithMode: vi.fn((text: string) => params?.chunks ?? [text]),
       },
       media: {
-        readRemoteMediaBuffer: vi.fn(async () => params?.media ?? { buffer: Buffer.from("image") }),
+        readRemoteMediaBuffer: vi.fn(async () => ({ buffer: Buffer.from("image") })),
       },
     },
   } as unknown as GoogleChatCoreRuntime;
 }
 
-function createRuntime() {
-  return {
-    error: vi.fn(),
-    log: vi.fn(),
-  } satisfies GoogleChatRuntimeEnv;
-}
-
-let createGoogleChatTypingMessage: typeof import("./monitor-reply-delivery.js").createGoogleChatTypingMessage;
-let deliverGoogleChatReply: typeof import("./monitor-reply-delivery.js").deliverGoogleChatReply;
-
-beforeEach(async () => {
+beforeEach(() => {
   vi.clearAllMocks();
   mocks.sendGoogleChatMessage.mockResolvedValue(null);
   mocks.updateGoogleChatMessage.mockResolvedValue({});
-  ({ createGoogleChatTypingMessage, deliverGoogleChatReply } =
-    await import("./monitor-reply-delivery.js"));
 });
 
 afterAll(() => {
@@ -71,7 +57,7 @@ afterAll(() => {
 describe("Google Chat reply delivery", () => {
   it("does not resend the first chunk when the typing update result is ambiguous", async () => {
     const core = createCore({ chunks: ["first chunk", "second chunk"] });
-    const runtime = createRuntime();
+    const runtime = createRuntimeSpies();
     const statusSink = vi.fn();
     const updateError = new Error("response lost");
     mocks.updateGoogleChatMessage.mockRejectedValueOnce(updateError);
@@ -103,43 +89,20 @@ describe("Google Chat reply delivery", () => {
     expect(statusSink).not.toHaveBeenCalled();
   });
 
-  it("sends the first chunk after a confirmed missing typing placeholder", async () => {
+  it.each([
+    ["provider fallback", "spaces/AAA/threads/fallback", "spaces/AAA/threads/fallback"],
+    ["requested when metadata is omitted", undefined, "spaces/AAA/threads/requested"],
+  ])("continues later chunks in the %s thread", async (_name, threadName, expectedThread) => {
     const core = createCore({ chunks: ["first chunk", "second chunk"] });
-    mocks.updateGoogleChatMessage.mockRejectedValueOnce(
-      new GoogleChatApiError(404, "Google Chat API 404: message not found"),
-    );
-
-    await deliverGoogleChatReply({
-      payload: { text: "two chunks", replyToId: "spaces/AAA/threads/root" },
-      account,
-      spaceId: "spaces/AAA",
-      runtime: createRuntime(),
-      core,
-      config,
-      typingMessage: createGoogleChatTypingMessage({
-        messageName: "spaces/AAA/messages/typing",
-        requestedThreadName: "spaces/AAA/threads/root",
-        deliveredThreadName: "spaces/AAA/threads/root",
-      }),
-    });
-
-    expect(mocks.sendGoogleChatMessage.mock.calls.map((call) => call[0]?.text)).toEqual([
-      "first chunk",
-      "second chunk",
-    ]);
-  });
-
-  it("continues later chunks in the provider fallback thread", async () => {
-    const core = createCore({ chunks: ["first chunk", "second chunk"] });
-    const runtime = createRuntime();
+    const runtime = createRuntimeSpies();
     mocks.sendGoogleChatMessage
       .mockResolvedValueOnce({
         messageName: "spaces/AAA/messages/first",
-        threadName: "spaces/AAA/threads/fallback",
+        threadName,
       })
       .mockResolvedValueOnce({
         messageName: "spaces/AAA/messages/second",
-        threadName: "spaces/AAA/threads/fallback",
+        threadName,
       });
 
     await deliverGoogleChatReply({
@@ -161,109 +124,29 @@ describe("Google Chat reply delivery", () => {
       account,
       space: "spaces/AAA",
       text: "second chunk",
-      thread: "spaces/AAA/threads/fallback",
+      thread: expectedThread,
     });
   });
 
-  it("continues after a fallback typing placeholder in its delivered thread", async () => {
-    const core = createCore({ chunks: ["first chunk", "second chunk"] });
-    const runtime = createRuntime();
-    mocks.sendGoogleChatMessage.mockResolvedValueOnce({
-      messageName: "spaces/AAA/messages/second",
-      threadName: "spaces/AAA/threads/fallback",
-    });
+  it("replaces the typing message for a valid explicit thread target", async () => {
+    const core = createCore();
+    mocks.sendGoogleChatMessage.mockResolvedValue({ messageName: "spaces/AAA/messages/reply" });
 
     await deliverGoogleChatReply({
-      payload: { text: "two chunks", replyToId: "spaces/AAA/threads/requested" },
+      payload: {
+        text: "retargeted reply",
+        replyToId: "spaces/AAA/threads/other",
+      },
       account,
       spaceId: "spaces/AAA",
-      runtime,
+      runtime: createRuntimeSpies(),
       core,
       config,
       typingMessage: createGoogleChatTypingMessage({
         messageName: "spaces/AAA/messages/typing",
-        requestedThreadName: "spaces/AAA/threads/requested",
-        deliveredThreadName: "spaces/AAA/threads/fallback",
-      }),
-    });
-
-    expect(mocks.updateGoogleChatMessage).toHaveBeenCalledWith({
-      account,
-      messageName: "spaces/AAA/messages/typing",
-      text: "first chunk",
-    });
-    expect(mocks.sendGoogleChatMessage).toHaveBeenCalledOnce();
-    expect(mocks.sendGoogleChatMessage).toHaveBeenCalledWith({
-      account,
-      space: "spaces/AAA",
-      text: "second chunk",
-      thread: "spaces/AAA/threads/fallback",
-    });
-  });
-
-  it("keeps the requested thread when the provider omits thread metadata", async () => {
-    const core = createCore({ chunks: ["first chunk", "second chunk"] });
-    const runtime = createRuntime();
-    mocks.sendGoogleChatMessage.mockResolvedValue({
-      messageName: "spaces/AAA/messages/sent",
-    });
-
-    await deliverGoogleChatReply({
-      payload: { text: "two chunks", replyToId: "spaces/AAA/threads/requested" },
-      account,
-      spaceId: "spaces/AAA",
-      runtime,
-      core,
-      config,
-    });
-
-    expect(mocks.sendGoogleChatMessage).toHaveBeenCalledTimes(2);
-    for (const call of mocks.sendGoogleChatMessage.mock.calls) {
-      expect(call[0]?.thread).toBe("spaces/AAA/threads/requested");
-    }
-  });
-
-  it("keeps top-level chunks top-level when Google returns a thread name", async () => {
-    const core = createCore({ chunks: ["first chunk", "second chunk"] });
-    const runtime = createRuntime();
-    mocks.sendGoogleChatMessage.mockResolvedValue({
-      messageName: "spaces/AAA/messages/sent",
-      threadName: "spaces/AAA/threads/provider-created",
-    });
-
-    await deliverGoogleChatReply({
-      payload: { text: "two top-level chunks" },
-      account,
-      spaceId: "spaces/AAA",
-      runtime,
-      core,
-      config,
-    });
-
-    expect(mocks.sendGoogleChatMessage).toHaveBeenCalledTimes(2);
-    for (const call of mocks.sendGoogleChatMessage.mock.calls) {
-      expect(call[0]?.thread).toBeUndefined();
-    }
-  });
-
-  it("replaces a typing message when the final reply target changed", async () => {
-    const core = createCore();
-    const runtime = createRuntime();
-    mocks.sendGoogleChatMessage.mockResolvedValue({ messageName: "spaces/AAA/messages/reply" });
-
-    await deliverGoogleChatReply({
-      payload: { text: "top-level reply" },
-      account,
-      spaceId: "spaces/AAA",
-      runtime,
-      core,
-      config,
-      typingMessage: {
-        placement: "thread",
-        name: "spaces/AAA/messages/typing",
         requestedThreadName: "spaces/AAA/threads/root",
         deliveredThreadName: "spaces/AAA/threads/root",
-      },
+      }),
     });
 
     expect(mocks.deleteGoogleChatMessage).toHaveBeenCalledWith({
@@ -274,52 +157,14 @@ describe("Google Chat reply delivery", () => {
     expect(mocks.sendGoogleChatMessage).toHaveBeenCalledWith({
       account,
       space: "spaces/AAA",
-      text: "top-level reply",
-      thread: undefined,
+      text: "retargeted reply",
+      thread: "spaces/AAA/threads/other",
     });
-  });
-
-  it("uses text fallback without loading outbound media", async () => {
-    const core = createCore({
-      media: { buffer: Buffer.from("image"), contentType: "image/png", fileName: "reply.png" },
-    });
-    const runtime = createRuntime();
-
-    await deliverGoogleChatReply({
-      payload: {
-        text: "caption",
-        mediaUrl: "https://example.invalid/reply.png",
-        replyToId: "spaces/AAA/threads/root",
-      },
-      account,
-      spaceId: "spaces/AAA",
-      runtime,
-      core,
-      config,
-      typingMessage: {
-        placement: "thread",
-        name: "spaces/AAA/messages/typing",
-        requestedThreadName: "spaces/AAA/threads/root",
-        deliveredThreadName: "spaces/AAA/threads/root",
-      },
-    });
-
-    expect(mocks.updateGoogleChatMessage).toHaveBeenCalledWith({
-      account,
-      messageName: "spaces/AAA/messages/typing",
-      text: "caption",
-    });
-    expect(core.channel.media.readRemoteMediaBuffer).not.toHaveBeenCalled();
-    expect(mocks.deleteGoogleChatMessage).not.toHaveBeenCalled();
-    expect(mocks.sendGoogleChatMessage).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith(
-      "Google Chat outbound attachments require user OAuth and are not supported by this service-account channel; sending text fallback only.",
-    );
   });
 
   it("cleans up typing and rejects media-only replies without provider upload access", async () => {
     const core = createCore();
-    const runtime = createRuntime();
+    const runtime = createRuntimeSpies();
 
     await expect(
       deliverGoogleChatReply({

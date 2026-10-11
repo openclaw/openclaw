@@ -55,11 +55,11 @@ flow:
                   - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
             catchAs: handoffError
             catch:
-              - set: handoffTasks
+              - set: handoffRuns
                 value:
-                  expr: "await runQaCli(env, ['tasks', 'list', '--json', '--runtime', 'subagent'], { timeoutMs: liveTurnTimeoutMs(env, 60000), json: true }).catch((error) => ({ error: formatErrorMessage(error) }))"
+                  expr: "await readNativeQaSubagentRuns(env, 'agent:qa:subagent').catch((error) => ({ error: formatErrorMessage(error) }))"
               - throw:
-                  expr: "`subagent handoff stalled: ${formatErrorMessage(handoffError)}; outbound=${recentOutboundSummary(state, 8)} tasks=${JSON.stringify(handoffTasks)}`"
+                  expr: "`subagent handoff stalled: ${formatErrorMessage(handoffError)}; outbound=${recentOutboundSummary(state, 8)} runs=${JSON.stringify(handoffRuns)}`"
         - assert:
             expr: "!['failed to delegate','could not delegate','subagent unavailable'].some((needle) => normalizeLowercaseStringOrEmpty(outbound.text).includes(needle))"
             message:
@@ -74,9 +74,8 @@ flow:
         # subagent-fanout-synthesis scenario — which also contains "delegate"
         # and produces its own pre-tool sessions_spawn request — cannot
         # satisfy the assertion here. The match is also constrained to
-        # pre-tool requests (no toolOutput) because the mock only plans
-        # sessions_spawn on requests with no toolOutput; the follow-up
-        # request after the tool runs has plannedToolName unset.
+        # pre-tool requests (no toolOutput), so waiting for a spawned child
+        # cannot substitute for evidence that the child was launched.
         - set: subagentDebugRequests
           value:
             expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`))] : []"

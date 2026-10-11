@@ -1,4 +1,3 @@
-// Provider entry contracts define provider plugin hooks, model catalogs, and runtime adapters.
 import type { UnifiedModelCatalogEntry } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
@@ -10,7 +9,7 @@ import type {
   PluginManifestSetupProvider,
 } from "../plugins/manifest-types.js";
 import { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
-import { projectProviderCatalogResultToUnifiedTextRows } from "../plugins/provider-catalog-unified-text.js";
+import { copyProviderCatalogResultEntries } from "../plugins/provider-catalog-result.js";
 import {
   buildManifestModelProviderConfig,
   buildSingleProviderApiKeyCatalog,
@@ -72,6 +71,7 @@ type SingleProviderPluginManifestAuthChoice = Pick<
   | "assistantPriority"
   | "onboardingFeatured"
 > & {
+  modelTarget?: string;
   assistantVisibility?: string;
   onboardingScopes?: readonly string[];
 };
@@ -116,7 +116,7 @@ type ManifestProviderAuthOptions = Omit<
 /**
  * Catalog configuration accepted by the single-provider entry helper.
  */
-export type SingleProviderPluginCatalogOptions =
+type SingleProviderPluginCatalogOptions =
   | {
       /**
        * Builds the live provider catalog through the shared API-key catalog path.
@@ -264,7 +264,9 @@ function resolveManifestProviderAuth(params: {
   }
   const defaultModel = readManifestProviderDefaultModelRef(params.manifest, params.providerId);
   const assistantVisibility =
-    choice.assistantVisibility === "visible" || choice.assistantVisibility === "manual-only"
+    choice.assistantVisibility === "visible" ||
+    choice.assistantVisibility === "manual-only" ||
+    choice.assistantVisibility === "detected-only"
       ? choice.assistantVisibility
       : undefined;
   const onboardingScopes = choice.onboardingScopes?.filter(
@@ -298,6 +300,7 @@ function resolveManifestProviderAuth(params: {
                 ? { assistantPriority: choice.assistantPriority }
                 : {}),
               ...(assistantVisibility ? { assistantVisibility } : {}),
+              ...(choice.modelTarget === "utility" ? { modelTarget: "utility" as const } : {}),
               ...(choice.onboardingFeatured !== undefined
                 ? { onboardingFeatured: choice.onboardingFeatured }
                 : {}),
@@ -321,6 +324,7 @@ function resolveWizardSetup(params: {
   const methodId = params.auth.methodId.trim();
   return {
     choiceId: wizard.choiceId ?? `${params.providerId}-${methodId}`,
+    ...(wizard.modelTarget ? { modelTarget: wizard.modelTarget } : {}),
     choiceLabel: wizard.choiceLabel ?? params.auth.label,
     ...(wizard.choiceHint ? { choiceHint: wizard.choiceHint } : {}),
     ...(wizard.assistantPriority !== undefined
@@ -342,16 +346,6 @@ function resolveWizardSetup(params: {
   };
 }
 
-function copyProviderAuthOptions(value: unknown): SingleProviderPluginApiKeyAuthOptions[] {
-  return copyArrayEntries(value).filter(
-    isRecordWithoutThrowing,
-  ) as SingleProviderPluginApiKeyAuthOptions[];
-}
-
-function copyProviderAuthMethods(value: unknown): ProviderAuthMethod[] {
-  return copyArrayEntries(value).filter(isRecordWithoutThrowing) as ProviderAuthMethod[];
-}
-
 function resolveEnvVars(params: {
   envVars?: unknown;
   auth?: SingleProviderPluginApiKeyAuthOptions[];
@@ -370,11 +364,23 @@ async function runUnifiedTextCatalog(params: {
   source: UnifiedModelCatalogEntry["source"];
 }): Promise<UnifiedModelCatalogEntry[]> {
   const result = await params.catalog.run(params.ctx);
-  return projectProviderCatalogResultToUnifiedTextRows({
+  const rows: UnifiedModelCatalogEntry[] = [];
+  // Consume the copier's validated records without copying the catalog again.
+  for (const [providerId, providerConfig] of copyProviderCatalogResultEntries({
     providerId: params.providerId,
     result,
-    source: params.source,
-  });
+  })) {
+    for (const model of providerConfig.models) {
+      rows.push({
+        kind: "text",
+        provider: providerId,
+        model: model.id,
+        ...(model.name ? { label: model.name } : {}),
+        source: params.source,
+      });
+    }
+  }
+  return rows;
 }
 
 /**
@@ -400,7 +406,7 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
         ) {
           throw new Error(`Missing modelCatalog.providers.${providerId}`);
         }
-        const providerAuth = copyProviderAuthOptions(
+        const providerAuth = copyArrayEntries(
           provider.auth ??
             resolveManifestProviderAuth({
               manifest: options.manifest,
@@ -408,7 +414,7 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
               providerLabel: provider.label,
               overrides: provider.manifestAuth,
             }),
-        );
+        ).filter(isRecordWithoutThrowing) as SingleProviderPluginApiKeyAuthOptions[];
         const acceptedProviderAuth: SingleProviderPluginApiKeyAuthOptions[] = [];
         const auth = providerAuth.flatMap((entry) => {
           try {
@@ -436,7 +442,16 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
           envVars: provider.envVars,
           auth: acceptedProviderAuth,
         });
-        auth.push(...copyProviderAuthMethods(provider.extraAuth));
+        auth.push(
+          ...(copyArrayEntries(provider.extraAuth).filter(
+            isRecordWithoutThrowing,
+          ) as ProviderAuthMethod[]),
+        );
+        const buildManifestProvider = () =>
+          buildManifestModelProviderConfig({
+            providerId,
+            catalog: options.manifest?.modelCatalog?.providers?.[providerId],
+          });
         let catalog: ProviderPluginCatalog;
         if ("run" in provider.catalog) {
           const catalogRun = provider.catalog.run;
@@ -450,13 +465,7 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
               normalizeProviderId,
             ),
           );
-          const buildProvider =
-            provider.catalog.buildProvider ??
-            (() =>
-              buildManifestModelProviderConfig({
-                providerId,
-                catalog: options.manifest?.modelCatalog?.providers?.[providerId],
-              }));
+          const buildProvider = provider.catalog.buildProvider ?? buildManifestProvider;
           catalog = {
             order: "simple",
             run: (ctx: ProviderCatalogContext): Promise<ProviderCatalogResult> => {
@@ -496,13 +505,7 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
           "run" in provider.catalog
             ? undefined
             : (provider.catalog.buildStaticProvider ??
-              (provider.catalog.buildProvider
-                ? undefined
-                : () =>
-                    buildManifestModelProviderConfig({
-                      providerId,
-                      catalog: options.manifest?.modelCatalog?.providers?.[providerId],
-                    })));
+              (provider.catalog.buildProvider ? undefined : buildManifestProvider));
         const staticCatalog: ProviderPluginCatalog | undefined =
           "run" in provider.catalog
             ? provider.catalog.staticRun

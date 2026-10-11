@@ -106,8 +106,8 @@ export function renderSessionOwnerAvatar(
 
 /**
  * Session-owner avatar. The owner may be reassigned; live viewing only changes
- * avatar saturation. Render only when the Gateway's complete owner facet has 2+
- * identities (solo mode shows no attribution chrome). Human actors use the durable
+ * avatar saturation. Sidebar rows show attribution only with multiple known humans
+ * among owners and participants. Human actors use the durable
  * profile projection carried by the session record; typed agents share the agent face fallback.
  */
 class SessionOwnerChip extends OpenClawLightDomElement {
@@ -157,7 +157,7 @@ class SessionOwnerChip extends OpenClawLightDomElement {
         >${
           owner.identity?.type === "agent" || avatar.kind === "profile"
             ? renderSessionOwnerAvatar({ ...owner, id: owner.id })
-            : initials
+            : html`<span class="session-owner-chip__initials">${initials}</span>`
         }</span
       >
     `;
@@ -170,12 +170,18 @@ class SessionOwnerChip extends OpenClawLightDomElement {
       this.participantCount === 1 && participantTitle
         ? `${accessibleLabel} · ${t("sessionsView.withParticipant", { name: participantTitle })}`
         : `${accessibleLabel} · ${t("sessionsView.withMoreParticipants", { count: String(this.participantCount) })}`;
-    return html`<span class="session-owner-stack" role="group" aria-label=${combinedLabel}>
+    return html`<span
+      class="session-owner-stack ${this.participantCount > 1 ? "session-owner-stack--overflow" : ""}"
+      role="group"
+      aria-label=${combinedLabel}
+    >
       <span class="session-owner-stack__back" aria-hidden="true">
         ${
           this.participantCount === 1 && participant
             ? renderSessionOwnerAvatar({ ...participant, id: participant.identity.id })
-            : html`<span class="session-owner-stack__overflow">+${this.participantCount}</span>`
+            : html`<span class="session-owner-stack__overflow"
+                ><span class="session-owner-stack__count">+${this.participantCount}</span></span
+              >`
         }
       </span>
       ${chip}

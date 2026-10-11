@@ -1,4 +1,3 @@
-// Zalo plugin module implements outbound media behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   asDateTimestampMs,
@@ -26,10 +25,14 @@ const ZALO_OUTBOUND_MEDIA_MAX_CHUNK_ROWS =
   ZALO_OUTBOUND_MEDIA_MAX_ENTRIES * ZALO_OUTBOUND_MEDIA_CHUNK_ROWS_PER_ENTRY_BUDGET;
 
 let hostedZaloMediaStore: HostedOutboundMediaStore | undefined;
+let hostedZaloMediaRuntime: ReturnType<typeof getZaloRuntime> | undefined;
 
-function createHostedZaloMediaStore(): HostedOutboundMediaStore {
+function getHostedZaloMediaStore(): HostedOutboundMediaStore {
   const runtime = getZaloRuntime();
-  return createHostedOutboundMediaStore({
+  if (hostedZaloMediaStore && hostedZaloMediaRuntime === runtime) {
+    return hostedZaloMediaStore;
+  }
+  hostedZaloMediaStore = createHostedOutboundMediaStore({
     metadataStore: runtime.state.openKeyedStore<HostedOutboundMediaMetaRecord>({
       namespace: ZALO_OUTBOUND_MEDIA_NAMESPACE,
       maxEntries: ZALO_OUTBOUND_MEDIA_MAX_ENTRIES + 16,
@@ -43,10 +46,7 @@ function createHostedZaloMediaStore(): HostedOutboundMediaStore {
     maxChunkRows: ZALO_OUTBOUND_MEDIA_MAX_CHUNK_ROWS,
     resolveExpiresAtMs: (ttlMs) => resolveExpiresAtMsFromDurationMs(ttlMs),
   });
-}
-
-function getHostedZaloMediaStore(): HostedOutboundMediaStore {
-  hostedZaloMediaStore ??= createHostedZaloMediaStore();
+  hostedZaloMediaRuntime = runtime;
   return hostedZaloMediaStore;
 }
 
@@ -67,13 +67,6 @@ export function resolveHostedZaloMediaRoutePrefix(params: {
     : `${webhookRoutePath}/${ZALO_OUTBOUND_MEDIA_SEGMENT}`;
 }
 
-function resolveHostedZaloMediaRoutePath(params: {
-  webhookUrl: string;
-  webhookPath?: string;
-}): string {
-  return `${resolveHostedZaloMediaRoutePrefix(params)}/`;
-}
-
 export async function prepareHostedZaloMediaUrl(params: {
   mediaUrl: string;
   webhookUrl: string;
@@ -90,10 +83,10 @@ export async function prepareHostedZaloMediaUrl(params: {
     throw new Error("Zalo outbound media expiry could not be resolved");
   }
 
-  const routePath = resolveHostedZaloMediaRoutePath({
+  const routePath = `${resolveHostedZaloMediaRoutePrefix({
     webhookUrl: params.webhookUrl,
     webhookPath: params.webhookPath,
-  });
+  })}/`;
   const publicBaseUrl = new URL(params.webhookUrl).origin;
 
   return await getHostedZaloMediaStore().prepareUrl({

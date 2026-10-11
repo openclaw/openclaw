@@ -1,4 +1,3 @@
-/** Permission, environment, and spawn helpers for the standalone ACP client. */
 import * as readline from "node:readline";
 import type { RequestPermissionRequest, RequestPermissionResponse } from "@agentclientprotocol/sdk";
 import {
@@ -11,58 +10,26 @@ import {
   resolveWindowsSpawnProgram,
 } from "../plugin-sdk/windows-spawn.js";
 import {
-  listKnownProviderAuthEnvVarNames,
+  listKnownProviderAuthEnvVarNamesCore,
   omitEnvKeysCaseInsensitive,
 } from "../secrets/provider-env-vars.js";
-import { classifyAcpToolApproval, type AcpApprovalClass } from "./approval-classifier.js";
+import { classifyAcpToolApproval } from "./approval-classifier.js";
 
-type PermissionOption = RequestPermissionRequest["options"][number];
-
-// ACP permission resolution keeps readonly tool classes noninteractive and prompts for risky tools.
 type PermissionResolverDeps = {
   prompt?: (toolName: string | undefined, toolTitle?: string) => Promise<boolean>;
   log?: (line: string) => void;
   cwd?: string;
+  signal?: AbortSignal;
 };
 
-function resolveToolKindForPermission(
+function promptUserPermission(
   toolName: string | undefined,
-  approvalClass: AcpApprovalClass,
-): string | undefined {
-  if (!toolName && approvalClass === "unknown") {
-    return undefined;
+  toolTitle?: string,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  if (signal?.aborted) {
+    return Promise.resolve(false);
   }
-  if (approvalClass === "readonly_scoped") {
-    return "readonly_scoped";
-  }
-  if (approvalClass === "readonly_search") {
-    return "readonly_search";
-  }
-  return approvalClass;
-}
-
-function pickOption(
-  options: PermissionOption[],
-  kinds: PermissionOption["kind"][],
-): PermissionOption | undefined {
-  for (const kind of kinds) {
-    const match = options.find((option) => option.kind === kind);
-    if (match) {
-      return match;
-    }
-  }
-  return undefined;
-}
-
-function selectedPermission(optionId: string): RequestPermissionResponse {
-  return { outcome: { outcome: "selected", optionId } };
-}
-
-function cancelledPermission(): RequestPermissionResponse {
-  return { outcome: { outcome: "cancelled" } };
-}
-
-function promptUserPermission(toolName: string | undefined, toolTitle?: string): Promise<boolean> {
   if (!process.stdin.isTTY || !process.stderr.isTTY) {
     console.error(`[permission denied] ${toolName ?? "unknown"}: non-interactive terminal`);
     return Promise.resolve(false);
@@ -80,10 +47,15 @@ function promptUserPermission(toolName: string | undefined, toolTitle?: string):
       }
       settled = true;
       clearTimeout(timeout);
+      signal?.removeEventListener("abort", onClose);
+      rl.off("close", onClose);
       rl.close();
       resolve(approved);
     };
 
+    const onClose = () => finish(false);
+    rl.once("close", onClose);
+    signal?.addEventListener("abort", onClose, { once: true });
     const timeout = setTimeout(() => {
       console.error(`\n[permission timeout] denied: ${toolName ?? "unknown"}`);
       finish(false);
@@ -102,61 +74,71 @@ function promptUserPermission(toolName: string | undefined, toolTitle?: string):
   });
 }
 
-/** Converts an ACP permission request into a selected allow/reject option or cancellation. */
 export async function resolvePermissionRequest(
   params: RequestPermissionRequest,
   deps: PermissionResolverDeps = {},
 ): Promise<RequestPermissionResponse> {
   const log = deps.log ?? ((line: string) => console.error(line));
-  const prompt = deps.prompt ?? promptUserPermission;
+  if (deps.signal?.aborted) {
+    return { outcome: { outcome: "cancelled" } };
+  }
+  const prompt =
+    deps.prompt ?? ((toolName, title) => promptUserPermission(toolName, title, deps.signal));
   const cwd = deps.cwd ?? process.cwd();
   const options = params.options ?? [];
   const toolTitle = sanitizeTerminalText(params.toolCall?.title ?? "tool");
   const classification = classifyAcpToolApproval({ toolCall: params.toolCall, cwd });
   const toolName = classification.toolName;
-  const toolKind = resolveToolKindForPermission(toolName, classification.approvalClass);
+  const toolKind =
+    !toolName && classification.approvalClass === "unknown"
+      ? undefined
+      : classification.approvalClass;
 
   if (options.length === 0) {
     log(`[permission cancelled] ${toolName ?? "unknown"}: no options available`);
-    return cancelledPermission();
+    return { outcome: { outcome: "cancelled" } };
   }
 
-  const allowOption = pickOption(options, ["allow_once", "allow_always"]);
-  const rejectOption = pickOption(options, ["reject_once", "reject_always"]);
-  const promptRequired = !classification.autoApprove;
-
-  if (!promptRequired) {
+  const allowOption =
+    options.find((option) => option.kind === "allow_once") ??
+    options.find((option) => option.kind === "allow_always");
+  const rejectOption =
+    options.find((option) => option.kind === "reject_once") ??
+    options.find((option) => option.kind === "reject_always");
+  if (classification.autoApprove) {
     if (!allowOption) {
       log(`[permission cancelled] ${toolName ?? "unknown"}: missing allow option`);
-      return cancelledPermission();
+      return { outcome: { outcome: "cancelled" } };
     }
     log(`[permission auto-approved] ${toolName} (${toolKind ?? "unknown"})`);
-    return selectedPermission(allowOption.optionId);
+    return { outcome: { outcome: "selected", optionId: allowOption.optionId } };
   }
 
   log(
     `\n[permission requested] ${toolTitle}${toolName ? ` (${toolName})` : ""}${toolKind ? ` [${toolKind}]` : ""}`,
   );
   const approved = await prompt(toolName, toolTitle);
+  if (deps.signal?.aborted) {
+    return { outcome: { outcome: "cancelled" } };
+  }
 
   if (approved && allowOption) {
-    return selectedPermission(allowOption.optionId);
+    return { outcome: { outcome: "selected", optionId: allowOption.optionId } };
   }
   if (!approved && rejectOption) {
-    return selectedPermission(rejectOption.optionId);
+    return { outcome: { outcome: "selected", optionId: rejectOption.optionId } };
   }
 
   log(
     `[permission cancelled] ${toolName ?? "unknown"}: missing ${approved ? "allow" : "reject"} option`,
   );
-  return cancelledPermission();
+  return { outcome: { outcome: "cancelled" } };
 }
 
 type AcpClientSpawnEnvOptions = {
   stripKeys?: Iterable<string>;
 };
 
-/** Builds the sanitized environment used when spawning an ACP client process. */
 export function resolveAcpClientSpawnEnv(
   baseEnv: NodeJS.ProcessEnv = process.env,
   options: AcpClientSpawnEnvOptions = {},
@@ -166,7 +148,6 @@ export function resolveAcpClientSpawnEnv(
   return env;
 }
 
-/** Returns true when the client should hide provider credentials from the spawned server. */
 export function shouldStripProviderAuthEnvVarsForAcpServer(
   params: {
     serverCommand?: string;
@@ -191,14 +172,13 @@ export function shouldStripProviderAuthEnvVarsForAcpServer(
   );
 }
 
-/** Builds the exact environment variable denylist used for ACP client subprocesses. */
 export function buildAcpClientStripKeys(params: {
   stripProviderAuthEnvVars?: boolean;
   activeSkillEnvKeys?: Iterable<string>;
 }): Set<string> {
   const stripKeys = new Set<string>(params.activeSkillEnvKeys ?? []);
   if (params.stripProviderAuthEnvVars) {
-    for (const key of listKnownProviderAuthEnvVarNames()) {
+    for (const key of listKnownProviderAuthEnvVarNamesCore()) {
       stripKeys.add(key);
     }
   }
@@ -217,7 +197,6 @@ const DEFAULT_ACP_SPAWN_RUNTIME: AcpSpawnRuntime = {
   execPath: process.execPath,
 };
 
-/** Resolves the executable/args used to spawn an ACP server, including Windows shims. */
 export function resolveAcpClientSpawnInvocation(
   params: { serverCommand: string; serverArgs: string[] },
   runtime: AcpSpawnRuntime = DEFAULT_ACP_SPAWN_RUNTIME,

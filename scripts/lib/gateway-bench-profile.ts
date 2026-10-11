@@ -19,14 +19,27 @@ export type GatewayProfileCommand = {
 
 export type GatewayCpuUsageSnapshot = {
   pid: number;
+  cpuEnvironment?: { availableParallelism: number; affinity?: string };
   atMonotonicMicros: number;
   process: NodeJS.CpuUsage;
   mainThread: NodeJS.CpuUsage;
 };
 
+export type GatewayResourceSnapshot = GatewayCpuUsageSnapshot & {
+  memory: NodeJS.MemoryUsage;
+  activeResources: Record<string, number>;
+  runtime: { node: string; platform: string; arch: string };
+};
+
 export type GatewayBenchCommand =
   | GatewayProfileCommand
-  | { channel: typeof GATEWAY_PROFILE_CHANNEL; kind: "cpu-usage"; action: "sample" };
+  | { channel: typeof GATEWAY_PROFILE_CHANNEL; kind: "cpu-usage"; action: "sample" }
+  | {
+      channel: typeof GATEWAY_PROFILE_CHANNEL;
+      kind: "resource-usage";
+      action: "sample";
+      initial?: boolean;
+    };
 
 type GatewayProfileReply = {
   channel: typeof GATEWAY_PROFILE_CHANNEL;
@@ -34,36 +47,13 @@ type GatewayProfileReply = {
   action: GatewayBenchCommand["action"];
   error?: string;
   cpuUsage?: GatewayCpuUsageSnapshot;
+  resources?: GatewayResourceSnapshot;
 };
 
-type CpuUsageMilliseconds = { userMs: number; systemMs: number; totalMs: number };
-
-export type GatewayCpuUsage = {
-  pid: number;
-  startMonotonicMicros: number;
-  endMonotonicMicros: number;
-  wallMs: number;
-  process: CpuUsageMilliseconds;
-  mainThread: CpuUsageMilliseconds;
-};
-
-export type GatewayHeapProfile = {
-  profilePath: string;
-  samplingIntervalBytes: number;
-  includesCollectedObjects: true;
-  sampledAllocatedBytes: number;
-  topAllocationSites: Array<{
-    sampledBytes: number;
-    stack: string[];
-  }>;
-} & GatewayProfileArtifacts;
-
-export type GatewayCpuProfile = {
-  profilePath: string;
-  samplingIntervalMicros: number;
-  durationMs: number;
-  sampleCount: number;
-} & GatewayProfileArtifacts;
+export type GatewayCpuUsage = Omit<ReturnType<typeof measureGatewayCpuUsage>, "cpuEnvironment"> &
+  Pick<GatewayCpuUsageSnapshot, "cpuEnvironment">;
+export type GatewayHeapProfile = ReturnType<typeof readGatewayHeapProfile>;
+export type GatewayCpuProfile = ReturnType<typeof readGatewayCpuProfile>;
 
 type GatewayProfileArtifacts = {
   diagnosticsPath?: string;
@@ -105,14 +95,37 @@ export async function readGatewayCpuUsage(child: ChildProcess): Promise<GatewayC
   return reply.cpuUsage;
 }
 
+/** Samples the Gateway itself, not the controller or its descendants. */
+export async function readGatewayResources(
+  child: ChildProcess,
+  options: { initial?: boolean } = {},
+): Promise<GatewayResourceSnapshot> {
+  const reply = await sendGatewayBenchCommand(child, {
+    channel: GATEWAY_PROFILE_CHANNEL,
+    kind: "resource-usage",
+    action: "sample",
+    ...options,
+  });
+  if (!reply.resources || reply.resources.pid !== child.pid) {
+    throw new Error("Gateway did not report resources for the owned child PID");
+  }
+  return reply.resources;
+}
+
 export function measureGatewayCpuUsage(
   before: GatewayCpuUsageSnapshot,
   after: GatewayCpuUsageSnapshot,
-): GatewayCpuUsage {
+) {
   if (before.pid !== after.pid || after.atMonotonicMicros <= before.atMonotonicMicros) {
     throw new Error("Gateway CPU samples must span one process and a positive interval");
   }
-  const delta = (start: NodeJS.CpuUsage, end: NodeJS.CpuUsage): CpuUsageMilliseconds => {
+  if (
+    before.cpuEnvironment?.availableParallelism !== after.cpuEnvironment?.availableParallelism ||
+    before.cpuEnvironment?.affinity !== after.cpuEnvironment?.affinity
+  ) {
+    throw new Error("Gateway CPU affinity or available parallelism changed during measurement");
+  }
+  const delta = (start: NodeJS.CpuUsage, end: NodeJS.CpuUsage) => {
     const userMs = (end.user - start.user) / 1_000;
     const systemMs = (end.system - start.system) / 1_000;
     if (userMs < 0 || systemMs < 0) {
@@ -122,6 +135,7 @@ export function measureGatewayCpuUsage(
   };
   return {
     pid: after.pid,
+    cpuEnvironment: before.cpuEnvironment,
     startMonotonicMicros: before.atMonotonicMicros,
     endMonotonicMicros: after.atMonotonicMicros,
     wallMs: (after.atMonotonicMicros - before.atMonotonicMicros) / 1_000,
@@ -181,7 +195,7 @@ async function sendGatewayBenchCommand(
   });
 }
 
-export function readGatewayCpuProfile(profilePath: string): GatewayCpuProfile {
+export function readGatewayCpuProfile(profilePath: string) {
   const profile: Profiler.Profile = JSON.parse(readFileSync(profilePath, "utf8"));
   return {
     ...readProfileArtifacts(profilePath),
@@ -192,9 +206,9 @@ export function readGatewayCpuProfile(profilePath: string): GatewayCpuProfile {
   };
 }
 
-export function readGatewayHeapProfile(profilePath: string): GatewayHeapProfile {
+export function readGatewayHeapProfile(profilePath: string) {
   const profile: HeapProfiler.SamplingHeapProfile = JSON.parse(readFileSync(profilePath, "utf8"));
-  const sites: GatewayHeapProfile["topAllocationSites"] = [];
+  const sites: Array<{ sampledBytes: number; stack: string[] }> = [];
   let sampledAllocatedBytes = 0;
   const formatFrame = (frame: HeapProfiler.SamplingHeapProfileNode["callFrame"]): string => {
     const filePath = frame.url.startsWith("file://") ? fileURLToPath(frame.url) : frame.url;
@@ -216,7 +230,7 @@ export function readGatewayHeapProfile(profilePath: string): GatewayHeapProfile 
     ...readProfileArtifacts(profilePath),
     profilePath,
     samplingIntervalBytes: GATEWAY_HEAP_SAMPLE_INTERVAL,
-    includesCollectedObjects: true,
+    includesCollectedObjects: true as const,
     sampledAllocatedBytes,
     topAllocationSites: sites.toSorted((a, b) => b.sampledBytes - a.sampledBytes).slice(0, 20),
   };

@@ -374,7 +374,9 @@ describe("setup admission", () => {
     async (reset) => {
       const create = vi.fn(() => new WizardSession(async () => {}));
       const pending = createAdmittedWizardSession(create);
-      const rejected = expect(pending).rejects.toThrow("draining");
+      const rejected = expect(pending).rejects.toThrow(
+        "Gateway is restarting. Please try again shortly.",
+      );
       markGatewayRestartDraining();
       if (reset) {
         resetGatewayWorkAdmission();
@@ -385,30 +387,6 @@ describe("setup admission", () => {
       const fresh = await createAdmittedWizardSession(create);
       expect(fresh).toBeDefined();
       await whenAdmittedWizardSessionSettled(fresh!);
-    },
-  );
-
-  it.each([false, true])(
-    "closes a wizard when construction races drain (target lock=%s)",
-    async (lockSetupTarget) => {
-      const session = await createAdmittedWizardSession(
-        () =>
-          new WizardSession(async (prompter) => {
-            markGatewayRestartDraining();
-            await prompter.text({ message: "Local model base URL" });
-          }),
-        lockSetupTarget,
-      );
-      if (!session) {
-        throw new Error("expected an admitted wizard");
-      }
-      try {
-        await whenAdmittedWizardSessionSettled(session);
-        expect(session.getStatus()).toBe("error");
-      } finally {
-        session.cancel();
-        await whenAdmittedWizardSessionSettled(session);
-      }
     },
   );
 

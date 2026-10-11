@@ -5,6 +5,7 @@
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
+import { labelRuntimeContextText } from "../llm/types.js";
 import {
   annotateInterSessionPromptText,
   type InputProvenance,
@@ -23,8 +24,6 @@ import {
 } from "./internal-event-contract.js";
 import {
   escapeInternalRuntimeContextDelimiters,
-  INTERNAL_RUNTIME_CONTEXT_BEGIN,
-  INTERNAL_RUNTIME_CONTEXT_END,
   type RuntimeContextFragment,
 } from "./internal-runtime-context.js";
 import { wrapPromptDataBlock } from "./sanitize-for-prompt.js";
@@ -50,8 +49,6 @@ type AgentTaskCompletionInternalEvent = {
 
 type TaskCompletionPromptMode = "plain" | "protected" | "data";
 
-const MAX_TASK_COMPLETION_RESULT_ESCAPED_CHARS = 6_000;
-const TASK_COMPLETION_RESULT_TRUNCATION_NOTICE = "\n[child result truncated]";
 // Status labels embed provider/lifecycle error text ("failed: <cause>",
 // "timed out: <cause>"), which is caller-supplied and unbounded. Keep the
 // single status line short so a large error cannot crowd out the child result
@@ -130,14 +127,10 @@ function sanitizeMediaDirectiveValue(value: string, raw = false): string | null 
 }
 
 function formatChildResultDataBlock(value: string): string {
-  // The event retains the authoritative full result; only model-visible
-  // projections share this escaped-output budget.
   return (
     wrapPromptDataBlock({
       label: "Child result",
       text: value,
-      maxEscapedChars: MAX_TASK_COMPLETION_RESULT_ESCAPED_CHARS,
-      truncationMarker: TASK_COMPLETION_RESULT_TRUNCATION_NOTICE,
     }) || "Child result: (no output)"
   );
 }
@@ -157,7 +150,15 @@ function formatGeneratedMediaDirectiveLines(
   if (mediaUrls.length === 0) {
     return [];
   }
-  return [label, ...mediaUrls.map((mediaUrl) => `MEDIA:${mediaUrl}`)];
+  return [
+    label,
+    ...mediaUrls.map((mediaUrl) => {
+      // Delimit literal quotes and suffixes that the unquoted parser treats as serialized output.
+      const reference =
+        mediaUrl.includes('"') || /[`'\\})\],]$/u.test(mediaUrl) ? `"${mediaUrl}"` : mediaUrl;
+      return `MEDIA:${reference}`;
+    }),
+  ];
 }
 
 function formatTaskCompletionEvent(
@@ -180,17 +181,7 @@ function formatTaskCompletionEvent(
     },
   );
   const result =
-    mode === "data"
-      ? truncateWithMarker(
-          event.result || "(no output)",
-          MAX_TASK_COMPLETION_RESULT_ESCAPED_CHARS,
-          {
-            marker: TASK_COMPLETION_RESULT_TRUNCATION_NOTICE,
-            reserve: TASK_COMPLETION_RESULT_TRUNCATION_NOTICE.length,
-            trimEnd: true,
-          },
-        )
-      : formatChildResultDataBlock(event.result);
+    mode === "data" ? event.result || "(no output)" : formatChildResultDataBlock(event.result);
   const modelRouteChange = normalizeAgentRunRouteChange(event.modelRouteChange);
   const attachmentLines = formatGeneratedAttachmentLines(event.attachments);
   const mediaDirectiveLines = formatGeneratedMediaDirectiveLines(event, mode === "data");
@@ -236,20 +227,19 @@ function formatTaskCompletionEvent(
 /** Provenance comes from the producer event; child output and labels remain data. */
 export function buildAgentInternalEventContext(
   events?: AgentInternalEvent[],
-  legacy = false,
+  supplemental: readonly RuntimeContextFragment[] = [],
 ): RuntimeContextFragment[] {
-  if (legacy) {
-    const text = formatAgentInternalEventsForPrompt(events);
-    return text ? [{ kind: "runtime-instruction", text }] : [];
-  }
-  return (events ?? []).flatMap((event): RuntimeContextFragment[] => [
-    {
-      kind: "runtime-instruction",
-      text: "A background task completed. Keep internal details private and use its result to reply in your normal assistant voice.",
-    },
-    { kind: "conversation-data", text: formatTaskCompletionEvent(event, "data") },
-    { kind: "runtime-instruction", text: event.replyInstruction },
-  ]);
+  return [
+    ...(events ?? []).flatMap((event): RuntimeContextFragment[] => [
+      {
+        kind: "runtime-instruction",
+        text: "A background task completed. Keep internal details private and use its result to reply in your normal assistant voice.",
+      },
+      { kind: "conversation-data", text: formatTaskCompletionEvent(event, "data") },
+      { kind: "runtime-instruction", text: event.replyInstruction },
+    ]),
+    ...supplemental,
+  ];
 }
 
 export function buildGeneratedMediaDeliveryContext(
@@ -278,14 +268,13 @@ export function formatAgentInternalEventsForPrompt(events?: AgentInternalEvent[]
   if (blocks.length === 0) {
     return "";
   }
-  return [
-    INTERNAL_RUNTIME_CONTEXT_BEGIN,
-    "OpenClaw runtime context (internal):",
-    "This context is runtime-generated, not user-authored. Keep internal details private.",
-    "",
-    blocks.join("\n\n---\n\n"),
-    INTERNAL_RUNTIME_CONTEXT_END,
-  ].join("\n");
+  return labelRuntimeContextText(
+    [
+      "This context is runtime-generated, not user-authored. Keep internal details private.",
+      "",
+      blocks.join("\n\n---\n\n"),
+    ].join("\n"),
+  );
 }
 
 /** Build a protected follow-up that can retry only media proven missing from a partial send. */
@@ -298,20 +287,19 @@ export function formatGeneratedMediaDeliveryRetryForPrompt(mediaUrls: string[]):
   if (mediaDirectiveLines.length === 0) {
     return "";
   }
-  return [
-    INTERNAL_RUNTIME_CONTEXT_BEGIN,
-    "OpenClaw runtime context (internal):",
-    "This context is runtime-generated, not user-authored. Keep internal details private.",
-    "",
-    "[Generated media delivery retry]",
-    "A previous agent turn delivered only part of this generated-media result.",
-    "",
-    ...mediaDirectiveLines,
-    "",
-    "Action:",
-    "Deliver only the generated media listed above. Do not resend any other attachment.",
-    INTERNAL_RUNTIME_CONTEXT_END,
-  ].join("\n");
+  return labelRuntimeContextText(
+    [
+      "This context is runtime-generated, not user-authored. Keep internal details private.",
+      "",
+      "[Generated media delivery retry]",
+      "A previous agent turn delivered only part of this generated-media result.",
+      "",
+      ...mediaDirectiveLines,
+      "",
+      "Action:",
+      "Deliver only the generated media listed above. Do not resend any other attachment.",
+    ].join("\n"),
+  );
 }
 
 /** Format internal runtime events for plain prompts that lack context delimiters. */
@@ -320,18 +308,6 @@ function formatAgentInternalEventsForPlainPrompt(events?: AgentInternalEvent[]):
     .filter((event) => event.type === "task_completion")
     .map((event) => formatTaskCompletionEvent(event, "plain"))
     .join("\n\n---\n\n");
-}
-
-/** Keep the existing event carrier for runtimes that own their prompt assembly. */
-export function prependInternalEventContext(
-  body: string,
-  events: AgentInternalEvent[] | undefined,
-  inputProvenance?: InputProvenance,
-): string {
-  const rendered = formatAgentInternalEventsForPrompt(events);
-  return !rendered || resolveInternalEventPromptBody(body, events, inputProvenance) !== body
-    ? body
-    : [rendered, body].filter(Boolean).join("\n\n");
 }
 
 /** Remove only the canonical duplicate carried by the existing internal-events API. */

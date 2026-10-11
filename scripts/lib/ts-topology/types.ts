@@ -1,17 +1,6 @@
-// Types script supports OpenClaw repository automation.
-import type ts from "typescript";
+import type { Checker, Project } from "typescript/unstable/sync";
 
 export type UsageBucket = "internal" | "production" | "test";
-
-export type ConsumerScope =
-  | "src"
-  | "extension"
-  | "package"
-  | "app"
-  | "ui"
-  | "script"
-  | "test"
-  | "other";
 
 export type TopologyReportName =
   | "public-surface-usage"
@@ -32,8 +21,9 @@ export type SymbolKind =
 export type ProgramContext = {
   repoRoot: string;
   tsconfigPath: string;
-  program: ts.Program;
-  checker: ts.TypeChecker;
+  project: Project;
+  checker: Checker;
+  close: () => void;
   normalizePath: (filePath: string) => string;
   relativeToRepo: (filePath: string) => string;
 };
@@ -50,18 +40,6 @@ export type PublicEntrypoint = {
   entrypoint: string;
   sourcePath: string;
   importSpecifier: string;
-};
-
-export type ReferenceEvent = {
-  canonicalKey: string;
-  bucket: UsageBucket;
-  consumerPath: string;
-  usageCount: number;
-  importCount: number;
-  importSpecifier: string;
-  owner: string | null;
-  extensionId: string | null;
-  packageOwner: string | null;
 };
 
 export type TopologyRecord = CanonicalSymbol & {
@@ -89,12 +67,7 @@ export type TopologyScope = {
   id: string;
   description: string;
   entrypoints: PublicEntrypoint[];
-  importFilter: (specifier: string) => boolean;
-  classifyUsageBucket: (relPath: string) => UsageBucket;
-  classifyScope: (relPath: string) => ConsumerScope;
-  ownerForPath: (relPath: string) => string | null;
-  extensionForPath: (relPath: string) => string | null;
-  packageOwnerForPath: (relPath: string) => string | null;
+  internalRoots: string[];
 };
 
 export type RankedCandidates = {
@@ -129,10 +102,4 @@ export type TopologyEnvelope = {
   };
   rankedCandidates?: RankedCandidates;
   records: TopologyRecord[];
-};
-
-export type ReportModule = {
-  name: TopologyReportName;
-  describe: (envelope: TopologyEnvelope, limit: number) => string;
-  filterRecords?: (record: TopologyRecord) => boolean;
 };

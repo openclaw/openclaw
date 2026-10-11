@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { openDetailsPullRequests } from "./chat-details.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   activateSelfRemovingControl,
@@ -39,6 +40,7 @@ suite.define(() => {
       const sessionKey = "agent:main:archive-actions";
       const messageText = "Archive action proof.";
       const session = sessionRow(sessionKey, "Archive actions", baseTime);
+      const main = sessionRow("agent:main:main", "Main", baseTime + 1_000);
       const gateway = await installMockGateway(page, {
         featureMethods: [
           "chat.metadata",
@@ -47,6 +49,7 @@ suite.define(() => {
           "sessions.branches.switch",
           "sessions.fork",
           "sessions.github.publish",
+          "sessions.github.options",
           "sessions.patch",
           "sessions.rewind",
           SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
@@ -88,10 +91,7 @@ suite.define(() => {
             editorText: messageText,
             sessionKey: "agent:main:dashboard:archive-action-fork",
           },
-          "sessions.list": sessionsListResponse([
-            sessionRow("agent:main:main", "Main", baseTime + 1_000),
-            session,
-          ]),
+          "sessions.list": sessionsListResponse([main, session]),
         },
         sessionArchiveFiltering: true,
         sessionKey,
@@ -127,7 +127,9 @@ suite.define(() => {
             },
           },
         });
-        await page.getByRole("button", { name: "Publish PR" }).waitFor();
+        await openDetailsPullRequests(activePane);
+        await activePane.getByRole("button", { name: "Publish PR" }).waitFor();
+        await activePane.getByRole("button", { name: "Close details", exact: true }).click();
 
         await userBubble.click({ button: "right" });
         const initialMenu = page.locator(".chat-reply-context-menu");
@@ -150,10 +152,14 @@ suite.define(() => {
         await rewind.click();
         await confirmation.waitFor({ state: "visible" });
 
-        await gateway.emitGatewayEvent("sessions.changed", {
+        const archived = {
           ...session,
           archived: true,
           archivedAt: baseTime + 2_000,
+        };
+        await gateway.setSessionsListResponse(sessionsListResponse([main, archived]));
+        await gateway.emitGatewayEvent("sessions.changed", {
+          ...archived,
           reason: "update",
           sessionKey,
         });
@@ -166,7 +172,11 @@ suite.define(() => {
           .poll(() => transcript.evaluate((element) => element === document.activeElement))
           .toBe(true);
         await expect.poll(() => branchTrigger.isDisabled()).toBe(true);
-        await expect.poll(() => page.getByRole("button", { name: "Publish PR" }).count()).toBe(0);
+        const archivedPullRequests = await openDetailsPullRequests(activePane);
+        await expect
+          .poll(() => archivedPullRequests.getByRole("button", { name: "Publish PR" }).count())
+          .toBe(0);
+        await activePane.getByRole("button", { name: "Close details", exact: true }).click();
 
         await userBubble.evaluate((element) => {
           const selection = window.getSelection();

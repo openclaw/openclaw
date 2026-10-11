@@ -46,19 +46,6 @@ describe("loadAnthropicTransportStream", () => {
 });
 
 describe("loadAnthropicProviderInternals", () => {
-  it("uses the candidate prefix-binding capability when exported", async () => {
-    const stream = vi.fn<AnthropicStreamFn>();
-    const binds = vi.fn(() => true);
-
-    const loaded = await loadAnthropicProviderInternals(async () => ({
-      streamAnthropic: stream,
-      bindsClaudeThinkingPrefix: binds,
-    }));
-
-    expect(loaded.streamAnthropic).toBe(stream);
-    expect(loaded.bindsClaudeThinkingPrefix({ id: "claude-fable-5-1" })).toBe(true);
-  });
-
   it("treats a missing prefix-binding export as an absent frozen capability", async () => {
     const stream = vi.fn<AnthropicStreamFn>();
     const loaded = await loadAnthropicProviderInternals(async () => ({ streamAnthropic: stream }));

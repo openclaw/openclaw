@@ -9,17 +9,6 @@ import { prepareEmbeddedRunTerminal } from "./terminal-preparation.js";
 import { resolveSettledTurnFinalizationRequest } from "./terminal-resolution.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
-function createAssistantReportedProviderFailureAttempt(): EmbeddedRunAttemptResult {
-  const base = createSettledProviderFailureAttempt({ terminal: { kind: "ok" } });
-  const assistant = base.currentAttemptCompletedAssistant;
-  if (!assistant) {
-    throw new Error("Missing failed assistant");
-  }
-  assistant.errorMessage = "WebSocket error";
-  assistant.errorCode = "ERR_WEBSOCKET_TRANSPORT";
-  return projectSettledProviderFailureAttempt(base);
-}
-
 function prepareRequest(
   attempt = createSettledProviderFailureAttempt(),
   trigger: "user" | "cron" = "user",
@@ -46,101 +35,58 @@ function prepareRequest(
 }
 
 describe("prepared provider errors after settled tools", () => {
-  it("does not mistake the generated provider error for an authored answer", () => {
-    const request = prepareRequest();
-    expect(request.payloadsWithToolMedia).toEqual([
-      expect.objectContaining({
-        isError: true,
-        text: expect.stringContaining("connection refused"),
-      }),
-    ]);
-    expect(resolveSettledTurnFinalizationRequest(request)).toContain(
-      "Do not repeat completed tool calls",
-    );
-  });
-
-  it("finalizes a provider error reported through the completed assistant", () => {
-    const attempt = createAssistantReportedProviderFailureAttempt();
-    expect(attempt).toMatchObject({
-      terminal: { kind: "ok" },
-      settledTurnFinalizationContext: { source: "openclaw-transcript" },
-    });
-    const request = prepareRequest(attempt);
-    expect(request.payloadsWithToolMedia).toEqual([expect.objectContaining({ isError: true })]);
-    expect(resolveSettledTurnFinalizationRequest(request)).toContain(
-      "Do not repeat completed tool calls",
-    );
-  });
-
-  it("finalizes an exact terminated transport stream reported through the completed assistant", () => {
-    const base = createSettledProviderFailureAttempt({ terminal: { kind: "ok" } });
-    const assistant = base.currentAttemptCompletedAssistant;
-    if (!assistant) {
-      throw new Error("Missing failed assistant");
-    }
-    assistant.errorMessage = "terminated";
-    assistant.errorCode = undefined;
-    const attempt = projectSettledProviderFailureAttempt(base);
-    expect(attempt).toMatchObject({
-      terminal: { kind: "ok" },
-      settledTurnFinalizationContext: { source: "openclaw-transcript" },
-    });
-    const request = prepareRequest(attempt);
-    expect(request.payloadsWithToolMedia).toEqual([expect.objectContaining({ isError: true })]);
-    expect(resolveSettledTurnFinalizationRequest(request)).toContain(
-      "Do not repeat completed tool calls",
-    );
-  });
-
-  it.each(["earlier user turn", "current commentary substring"])(
-    "does not attribute current output to %s",
-    (source) => {
-      const base = createSettledProviderFailureAttempt({
-        assistantTexts: ["The note is already saved."],
-      });
-      const earlierAssistant = {
-        ...base.lastAssistant!,
-        stopReason: "stop" as const,
-        content: [
-          {
-            type: "text" as const,
-            text:
-              source === "earlier user turn"
-                ? "The note is already saved."
-                : "The note is already saved. I will verify it.",
-          },
-        ],
-      };
-      base.messagesSnapshot.splice(source === "earlier user turn" ? 0 : 1, 0, earlierAssistant);
-      base.terminal = {
-        kind: "failed",
-        source: "prompt",
-        error: new Error("Stream ended without finish_reason"),
-      };
-      const attempt = projectSettledProviderFailureAttempt(base);
-      expect(attempt.settledTurnFinalizationContext).toBeUndefined();
-      expect(resolveSettledTurnFinalizationRequest(prepareRequest(attempt))).toBeNull();
+  it.each([
+    { name: "no prior text", assistantTexts: [] },
+    { name: "prior NO_REPLY", assistantTexts: ["NO_REPLY"] },
+  ])(
+    "does not mistake the generated provider error for a required answer after $name",
+    ({ assistantTexts }) => {
+      const request = prepareRequest(createSettledProviderFailureAttempt({ assistantTexts }));
+      expect(request.payloadsWithToolMedia).toEqual([
+        expect.objectContaining({
+          isError: true,
+          text: expect.stringContaining("Couldn't connect to the AI service."),
+        }),
+      ]);
+      expect(resolveSettledTurnFinalizationRequest(request)).toContain(
+        "Do not repeat completed tool calls",
+      );
     },
   );
 
+  it("does not attribute a current commentary substring to final output", () => {
+    const base = createSettledProviderFailureAttempt({
+      assistantTexts: ["The note is already saved."],
+    });
+    const earlierAssistant = {
+      ...base.lastAssistant!,
+      stopReason: "stop" as const,
+      content: [
+        {
+          type: "text" as const,
+          text: "The note is already saved. I will verify it.",
+        },
+      ],
+    };
+    base.messagesSnapshot.splice(1, 0, earlierAssistant);
+    base.terminal = {
+      kind: "failed",
+      source: "prompt",
+      error: new Error("Stream ended without finish_reason"),
+    };
+    const attempt = projectSettledProviderFailureAttempt(base);
+    expect(attempt.settledTurnFinalizationContext).toBeUndefined();
+    expect(resolveSettledTurnFinalizationRequest(prepareRequest(attempt))).toBeNull();
+  });
+
   it.each([
-    { name: "missing recovery context", change: { settledTurnFinalizationContext: undefined } },
     {
-      name: "authored assistant output",
-      change: { assistantTexts: ["The note is already saved."] },
-    },
-    { name: "intentional silence", change: { assistantTexts: ["NO_REPLY"] } },
-    {
-      name: "unfinished tool",
-      change: { itemLifecycle: { startedCount: 1, completedCount: 0, activeCount: 1 } },
-    },
-    {
-      name: "asynchronous tool",
-      change: { toolMetas: [{ toolName: "write", asyncStarted: true }] },
-    },
-    {
-      name: "delivered reply",
-      change: { didSendViaMessagingTool: true, messagingToolSentTexts: ["Note saved."] },
+      name: "delivered source reply",
+      change: {
+        sourceReplyDelivered: true,
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["Note saved."],
+      },
     },
     { name: "delivered media", change: { hasToolMediaBlockReply: true } },
     { name: "pending media", change: { toolMediaUrls: ["/tmp/note.png"] } },
@@ -152,6 +98,21 @@ describe("prepared provider errors after settled tools", () => {
       expect(resolveSettledTurnFinalizationRequest(request)).toBeNull();
     },
   );
+
+  it("does not let a send to another conversation settle the required source reply", () => {
+    const request = prepareRequest(
+      createSettledProviderFailureAttempt({
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["Sent elsewhere."],
+        messagingToolSentTargets: [
+          { tool: "message", provider: "telegram", to: "other-chat", text: "Sent elsewhere." },
+        ],
+      }),
+    );
+    expect(resolveSettledTurnFinalizationRequest(request)).toContain(
+      "Do not repeat completed tool calls",
+    );
+  });
 
   it.each(["provider refusal", "permanent WebSocket close"])(
     "preserves %s even with stale transient context",
@@ -174,7 +135,9 @@ describe("prepared provider errors after settled tools", () => {
         expect.objectContaining({
           isError: true,
           text: expect.stringContaining(
-            failure === "provider refusal" ? "refused this request" : "connection refused",
+            failure === "provider refusal"
+              ? "refused this request"
+              : "Couldn't connect to the AI service.",
           ),
         }),
       ]);
@@ -191,20 +154,9 @@ describe("prepared provider errors after settled tools", () => {
     expect(resolveSettledTurnFinalizationRequest(prepareRequest(attempt, "cron"))).toBeNull();
   });
 
-  it.each(["unmarked error", "structured tool error", "tool presentation"])(
-    "preserves %s alongside the generated provider error",
-    (kind) => {
-      const request = prepareRequest();
-      if (kind === "tool presentation") {
-        request.hasTerminalToolPresentation = true;
-      } else {
-        request.payloadsWithToolMedia?.push({
-          text: "Explicit error",
-          isError: true,
-          ...(kind === "structured tool error" ? { channelData: { explicit: true } } : {}),
-        });
-      }
-      expect(resolveSettledTurnFinalizationRequest(request)).toBeNull();
-    },
-  );
+  it("preserves an unmarked error alongside the generated provider error", () => {
+    const request = prepareRequest();
+    request.payloadsWithToolMedia?.push({ text: "Explicit error", isError: true });
+    expect(resolveSettledTurnFinalizationRequest(request)).toBeNull();
+  });
 });

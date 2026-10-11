@@ -1,6 +1,5 @@
 import { html, render } from "lit";
 import { afterEach } from "vitest";
-import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { SessionMenuData } from "../components/session-menu-actions.ts";
 import "../components/session-menu.ts";
@@ -33,18 +32,20 @@ export async function mountMenu(
   options: {
     session?: Partial<SessionMenuData>;
     compact?: boolean;
+    involvingMeContext?: boolean;
     navigationAllowed?: boolean;
     copyMarkdownAllowed?: boolean;
     splitAllowed?: boolean;
     work?: SessionMenuWork | null;
     pluginActions?: readonly PluginSessionMenuAction[];
     archiveAllowed?: boolean;
+    snoozeAllowed?: boolean;
     deleteAllowed?: boolean;
     cloudWorkerStopAllowed?: boolean;
     selectionCount?: number;
     lastActive?: string;
     groups?: readonly string[];
-    context?: ApplicationContext<RouteId>;
+    context?: ApplicationContext;
     currentOwner?: SessionOwnerOption | null;
     trigger?: HTMLElement | null;
     onAction?: (action: SessionMenuAction) => void;
@@ -65,6 +66,7 @@ export async function mountMenu(
     pinned: false,
     unread: false,
     archived: false,
+    snoozedUntil: null,
     category: null,
     icon: null,
     color: null,
@@ -75,6 +77,7 @@ export async function mountMenu(
     html`<openclaw-session-menu
       .session=${session}
       .compact=${options.compact ?? false}
+      .involvingMeContext=${options.involvingMeContext ?? false}
       .navigationAllowed=${options.navigationAllowed ?? true}
       .copyMarkdownAllowed=${options.copyMarkdownAllowed ?? true}
       .splitAllowed=${options.splitAllowed ?? false}
@@ -86,6 +89,7 @@ export async function mountMenu(
       .actionDisabledReasons=${options.actionDisabledReasons ?? {}}
       .forkDisabled=${false}
       .forkFromLastCompleted=${options.forkFromLastCompleted ?? false}
+      .snoozeAllowed=${options.snoozeAllowed ?? false}
       .archiveAllowed=${options.archiveAllowed ?? true}
       .deleteAllowed=${
         options.deleteAllowed ?? (session.archived || (options.archiveAllowed ?? true))

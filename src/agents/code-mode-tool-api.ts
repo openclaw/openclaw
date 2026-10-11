@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JsonSchemaValue } from "../plugins/schema-validator.js";
 import type { CodeModeApiVirtualFile } from "./code-mode-mcp-api.js";
 import { readToolOutputSchemaVariants } from "./schema/tool-output-schema.js";
@@ -19,7 +21,6 @@ export async function createCodeModeToolApiFile(
       optional = validateJsonSchemaValue({
         // SAFETY: The canonical validator checks the schema shape before compiling it.
         schema: (entry.parameters ?? {}) as JsonSchemaValue,
-        cacheKey: `code-mode-omitted-input:${JSON.stringify(entry.parameters)}`,
         value: {},
       }).ok;
     } catch {
@@ -62,6 +63,35 @@ export async function createCodeModeToolApiFile(
   };
 }
 
+type ObjectDeclaration = {
+  name: string;
+  properties: Record<string, unknown>;
+  required: Set<string>;
+};
+
+function readObjectDeclaration(name: string, schema: unknown): ObjectDeclaration | undefined {
+  if (
+    !isRecord(schema) ||
+    schema.type !== "object" ||
+    schema.additionalProperties !== false ||
+    !isRecord(schema.properties) ||
+    Object.keys(schema).some(
+      (key) => !["type", "properties", "required", "additionalProperties"].includes(key),
+    ) ||
+    (schema.required !== undefined &&
+      (!Array.isArray(schema.required) ||
+        !schema.required.every((key): key is string => typeof key === "string")))
+  ) {
+    return undefined;
+  }
+  const properties = schema.properties;
+  const required = new Set<string>(schema.required ?? []);
+  if ([...required].some((key) => !Object.hasOwn(properties, key))) {
+    return undefined;
+  }
+  return { name, properties, required };
+}
+
 function createVariantDeclarations(params: {
   callableName: string;
   input: string;
@@ -87,10 +117,47 @@ function createVariantDeclarations(params: {
     return undefined;
   }
   const names: string[] = [];
+  const objects: ObjectDeclaration[] = [];
   for (const [index, schema] of variants.variants.entries()) {
     const name = `${prefix}Output${index}`;
     // Preserve root shape constraints; unsupported types stay unknown.
-    const output = toolSchemaDeclaration({ ...outputSchema, anyOf: [schema] });
+    let output = toolSchemaDeclaration({ ...outputSchema, anyOf: [schema] });
+    const object = output === "unknown" ? undefined : readObjectDeclaration(name, schema);
+    if (object) {
+      // Extended results share their already-declared fields without widening either contract.
+      for (const base of objects) {
+        if (
+          !Object.entries(base.properties).every(
+            ([key, value]) =>
+              Object.hasOwn(object.properties, key) &&
+              base.required.has(key) === object.required.has(key) &&
+              isDeepStrictEqual(value, object.properties[key]),
+          )
+        ) {
+          continue;
+        }
+        const properties = Object.fromEntries(
+          Object.entries(object.properties).filter(([key]) => !Object.hasOwn(base.properties, key)),
+        );
+        const extension = toolSchemaDeclaration({
+          ...outputSchema,
+          anyOf: [
+            {
+              type: "object",
+              properties,
+              required: [...object.required].filter((key) => Object.hasOwn(properties, key)),
+              additionalProperties: false,
+            },
+          ],
+        });
+        const factored =
+          Object.keys(properties).length === 0 ? base.name : `${base.name} & ${extension}`;
+        if (extension !== "unknown" && factored.length < output.length) {
+          output = factored;
+        }
+      }
+      objects.push(object);
+    }
     if (!append(`type ${name} = ${output};`)) {
       return undefined;
     }

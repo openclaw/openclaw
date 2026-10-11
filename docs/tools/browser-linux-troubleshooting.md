@@ -27,8 +27,9 @@ Other common Linux launch failures:
 
 - `The profile appears to be in use by another Chromium process`: stale
   `Singleton*` lock files in the managed profile directory. OpenClaw removes
-  these locks and retries once when the lock points at a dead or
-  different-host process.
+  these locks and retries once when the lock points at a dead process on the
+  current host. Locks naming another hostname are preserved until you verify
+  that the profile is no longer in use, including after a machine rename.
 - `Missing X server or $DISPLAY`: a visible browser was explicitly requested
   on a host without a desktop session. Local managed profiles fall back to
   headless mode on Linux when both `DISPLAY` and `WAYLAND_DISPLAY` are unset.

@@ -14,7 +14,7 @@ import type { CompactionAccountingFact } from "./internal-params.js";
 import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 
-type SessionPromptState = ReturnType<typeof createEmbeddedRunSessionPromptState>;
+type SessionPromptState = Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
 
 export async function settleEmbeddedRun(input: {
   runInput: Pick<PreparedEmbeddedRunInput, "runParams" | "progressController">;
@@ -62,6 +62,7 @@ export async function settleEmbeddedRun(input: {
           ...(committed?.previousSessionId !== undefined
             ? { previousSessionId: committed.previousSessionId }
             : {}),
+          ...(committed ? { hostCompactionCommitted: true } : {}),
           target: {
             agentId: target.agentId,
             sessionId: committed?.entry.sessionId ?? target.sessionId,
@@ -87,6 +88,7 @@ export async function settleEmbeddedRun(input: {
         expectedSession: fact.target,
         amount: fact.count,
         tokensAfter: fact.currentContextSnapshot?.tokens,
+        transcriptByteCompactionLatch: fact.hostCompactionCommitted ? null : undefined,
         // Cancellation preserves bookkeeping, but a reused run id cannot lend a new admission.
         authorize: () =>
           compaction.authority !== undefined &&
@@ -99,7 +101,9 @@ export async function settleEmbeddedRun(input: {
   if (params.isFinalFallbackAttempt !== false) {
     await runInput.progressController.maybeEmitFastModeAutoResetBestEffort();
   }
-  forgetPromptBuildDrainCacheForRun(params.runId);
+  if (ownedContextEngineLease) {
+    forgetPromptBuildDrainCacheForRun(params.runId);
+  }
   clearProviderPromptState(params.runId);
   runtime.stopRuntimeAuthRefreshTimer();
   await ownedContextEngineLease?.dispose();

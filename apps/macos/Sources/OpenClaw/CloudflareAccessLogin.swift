@@ -6,7 +6,7 @@ enum CloudflareAccessLogin {
     struct Application: Sendable {
         let gatewayURL: URL
         let handoffFilename: String
-        fileprivate let issuer: URL
+        let issuer: URL
         fileprivate let audience: String
     }
 
@@ -121,6 +121,21 @@ enum CloudflareAccessLogin {
         attempt: MacGatewayProfileStore.BrowserSignInAttempt,
         progress: GatewayBrowserSignInProgress) async throws -> GatewayBrowserSession
     {
+        try await self.signIn(
+            application: application,
+            isCurrent: { attempt.isCurrent },
+            progress: progress,
+            handoffIsCurrent: { attempt.isCurrent })
+    }
+
+    @MainActor
+    static func signIn(
+        application: Application,
+        isCurrent: @escaping @Sendable () async -> Bool,
+        progress: GatewayBrowserSignInProgress? = nil,
+        handoffIsCurrent: (@Sendable () -> Bool)? = nil) async throws -> GatewayBrowserSession
+    {
+        guard await isCurrent() else { throw CancellationError() }
         let (executable, version) = try self.helper()
         let temporary = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-browser-login-\(UUID().uuidString)", isDirectory: true)
@@ -135,7 +150,7 @@ enum CloudflareAccessLogin {
         // Upstream writes both app and organization tokens. Keep its HOME private to this attempt
         // and delete it only after the bounded process owner has joined every child.
         defer {
-            progress.update(nil)
+            progress?.update(nil)
             try? FileManager.default.removeItem(at: temporary)
         }
         let result: BoundedProcessResult
@@ -162,24 +177,24 @@ enum CloudflareAccessLogin {
                     // The pinned helper writes this private companion before invoking macOS `open`.
                     // Offer its documented manual handoff without opening a second browser automatically.
                     var published = false
-                    while attempt.isCurrent, process.isRunning {
+                    while await isCurrent(), process.isRunning {
                         try Task.checkCancellation()
-                        if !published, let handle = try? FileHandle(forReadingFrom: file) {
+                        if !published, let handoffIsCurrent, let handle = try? FileHandle(forReadingFrom: file) {
                             let data = try? handle.read(upToCount: 16385)
                             try? handle.close()
                             if let data, let url = self.handoffURL(data: data, application: application) {
                                 let handoff = GatewayBrowserHandoff(url: url) {
-                                    attempt.isCurrent && process.isRunning
+                                    handoffIsCurrent() && process.isRunning
                                 }
                                 await MainActor.run {
-                                    if handoff.isAvailable { progress.update(handoff) }
+                                    if handoff.isAvailable { progress?.update(handoff) }
                                 }
                                 published = true
                             }
                         }
                         try await Task.sleep(for: .milliseconds(100))
                     }
-                    if !attempt.isCurrent { throw CancellationError() }
+                    if await !isCurrent() { throw CancellationError() }
                 },
                 timeout: 300)
         } catch is CancellationError {
@@ -202,6 +217,7 @@ enum CloudflareAccessLogin {
         guard let origin = components.url else { throw LoginError.invalidGateway }
         // login verifies metadata before opening the browser. Only its successful, audience-bound
         // result may be presented to the requested origin; redirects can never forward the credential.
+        guard await isCurrent() else { throw CancellationError() }
         var identityRequest = URLRequest(url: origin.appendingPathComponent("cdn-cgi/access/get-identity"))
         identityRequest.setValue("CF_Authorization=\(token)", forHTTPHeaderField: "Cookie")
         identityRequest.setValue("cloudflared/\(version)", forHTTPHeaderField: "User-Agent")
@@ -211,6 +227,7 @@ enum CloudflareAccessLogin {
               identity.userUUID == claims.sub
         else { throw LoginError.invalidSession }
         try Task.checkCancellation()
+        guard await isCurrent() else { throw CancellationError() }
         let session = try GatewayBrowserSession(
             origin: origin,
             issuer: application.issuer,
@@ -298,7 +315,7 @@ enum CloudflareAccessLogin {
         else { throw LoginError.invalidGateway }
     }
 
-    private static func decodeJWT<Claims: Decodable>(_ type: Claims.Type, token: String) throws -> Claims {
+    static func decodeJWT<Claims: Decodable>(_ type: Claims.Type, token: String) throws -> Claims {
         guard token.utf8.count <= 32768 else { throw LoginError.invalidSession }
         let parts = token.split(separator: ".", omittingEmptySubsequences: false)
         guard parts.count == 3,

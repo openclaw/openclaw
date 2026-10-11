@@ -20,58 +20,52 @@ export function renderChatSendStatus(
   const reconnecting = status.state === "waiting-reconnect";
   const retry = reconnecting ? undefined : (action?.onAction ?? actions.onRetryQueuedMessage);
   const discard =
-    (status.state === "unconfirmed" || reconnecting) && !action
+    (status.state === "failed" ||
+      status.state === "unconfirmed" ||
+      status.state === "held" ||
+      reconnecting) &&
+    !action
       ? actions.onDiscardQueuedMessage
       : undefined;
+  const renderAction = (kind: "retry" | "discard", callback: typeof retry) =>
+    callback
+      ? html`<span class="chat-send-status__part">
+          <span aria-hidden="true">·</span>
+          <button
+            class="chat-send-status__action chat-send-status__${kind}"
+            type="button"
+            aria-label=${kind === "retry" ? (action?.label ?? t("chat.queue.retryQueuedMessage")) : nothing}
+            title=${kind === "discard" ? t("chat.queue.discardPendingMessage") : nothing}
+            @click=${(event: MouseEvent) => {
+              // Chromium may retarget click 2 to the next row after removal.
+              if (kind === "retry" || event.detail <= 1) {
+                callback(status.id);
+              }
+            }}
+          >
+            ${kind === "retry" ? (action?.label ?? t("chat.queue.retry")) : t("chat.queue.discard")}
+          </button>
+        </span>`
+      : nothing;
   return html`<span
     class="chat-send-status"
     title=${status.error ?? nothing}
     data-send-state=${status.state}
   >
-    <span aria-hidden="true">·</span>
-    <span
-      >${t(
-        reconnecting
-          ? "chat.queue.states.waitingForReconnect"
-          : status.state === "unconfirmed"
-            ? "chat.queue.deliveryUnconfirmed"
-            : "chat.queue.notSent",
-      )}</span
-    >
-    ${
-      retry
-        ? html`
-            <span aria-hidden="true">·</span>
-            <button
-              class="chat-send-status__action chat-send-status__retry"
-              type="button"
-              aria-label=${action?.label ?? t("chat.queue.retryQueuedMessage")}
-              @click=${() => retry(status.id)}
-            >
-              ${action?.label ?? t("chat.queue.retry")}
-            </button>
-          `
-        : nothing
-    }
-    ${
-      discard
-        ? html`
-            <span aria-hidden="true">·</span>
-            <button
-              class="chat-send-status__action chat-send-status__discard"
-              type="button"
-              title=${t("chat.queue.discardPendingMessage")}
-              @click=${(event: MouseEvent) => {
-                // Chromium may retarget click 2 to the next row after removal.
-                if (event.detail <= 1) {
-                  discard(status.id);
-                }
-              }}
-            >
-              ${t("chat.queue.discard")}
-            </button>
-          `
-        : nothing
-    }
+    <span class="chat-send-status__part">
+      <span aria-hidden="true">·</span>
+      <span
+        >${t(
+          reconnecting
+            ? "chat.queue.states.waitingForReconnect"
+            : status.state === "held"
+              ? "chat.queue.states.needsReview"
+              : status.state === "unconfirmed"
+                ? "chat.queue.deliveryUnconfirmed"
+                : "chat.queue.notSent",
+        )}</span
+      >
+    </span>
+    ${renderAction("retry", retry)} ${renderAction("discard", discard)}
   </span>`;
 }

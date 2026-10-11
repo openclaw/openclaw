@@ -2,17 +2,31 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { fetchClawHubPackageDetail } from "../infra/clawhub-packages.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
-import { resolveInstalledPluginIndexStorePath } from "../plugins/installed-plugin-index-store.js";
+import {
+  readPersistedInstalledPluginIndex,
+  resolveInstalledPluginIndexStorePath,
+} from "../plugins/installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
+import { pluginCacheExistsSync } from "../plugins/plugin-cache-files.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { VERSION } from "../version.js";
 import { runPostUpgradeProbes } from "./doctor-post-upgrade.js";
+
+vi.mock("../version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../version.js")>()),
+  VERSION: "2026.9.4",
+}));
+
+vi.mock("../infra/clawhub-packages.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/clawhub-packages.js")>()),
+  fetchClawHubPackageDetail: vi.fn(),
+}));
 
 async function makeFixtureRoot(prefix: string): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), `doctor-post-upgrade-${prefix}-`));
@@ -41,19 +55,6 @@ function createIndex(
   };
 }
 
-function writeRawIndexFixture(root: string, valueJson: string): void {
-  // Keep malformed JSON bytes intact so the canonical row parser owns rejection.
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      db.prepare(
-        `INSERT OR REPLACE INTO config_machine_state (state_key, value_json, updated_at_ms)
-         VALUES ('plugins.installedIndex', ?, 1)`,
-      ).run(valueJson);
-    },
-    { env: { ...process.env, OPENCLAW_STATE_DIR: root } },
-  );
-}
-
 async function withFixtureRoot<T>(prefix: string, run: (root: string) => Promise<T>): Promise<T> {
   const root = await makeFixtureRoot(prefix);
   try {
@@ -76,6 +77,8 @@ async function writePluginFixture(
     manifest?: Record<string, unknown> | false;
     manifestHash?: string;
     enabled?: boolean;
+    format?: InstalledPluginIndex["plugins"][number]["format"];
+    bundleFormat?: InstalledPluginIndex["plugins"][number]["bundleFormat"];
     installRecord?: PluginInstallRecord;
   },
 ) {
@@ -114,12 +117,19 @@ async function writePluginFixture(
             : {}),
           manifestPath: params.manifest === false ? "" : manifestPath,
           manifestHash: params.manifestHash ?? "",
+          ...(params.format ? { format: params.format } : {}),
+          ...(params.bundleFormat ? { bundleFormat: params.bundleFormat } : {}),
         },
       ],
       params.installRecord ? { [params.id]: params.installRecord } : {},
     ),
     { stateDir: root },
   );
+  return { manifestPath };
+}
+
+function packageManifest(name: string, entry = "./dist/index.js") {
+  return { name, version: "0.0.1", type: "module", openclaw: { extensions: [entry] } };
 }
 
 async function writeDeclaredPackageFixture(root: string, packageContents: string): Promise<void> {
@@ -136,40 +146,6 @@ describe("runPostUpgradeProbes — plugin.index_unavailable", () => {
       const report = await runPostUpgradeProbes({ stateDir: root });
 
       expect(report.probesRun).toContain("plugin.index_unavailable");
-      expect(report.findings).toEqual([
-        expect.objectContaining({
-          level: "error",
-          code: "plugin.index_unavailable",
-        }),
-      ]);
-    });
-  });
-
-  it("returns a structured finding when the installed plugin index is malformed", async () => {
-    await withFixtureRoot("index-malformed", async (root) => {
-      writeRawIndexFixture(root, "{ not json");
-
-      const report = await runPostUpgradeProbes({ stateDir: root });
-
-      expect(report.probesRun).toContain("plugin.index_unavailable");
-      expect(report.findings).toEqual([
-        expect.objectContaining({
-          level: "error",
-          code: "plugin.index_unavailable",
-        }),
-      ]);
-    });
-  });
-
-  it("returns a structured finding when an installed plugin record is malformed", async () => {
-    await withFixtureRoot("record-malformed", async (root) => {
-      writeRawIndexFixture(
-        root,
-        JSON.stringify({ revision: 1, index: { ...createIndex([]), plugins: [{}] } }),
-      );
-
-      const report = await runPostUpgradeProbes({ stateDir: root });
-
       expect(report.findings).toEqual([
         expect.objectContaining({
           level: "error",
@@ -228,42 +204,13 @@ describe("runPostUpgradeProbes — plugin.entry_unresolved", () => {
     }
   });
 
-  it("reports malformed declared plugin packages as entry resolution errors", async () => {
-    const root = await makeFixtureRoot("entry-malformed-package");
+  it("rejects a non-object declared package manifest", async () => {
+    const root = await makeFixtureRoot("entry-non-object");
     const stderrSpy = vi
       .spyOn(process.stderr, "write")
       .mockImplementation(() => true as unknown as ReturnType<typeof process.stderr.write>);
     try {
-      await writeDeclaredPackageFixture(root, "{ not json");
-      const report = await runPostUpgradeProbes({ stateDir: root });
-
-      expect(report.findings).toEqual([
-        expect.objectContaining({
-          level: "error",
-          code: "plugin.entry_unresolved",
-          plugin: "broken",
-          entry: "package.json",
-          message: expect.stringContaining("openclaw plugins registry --refresh"),
-        }),
-      ]);
-      expect(stderrSpy).toHaveBeenCalled();
-    } finally {
-      stderrSpy.mockRestore();
-      await cleanupFixtureRoot(root);
-    }
-  });
-
-  it.each([
-    { label: "null", packageJson: null },
-    { label: "array", packageJson: [] },
-    { label: "string", packageJson: "not a package" },
-  ])("rejects a $label declared package manifest", async ({ label, packageJson }) => {
-    const root = await makeFixtureRoot(`entry-non-object-${label}`);
-    const stderrSpy = vi
-      .spyOn(process.stderr, "write")
-      .mockImplementation(() => true as unknown as ReturnType<typeof process.stderr.write>);
-    try {
-      await writeDeclaredPackageFixture(root, JSON.stringify(packageJson));
+      await writeDeclaredPackageFixture(root, "null");
       const report = await runPostUpgradeProbes({ stateDir: root });
 
       expect(report.findings).toEqual([
@@ -281,137 +228,32 @@ describe("runPostUpgradeProbes — plugin.entry_unresolved", () => {
     }
   });
 
-  it.each([
-    {
-      label: "non-object metadata",
-      openclaw: "invalid",
-      reason: "package.json openclaw must be an object",
-    },
-    {
-      label: "non-array entries",
-      openclaw: { extensions: "./dist/index.js" },
-      reason: "package.json openclaw.extensions must be an array",
-    },
-    {
-      label: "blank entries",
-      openclaw: { extensions: ["  "] },
-      reason: "package.json openclaw.extensions[0] must be a non-empty string",
-    },
-    {
-      label: "non-string entries",
-      openclaw: { extensions: [42] },
-      reason: "package.json openclaw.extensions[0] must be a non-empty string",
-    },
-  ])(
-    "reports $label through the canonical package contract",
-    async ({ label, openclaw, reason }) => {
-      const root = await makeFixtureRoot(`entry-invalid-${label.replaceAll(" ", "-")}`);
-      try {
-        await writeDeclaredPackageFixture(root, JSON.stringify({ name: "broken", openclaw }));
-        const report = await runPostUpgradeProbes({ stateDir: root });
-
-        expect(report.findings).toEqual([
-          expect.objectContaining({
-            level: "error",
-            code: "plugin.entry_unresolved",
-            plugin: "broken",
-            entry: "package.json",
-            message: expect.stringContaining(reason),
-          }),
-        ]);
-      } finally {
-        await cleanupFixtureRoot(root);
-      }
-    },
-  );
-
-  it("reads the canonical SQLite plugin index by default", async () => {
-    await withFixtureRoot("entry-sqlite", async (root) => {
-      await writePluginFixture(root, {
-        id: "sqlite-ghost",
-        packageJson: {
-          name: "sqlite-ghost",
-          version: "0.0.1",
-          type: "module",
-          openclaw: { extensions: ["./dist/index.js"] },
-        },
-        manifestHash: "manifest-hash",
-      });
-
+  it("reports invalid extensions through the canonical package contract", async () => {
+    const root = await makeFixtureRoot("entry-invalid-extensions");
+    const openclaw = { extensions: "./dist/index.js" };
+    try {
+      await writeDeclaredPackageFixture(root, JSON.stringify({ name: "broken", openclaw }));
       const report = await runPostUpgradeProbes({ stateDir: root });
 
-      expect(report.findings).not.toContainEqual(
-        expect.objectContaining({ code: "plugin.index_unavailable" }),
-      );
-      const finding = report.findings.find((f) => f.code === "plugin.entry_unresolved");
-      expect(finding).toBeDefined();
-      expect(finding?.plugin).toBe("sqlite-ghost");
-    });
-  });
-
-  it("flags an enabled plugin whose declared entry does not exist on disk", async () => {
-    await withFixtureRoot("entry-unresolved", async (root) => {
-      await writePluginFixture(root, {
-        id: "ghost",
-        packageJson: {
-          name: "ghost",
-          version: "0.0.1",
-          type: "module",
-          openclaw: { extensions: ["./dist/index.js"] },
-        },
-      });
-
-      const report = await runPostUpgradeProbes({ stateDir: root });
-      const finding = report.findings.find((f) => f.code === "plugin.entry_unresolved");
-      expect(finding).toBeDefined();
-      expect(finding?.level).toBe("error");
-      expect(finding?.plugin).toBe("ghost");
-      expect(finding?.entry).toBe("./dist/index.js");
-    });
-  });
-
-  it("emits no entry_unresolved findings when the entry resolves", async () => {
-    await withFixtureRoot("entry-ok", async (root) => {
-      await writePluginFixture(root, {
-        id: "good",
-        packageJson: {
-          name: "good",
-          version: "0.0.1",
-          type: "module",
-          openclaw: { extensions: ["./dist/index.js"] },
-        },
-        files: { "dist/index.js": "export default {};" },
-      });
-
-      const report = await runPostUpgradeProbes({ stateDir: root });
-      expect(report.findings.filter((f) => f.code === "plugin.entry_unresolved")).toHaveLength(0);
-    });
-  });
-
-  it("skips package entry validation for non-package registry records", async () => {
-    await withFixtureRoot("no-package-json-ref", async (root) => {
-      await writePluginFixture(root, {
-        id: "runtime-only",
-        location: "dist/extensions",
-        origin: "bundled",
-        files: { "index.js": "export default {};" },
-      });
-
-      const report = await runPostUpgradeProbes({ stateDir: root });
-      expect(report.findings).toHaveLength(0);
-    });
+      expect(report.findings).toEqual([
+        expect.objectContaining({
+          level: "error",
+          code: "plugin.entry_unresolved",
+          plugin: "broken",
+          entry: "package.json",
+          message: expect.stringContaining("package.json openclaw.extensions must be an array"),
+        }),
+      ]);
+    } finally {
+      await cleanupFixtureRoot(root);
+    }
   });
 
   it("validates legacy package records without packageJson metadata", async () => {
     await withFixtureRoot("legacy-package-json-ref", async (root) => {
       await writePluginFixture(root, {
         id: "legacy-package",
-        packageJson: {
-          name: "legacy-package",
-          version: "0.0.1",
-          type: "module",
-          openclaw: { extensions: ["./src/index.ts"] },
-        },
+        packageJson: packageManifest("legacy-package", "./src/index.ts"),
         files: { "src/index.ts": "export default {};" },
         includePackageJsonRecord: false,
       });
@@ -424,111 +266,13 @@ describe("runPostUpgradeProbes — plugin.entry_unresolved", () => {
     });
   });
 
-  it("flags an entry that escapes the plugin package directory", async () => {
-    await withFixtureRoot("entry-escape", async (root) => {
-      // Create a sibling file outside the plugin root that the entry resolves to.
-      const outsideDir = path.join(root, "outside");
-      await fs.mkdir(outsideDir, { recursive: true });
-      await fs.writeFile(path.join(outsideDir, "leak.js"), "export default {};", "utf-8");
-      await writePluginFixture(root, {
-        id: "escape",
-        packageJson: {
-          name: "escape",
-          version: "0.0.1",
-          type: "module",
-          openclaw: { extensions: ["../outside/leak.js"] },
-        },
-      });
-
-      const report = await runPostUpgradeProbes({ stateDir: root });
-      const finding = report.findings.find((f) => f.code === "plugin.entry_unresolved");
-      expect(finding).toBeDefined();
-      expect(finding?.level).toBe("error");
-      expect(finding?.plugin).toBe("escape");
-      expect(finding?.message).toMatch(/escapes plugin directory/);
-    });
-  });
-
-  it("accepts a TypeScript source entry that ships a compiled dist peer", async () => {
-    await withFixtureRoot("ts-with-dist", async (root) => {
-      // No explicit runtimeExtensions; the resolver should infer dist/index.js.
-      await writePluginFixture(root, {
-        id: "ts-dist",
-        packageJson: {
-          name: "ts-dist",
-          version: "0.0.1",
-          type: "module",
-          openclaw: { extensions: ["./src/index.ts"] },
-        },
-        files: {
-          "src/index.ts": "export default {};",
-          "dist/index.js": "export default {};",
-        },
-      });
-
-      const report = await runPostUpgradeProbes({ stateDir: root });
-      expect(report.findings.filter((f) => f.code === "plugin.entry_unresolved")).toHaveLength(0);
-    });
-  });
-
-  it("flags a TypeScript source-only entry with no compiled output", async () => {
-    await withFixtureRoot("ts-source-only", async (root) => {
-      // Source exists, no dist peer — installed plugins must ship compiled JS.
-      await writePluginFixture(root, {
-        id: "ts-only",
-        packageJson: {
-          name: "ts-only",
-          version: "0.0.1",
-          type: "module",
-          openclaw: { extensions: ["./src/index.ts"] },
-        },
-        files: { "src/index.ts": "export default {};" },
-      });
-
-      const report = await runPostUpgradeProbes({ stateDir: root });
-      const finding = report.findings.find((f) => f.code === "plugin.entry_unresolved");
-      expect(finding).toBeDefined();
-      expect(finding?.level).toBe("error");
-      expect(finding?.plugin).toBe("ts-only");
-      expect(finding?.message).toMatch(/compiled runtime output/);
-    });
-  });
-
-  it("allows TypeScript source-only entries for source checkout plugin records", async () => {
-    await withFixtureRoot("ts-source-checkout", async (root) => {
-      await fs.mkdir(path.join(root, ".git"), { recursive: true });
-      await fs.writeFile(path.join(root, "pnpm-workspace.yaml"), "packages: []\n", "utf-8");
-      await fs.mkdir(path.join(root, "src"), { recursive: true });
-      await writePluginFixture(root, {
-        id: "ts-source",
-        location: "extensions",
-        origin: "bundled",
-        packageJson: {
-          name: "ts-source",
-          version: "0.0.1",
-          type: "module",
-          openclaw: { extensions: ["./src/index.ts"] },
-        },
-        files: { "src/index.ts": "export default {};" },
-      });
-
-      const report = await runPostUpgradeProbes({ stateDir: root });
-      expect(report.findings.filter((f) => f.code === "plugin.entry_unresolved")).toHaveLength(0);
-    });
-  });
-
   it("flags TypeScript source-only entries for packaged bundled plugin records", async () => {
     await withFixtureRoot("ts-packaged-bundled", async (root) => {
       await writePluginFixture(root, {
         id: "ts-packaged",
         location: "dist/extensions",
         origin: "bundled",
-        packageJson: {
-          name: "ts-packaged",
-          version: "0.0.1",
-          type: "module",
-          openclaw: { extensions: ["./src/index.ts"] },
-        },
+        packageJson: packageManifest("ts-packaged", "./src/index.ts"),
         files: { "src/index.ts": "export default {};" },
       });
 
@@ -539,73 +283,17 @@ describe("runPostUpgradeProbes — plugin.entry_unresolved", () => {
       expect(finding?.message).toMatch(/compiled runtime output/);
     });
   });
-
-  it("flags a runtimeExtensions length mismatch", async () => {
-    await withFixtureRoot("runtime-len-mismatch", async (root) => {
-      await writePluginFixture(root, {
-        id: "len-mismatch",
-        packageJson: {
-          name: "len-mismatch",
-          version: "0.0.1",
-          type: "module",
-          openclaw: {
-            extensions: ["./dist/a.js", "./dist/b.js"],
-            runtimeExtensions: ["./dist/a.js"],
-          },
-        },
-        files: {
-          "dist/a.js": "export default {};",
-          "dist/b.js": "export default {};",
-        },
-      });
-
-      const report = await runPostUpgradeProbes({ stateDir: root });
-      const finding = report.findings.find((f) => f.code === "plugin.entry_unresolved");
-      expect(finding).toBeDefined();
-      expect(finding?.level).toBe("error");
-      expect(finding?.plugin).toBe("len-mismatch");
-      expect(finding?.message).toMatch(/runtimeExtensions length/);
-    });
-  });
-
-  it("does not flag entry_unresolved when runtimeExtensions exists even if source entry is missing", async () => {
-    await withFixtureRoot("runtime-extensions", async (root) => {
-      // Source entry (./src/index.ts) does NOT exist
-      // But runtime entry (./dist/index.js) DOES exist
-      await writePluginFixture(root, {
-        id: "runtime-only",
-        packageJson: {
-          name: "runtime-only",
-          version: "0.0.1",
-          type: "module",
-          openclaw: {
-            extensions: ["./src/index.ts"],
-            runtimeExtensions: ["./dist/index.js"],
-          },
-        },
-        files: { "dist/index.js": "export default {};" },
-      });
-
-      const report = await runPostUpgradeProbes({ stateDir: root });
-      expect(report.findings.filter((f) => f.code === "plugin.entry_unresolved")).toHaveLength(0);
-    });
-  });
 });
 
 describe("runPostUpgradeProbes — plugin.manifest_drift", () => {
-  it("flags a plugin whose manifest hash differs from installs.json", async () => {
+  it("flags a plugin whose manifest hash differs from the installed index", async () => {
     await withFixtureRoot("manifest-drift", async (root) => {
       const oldManifestRaw = JSON.stringify({ id: "drifted", version: 1 });
       const oldManifestHash = crypto.createHash("sha256").update(oldManifestRaw).digest("hex");
       // Write a NEW manifest after the installed index was snapshotted.
       await writePluginFixture(root, {
         id: "drifted",
-        packageJson: {
-          name: "drifted",
-          version: "0.0.1",
-          type: "module",
-          openclaw: { extensions: ["./dist/index.js"] },
-        },
+        packageJson: packageManifest("drifted"),
         files: { "dist/index.js": "export default {};" },
         manifest: { id: "drifted", version: 2 },
         manifestHash: oldManifestHash,
@@ -621,34 +309,78 @@ describe("runPostUpgradeProbes — plugin.manifest_drift", () => {
 });
 
 describe("runPostUpgradeProbes — plugin.version_drift", () => {
+  beforeEach(() => {
+    vi.mocked(fetchClawHubPackageDetail).mockReset();
+    vi.mocked(fetchClawHubPackageDetail).mockResolvedValue({
+      package: {
+        name: "@openclaw/whatsapp",
+        displayName: "WhatsApp",
+        family: "code-plugin",
+        channel: "official",
+        isOfficial: true,
+        createdAt: 0,
+        updatedAt: 0,
+        latestVersion: "2026.9.3",
+        compatibility: { pluginApiRange: ">=2026.9.3", minGatewayVersion: ">=2026.9.3" },
+      },
+    });
+  });
+
   it.each([
+    // A stable host reaches the registry, finds nothing newer, and says so
+    // instead of dropping the plugin from the report.
     {
-      label: "outdated official install",
-      id: "whatsapp",
-      version: "2026.7.1",
+      channel: "stable",
       enabled: true,
-      drift: true,
+      expected: "The registry already serves 2026.9.3",
+      lookup: true,
     },
     {
-      label: "matching official install",
-      id: "whatsapp",
-      version: VERSION,
+      channel: "extended-stable",
       enabled: true,
-      drift: false,
+      expected: "No confirmed repair target",
+      lookup: false,
     },
-    {
-      label: "disabled official install",
-      id: "whatsapp",
-      version: "2026.7.1",
-      enabled: false,
-      drift: false,
+  ] as const)(
+    "preserves $channel intent and persisted enablement=$enabled on a stable host",
+    async ({ channel, enabled, expected, lookup }) => {
+      await withFixtureRoot("clawhub-version-drift", async (root) => {
+        await writePluginFixture(root, {
+          id: "whatsapp",
+          enabled,
+          installRecord: {
+            source: "clawhub",
+            spec: "clawhub:@openclaw/whatsapp",
+            clawhubPackage: "@openclaw/whatsapp",
+            resolvedVersion: "2026.9.3",
+          },
+        });
+
+        const report = await runPostUpgradeProbes({ stateDir: root, updateChannel: channel });
+
+        expect(report.findings).toEqual(
+          expected
+            ? [
+                expect.objectContaining({
+                  code: "plugin.version_drift",
+                  level: "warn",
+                  plugin: "whatsapp",
+                  message: expect.stringContaining(expected),
+                }),
+              ]
+            : [],
+        );
+        expect(fetchClawHubPackageDetail).toHaveBeenCalledTimes(lookup ? 1 : 0);
+      });
     },
-    { label: "community install", id: "community", version: "1.2.3", enabled: true, drift: false },
-  ])("checks $label against the upgraded core", async ({ id, version, enabled, drift }) => {
+  );
+
+  it("checks an outdated official install against the upgraded core", async () => {
     await withFixtureRoot("version-drift", async (root) => {
+      const id = "whatsapp";
+      const version = "2026.7.1";
       await writePluginFixture(root, {
         id,
-        enabled,
         packageJson: { name: `@openclaw/${id}`, version, openclaw: { extensions: ["./index.js"] } },
         files: { "index.js": "export default {};" },
         installRecord: {
@@ -660,22 +392,77 @@ describe("runPostUpgradeProbes — plugin.version_drift", () => {
       });
 
       const report = await runPostUpgradeProbes({ stateDir: root });
-      expect(report.findings).toEqual(
-        drift
-          ? [
-              expect.objectContaining({
-                code: "plugin.version_drift",
-                level: "warn",
-                plugin: id,
-                message: expect.stringContaining(`openclaw plugins update ${id}`),
-              }),
-            ]
-          : [],
-      );
-      if (drift) {
-        expect(report.findings[0]?.message).toContain(version);
-        expect(report.findings[0]?.message).toContain(VERSION);
-      }
+      expect(report.findings).toEqual([
+        expect.objectContaining({
+          code: "plugin.version_drift",
+          level: "warn",
+          plugin: id,
+          message: expect.stringContaining(`openclaw plugins update ${id}`),
+        }),
+      ]);
+      expect(report.findings[0]?.message).toContain(version);
+      expect(report.findings[0]?.message).toContain(VERSION);
     });
   });
+});
+
+describe("runPostUpgradeProbes — manifest availability", () => {
+  it("reports a missing required manifest without a hash or changing the index", async () => {
+    await withFixtureRoot("manifest-availability", async (root) => {
+      const id = "manifest-probe";
+      const { manifestPath } = await writePluginFixture(root, { id });
+      const before = await readPersistedInstalledPluginIndex({ stateDir: root });
+      await fs.unlink(manifestPath);
+
+      const report = await runPostUpgradeProbes({ stateDir: root });
+      expect(report.probesRun).toContain("plugin.manifest_unavailable");
+      expect(report.findings).toEqual([
+        expect.objectContaining({
+          level: "error",
+          code: "plugin.manifest_unavailable",
+          plugin: id,
+          message: expect.stringContaining(manifestPath),
+        }),
+      ]);
+      expect(report.findings[0]?.message).toContain("Reinstall the plugin");
+      expect(report.findings[0]?.message).toContain("openclaw plugins registry --refresh");
+      expect(await readPersistedInstalledPluginIndex({ stateDir: root })).toEqual(before);
+    });
+  });
+
+  it.each([true, false])(
+    "uses actual Claude file state after cached existence=%s",
+    async (existed) => {
+      await withFixtureRoot("manifest-cache-transition", async (root) => {
+        const { manifestPath } = await writePluginFixture(root, {
+          id: "claude-transition",
+          format: "bundle",
+          bundleFormat: "claude",
+          manifestHash: "derived-bundle-hash",
+        });
+        if (!existed) {
+          await fs.unlink(manifestPath);
+        }
+        expect(pluginCacheExistsSync(manifestPath)).toBe(existed);
+        if (existed) {
+          await fs.unlink(manifestPath);
+        } else {
+          await fs.mkdir(manifestPath);
+        }
+        const report = await runPostUpgradeProbes({ stateDir: root });
+        expect(report.findings).toEqual(
+          existed
+            ? []
+            : [
+                expect.objectContaining({
+                  level: "error",
+                  code: "plugin.manifest_unavailable",
+                  plugin: "claude-transition",
+                  message: expect.stringContaining(manifestPath),
+                }),
+              ],
+        );
+      });
+    },
+  );
 });

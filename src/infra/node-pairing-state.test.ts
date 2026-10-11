@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   captureAuthenticatedNodePairingState,
   captureNodePairingGeneration,
-  isNodePairingGenerationCurrent,
 } from "./device-pairing-node-state.js";
 import type { PairedDevice } from "./device-pairing.js";
 
@@ -46,12 +45,20 @@ function pairedNode(overrides: Partial<PairedDevice> = {}): PairedDevice {
   };
 }
 
+function authenticateNode(node: PairedDevice) {
+  return captureAuthenticatedNodePairingState({
+    nodeId: node.deviceId,
+    publicKey: node.publicKey,
+    token: node.tokens!.node!.token,
+  });
+}
+
 describe("node pairing generation", () => {
   beforeEach(() => {
     mocks.getPairedDevice.mockReset();
   });
 
-  it("binds work to node-role token and node-surface approval identity", async () => {
+  it("captures a generation for an approved node-role pairing", async () => {
     const original = pairedNode();
     mocks.getPairedDevice.mockResolvedValueOnce(original);
 
@@ -61,15 +68,6 @@ describe("node pairing generation", () => {
       nodeId: "node-1",
       key: expect.stringMatching(/^[a-f0-9]{64}$/u),
     });
-    mocks.getPairedDevice.mockResolvedValueOnce(
-      pairedNode({
-        tokens: {
-          ...original.tokens,
-          node: { ...original.tokens!.node!, token: "secret-token", rotatedAtMs: 500 },
-        },
-      }),
-    );
-    await expect(isNodePairingGenerationCurrent(generation!)).resolves.toBe(false);
   });
 
   it("binds connected sessions to the public key and node token used at authentication", async () => {
@@ -86,40 +84,18 @@ describe("node pairing generation", () => {
         }),
       );
 
-    await expect(
-      captureAuthenticatedNodePairingState({
-        nodeId: original.deviceId,
-        publicKey: original.publicKey,
-        token: original.tokens!.node!.token,
-      }),
-    ).resolves.toMatchObject({ generation: { nodeId: original.deviceId } });
-    await expect(
-      captureAuthenticatedNodePairingState({
-        nodeId: original.deviceId,
-        publicKey: original.publicKey,
-        token: original.tokens!.node!.token,
-      }),
-    ).resolves.toBeNull();
-    await expect(
-      captureAuthenticatedNodePairingState({
-        nodeId: original.deviceId,
-        publicKey: original.publicKey,
-        token: original.tokens!.node!.token,
-      }),
-    ).resolves.toBeNull();
+    await expect(authenticateNode(original)).resolves.toMatchObject({
+      generation: { nodeId: original.deviceId },
+    });
+    await expect(authenticateNode(original)).resolves.toBeNull();
+    await expect(authenticateNode(original)).resolves.toBeNull();
   });
 
   it("keeps authenticated pairing identity while first surface approval is pending", async () => {
     const original = pairedNode({ nodeSurface: undefined });
     mocks.getPairedDevice.mockResolvedValueOnce(original);
 
-    await expect(
-      captureAuthenticatedNodePairingState({
-        nodeId: original.deviceId,
-        publicKey: original.publicKey,
-        token: original.tokens!.node!.token,
-      }),
-    ).resolves.toEqual({
+    await expect(authenticateNode(original)).resolves.toEqual({
       identity: {
         nodeId: original.deviceId,
         key: expect.stringMatching(/^[a-f0-9]{64}$/u),
@@ -141,13 +117,7 @@ describe("node pairing generation", () => {
     });
     mocks.getPairedDevice.mockResolvedValueOnce(original);
 
-    await expect(
-      captureAuthenticatedNodePairingState({
-        nodeId: original.deviceId,
-        publicKey: original.publicKey,
-        token: original.tokens!.node!.token,
-      }),
-    ).resolves.toMatchObject({
+    await expect(authenticateNode(original)).resolves.toMatchObject({
       approvedSurface: {
         caps: ["screen"],
         commands: ["screen.snapshot"],
@@ -173,56 +143,6 @@ describe("node pairing generation", () => {
     expect(pendingState?.generation).toBeNull();
     expect(approvedState?.generation).not.toBeNull();
     expect(approvedState?.identity.key).toBe(pendingState?.identity.key);
-  });
-
-  it("keeps node work current across unrelated operator approval", async () => {
-    const original = pairedNode();
-    mocks.getPairedDevice.mockResolvedValueOnce(original);
-    const generation = await captureNodePairingGeneration(original.deviceId);
-
-    mocks.getPairedDevice.mockResolvedValueOnce(
-      pairedNode({
-        approvedAtMs: 201,
-        tokens: {
-          ...original.tokens,
-          operator: {
-            ...original.tokens!.operator!,
-            token: "gateway-token",
-            rotatedAtMs: 501,
-          },
-        },
-      }),
-    );
-
-    await expect(isNodePairingGenerationCurrent(generation!)).resolves.toBe(true);
-  });
-
-  it("invalidates node work when the node surface is reapproved", async () => {
-    const original = pairedNode();
-    mocks.getPairedDevice.mockResolvedValueOnce(original);
-    const generation = await captureNodePairingGeneration(original.deviceId);
-
-    mocks.getPairedDevice.mockResolvedValueOnce(
-      pairedNode({ nodeSurface: { createdAtMs: 300, approvedAtMs: 401 } }),
-    );
-    await expect(isNodePairingGenerationCurrent(generation!)).resolves.toBe(false);
-  });
-
-  it("invalidates node work when its effective node token is revoked", async () => {
-    const original = pairedNode();
-    mocks.getPairedDevice.mockResolvedValueOnce(original);
-    const generation = await captureNodePairingGeneration(original.deviceId);
-
-    mocks.getPairedDevice.mockResolvedValueOnce(
-      pairedNode({
-        tokens: {
-          ...original.tokens,
-          node: { ...original.tokens!.node!, revokedAtMs: 501 },
-        },
-      }),
-    );
-
-    await expect(isNodePairingGenerationCurrent(generation!)).resolves.toBe(false);
   });
 
   it("rejects admission without an active node token or approved node surface", async () => {

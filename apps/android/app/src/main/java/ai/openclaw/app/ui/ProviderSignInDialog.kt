@@ -14,7 +14,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.OutlinedTextField
@@ -71,16 +70,11 @@ internal fun ProviderSignInDialog(
   DisposableEffect(controller) { onDispose { controller.close() } }
   val step = state.wizard?.get("step")?.jsonObject
   val done =
-    state.wizard
-      ?.get("status")
-      ?.jsonPrimitive
-      ?.content == "done" &&
-      state.wizard
-        ?.get("done")
-        ?.jsonPrimitive
-        ?.booleanOrNull == true
+    state.wizard?.let { wizard ->
+      wizard["status"]?.jsonPrimitive?.content == "done" && wizard["done"]?.jsonPrimitive?.booleanOrNull == true
+    } == true
 
-  AlertDialog(
+  AppAlertDialog(
     onDismissRequest = onDismiss,
     title = { Text(nativeString("Sign in")) },
     text = {
@@ -152,7 +146,7 @@ internal fun ProviderSignInDialog(
           if (it["executor"]?.jsonPrimitive?.content == "gateway") {
             CircularProgressIndicator()
           } else {
-            ProviderSignInAnswer(it, enabled = controlsEnabled && !state.cancelling, onAnswer = controller::answer)
+            ProviderSignInAnswer(it, enabled = controlsEnabled, onAnswer = controller::answer)
           }
         }
       }
@@ -202,9 +196,7 @@ private fun ProviderSignInAnswer(
             Text(choice.getValue("label").jsonPrimitive.content)
           }
         } else {
-          TextButton(enabled = enabled, onClick = {
-            onAnswer(value)
-          }) {
+          TextButton(enabled = enabled, onClick = { onAnswer(value) }) {
             Column(Modifier.padding(vertical = 4.dp)) {
               Text(choice.getValue("label").jsonPrimitive.content)
               choice["hint"]?.jsonPrimitive?.content?.let { Text(it, style = ClawTheme.type.caption) }

@@ -15,6 +15,10 @@ import {
 } from "../agents/sessions/model-registry-runtime.js";
 import { openClawAgentCoreRuntime } from "../plugin-sdk/agent-core.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import {
+  PluginInstanceDrainTimeoutError,
+  PluginInstanceUnavailableError,
+} from "./plugin-instance-error.js";
 import { PluginInstance } from "./plugin-instance.js";
 
 const model: Model = {
@@ -50,6 +54,7 @@ const message: AssistantMessage = {
 const config = { model, convertToLlm: () => [user] };
 const noTools = async () => ({
   messages: [],
+  terminalToolCallIds: [],
   steeringMessages: [],
   terminate: false,
   terminateRun: false,
@@ -119,46 +124,136 @@ async function consume(kind: "agent" | "summary" | "branch" | "model-summary", s
 }
 
 describe("plugin stream consumer admission", () => {
-  it.each(["direct", "thinking"] as const)(
-    "admits an async stream factory through %s before retirement can finish its handoff",
-    async (wrapper) => {
-      const instance = new PluginInstance("async-consumer");
-      const factoryStarted = createDeferredCore();
-      const releaseFactory = createDeferredCore();
-      const source: AssistantMessageEventStreamLike = {
-        async *[Symbol.asyncIterator]() {
-          yield { type: "start", partial: message };
-        },
-        result: async () => message,
-      };
-      const factory = instance.wrap(async () => {
-        factoryStarted.resolve();
-        await releaseFactory.promise;
-        return source;
-      });
-      const stream =
-        wrapper === "thinking"
-          ? wrapAnthropicStreamWithRecovery(factory, { id: "async-factory-fixture" })
-          : factory;
-      const output = consume("summary", stream).then(
-        (value) => ({ status: "fulfilled", value }),
-        (error: unknown) => ({ status: "rejected", error }),
-      );
-      await factoryStarted.promise;
-      const closing = instance.dispose();
+  it.each([false, true])(
+    "rechecks retained authority for results after forced retirement (released: %s)",
+    async (released) => {
+      vi.useFakeTimers();
+      const instance = new PluginInstance("retained-result");
+      const consumer = instance.retainConsumer();
+      const finish = createDeferredCore<string>();
+      const operation = instance.wrap(() => finish.promise);
+      const pending = consumer.run(operation);
+      void pending.catch(() => {});
+      const retirement = instance.dispose();
+      let settlement: Promise<void> | undefined;
       try {
-        releaseFactory.resolve();
-        expect(await output).toEqual({ status: "fulfilled", value: "Synthetic summary" });
-        await closing;
+        await vi.advanceTimersByTimeAsync(5_000);
+        const timeout = (await retirement).errors[0];
+        expect(timeout).toBeInstanceOf(PluginInstanceDrainTimeoutError);
+        if (!(timeout instanceof PluginInstanceDrainTimeoutError)) {
+          throw new Error("Expected retained consumer retirement deadline");
+        }
+        settlement = timeout.settled;
+        expect(() => instance.run(() => "fresh")).toThrow("reloaded or disabled");
+        if (released) {
+          consumer.release();
+        }
+        finish.resolve("completed");
+        if (released) {
+          await expect(pending).rejects.toBeInstanceOf(PluginInstanceUnavailableError);
+        } else {
+          await expect(pending).resolves.toBe("completed");
+          consumer.release();
+        }
+        expect(() => consumer.run(operation)).toThrow("consumer is closed");
+        await settlement;
       } finally {
-        releaseFactory.resolve();
-        await output;
-        await closing;
+        finish.resolve("completed");
+        consumer.release();
+        await Promise.allSettled([pending, retirement, settlement]);
+        vi.useRealTimers();
       }
     },
   );
 
-  it.each(["agent", "summary", "branch", "model-summary"] as const)(
+  it("fences new retained admission while replacing an idle donor and releases only its own reservation", async () => {
+    const instance = new PluginInstance("idle-donor");
+    const custody = instance.retainConsumer(undefined, undefined, "custody");
+    const release = instance.reserveReplacement();
+    try {
+      expect(() => instance.retainConsumer()).toThrow("retiring");
+      expect(() => custody.run(() => instance.retainConsumer())).toThrow("retiring");
+      expect(() => instance.retainWork()).toThrow("replacement is in progress");
+      expect(() => instance.reserveReplacement()).toThrow("replacement is in progress");
+      release();
+      const releaseNext = instance.reserveReplacement();
+      release();
+      expect(() => instance.retainWork()).toThrow("replacement is in progress");
+      releaseNext();
+      const work = instance.retainConsumer();
+      expect(work.run(() => "still callable")).toBe("still callable");
+      work.release();
+    } finally {
+      release();
+      custody.release();
+      await instance.dispose();
+    }
+  });
+
+  it.each(["host", "descendant"])("joins retained %s work during replacement", async (kind) => {
+    const instance = new PluginInstance("retained-work");
+    const parent = kind === "descendant" ? instance.retainConsumer() : undefined;
+    const custody = parent ? instance.retainConsumer(undefined, undefined, "custody") : undefined;
+    const release = parent ? () => parent.release() : instance.retainWork();
+    const replacement = instance.reserveReplacement();
+    const child = parent?.run(() => instance.retainConsumer());
+    const settled = vi.fn();
+    const drained = instance.waitForRetainedWork(new AbortController().signal).then(settled);
+    if (child) {
+      expect(() => custody!.run(() => instance.retainConsumer())).toThrow("retiring");
+      release();
+      await Promise.resolve();
+      expect(settled).not.toHaveBeenCalled();
+      expect(child.run(() => "finished")).toBe("finished");
+      child.release();
+    } else {
+      await expect(instance.dispose()).resolves.toEqual({ errors: [] });
+      expect(settled).not.toHaveBeenCalled();
+      release();
+      release();
+    }
+    await drained;
+    expect(settled).toHaveBeenCalledOnce();
+    replacement();
+    custody?.release();
+    await instance.dispose();
+    expect(() => instance.run(() => "unavailable")).toThrow("reloaded or disabled");
+  });
+
+  it("admits an async stream factory through recovery before retirement can finish its handoff", async () => {
+    const instance = new PluginInstance("async-consumer");
+    const factoryStarted = createDeferredCore();
+    const releaseFactory = createDeferredCore();
+    const source: AssistantMessageEventStreamLike = {
+      async *[Symbol.asyncIterator]() {
+        yield { type: "start", partial: message };
+      },
+      result: async () => message,
+    };
+    const factory = instance.wrap(async () => {
+      factoryStarted.resolve();
+      await releaseFactory.promise;
+      return source;
+    });
+    const stream = wrapAnthropicStreamWithRecovery(factory, { id: "async-factory-fixture" });
+    const output = consume("summary", stream).then(
+      (value) => ({ status: "fulfilled", value }),
+      (error: unknown) => ({ status: "rejected", error }),
+    );
+    await factoryStarted.promise;
+    const closing = instance.dispose();
+    try {
+      releaseFactory.resolve();
+      expect(await output).toEqual({ status: "fulfilled", value: "Synthetic summary" });
+      await closing;
+    } finally {
+      releaseFactory.resolve();
+      await output;
+      await closing;
+    }
+  });
+
+  it.each(["agent", "branch", "model-summary"] as const)(
     "keeps %s iteration and decorated terminal work in one admission during disposal",
     async (kind) => {
       const instance = new PluginInstance("consumer-fixture");
@@ -256,59 +351,54 @@ describe("plugin stream consumer admission", () => {
     expect(result).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
-    "keeps retained consumers separate from ordinary drain (cleanup rejects: %s)",
-    async (rejectCleanup) => {
-      vi.useFakeTimers();
-      const instance = new PluginInstance("retained-consumer");
-      const failure = new Error("retained owner cleanup failed");
-      const cleanup = vi.fn(() => {
-        if (rejectCleanup) {
-          throw failure;
-        }
+  it("keeps retained consumers separate from ordinary drain when cleanup rejects", async () => {
+    vi.useFakeTimers();
+    const instance = new PluginInstance("retained-consumer");
+    const failure = new Error("retained owner cleanup failed");
+    const cleanup = vi.fn(() => {
+      throw failure;
+    });
+    instance.lifecycle.onDispose(cleanup);
+    const helper = instance.wrap(() => "original-owner");
+    const first = instance.retainConsumer();
+    const second = instance.retainConsumer();
+    const continueFirst = createDeferredCore();
+    let closing: ReturnType<PluginInstance["dispose"]> | undefined;
+    try {
+      await expect(instance.drain()).resolves.toEqual({ errors: [] });
+      expect(() => helper()).toThrow("reloaded or disabled");
+      let closed = false;
+      closing = instance.dispose();
+      void closing.then(() => {
+        closed = true;
       });
-      instance.lifecycle.onDispose(cleanup);
-      const helper = instance.wrap(() => "original-owner");
-      const first = instance.retainConsumer();
-      const second = instance.retainConsumer();
-      const continueFirst = createDeferredCore();
-      let closing: ReturnType<PluginInstance["dispose"]> | undefined;
-      try {
-        await expect(instance.drain()).resolves.toEqual({ errors: [] });
-        expect(() => helper()).toThrow("reloaded or disabled");
-        let closed = false;
-        closing = instance.dispose();
-        void closing.then(() => {
-          closed = true;
-        });
-        expect(instance.dispose()).toBe(closing);
-        await vi.advanceTimersByTimeAsync(10_001);
-        expect(closed).toBe(false);
-        expect(cleanup).not.toHaveBeenCalled();
-        const stale = first.run(async () => {
-          await continueFirst.promise;
-          return helper();
-        });
-        first.release();
-        continueFirst.resolve();
-        await expect(stale).rejects.toThrow("reloaded or disabled");
-        expect(() => first.run(helper)).toThrow("consumer is closed");
-        expect(second.run(helper)).toBe("original-owner");
-        second.release();
-        await expect(closing).resolves.toEqual({ errors: rejectCleanup ? [failure] : [] });
-        expect(cleanup).toHaveBeenCalledOnce();
-        expect(instance.lifecycle.signal.aborted).toBe(true);
-        expect(() => instance.retainConsumer()).toThrow("retiring");
-        expect(() => second.run(helper)).toThrow("consumer is closed");
-      } finally {
-        continueFirst.resolve();
-        first.release();
-        second.release();
-        await (closing ?? instance.dispose());
-        vi.useRealTimers();
-      }
-    },
-  );
+      expect(instance.dispose()).toBe(closing);
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(closed).toBe(false);
+      expect(cleanup).not.toHaveBeenCalled();
+      const stale = first.run(async () => {
+        await continueFirst.promise;
+        return helper();
+      });
+      first.release();
+      continueFirst.resolve();
+      await expect(stale).rejects.toThrow("reloaded or disabled");
+      expect(() => first.run(helper)).toThrow("consumer is closed");
+      expect(second.run(helper)).toBe("original-owner");
+      second.release();
+      await expect(closing).resolves.toEqual({ errors: [failure] });
+      expect(cleanup).toHaveBeenCalledOnce();
+      expect(instance.lifecycle.signal.aborted).toBe(true);
+      expect(() => instance.retainConsumer()).toThrow("retiring");
+      expect(() => second.run(helper)).toThrow("consumer is closed");
+    } finally {
+      continueFirst.resolve();
+      first.release();
+      second.release();
+      await (closing ?? instance.dispose());
+      vi.useRealTimers();
+    }
+  });
 
   it("keeps wrapped callback continuations in their retained consumer", async () => {
     vi.useFakeTimers();
@@ -339,7 +429,7 @@ describe("plugin stream consumer admission", () => {
     await entered.promise;
     const closing = instance.dispose();
     try {
-      await vi.advanceTimersByTimeAsync(5_001);
+      await vi.advanceTimersByTimeAsync(4_999);
       resume.resolve();
       await vi.advanceTimersByTimeAsync(0);
       expect(observed).toEqual(["original-owner"]);

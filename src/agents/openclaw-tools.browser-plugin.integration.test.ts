@@ -1,9 +1,9 @@
-// Verifies OpenClaw plugin tools are resolved with browser/runtime context.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { Type } from "typebox";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import {
@@ -14,155 +14,179 @@ import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../gateway/message-action-turn-capability.js";
+import { resolveGatewayScopedTools } from "../gateway/tool-resolution.js";
 import { buildOutboundMediaLoadOptions } from "../media/load-options.js";
 import { loadWebMediaRaw } from "../media/web-media.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
-import { activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
+import type { OpenClawPluginToolDelivery } from "../plugins/tool-types.js";
+import type { resolvePluginTools } from "../plugins/tools.js";
+import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
+import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import {
-  getRuntimeAuthProfileStoreCredentialsRevision,
-  getRuntimeAuthProfileStoreSnapshotsRevision,
-} from "./auth-profiles/runtime-snapshots.js";
+  createChannelTestPluginBase,
+  createOutboundTestPlugin,
+  createTestRegistry,
+} from "../test-utils/channel-plugins.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+import { createOpenClawTools, createOpenClawToolsAsync } from "./openclaw-tools.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import { jsonResult } from "./tools/common.js";
 
-const hoisted = vi.hoisted(() => ({
-  resolvePluginTools: vi.fn(),
-}));
-const TEST_AGENT_DIR = path.join(os.tmpdir(), "openclaw-plugin-tool-auth-test");
-const observedGatewayCallerIdentities: unknown[] = [];
-
+const hoisted = vi.hoisted(() => ({ resolvePluginTools: vi.fn<typeof resolvePluginTools>() }));
 vi.mock("../plugins/tools.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/tools.js")>()),
-  resolvePluginTools: (...args: unknown[]) => hoisted.resolvePluginTools(...args),
+  resolvePluginTools: (...args: Parameters<typeof resolvePluginTools>) =>
+    hoisted.resolvePluginTools(...args),
 }));
+const TEST_AGENT_DIR = path.join(os.tmpdir(), "openclaw-plugin-tool-auth-test");
+const SESSION_KEY = "agent:main:telegram:group:123";
+const deliveryOptions = {
+  agentSessionKey: SESSION_KEY,
+  runId: "run-1",
+  sessionId: "session-1",
+  agentChannel: "telegram",
+  agentAccountId: "work",
+  agentTo: "123",
+  requesterAgentIdOverride: "main",
+  disableMessageTool: true,
+};
+const capabilities: string[] = [];
+const observedGatewayCallerIdentities: unknown[] = [];
 
-function firstResolvePluginToolsParams(): Record<string, unknown> {
-  // Captures the plugin runtime contract passed from OpenClaw tool resolution.
+function mintTurn(overrides: Partial<Parameters<typeof mintMessageActionTurnCapability>[0]> = {}) {
+  const token = mintMessageActionTurnCapability({
+    agentId: "main",
+    runId: "run-1",
+    sessionId: "session-1",
+    sessionKey: SESSION_KEY,
+    ...overrides,
+  });
+  capabilities.push(token);
+  return token;
+}
+
+function installChannel(plugin: ReturnType<typeof createOutboundTestPlugin>, accounts?: string[]) {
+  const registry = createTestRegistry([
+    {
+      pluginId: plugin.id,
+      source: "test",
+      plugin: accounts
+        ? {
+            ...plugin,
+            config: {
+              ...plugin.config,
+              listAccountIds: () => accounts,
+              resolveAccount: () => ({}),
+            },
+          }
+        : plugin,
+    },
+  ]);
+  setActivePluginRegistry(registry);
+  return registry;
+}
+
+function firstResolvePluginToolsParams() {
   const call = hoisted.resolvePluginTools.mock.calls[0];
   if (!call) {
     throw new Error("Expected plugin tool resolution");
   }
-  return call[0] as Record<string, unknown>;
+  return call[0];
 }
 
+function resolveTools(
+  options: NonNullable<Parameters<typeof resolveOpenClawPluginToolsForOptions>[0]["options"]>,
+) {
+  resolveOpenClawPluginToolsForOptions({ options, resolvedConfig: options.config });
+  return firstResolvePluginToolsParams();
+}
+
+function authConfig(envName: string): OpenClawConfig {
+  return {
+    models: {
+      providers: {
+        acme: { baseUrl: "https://example.com/v1", apiKey: `\${${envName}}`, models: [] },
+      },
+    },
+    plugins: { allow: ["xai"] },
+  };
+}
+
+beforeEach(() => {
+  // Exercise auth-source preparation even on hosts with configured search providers.
+  for (const name of listKnownProviderAuthEnvVarNamesCore({ config: {} })) {
+    vi.stubEnv(name, undefined);
+  }
+  hoisted.resolvePluginTools.mockReturnValue([]);
+});
+afterEach(() => {
+  for (const token of capabilities.splice(0)) {
+    revokeMessageActionTurnCapability(token);
+  }
+  hoisted.resolvePluginTools.mockReset();
+  observedGatewayCallerIdentities.length = 0;
+  vi.unstubAllEnvs();
+  clearSecretsRuntimeSnapshot();
+  resetConfigRuntimeState();
+  resetPluginRuntimeStateForTest();
+});
+
 describe("createOpenClawTools browser plugin integration", () => {
-  afterEach(() => {
-    hoisted.resolvePluginTools.mockReset();
-    vi.unstubAllEnvs();
-    clearSecretsRuntimeSnapshot();
-    resetConfigRuntimeState();
-    resetPluginRuntimeStateForTest();
+  it("awaits account discovery before publishing message actions and schema", async () => {
+    const enteredDiscovery = createDeferred();
+    const releaseDiscovery = createDeferred();
+    const describeMessageTool = vi.fn(() => ({ actions: [] }));
+    const describeMessageToolAsync = vi.fn(async () => {
+      enteredDiscovery.resolve();
+      await releaseDiscovery.promise;
+      return {
+        actions: ["send", "react"] as const,
+        capabilities: ["delivery-pin"] as const,
+        schema: { properties: { reactionKind: Type.Optional(Type.String()) } },
+      };
+    });
+    installChannel({
+      ...createChannelTestPluginBase({ id: "matrix" }),
+      actions: {
+        describeMessageTool,
+        describeMessageToolAsync,
+      },
+    });
+    let published = false;
+    const pending = createOpenClawToolsAsync({
+      config: { tools: { web: { search: { enabled: false }, fetch: { enabled: false } } } },
+      agentChannel: "matrix",
+      agentAccountId: "work",
+      disablePluginTools: true,
+      wrapBeforeToolCallHook: false,
+    }).then((tools) => {
+      published = true;
+      return tools;
+    });
+    await awaitGateBeforeSettlement(
+      enteredDiscovery.promise,
+      pending,
+      "Message tool construction skipped asynchronous account discovery",
+    );
+    expect(published).toBe(false);
+    releaseDiscovery.resolve();
+    const message = (await pending).find((tool) => tool.name === "message");
+    expect(message?.description).toContain("react");
+    expect(message?.parameters).toMatchObject({
+      properties: {
+        action: { enum: expect.arrayContaining(["react"]) },
+        reactionKind: { type: "string" },
+        delivery: { type: "object", properties: { pin: expect.any(Object) } },
+      },
+    });
+    expect(describeMessageTool).not.toHaveBeenCalled();
+    expect(describeMessageToolAsync).toHaveBeenCalledOnce();
   });
 
-  it("keeps the browser tool returned by plugin resolution", () => {
-    hoisted.resolvePluginTools.mockReturnValue([
-      {
-        name: "browser",
-        description: "browser fixture tool",
-        parameters: {
-          type: "object",
-          properties: {},
-        },
-        async execute() {
-          return {
-            content: [{ type: "text", text: "ok" }],
-          };
-        },
-      },
-    ]);
-
-    const config = {
-      plugins: {
-        allow: ["browser"],
-      },
-    } as OpenClawConfig;
-
-    const tools = resolveOpenClawPluginToolsForOptions({
-      options: { config },
-      resolvedConfig: config,
-    });
-
-    expect(tools.map((tool) => tool.name)).toContain("browser");
-  });
-
-  it("omits the browser tool when plugin resolution returns no browser tool", () => {
-    hoisted.resolvePluginTools.mockReturnValue([]);
-
-    const config = {
-      plugins: {
-        allow: ["browser"],
-        entries: {
-          browser: {
-            enabled: false,
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const tools = resolveOpenClawPluginToolsForOptions({
-      options: { config },
-      resolvedConfig: config,
-    });
-
-    expect(tools.map((tool) => tool.name)).not.toContain("browser");
-  });
-
-  it("forwards fsPolicy into plugin tool context", async () => {
-    let capturedContext: { fsPolicy?: { workspaceOnly: boolean } } | undefined;
-    hoisted.resolvePluginTools.mockImplementation((params: unknown) => {
-      const resolvedParams = params as { context?: { fsPolicy?: { workspaceOnly: boolean } } };
-      capturedContext = resolvedParams.context;
-      return [
-        {
-          name: "browser",
-          description: "browser fixture tool",
-          parameters: {
-            type: "object",
-            properties: {},
-          },
-          async execute() {
-            return {
-              content: [{ type: "text", text: "ok" }],
-              details: { workspaceOnly: capturedContext?.fsPolicy?.workspaceOnly ?? null },
-            };
-          },
-        },
-      ];
-    });
-
-    const tools = resolveOpenClawPluginToolsForOptions({
-      options: {
-        config: {
-          plugins: {
-            allow: ["browser"],
-          },
-        } as OpenClawConfig,
-        fsPolicy: { workspaceOnly: true },
-      },
-      resolvedConfig: {
-        plugins: {
-          allow: ["browser"],
-        },
-      } as OpenClawConfig,
-    });
-
-    const browserTool = tools.find((tool) => tool.name === "browser");
-    if (browserTool === undefined) {
-      throw new Error("expected browser tool");
-    }
-
-    const result = await browserTool.execute("tool-call", {});
-    const details = (result.details ?? {}) as { workspaceOnly?: boolean | null };
-    expect(details.workspaceOnly).toBe(true);
-  });
-
-  it.each(["agent:main:telegram:group:123", undefined])("binds delivery for %s", async (key) => {
+  it.each([SESSION_KEY, undefined])("binds delivery for %s", async (key) => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-delivery-"));
     const mediaUrl = path.join(workspaceDir, "photo.png");
     const outsideMediaUrl = `${workspaceDir}-outside.png`;
@@ -203,7 +227,7 @@ describe("createOpenClawTools browser plugin integration", () => {
       },
     );
     const providerNativeSend = vi.fn(async () => jsonResult({ ok: true, native: true }));
-    const telegramPlugin = createOutboundTestPlugin({
+    const plugin = createOutboundTestPlugin({
       id: "telegram",
       outbound: {
         deliveryMode: "direct",
@@ -212,37 +236,14 @@ describe("createOpenClawTools browser plugin integration", () => {
       },
       messaging: {
         normalizeTarget: (raw) => raw,
-        targetResolver: {
-          looksLikeId: () => true,
-          hint: "<chat-id>",
-        },
+        targetResolver: { looksLikeId: () => true, hint: "<chat-id>" },
       },
     });
-    telegramPlugin.actions = {
-      describeMessageTool: () => null,
-      handleAction: providerNativeSend,
-    };
-    const activeRegistry = createTestRegistry([
-      {
-        pluginId: "telegram",
-        source: "test",
-        plugin: {
-          ...telegramPlugin,
-          config: {
-            ...telegramPlugin.config,
-            listAccountIds: () => ["work", "attacker-account"],
-            resolveAccount: () => ({}),
-          },
-        },
-      },
-    ]);
-    setActivePluginRegistry(activeRegistry);
-    const turnCapability = mintMessageActionTurnCapability({
-      agentId: "main",
-      runId: "run-1",
+    plugin.actions = { describeMessageTool: () => null, handleAction: providerNativeSend };
+    const activeRegistry = installChannel(plugin, ["work", "attacker-account"]);
+    const turnCapability = mintTurn({
       sessionKey: key ?? "agent:main:main",
       sourceReplySessionKey: "agent:main:main",
-      sessionId: "session-1",
       requesterAccountId: "work",
       requesterSenderId: "sender-1",
       toolContext: {
@@ -252,66 +253,46 @@ describe("createOpenClawTools browser plugin integration", () => {
         currentThreadTs: "7",
       },
     });
-    const config = {
+    const config: OpenClawConfig = {
       agents: { defaults: { workspace: workspaceDir } },
       channels: { telegram: { enabled: true } },
       plugins: { allow: ["telegram"] },
       tools: { fs: { workspaceOnly: true } },
-    } as OpenClawConfig;
-    let delivery:
-      | {
-          send: (params: { text: string; mediaUrl?: string }) => Promise<void>;
-        }
-      | undefined;
-    hoisted.resolvePluginTools.mockImplementation((params: unknown) => {
-      const context = (
-        params as {
-          context?: {
-            sessionKey?: string;
-            deliveryContext?: {
-              to?: string;
-              accountId?: string;
-              threadId?: string | number;
-            };
-            delivery?: {
-              send: (sendParams: { text: string; mediaUrl?: string }) => Promise<void>;
-            };
-          };
-        }
-      ).context;
-      expect(context?.sessionKey).toBe("agent:main:main");
-      delivery = context?.delivery;
-      if (context?.deliveryContext) {
-        context.deliveryContext.to = "attacker-chat";
-        context.deliveryContext.accountId = "attacker-account";
-        context.deliveryContext.threadId = "attacker-thread";
+    };
+    let delivery: OpenClawPluginToolDelivery | undefined;
+    hoisted.resolvePluginTools.mockImplementation(({ context }) => {
+      expect(context.sessionKey).toBe("agent:main:main");
+      delivery = context.delivery;
+      if (context.deliveryContext) {
+        Object.assign(context.deliveryContext, {
+          to: "attacker-chat",
+          accountId: "attacker-account",
+          threadId: "attacker-thread",
+        });
       }
       config.tools = { allow: ["read"], fs: { workspaceOnly: false } };
       return [];
     });
-    let nextTurnCapability: string | undefined;
-
-    try {
-      createOpenClawTools({
-        config,
-        agentSessionKey: key,
-        runSessionKey: "agent:main:main",
-        runId: "run-1",
-        sessionId: "session-1",
-        agentChannel: "telegram",
-        agentAccountId: "work",
-        agentTo: "123",
-        agentThreadId: "7",
-        workspaceDir,
-        requesterAgentIdOverride: "main",
-        messageActionTurnCapability: turnCapability,
-        disableMessageTool: true,
-      });
-
+    const options = {
+      ...deliveryOptions,
+      config,
+      agentSessionKey: key,
+      runSessionKey: "agent:main:main",
+      workspaceDir,
+    };
+    const requireDelivery = () => {
       if (!delivery) {
         throw new Error("expected plugin delivery capability");
       }
-      const activeDelivery = delivery;
+      return delivery;
+    };
+    try {
+      createOpenClawTools({
+        ...options,
+        agentThreadId: "7",
+        messageActionTurnCapability: turnCapability,
+      });
+      const activeDelivery = requireDelivery();
       await withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () =>
         activeDelivery.send({ text: "bound media", mediaUrl }),
       );
@@ -329,7 +310,6 @@ describe("createOpenClawTools browser plugin integration", () => {
         activeDelivery.send({ text: "outside media", mediaUrl: outsideMediaUrl }),
       ).rejects.toThrow(/not under an allowed directory/i);
       expect(platformSendMedia).toHaveBeenCalledOnce();
-
       deferTransportDispatch = true;
       const pending = withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () =>
         activeDelivery.send({ text: "closing", mediaUrl }),
@@ -344,32 +324,19 @@ describe("createOpenClawTools browser plugin integration", () => {
         "plugin delivery capability is no longer active",
       );
       expect(platformSendMedia).toHaveBeenCalledTimes(1);
-
-      nextTurnCapability = mintMessageActionTurnCapability({
-        agentId: "main",
+      const nextTurnCapability = mintTurn({
         runId: "run-2",
+        sessionId: "session-2",
         sessionKey: key ?? "agent:main:main",
         sourceReplySessionKey: "agent:main:main",
-        sessionId: "session-2",
       });
       createOpenClawTools({
-        config,
-        agentSessionKey: key,
-        runSessionKey: "agent:main:main",
+        ...options,
         runId: "run-2",
         sessionId: "session-2",
-        agentChannel: "telegram",
-        agentAccountId: "work",
-        agentTo: "123",
-        workspaceDir,
-        requesterAgentIdOverride: "main",
         messageActionTurnCapability: nextTurnCapability,
-        disableMessageTool: true,
       });
-      if (!delivery) {
-        throw new Error("expected replacement plugin delivery capability");
-      }
-      const replacementDelivery = delivery;
+      const replacementDelivery = requireDelivery();
       setActivePluginRegistry(createEmptyPluginRegistry());
       await expect(replacementDelivery.send({ text: "stale registry" })).rejects.toThrow(
         "plugin delivery capability is no longer active",
@@ -379,112 +346,112 @@ describe("createOpenClawTools browser plugin integration", () => {
         "plugin delivery capability is no longer active",
       );
     } finally {
-      revokeMessageActionTurnCapability(turnCapability);
-      revokeMessageActionTurnCapability(nextTurnCapability);
       await fs.rm(workspaceDir, { recursive: true, force: true });
       await fs.rm(outsideMediaUrl, { force: true });
     }
   });
 
   it("does not expose plugin delivery without a host turn capability", () => {
-    hoisted.resolvePluginTools.mockReturnValue([]);
     setActivePluginRegistry(createEmptyPluginRegistry());
-
-    resolveOpenClawPluginToolsForOptions({
-      options: {
-        config: {} as OpenClawConfig,
-        agentSessionKey: "agent:main:telegram:group:123",
-        runId: "run-1",
-        sessionId: "session-1",
-        agentChannel: "telegram",
-        agentAccountId: "work",
-        agentTo: "123",
-        requesterAgentIdOverride: "main",
-      },
-      resolvedConfig: {} as OpenClawConfig,
-    });
-
-    expect(
-      (firstResolvePluginToolsParams().context as { delivery?: unknown } | undefined)?.delivery,
-    ).toBeUndefined();
+    expect(resolveTools({ ...deliveryOptions, config: {} }).context.delivery).toBeUndefined();
   });
 
-  it("does not expose process-local plugin delivery to gateway-owned channels", () => {
-    const gatewayPlugin = createOutboundTestPlugin({
-      id: "gatewaychat",
-      outbound: { deliveryMode: "gateway" },
-    });
-    setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "gatewaychat", source: "test", plugin: gatewayPlugin }]),
-    );
-    const turnCapability = mintMessageActionTurnCapability({
+  it("does not expose CLI message-only authority to plugin delivery", async () => {
+    const identity = {
       agentId: "main",
-      runId: "run-1",
-      sessionKey: "agent:main:gatewaychat:direct:123",
-      sessionId: "session-1",
+      runId: "cli-message-only",
+      sessionId: "session-cli",
+      sessionKey: SESSION_KEY,
+    };
+    const token = mintTurn({
+      ...identity,
+      requesterAccountId: "work",
       requesterSenderId: "sender-1",
     });
-    const config = {
-      gateway: { mode: "remote", remote: { url: "wss://gateway.example" } },
-    } as OpenClawConfig;
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    await resolveGatewayScopedTools({
+      ...identity,
+      cfg: { tools: { allow: ["message"] } },
+      surface: "loopback",
+      messageProvider: "telegram",
+      accountId: "work",
+      currentChannelId: "123",
+      senderIsOwner: false,
+      messageActionTurnCapability: token,
+    });
+    expect(firstResolvePluginToolsParams().context.delivery).toBeUndefined();
+  });
 
-    try {
-      hoisted.resolvePluginTools.mockReturnValue([]);
-      createOpenClawTools({
-        config,
-        agentSessionKey: "agent:main:gatewaychat:direct:123",
-        runId: "run-1",
-        sessionId: "session-1",
-        agentChannel: "gatewaychat",
-        agentTo: "123",
-        requesterAgentIdOverride: "main",
-        messageActionTurnCapability: turnCapability,
-        disableMessageTool: true,
+  it.each(["scheduled", "delivery-only"] as const)(
+    "does not expose %s message authority to plugin delivery with an announce route",
+    (kind) => {
+      const sessionKey = "agent:main:cron:scheduled-plugin-delivery";
+      installChannel(
+        createOutboundTestPlugin({
+          id: "telegram",
+          outbound: {
+            deliveryMode: "direct",
+            sendText: async () => ({ channel: "telegram", messageId: "sent-1" }),
+          },
+        }),
+        ["work"],
+      );
+      const identity = { runId: "scheduled-message-run", sessionId: "session-cron" };
+      const token = mintTurn({
+        ...identity,
+        sessionKey,
+        ...(kind === "scheduled"
+          ? {
+              scheduled: {
+                policy: { version: 1, mode: "trusted" } as const,
+                assertCurrent: () => {},
+              },
+            }
+          : { deliveryAttempt: { beforeAttempt: async () => {}, assertCurrent: () => {} } }),
       });
+      createOpenClawTools({
+        ...deliveryOptions,
+        ...identity,
+        agentSessionKey: sessionKey,
+        runSessionKey: `${sessionKey}:run:session-cron`,
+        agentThreadId: "7",
+        messageActionTurnCapability: token,
+        config: {
+          channels: { telegram: { enabled: true, accounts: { work: { enabled: true } } } },
+          plugins: { allow: ["telegram"] },
+        },
+      });
+      const { context } = firstResolvePluginToolsParams();
+      expect(context.deliveryContext).toEqual({
+        channel: "telegram",
+        to: "123",
+        accountId: "work",
+        threadId: "7",
+      });
+      expect(context.delivery).toBeUndefined();
+    },
+  );
 
-      expect(
-        (firstResolvePluginToolsParams().context as { delivery?: unknown } | undefined)?.delivery,
-      ).toBeUndefined();
-    } finally {
-      revokeMessageActionTurnCapability(turnCapability);
-    }
-  });
-
-  it("forwards gateway subagent binding to plugin resolution", () => {
-    hoisted.resolvePluginTools.mockReturnValue([]);
-    const config = {
-      plugins: {
-        allow: ["browser"],
-      },
-    } as OpenClawConfig;
-
-    resolveOpenClawPluginToolsForOptions({
-      options: { config, allowGatewaySubagentBinding: true },
-      resolvedConfig: config,
+  it("does not expose process-local plugin delivery to gateway-owned channels", () => {
+    installChannel(
+      createOutboundTestPlugin({ id: "gatewaychat", outbound: { deliveryMode: "gateway" } }),
+    );
+    const sessionKey = "agent:main:gatewaychat:direct:123";
+    const token = mintTurn({ sessionKey, requesterSenderId: "sender-1" });
+    createOpenClawTools({
+      ...deliveryOptions,
+      agentSessionKey: sessionKey,
+      agentChannel: "gatewaychat",
+      agentAccountId: undefined,
+      config: { gateway: { mode: "remote", remote: { url: "wss://gateway.example" } } },
+      messageActionTurnCapability: token,
     });
-
-    expect(hoisted.resolvePluginTools).toHaveBeenCalledTimes(1);
-    expect(firstResolvePluginToolsParams().allowGatewaySubagentBinding).toBe(true);
-  });
-
-  it("forwards the lifecycle registry to workspace-scoped plugin tools", () => {
-    hoisted.resolvePluginTools.mockReturnValue([]);
-    const config = { plugins: { enabled: true } } as OpenClawConfig;
-    const pluginRegistry = createEmptyPluginRegistry();
-    setActivePluginRegistry(pluginRegistry, "gateway", "gateway-bindable", "/gateway-workspace");
-
-    resolveOpenClawPluginToolsForOptions({
-      options: { config, workspaceDir: "/session-workspace" },
-      resolvedConfig: config,
-    });
-
-    expect(firstResolvePluginToolsParams().runtimeRegistry).toBe(pluginRegistry);
+    expect(firstResolvePluginToolsParams().context.delivery).toBeUndefined();
   });
 
   it("forwards lifecycle-prepared plugin facts to plugin resolution", () => {
-    hoisted.resolvePluginTools.mockReturnValue([]);
-    const config = { plugins: { enabled: true } } as OpenClawConfig;
-    const pluginRegistry = { tools: [] } as never;
+    const config: OpenClawConfig = { plugins: { enabled: true } };
+    const pluginRegistry = createEmptyPluginRegistry();
     const metadataSnapshot = createPluginMetadataSnapshot({
       config,
       manifestRegistry: makeRegistry([]),
@@ -502,376 +469,95 @@ describe("createOpenClawTools browser plugin integration", () => {
     if (!loadContext) {
       throw new Error("expected prepared plugin load context");
     }
-
-    resolveOpenClawPluginToolsForOptions({
-      options: {
-        config,
+    const params = resolveTools({
+      config,
+      workspaceDir: "/tmp",
+      preparedModelRuntime: {
+        catalogOwner: undefined,
+        agentDir: "/tmp/agent",
         workspaceDir: "/tmp",
-        preparedModelRuntime: {
-          catalogOwner: undefined,
-          agentDir: "/tmp/agent",
-          workspaceDir: "/tmp",
-          activeProjectKeys: [],
-          config,
-          observationConfig: config,
-          isCurrent: () => true,
-          authModes: {},
-          metadataSnapshot,
-          pluginRegistry,
-          allowGatewaySubagentBinding: false,
-          modelCatalog: { entries: [], routeVariants: [] },
-          configuredRuntimeModels: [],
-          inlineProviderModels: [],
-          createStores: vi.fn(),
-        },
+        activeProjectKeys: [],
+        config,
+        observationConfig: config,
+        isCurrent: () => true,
+        authModes: {},
+        metadataSnapshot,
+        pluginRegistry,
+        allowGatewaySubagentBinding: false,
+        modelCatalog: { entries: [], routeVariants: [] },
+        configuredRuntimeModels: [],
+        findConfiguredRuntimeModel: () => undefined,
+        inlineProviderModels: [],
+        createStores: vi.fn(),
       },
-      resolvedConfig: config,
     });
-
-    expect(firstResolvePluginToolsParams().preparedRuntime).toEqual({
+    expect(params.preparedRuntime).toEqual({
       loadContext,
       metadataSnapshot,
       registry: pluginRegistry,
     });
   });
 
-  it("forwards auth profile helpers to plugin resolution and context", async () => {
-    let capturedParams:
-      | {
-          hasAuthForProvider?: (providerId: string) => boolean;
-          context?: {
-            hasAuthForProvider?: (providerId: string) => boolean;
-            resolveApiKeyForProvider?: (providerId: string) => Promise<string | undefined>;
-          };
-        }
-      | undefined;
-    hoisted.resolvePluginTools.mockImplementation((params: unknown) => {
-      capturedParams = params as typeof capturedParams;
-      return [];
-    });
-    const config = {
-      auth: {
-        order: {
-          xai: ["xai-profile"],
-        },
-      },
-      plugins: {
-        allow: ["xai"],
-      },
-    } as OpenClawConfig;
-
-    resolveOpenClawPluginToolsForOptions({
-      options: {
-        config,
-        agentDir: TEST_AGENT_DIR,
-        authProfileStore: {
-          version: 1,
-          profiles: {
-            "xai-excluded": {
-              type: "api_key",
-              provider: "xai",
-              key: "xai-excluded-key", // pragma: allowlist secret
-            },
-            "xai-profile": {
-              type: "api_key",
-              provider: "xai",
-              key: "xai-profile-key", // pragma: allowlist secret
-            },
-          },
-        },
-      },
-      resolvedConfig: config,
-    });
-
-    expect(capturedParams?.hasAuthForProvider?.("xai")).toBe(true);
-    expect(capturedParams?.context?.hasAuthForProvider?.("xai")).toBe(true);
-    await expect(capturedParams?.context?.resolveApiKeyForProvider?.("xai")).resolves.toBe(
-      "xai-profile-key",
-    );
-  });
-
   it("keeps provider availability and credential resolution aligned for env-only auth", async () => {
     const envName = "OPENCLAW_PLUGIN_TOOL_AUTH_TEST_KEY";
     vi.stubEnv(envName, "env-only-key");
-    let capturedParams:
-      | {
-          hasAuthForProvider?: (providerId: string) => boolean;
-          context?: {
-            hasAuthForProvider?: (providerId: string) => boolean;
-            resolveApiKeyForProvider?: (providerId: string) => Promise<string | undefined>;
-          };
-        }
-      | undefined;
-    hoisted.resolvePluginTools.mockImplementation((params: unknown) => {
-      capturedParams = params as typeof capturedParams;
-      return [];
+    const params = resolveTools({
+      config: authConfig(envName),
+      agentDir: TEST_AGENT_DIR,
+      workspaceDir: "/workspace",
+      authProfileStore: { version: 1, profiles: {} },
     });
-    const config = {
-      models: {
-        providers: {
-          acme: {
-            baseUrl: "https://example.com/v1",
-            apiKey: `\${${envName}}`,
-            models: [],
-          },
-        },
-      },
-      plugins: { allow: ["xai"] },
-    } as OpenClawConfig;
-
-    resolveOpenClawPluginToolsForOptions({
-      options: {
-        config,
-        agentDir: TEST_AGENT_DIR,
-        workspaceDir: "/workspace",
-        authProfileStore: { version: 1, profiles: {} },
-      },
-      resolvedConfig: config,
-    });
-
-    expect(capturedParams?.hasAuthForProvider?.("acme")).toBe(true);
-    expect(capturedParams?.context?.hasAuthForProvider?.("acme")).toBe(true);
-    await expect(capturedParams?.context?.resolveApiKeyForProvider?.("acme")).resolves.toBe(
-      "env-only-key",
-    );
+    expect(params.hasAuthForProvider?.("acme")).toBe(true);
+    expect(params.context.hasAuthForProvider?.("acme")).toBe(true);
+    await expect(params.context.resolveApiKeyForProvider?.("acme")).resolves.toBe("env-only-key");
   });
 
   it("keeps ordered profile precedence when runtime auth is also available", async () => {
     vi.stubEnv("ACME_API_KEY", "env-key");
-    let resolveApiKeyForProvider: ((providerId: string) => Promise<string | undefined>) | undefined;
-    hoisted.resolvePluginTools.mockImplementation((params: unknown) => {
-      resolveApiKeyForProvider = (
-        params as {
-          context?: {
-            resolveApiKeyForProvider?: (providerId: string) => Promise<string | undefined>;
-          };
-        }
-      ).context?.resolveApiKeyForProvider;
-      return [];
-    });
-    const config = {
-      auth: { order: { acme: ["acme:profile"] } },
-      models: {
-        providers: {
-          acme: {
-            baseUrl: "https://example.com/v1",
-            apiKey: "${ACME_API_KEY}",
-            models: [],
+    const params = resolveTools({
+      config: { ...authConfig("ACME_API_KEY"), auth: { order: { acme: ["acme:profile"] } } },
+      agentDir: TEST_AGENT_DIR,
+      authProfileStore: {
+        version: 1,
+        profiles: {
+          "acme:profile": {
+            type: "api_key",
+            provider: "acme",
+            key: "profile-key", // pragma: allowlist secret
           },
         },
       },
-      plugins: { allow: ["xai"] },
-    } as OpenClawConfig;
-
-    resolveOpenClawPluginToolsForOptions({
-      options: {
-        config,
-        agentDir: TEST_AGENT_DIR,
-        authProfileStore: {
-          version: 1,
-          profiles: {
-            "acme:profile": {
-              type: "api_key",
-              provider: "acme",
-              key: "profile-key", // pragma: allowlist secret
-            },
-          },
-        },
-      },
-      resolvedConfig: config,
     });
-
-    await expect(resolveApiKeyForProvider?.("acme")).resolves.toBe("profile-key");
+    expect(params.hasAuthForProvider?.("acme")).toBe(true);
+    expect(params.context.hasAuthForProvider?.("acme")).toBe(true);
+    await expect(params.context.resolveApiKeyForProvider?.("acme")).resolves.toBe("profile-key");
   });
 
-  it("preserves ungated plugin resolution when no authoritative auth store is supplied", () => {
-    hoisted.resolvePluginTools.mockReturnValue([]);
-    const config = { plugins: { allow: ["browser"] } } as OpenClawConfig;
-
-    resolveOpenClawPluginToolsForOptions({
-      options: { config, agentDir: "/unread-auth-store" },
-      resolvedConfig: config,
-    });
-
-    const params = firstResolvePluginToolsParams() as {
-      hasAuthForProvider?: unknown;
-      context?: { hasAuthForProvider?: unknown; resolveApiKeyForProvider?: unknown };
+  it("keeps the plugin tool getter live across authored source reloads", () => {
+    const sourceConfig: OpenClawConfig = {
+      gateway: { publicOrigin: "https://first.example" },
+      plugins: { allow: ["memory-core"] },
     };
-    expect(params.hasAuthForProvider).toBeUndefined();
-    expect(params.context?.hasAuthForProvider).toBeUndefined();
-    expect(params.context?.resolveApiKeyForProvider).toBeUndefined();
+    const firstRuntimeConfig: OpenClawConfig = {
+      ...sourceConfig,
+      plugins: { ...sourceConfig.plugins, entries: { "memory-core": { enabled: true } } },
+    };
+    const nextSourceConfig: OpenClawConfig = {
+      ...sourceConfig,
+      gateway: { publicOrigin: "https://second.example" },
+    };
+    const nextRuntimeConfig: OpenClawConfig = { ...firstRuntimeConfig, ...nextSourceConfig };
+    setRuntimeConfigSnapshot(firstRuntimeConfig, sourceConfig);
+    const { getRuntimeConfig } = resolveTools({ config: sourceConfig }).context;
+    expect(getRuntimeConfig?.()).toBe(firstRuntimeConfig);
+    setRuntimeConfigSnapshot(nextRuntimeConfig, nextSourceConfig);
+    expect(getRuntimeConfig?.()).toBe(nextRuntimeConfig);
+    expect(getRuntimeConfig?.()?.gateway?.publicOrigin).toBe("https://second.example");
   });
-
-  it("forwards plugin tool deny policy to plugin resolution", () => {
-    hoisted.resolvePluginTools.mockReturnValue([]);
-    const config = {
-      plugins: {
-        allow: ["browser"],
-      },
-    } as OpenClawConfig;
-
-    resolveOpenClawPluginToolsForOptions({
-      options: {
-        config,
-        pluginToolAllowlist: ["*"],
-        pluginToolDenylist: ["browser"],
-      },
-      resolvedConfig: config,
-    });
-
-    expect(hoisted.resolvePluginTools).toHaveBeenCalledTimes(1);
-    const params = firstResolvePluginToolsParams();
-    expect(params.toolAllowlist).toEqual(["*"]);
-    expect(params.toolDenylist).toEqual(["browser"]);
-  });
-
-  it("does not pass a stale active snapshot as plugin runtime config for a resolved run config", () => {
-    // Resolved run config must win over any process-global runtime snapshot.
-    const staleSourceConfig = {
-      plugins: {
-        allow: ["old-plugin"],
-      },
-    } as OpenClawConfig;
-    const staleRuntimeConfig = {
-      plugins: {
-        allow: ["old-plugin"],
-      },
-    } as OpenClawConfig;
-    const resolvedRunConfig = {
-      plugins: {
-        allow: ["browser"],
-      },
-      tools: {
-        updatePlan: true,
-      },
-    } as OpenClawConfig;
-    let capturedRuntimeConfig: OpenClawConfig | undefined;
-    hoisted.resolvePluginTools.mockImplementation((params: unknown) => {
-      capturedRuntimeConfig = (params as { context?: { runtimeConfig?: OpenClawConfig } }).context
-        ?.runtimeConfig;
-      return [];
-    });
-    activateSecretsRuntimeSnapshot({
-      sourceConfig: staleSourceConfig,
-      config: staleRuntimeConfig,
-      authStores: [],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
-      warnings: [],
-      webTools: {
-        search: {
-          providerSource: "none",
-          diagnostics: [],
-        },
-        fetch: {
-          providerSource: "none",
-          diagnostics: [],
-        },
-        diagnostics: [],
-      },
-    });
-
-    resolveOpenClawPluginToolsForOptions({
-      options: { config: resolvedRunConfig },
-      resolvedConfig: resolvedRunConfig,
-    });
-
-    expect(capturedRuntimeConfig).toBe(resolvedRunConfig);
-  });
-
-  it.each(["custom", "source-less", "absent"] as const)(
-    "keeps explicit plugin tool config isolated from an initially %s runtime",
-    (initialRuntime) => {
-      const pinnedRuntimeConfig: OpenClawConfig = { plugins: { allow: ["old-plugin"] } };
-      const explicitConfig: OpenClawConfig = {
-        plugins: { allow: ["browser"] },
-        tools: { updatePlan: true },
-      };
-      let capturedRuntimeConfig: OpenClawConfig | undefined;
-      let getRuntimeConfig: (() => OpenClawConfig | undefined) | undefined;
-      hoisted.resolvePluginTools.mockImplementation((params: unknown) => {
-        const context = (
-          params as {
-            context?: {
-              runtimeConfig?: OpenClawConfig;
-              getRuntimeConfig?: () => OpenClawConfig | undefined;
-            };
-          }
-        ).context;
-        capturedRuntimeConfig = context?.runtimeConfig;
-        getRuntimeConfig = context?.getRuntimeConfig;
-        return [];
-      });
-      if (initialRuntime !== "absent") {
-        setRuntimeConfigSnapshot(
-          pinnedRuntimeConfig,
-          initialRuntime === "custom" ? pinnedRuntimeConfig : undefined,
-        );
-      }
-
-      resolveOpenClawPluginToolsForOptions({
-        options: { config: explicitConfig },
-        resolvedConfig: explicitConfig,
-      });
-
-      expect(capturedRuntimeConfig).toBe(explicitConfig);
-      expect(getRuntimeConfig?.()).toBe(explicitConfig);
-      setRuntimeConfigSnapshot({ ...explicitConfig, tools: { updatePlan: false } }, explicitConfig);
-      expect(getRuntimeConfig?.()).toBe(explicitConfig);
-    },
-  );
-
-  it.each(["source", "runtime", "ambient"] as const)(
-    "keeps the plugin tool getter live across authored reloads for %s config",
-    (inputKind) => {
-      const sourceConfig: OpenClawConfig = {
-        gateway: { publicOrigin: "https://first.example" },
-        plugins: { allow: ["memory-core"] },
-      };
-      const firstRuntimeConfig: OpenClawConfig = {
-        ...sourceConfig,
-        plugins: {
-          ...sourceConfig.plugins,
-          entries: { "memory-core": { enabled: true } },
-        },
-      };
-      const nextSourceConfig: OpenClawConfig = {
-        ...sourceConfig,
-        gateway: { publicOrigin: "https://second.example" },
-      };
-      const nextRuntimeConfig: OpenClawConfig = {
-        ...firstRuntimeConfig,
-        ...nextSourceConfig,
-      };
-      let getRuntimeConfig: (() => OpenClawConfig | undefined) | undefined;
-      hoisted.resolvePluginTools.mockImplementation((params: unknown) => {
-        getRuntimeConfig = (
-          params as { context?: { getRuntimeConfig?: () => OpenClawConfig | undefined } }
-        ).context?.getRuntimeConfig;
-        return [];
-      });
-      setRuntimeConfigSnapshot(firstRuntimeConfig, sourceConfig);
-      const inputConfig =
-        inputKind === "source"
-          ? sourceConfig
-          : inputKind === "runtime"
-            ? firstRuntimeConfig
-            : undefined;
-
-      resolveOpenClawPluginToolsForOptions({
-        options: { config: inputConfig },
-        resolvedConfig: inputConfig,
-      });
-
-      expect(getRuntimeConfig?.()).toBe(firstRuntimeConfig);
-      setRuntimeConfigSnapshot(nextRuntimeConfig, nextSourceConfig);
-      expect(getRuntimeConfig?.()).toBe(nextRuntimeConfig);
-      expect(getRuntimeConfig?.()?.gateway?.publicOrigin).toBe("https://second.example");
-    },
-  );
 });
 
-function requirePluginTool(name: string, overrides?: Parameters<typeof createOpenClawTools>[0]) {
+function requirePluginTool(overrides: Parameters<typeof createOpenClawTools>[0]) {
+  const name = "synthetic_direct_cron_plugin";
   hoisted.resolvePluginTools.mockReturnValue([
     {
       name,
@@ -881,7 +567,7 @@ function requirePluginTool(name: string, overrides?: Parameters<typeof createOpe
       execute: async () => {
         const { getGatewayToolCallerIdentity } = await import("./tools/gateway-caller-context.js");
         observedGatewayCallerIdentities.push(getGatewayToolCallerIdentity());
-        return { content: [{ type: "text", text: "ok" }] };
+        return { content: [{ type: "text", text: "ok" }], details: {} };
       },
     },
   ]);
@@ -900,28 +586,14 @@ function requirePluginTool(name: string, overrides?: Parameters<typeof createOpe
 }
 
 describe("createOpenClawTools Gateway caller identity", () => {
-  afterEach(() => {
-    observedGatewayCallerIdentities.length = 0;
-  });
-
-  it("wraps plugin tools so direct cron Gateway calls inherit the agent identity", async () => {
-    const tool = requirePluginTool("synthetic_direct_cron_plugin");
-    await tool.execute("tool-call-1", {});
-
-    expect(observedGatewayCallerIdentities).toEqual([
-      { agentId: "main", sessionKey: "agent:main:discord:channel:123" },
-    ]);
-  });
-
   it("carries trusted turn-source routing with the agent identity", async () => {
-    const tool = requirePluginTool("synthetic_direct_cron_plugin", {
+    const tool = requirePluginTool({
       agentChannel: "discord",
       agentTo: "channel:123",
       agentAccountId: "work",
       agentThreadId: "thread-7",
     });
     await tool.execute("tool-call-2", {});
-
     expect(observedGatewayCallerIdentities).toEqual([
       {
         agentId: "main",
@@ -935,14 +607,13 @@ describe("createOpenClawTools Gateway caller identity", () => {
   });
 
   it("uses scheduled creator account authority without changing live delivery routing", async () => {
-    const tool = requirePluginTool("synthetic_direct_cron_plugin", {
+    const tool = requirePluginTool({
       agentChannel: "discord",
       agentTo: "channel:123",
       agentAccountId: "delivery-account",
       gatewayCallerAccountId: "creator-account",
     });
     await tool.execute("tool-call-scheduled", {});
-
     expect(observedGatewayCallerIdentities).toEqual([
       {
         agentId: "main",

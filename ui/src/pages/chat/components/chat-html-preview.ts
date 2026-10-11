@@ -3,11 +3,16 @@ import { LazyCustomElementRequestController } from "../../../app/lazy-custom-ele
 import { isStaleChunkImportError } from "../../../app/stale-chunk-reload.ts";
 import { renderLazyViewError } from "../../../components/lazy-view-error.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
-import type { SidebarContent, AttachmentSidebarRuntime } from "./chat-sidebar-content-types.ts";
+import type {
+  SidebarContent,
+  AttachmentSidebarRuntime,
+  SessionFileSource,
+} from "./chat-sidebar-content-types.ts";
 import type { FileViewControls } from "./chat-sidebar-file-view.ts";
 
-export { LazyCustomElementRequestController };
+registerFilePreviewEnglish();
 
 export function isHtmlDocument(mimeType: string, filename: string): boolean {
   return (
@@ -29,6 +34,7 @@ export function renderHtmlPreview(
   sourceIdentity: string,
   title: string,
   embedSandboxMode: EmbedSandboxMode,
+  sessionFileSource?: SessionFileSource,
 ) {
   loader.requestWhileActive(htmlPreviewElement, true);
   const state = loader.visibleState;
@@ -51,6 +57,7 @@ export function renderHtmlPreview(
       .sourceIdentity=${sourceIdentity}
       .title=${title}
       .embedSandboxMode=${embedSandboxMode}
+      .sessionFileSource=${sessionFileSource}
     ></openclaw-chat-html-preview>
   `;
 }
@@ -140,6 +147,7 @@ export class FileHtmlPreviewController implements ReactiveController {
                 ].join(String.fromCharCode(0)),
               file.name,
               options.mode,
+              file.sessionFileSource,
             ),
       sourceFallback: options.error
         ? html`

@@ -17,6 +17,9 @@ Use the green window button to enter native full screen. The Dashboard's sidebar
 and chat controls remain available at the top of the window. Leaving full screen
 restores the normal titlebar and window controls.
 
+While the Dashboard loads, its empty canvas follows the native window's appearance.
+Once the page paints, the Dashboard's selected theme supplies its background.
+
 The full native chat accepts image attachments through its picker, paste, and
 drag and drop. Assistant-generated images render inline through short-lived
 Gateway artifact URLs and open in a larger preview; iOS and macOS share the same
@@ -26,14 +29,15 @@ Only need the CLI and Gateway? Start with [Getting started](/start/getting-start
 
 ## Requirements
 
-**OpenClaw.app requires macOS 15.0 (Sequoia) or later.** This also applies to
-its native `openclaw-mac` helper. [Voice Wake and push-to-talk](/platforms/mac/voicewake#requirements)
-require macOS 26 or later.
+**OpenClaw.app requires macOS 26.2 (Tahoe) or later.** This also applies to
+its native `openclaw-mac` helper and [Voice Wake and push-to-talk](/platforms/mac/voicewake#requirements).
 
 The Node-based CLI and Gateway need a [supported Node version](/install/node)
 on an operating system supported by that runtime. Official Node 24 and Node 26
-macOS binaries require macOS 13.5 or later. Running the CLI on an older Mac
-does not make the native app compatible with that macOS version.
+macOS binaries are built for macOS 13.5 or later, the oldest release Node
+supports. Older macOS releases may still run them but are not supported. Running
+the CLI on an older Mac does not make the native app compatible with that macOS
+version.
 
 Building from source also requires the toolchain listed in
 [macOS developer setup](/platforms/mac/dev-setup#prerequisites).
@@ -89,6 +93,14 @@ cookie sync, and permissions. Device voice controls appear under
 **Settings → Updates → This Mac**. These device controls appear only in the
 macOS app's embedded Dashboard, not in an ordinary browser.
 
+**This Mac → Capabilities → Desktop sharing** is enabled by default. It exposes
+this Mac's existing Screen Sharing service in **Systems**, independently of
+**Computer Control** and **Keep computer awake**. Enable Screen Sharing in
+**System Settings → General → Sharing** and approve the node's desktop capability
+when requested. Existing explicit disable settings stay off after an update;
+changing the Mac setting reconnects the node automatically. See
+[paired node desktops](/gateway/config-browser-ui-desktop#paired-node-desktops).
+
 Enabling sensitive capabilities opens a native confirmation with **Cancel** as
 the default. Closing or replacing the Dashboard page cancels pending consent;
 request the change again from the current page.
@@ -99,8 +111,11 @@ Choose **Connection…** to open the small native window even when the Gateway
 is unreachable. Its **Connection** tab contains local Gateway status, remote/SSH
 options, Tailscale, and discovery; **Gateways** manages saved Gateway profiles.
 A **Debug** tab appears while the developer toggle in **This Mac → Developer**
-is enabled. **About OpenClaw** opens the standard macOS About panel with the app
-version, build information, and credits.
+is enabled. The same toggle enables **Inspect Element** in the Dashboard and
+widget panel context menus; changes apply to open windows without restarting.
+**About OpenClaw** selects the **About** tab in this window, with the app version,
+build information, and resource links. **Copy Build Info** copies the full version,
+commit, and build timestamp. About works offline.
 
 If the app-managed local Gateway is missing, outdated, or broken, the Connection
 tab offers **Install Gateway**, **Update Gateway**, or **Repair Gateway**. The
@@ -122,7 +137,7 @@ app profile is active.
 
 If the primary Gateway connection rejects the app's protocol version, the app
 shows an update alert and keeps the explanation in its connection status.
-Remote setup and connection probes show the same guidance inline. The message names the app
+Remote setup and connection checks show the same guidance inline. The message names the app
 release and both protocol versions, and tells you which side needs updating:
 run `openclaw update` on an older Gateway host, or install a newer Mac app from
 the [download options](#download). A rejected handshake may not report the
@@ -182,8 +197,11 @@ Open windows for saved Gateway profiles follow sign-in route changes after a
 reconnect. An unchanged route keeps the current dashboard and its navigation.
 
 The account card at the bottom-left of the dashboard shows your name and the
-current Gateway, including its health and primary status. While disconnected,
-it shows **Reconnecting…**. Open the card's **Gateway** section to switch Gateways,
+current Gateway and its primary status. A single subtitle below
+your name explains planned suspension and restart, reconnect, and recovery. An
+outbox count covers unresolved messages for this Gateway, including messages
+needing review; it does not promise that every message will send automatically.
+Open the card's **Gateway** section to switch Gateways,
 Command-click or Control-click a Gateway to open it in another window, or choose
 **Gateway settings…**. **Set as primary…** appears when the current Gateway can
 be promoted. These controls are available even with only one saved Gateway.

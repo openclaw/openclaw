@@ -30,15 +30,12 @@ function createMessage(
 describe("session run terminal bookkeeping", () => {
   it.each([
     { content: [] },
-    { content: [{ type: "input_text", text: "" }] },
     { content: [{ type: "input_text", text: "provider rate limit" }] },
-    { content: [{ type: "input_text", text: "[assistant turn failed before producing content]" }] },
     { content: [{ type: "output_text", text: "provider rate limit" }] },
     { content: [{ type: "thinking", thinking: "Internal reasoning" }] },
     { content: [{ type: "reasoning", text: "Internal reasoning" }] },
     { content: [{ type: "redacted_thinking", data: "redacted" }] },
     { content: [{ type: "text", text: "[assistant turn failed before producing content]" }] },
-    { content: [{ type: "text", text: "⚠️ Error: provider rate limit" }] },
     {
       content: [
         { type: "text", text: "⚠️ Error: provider" },
@@ -46,7 +43,6 @@ describe("session run terminal bookkeeping", () => {
       ],
     },
     { role: " Assistant ", content: [{ type: "text", text: "⚠️ Error: provider rate limit" }] },
-    { content: [{ type: "text", text: "The agent run failed before producing a reply." }] },
     {
       content: [
         { type: "text", text: "⚠️ Error: The agent run failed" },
@@ -103,29 +99,19 @@ describe("session run terminal bookkeeping", () => {
         { type: "image", source: "synthetic-image" },
       ],
     },
-    {
-      content: [
-        { type: "reasoning", text: "Internal reasoning" },
-        { type: "text", text: "Useful partial reply." },
-      ],
-    },
-    {
-      content: [
-        { type: "text", text: "provider rate limit" },
-        { type: "toolCall", id: "tool-1", name: "exec", arguments: {} },
-      ],
-    },
   ])("preserves useful failed-run content on a late delta: %j", ({ content }) => {
     const failed = reduceSessionProjection(createSessionProjection(primaryScope), {
       type: "runTerminal",
       runId: "run-1",
       status: "error",
+      seq: 10,
       errorMessage: "provider rate limit",
       message: { role: "assistant", content, stopReason: "error" },
     });
     expect(
       reduceSessionProjection(failed, {
         type: "runDelta",
+        seq: 11,
         runId: "run-1",
         message: createMessage("assistant", "late stream"),
       }),

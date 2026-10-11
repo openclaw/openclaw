@@ -6,18 +6,22 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { runWriteTransaction } from "./plugin-state-store.database.js";
 import {
   createPluginStateKeyedStore,
+  createPluginStateSyncKeyedStore,
   registerPluginStateSequencedJournalEntry,
   resetPluginStateStoreForTests,
-  sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.js";
+import { PLUGIN_STATE_EXPIRY_BATCH_ROWS } from "./plugin-state-store.kernel.js";
+import {
+  readPluginStateRetention,
+  registerPluginStateEntry,
+} from "./plugin-state-store.retention.js";
 import {
   clearPluginStateStoreForTests,
   seedPluginStateEntriesForTests,
-  setMaxPluginStateEntriesPerPluginForTests,
 } from "./plugin-state-store.test-helpers.js";
-import { PluginStateStoreError } from "./plugin-state-store.types.js";
 
 let testState: OpenClawTestState;
 
@@ -32,7 +36,6 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
-  setMaxPluginStateEntriesPerPluginForTests(undefined);
   resetPluginStateStoreForTests({ closeDatabase: false });
 });
 
@@ -42,6 +45,113 @@ afterAll(async () => {
 });
 
 describe("plugin state keyed store", () => {
+  it("shares quota and expiry facts while refreshing time and preserving sibling rows", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const scope = { pluginId: "discord", namespace: "operation-retention" };
+    const params = { ...scope, maxEntries: 2, overflowPolicy: "reject-new" as const };
+    seedPluginStateEntriesForTests([
+      { ...scope, key: "stable", value: 1 },
+      { ...scope, key: "expiring", value: 2, expiresAt: 2_000 },
+      { ...scope, namespace: "sibling", key: "expired", value: 3, expiresAt: 800 },
+    ]);
+    const current = createPluginStateSyncKeyedStore("discord", {
+      namespace: scope.namespace,
+      maxEntries: 2,
+      overflowPolicy: "reject-new",
+    });
+    const sibling = createPluginStateSyncKeyedStore("discord", {
+      namespace: "sibling",
+      maxEntries: 2,
+    });
+    const counts = runWriteTransaction("register", (store) => {
+      const retention = readPluginStateRetention(store.db, { ...scope, now: Date.now() });
+      const statements = trackSqliteStatementExecutions(
+        store.db,
+        ["expiryProbe", "delete"],
+        (sql) =>
+          sql.startsWith('select "expires_at" from "plugin_state_entries"')
+            ? "expiryProbe"
+            : sql.startsWith('delete from "plugin_state_entries"')
+              ? "delete"
+              : null,
+      );
+      try {
+        registerPluginStateEntry(
+          store,
+          { ...params, key: "stable", valueJson: "4" },
+          retention,
+          true,
+        );
+      } finally {
+        statements.restore();
+      }
+      vi.setSystemTime(2_000);
+      registerPluginStateEntry(
+        store,
+        { ...params, key: "stable", valueJson: "5" },
+        retention,
+        true,
+      );
+      return statements.counts;
+    });
+    vi.setSystemTime(500);
+    expect(current.entries()).toEqual([{ key: "stable", value: 5, createdAt: 2_000 }]);
+    expect(sibling.lookup("expired")).toBe(3);
+
+    seedPluginStateEntriesForTests([
+      { ...scope, key: "backward-visible", value: 6, expiresAt: 1_500 },
+    ]);
+    vi.setSystemTime(2_000);
+    expect(() =>
+      runWriteTransaction("register", (store) => {
+        const retention = readPluginStateRetention(store.db, { ...scope, now: Date.now() });
+        vi.setSystemTime(1_000);
+        registerPluginStateEntry(
+          store,
+          { ...params, key: "over-capacity", valueJson: "7" },
+          retention,
+          false,
+        );
+      }),
+    ).toThrow("reached its 2-row limit");
+    expect(current.lookup("over-capacity")).toBeUndefined();
+    expect(counts).toEqual({ expiryProbe: 0, delete: 0 });
+  });
+
+  it("continues bounded expiry cleanup when compound writes reuse retention facts", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(2_000);
+    const scope = { pluginId: "discord", namespace: "operation-expiry-batch" };
+    seedPluginStateEntriesForTests([
+      { ...scope, key: "stable", value: 1 },
+      ...Array.from({ length: PLUGIN_STATE_EXPIRY_BATCH_ROWS + 1 }, (_, index) => ({
+        ...scope,
+        key: `expired-${index}`,
+        value: index,
+        expiresAt: 1_000,
+      })),
+    ]);
+    runWriteTransaction("register", (store) => {
+      const retention = readPluginStateRetention(store.db, { ...scope, now: Date.now() });
+      const params = {
+        ...scope,
+        key: "stable",
+        maxEntries: 1,
+        overflowPolicy: "reject-new" as const,
+      };
+      registerPluginStateEntry(store, { ...params, valueJson: "2" }, retention, true);
+      registerPluginStateEntry(store, { ...params, valueJson: "3" }, retention, true);
+    });
+    vi.setSystemTime(500);
+    expect(
+      createPluginStateSyncKeyedStore("discord", {
+        namespace: scope.namespace,
+        maxEntries: 1,
+      }).entries(),
+    ).toEqual([{ key: "stable", value: 3, createdAt: 2_000 }]);
+  });
+
   it("evicts oldest live entries over maxEntries with bounded database calls", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1000);
@@ -54,21 +164,22 @@ describe("plugin state keyed store", () => {
         createdAt: Math.floor(index / 2),
       })),
     );
-    const store = createPluginStateKeyedStore("discord", { namespace: "evict", maxEntries: 3 });
+    const store = createPluginStateSyncKeyedStore("discord", { namespace: "evict", maxEntries: 3 });
     const statements = trackSqliteStatementExecutions(
       openOpenClawStateDatabase().db,
       ["delete"],
       (sql) => (sql.startsWith('delete from "plugin_state_entries"') ? "delete" : null),
     );
     try {
-      await store.register("a-protected", 64);
+      store.register("a-protected", 64);
     } finally {
       statements.restore();
     }
 
     // One bounded expiry sweep plus eviction must not scale with the victim count.
+    expect(statements.counts.delete).toBeGreaterThan(0);
     expect(statements.counts.delete).toBeLessThanOrEqual(2);
-    expect(await store.entries()).toEqual([
+    expect(store.entries()).toEqual([
       { key: "key-62", value: 62, createdAt: 31 },
       { key: "key-63", value: 63, createdAt: 31 },
       { key: "a-protected", value: 64, createdAt: 1000 },
@@ -78,149 +189,64 @@ describe("plugin state keyed store", () => {
   it("keeps the just-registered key when namespace eviction timestamps tie", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1000);
-    const store = createPluginStateKeyedStore<number>("discord", {
+    const store = createPluginStateSyncKeyedStore<number>("discord", {
       namespace: "evict-tie-register",
       maxEntries: 1,
     });
 
-    await store.register("z", 1);
-    await store.register("a", 2);
+    store.register("z", 1);
+    store.register("a", 2);
 
-    await expect(store.entries()).resolves.toEqual([{ key: "a", value: 2, createdAt: 1000 }]);
-    await expect(store.lookup("z")).resolves.toBeUndefined();
+    expect(store.entries()).toEqual([{ key: "a", value: 2, createdAt: 1000 }]);
+    expect(store.lookup("z")).toBeUndefined();
   });
 
-  it.each([3, 5])(
-    "enforces plugin quota without a redundant namespace count at maxEntries %i",
-    async (maxEntries) => {
-      vi.useFakeTimers();
-      vi.setSystemTime(1000);
-      setMaxPluginStateEntriesPerPluginForTests(3);
-      const pluginId = "quota-plugin";
-      const namespace = "quota";
-      seedPluginStateEntriesForTests([
-        ...["a-protected", "b", "c", "d", "e", "z"].map((key) => ({
-          pluginId,
-          namespace,
-          key,
-          value: key,
-          createdAt: 1000,
-        })),
-        { pluginId, namespace: "sibling", key: "peer", value: "sibling", createdAt: 1 },
-        {
-          pluginId: "foreign-plugin",
-          namespace,
-          key: "peer",
-          value: "foreign",
-          createdAt: 1,
-        },
-      ]);
-      const store = createPluginStateKeyedStore<string>(pluginId, { namespace, maxEntries });
-      const sibling = createPluginStateKeyedStore<string>(pluginId, {
-        namespace: "sibling",
-        maxEntries: 3,
-      });
-      const foreign = createPluginStateKeyedStore<string>("foreign-plugin", {
-        namespace,
-        maxEntries,
-      });
-      const statements = trackSqliteStatementExecutions(
-        openOpenClawStateDatabase().db,
-        ["namespace", "plugin"],
-        (sql) => {
-          if (!sql.startsWith('select count(*) as "count" from "plugin_state_entries"')) {
-            return null;
-          }
-          return sql.includes('"namespace" = ?') ? "namespace" : "plugin";
-        },
-      );
-      try {
-        await store.register("a-protected", "updated");
-      } finally {
-        statements.restore();
-      }
-
-      await expect(store.entries()).resolves.toEqual([
-        { key: "a-protected", value: "updated", createdAt: 1000 },
-        { key: "z", value: "z", createdAt: 1000 },
-      ]);
-      await expect(sibling.entries()).resolves.toEqual([
-        { key: "peer", value: "sibling", createdAt: 1 },
-      ]);
-      await expect(foreign.entries()).resolves.toEqual([
-        { key: "peer", value: "foreign", createdAt: 1 },
-      ]);
-      expect(statements.counts.namespace).toBe(0);
-      expect(statements.counts.plugin).toBe(1);
-    },
-  );
-
-  it("keeps a same-millisecond registerIfAbsent claim during namespace eviction", async () => {
+  it("keeps a same-millisecond registerIfAbsent claim in the shared native kernel", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1000);
-    const store = createPluginStateKeyedStore<number>("discord", {
+    const store = createPluginStateSyncKeyedStore<number>("discord", {
       namespace: "evict-tie-claim",
       maxEntries: 1,
     });
 
-    await expect(store.registerIfAbsent("z", 1)).resolves.toBe(true);
-    await expect(store.registerIfAbsent("a", 2)).resolves.toBe(true);
+    expect(store.registerIfAbsent("z", 1)).toBe(true);
+    expect(store.registerIfAbsent("a", 2)).toBe(true);
 
-    await expect(store.entries()).resolves.toEqual([{ key: "a", value: 2, createdAt: 1000 }]);
-    await expect(store.lookup("z")).resolves.toBeUndefined();
+    expect(store.entries()).toEqual([{ key: "a", value: 2, createdAt: 1000 }]);
+    expect(store.lookup("z")).toBeUndefined();
   });
 
-  it("evicts current namespace rows when sibling namespaces consume plugin row budget", async () => {
-    const maxPluginEntries = 40;
-    setMaxPluginStateEntriesPerPluginForTests(maxPluginEntries);
+  it("protects a worker claim when existing rows have later timestamps", async () => {
+    const store = createPluginStateKeyedStore<number>("discord", {
+      namespace: "evict-worker-claim",
+      maxEntries: 1,
+    });
     seedPluginStateEntriesForTests([
-      ...Array.from({ length: maxPluginEntries - 11 }, (_, entryIndex) => ({
-        pluginId: "telegram",
-        namespace: "telegram.message-cache",
-        key: `k-${entryIndex}`,
-        value: { kind: "message", entryIndex },
-      })),
-      ...Array.from({ length: 11 }, (_, entryIndex) => ({
-        pluginId: "telegram",
-        namespace: "telegram.topic-name-cache",
-        key: `topic-${entryIndex}`,
-        value: { kind: "topic", entryIndex },
-      })),
+      {
+        pluginId: "discord",
+        namespace: "evict-worker-claim",
+        key: "z",
+        value: 1,
+        createdAt: Date.now() + 24 * 60 * 60 * 1000,
+      },
     ]);
-
-    const messageStore = createPluginStateKeyedStore("telegram", {
-      namespace: "telegram.message-cache",
-      maxEntries: maxPluginEntries,
-    });
-    const topicStore = createPluginStateKeyedStore("telegram", {
-      namespace: "telegram.topic-name-cache",
-      maxEntries: 100,
-    });
-
-    await expect(
-      messageStore.register("new-message", { kind: "message", fresh: true }),
-    ).resolves.toBeUndefined();
-
-    await expect(messageStore.lookup("k-0")).resolves.toBeUndefined();
-    await expect(messageStore.lookup("new-message")).resolves.toEqual({
-      kind: "message",
-      fresh: true,
-    });
-    await expect(topicStore.lookup("topic-0")).resolves.toEqual({
-      kind: "topic",
-      entryIndex: 0,
-    });
-    await expect(messageStore.entries()).resolves.toHaveLength(maxPluginEntries - 11);
-    await expect(topicStore.entries()).resolves.toHaveLength(11);
+    const before = Date.now();
+    expect(await store.registerIfAbsent("a", 2)).toBe(true);
+    const after = Date.now();
+    const entries = await store.entries();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ key: "a", value: 2 });
+    expect(entries[0]?.createdAt).toBeGreaterThanOrEqual(before);
+    expect(entries[0]?.createdAt).toBeLessThanOrEqual(after);
+    expect(await store.lookup("z")).toBeUndefined();
   });
 
   it.each([true, false])(
     "sheds sequenced journal rows without evicting durable sibling state (existing cursor: %s)",
     async (existingCursor) => {
-      const maxPluginEntries = 40;
-      setMaxPluginStateEntriesPerPluginForTests(maxPluginEntries);
+      const durableEntryCount = 37;
       seedPluginStateEntriesForTests([
-        ...Array.from({ length: maxPluginEntries - 3 }, (_, entryIndex) => ({
+        ...Array.from({ length: durableEntryCount }, (_, entryIndex) => ({
           pluginId: "memory-core",
           namespace: "durable-state",
           key: `durable-${entryIndex}`,
@@ -265,16 +291,16 @@ describe("plugin state keyed store", () => {
             maxEntries: 1_000,
           },
           cursorKey: "workspace",
-          journalOptions: { namespace: "memory-host.events", maxEntries: 10_000 },
+          journalOptions: { namespace: "memory-host.events", maxEntries: 1 },
           journalKeyPrefix: "event-",
           journalKeyRange: { keyStartInclusive: "event-", keyEndExclusive: "event." },
-          journalValue: (sequence) => ({ sequence }),
+          journalValue: {},
         }),
       ).toBe(existingCursor ? 10 : 11);
 
       const durable = createPluginStateKeyedStore("memory-core", {
         namespace: "durable-state",
-        maxEntries: maxPluginEntries,
+        maxEntries: durableEntryCount,
       });
       const checkpoints = createPluginStateKeyedStore("memory-core", {
         namespace: "memory-host.event-migration-checkpoints",
@@ -283,7 +309,7 @@ describe("plugin state keyed store", () => {
       });
       const journal = createPluginStateKeyedStore("memory-core", {
         namespace: "memory-host.events",
-        maxEntries: 10_000,
+        maxEntries: 1,
       });
       const cursor = createPluginStateKeyedStore("memory-core", {
         namespace: "memory-host.event-cursors",
@@ -306,104 +332,4 @@ describe("plugin state keyed store", () => {
       });
     },
   );
-
-  it("leaves room for Telegram sibling namespaces at their persistent budgets", async () => {
-    seedPluginStateEntriesForTests([
-      ...Array.from({ length: 3_000 }, (_, entryIndex) => ({
-        pluginId: "telegram",
-        namespace: "telegram.message-cache",
-        key: `message-${entryIndex}`,
-        value: { kind: "message", entryIndex },
-      })),
-      ...Array.from({ length: 2_047 }, (_, entryIndex) => ({
-        pluginId: "telegram",
-        namespace: "telegram.topic-name-cache",
-        key: `topic-${entryIndex}`,
-        value: { kind: "topic", updatedAt: entryIndex },
-      })),
-      ...Array.from({ length: 127 }, (_, entryIndex) => ({
-        pluginId: "telegram",
-        namespace: "telegram.bot-info-cache",
-        key: `bot-${entryIndex}`,
-        value: { kind: "bot-info", fetchedAt: String(entryIndex) },
-      })),
-    ]);
-
-    const topicStore = createPluginStateKeyedStore("telegram", {
-      namespace: "telegram.topic-name-cache",
-      maxEntries: 2_048,
-    });
-    const botInfoStore = createPluginStateKeyedStore("telegram", {
-      namespace: "telegram.bot-info-cache",
-      maxEntries: 128,
-    });
-
-    await expect(
-      topicStore.register("topic-final", { kind: "topic", updatedAt: 2_048 }),
-    ).resolves.toBeUndefined();
-    await expect(
-      botInfoStore.register("default", { kind: "bot-info", fetchedAt: "now" }),
-    ).resolves.toBeUndefined();
-
-    await expect(topicStore.lookup("topic-final")).resolves.toEqual({
-      kind: "topic",
-      updatedAt: 2_048,
-    });
-    await expect(botInfoStore.lookup("default")).resolves.toEqual({
-      kind: "bot-info",
-      fetchedAt: "now",
-    });
-  });
-
-  it("rolls back plugin overflow when the current namespace cannot shed enough rows", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1000);
-    const maxPluginEntries = 3;
-    setMaxPluginStateEntriesPerPluginForTests(maxPluginEntries);
-    seedPluginStateEntriesForTests([
-      ...Array.from({ length: maxPluginEntries }, (_, entryIndex) => ({
-        pluginId: "telegram",
-        namespace: "telegram.topic-name-cache",
-        key: `topic-${entryIndex}`,
-        value: { entryIndex },
-      })),
-      ...Array.from({ length: 5 }, (_, entryIndex) => ({
-        pluginId: "telegram",
-        namespace: "telegram.message-cache",
-        key: `old-${entryIndex}`,
-        value: { entryIndex },
-        createdAt: entryIndex,
-      })),
-      {
-        pluginId: "telegram",
-        namespace: "telegram.message-cache",
-        key: "expired",
-        value: "expired",
-        expiresAt: 1000,
-      },
-    ]);
-
-    const messageStore = createPluginStateKeyedStore("telegram", {
-      namespace: "telegram.message-cache",
-      maxEntries: maxPluginEntries,
-    });
-    const topicStore = createPluginStateKeyedStore("telegram", {
-      namespace: "telegram.topic-name-cache",
-      maxEntries: maxPluginEntries,
-    });
-    const originalMessages = await messageStore.entries();
-    const originalTopics = await topicStore.entries();
-
-    const registration = messageStore.register("new-message", { fresh: true });
-    await expect(registration).rejects.toBeInstanceOf(PluginStateStoreError);
-    await expect(registration).rejects.toMatchObject({
-      code: "PLUGIN_STATE_LIMIT_EXCEEDED",
-      operation: "register",
-    });
-    await expect(messageStore.lookup("new-message")).resolves.toBeUndefined();
-    await expect(topicStore.lookup("topic-0")).resolves.toEqual({ entryIndex: 0 });
-    await expect(messageStore.entries()).resolves.toEqual(originalMessages);
-    await expect(topicStore.entries()).resolves.toEqual(originalTopics);
-    expect(sweepExpiredPluginStateEntries()).toBe(1);
-  });
 });

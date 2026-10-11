@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import { html as staticHtml, literal } from "lit/static-html.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { renderSettingsStatus } from "../../components/settings-ui.ts";
@@ -8,6 +9,7 @@ import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
+  isSessionKeyAddressable,
   resolveSessionPreferredFace,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
@@ -37,39 +39,36 @@ function renderCurrentSession(props: CurrentWorkProps, row: GatewaySessionRow) {
       >
     </span>
     ${renderSettingsStatus({ kind: "warn", label: row.status === "queued" ? t("activity.currentWork.queued") : t("activity.status.running") })}`;
-  // The Home URL addresses raw global only in global scope; raw unknown has no exact URL.
-  if (row.key === "unknown" || (row.key === "global" && !props.globalScope)) {
-    return html`<div
-      class="activity-current-work__row"
-      data-session-key=${row.key}
-      data-agent-id=${row.agentId ?? nothing}
-    >
-      ${content}
-    </div>`;
-  }
   const face = resolveSessionPreferredFace(row);
-  const target = sessionNavigationTarget({
-    face,
-    sessionKey: row.key,
-    basePath: props.basePath,
-    fallbackAgentId: row.agentId ?? props.fallbackAgentId,
-    mainKey: props.mainKey,
-    row,
-  });
-  return html`<a
+  const target = isSessionKeyAddressable(row.key, props.globalScope)
+    ? sessionNavigationTarget({
+        face,
+        sessionKey: row.key,
+        basePath: props.basePath,
+        fallbackAgentId: row.agentId ?? props.fallbackAgentId,
+        mainKey: props.mainKey,
+        row,
+      })
+    : null;
+  const tag = target ? literal`a` : literal`div`;
+  return staticHtml`<${tag}
     class="activity-current-work__row"
     data-session-key=${row.key}
     data-agent-id=${row.agentId ?? nothing}
-    href=${target.href}
-    @click=${(event: MouseEvent) => {
-      if (shouldHandleNavigationClick(event)) {
-        event.preventDefault();
-        props.navigate(face, target.options);
-      }
-    }}
+    href=${target?.href ?? nothing}
+    @click=${
+      target
+        ? (event: MouseEvent) => {
+            if (shouldHandleNavigationClick(event)) {
+              event.preventDefault();
+              props.navigate(face, target.options);
+            }
+          }
+        : nothing
+    }
   >
     ${content}
-  </a>`;
+  </${tag}>`;
 }
 
 export function renderCurrentWork(props: CurrentWorkProps) {

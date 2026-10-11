@@ -189,8 +189,15 @@ describe("Microsoft Teams native approval capability", () => {
     expect(isImplicitSameChatApprovalAuthorization(authorization)).toBe(true);
   });
 
-  it("restricts routing to the single Teams account and originating channel", () => {
-    const cfg = createConfig();
+  it("routes each approval only through its bound Teams account and originating channel", () => {
+    const cfg = createConfig({
+      teams: {
+        defaultAccount: "support",
+        accounts: {
+          support: { appId: "support-app", appPassword: "support-password" },
+        },
+      },
+    });
     const request = createExecRequest();
 
     expect(
@@ -204,7 +211,15 @@ describe("Microsoft Teams native approval capability", () => {
     expect(
       shouldHandleMSTeamsNativeApprovalRequest({
         cfg,
-        accountId: "other",
+        accountId: "support",
+        approvalKind: "exec",
+        request: createExecRequest({ turnSourceAccountId: "support" }),
+      }),
+    ).toBe(true);
+    expect(
+      shouldHandleMSTeamsNativeApprovalRequest({
+        cfg,
+        accountId: "support",
         approvalKind: "exec",
         request,
       }),
@@ -299,6 +314,8 @@ describe("Microsoft Teams native approval capability", () => {
     });
 
     expect(guidance).toContain("`channels.msteams.allowFrom`");
+    expect(guidance).toContain("Approve it from the Web UI for now.");
+    expect(guidance).not.toMatch(/terminal UI|\bTUI\b/i);
     expect(guidance).toContain("`channels.msteams.defaultTo`");
   });
 });

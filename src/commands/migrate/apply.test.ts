@@ -1,5 +1,8 @@
 // Migration apply tests cover backups, filtering, provider apply calls, and report output.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import * as gatewayLock from "../../infra/gateway-lock.js";
+import { readLifecycleWriteCustody } from "../../infra/lifecycle-write-custody.js";
 import type { MigrationPlan, MigrationProviderPlugin } from "../../plugins/types.js";
 import { createNonExitingRuntime } from "../../runtime.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
@@ -42,6 +45,75 @@ describe("runMigrationApply", () => {
   afterAll(async () => {
     await suiteTempDirs.cleanup();
   });
+
+  it("refuses a supplied provider before planning or applying under a live Gateway", async () => {
+    const discover = vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue({
+      pid: process.pid,
+      port: 18789,
+      ownerId: "synthetic-foreign-gateway",
+      createdAt: new Date().toISOString(),
+    });
+    const provider = {
+      id: "fixture",
+      label: "Fixture",
+      plan: vi.fn(async () => buildEmptyPlan()),
+      apply: vi.fn(async () => buildEmptyPlan()),
+    };
+    try {
+      await expect(
+        runMigrationApply({
+          runtime: createNonExitingRuntime(),
+          providerId: provider.id,
+          provider,
+          opts: { json: true, noBackup: true, configOverride: {} },
+        }),
+      ).rejects.toThrow("stop the Gateway");
+      expect(provider.plan).not.toHaveBeenCalled();
+      expect(provider.apply).not.toHaveBeenCalled();
+    } finally {
+      discover.mockRestore();
+    }
+  });
+
+  it.each([false, true])(
+    "retains migration custody until provider settlement (failure: %s)",
+    async (fail) => {
+      const entered = createDeferred();
+      const settled = createDeferred();
+      const provider: MigrationProviderPlugin = {
+        id: "fixture",
+        label: "Fixture",
+        plan: async () => {
+          expect(readLifecycleWriteCustody()).toEqual([]);
+          return buildEmptyPlan();
+        },
+        apply: async () => {
+          entered.resolve();
+          await settled.promise;
+          if (fail) {
+            throw new Error("migration failed");
+          }
+          return buildEmptyPlan();
+        },
+      };
+      const running = runMigrationApply({
+        runtime: createNonExitingRuntime(),
+        providerId: provider.id,
+        provider,
+        opts: { json: true, noBackup: true, configOverride: {} },
+      }).catch((error: unknown) => error);
+      await entered.promise;
+      try {
+        expect(readLifecycleWriteCustody()).toEqual([{ phase: "migration", count: 1 }]);
+      } finally {
+        settled.resolve();
+        await running;
+      }
+      const result = await running;
+      expect(result instanceof Error).toBe(fail);
+      expect(readLifecycleWriteCustody()).toEqual([]);
+    },
+  );
 
   it("uses the resolved provider id when forwarding Codex options", async () => {
     const plan = vi.fn(async () => buildEmptyPlan());

@@ -1,12 +1,11 @@
-// Checks gateway port usage and reports listener diagnostics.
-import { danger, info, shouldLogVerbose, warn } from "../globals.js";
+import { danger, info, shouldLogVerbose } from "../globals.js";
 import { logDebug } from "../logger.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { isErrno } from "./errors.js";
 import { formatPortDiagnostics } from "./ports-format.js";
 import { tryListenOnPort } from "./ports-probe.js";
-import type { PortUsage } from "./ports-types.js";
+export type { PortUsage } from "./ports-types.js";
 
 class PortInUseError extends Error {
   port: number;
@@ -56,20 +55,11 @@ export async function handlePortError(
   // Uniform messaging for EADDRINUSE with optional owner details.
   if (err instanceof PortInUseError || (isErrno(err) && err.code === "EADDRINUSE")) {
     const details =
-      err instanceof PortInUseError
-        ? (err.details ?? (await describePortOwner(port)))
-        : await describePortOwner(port);
+      (err instanceof PortInUseError ? err.details : undefined) ?? (await describePortOwner(port));
     runtime.error(danger(`${context} failed: port ${port} is already in use.`));
     if (details) {
       runtime.error(info("Port listener details:"));
       runtime.error(details);
-      if (/openclaw|src\/index\.ts|dist\/index\.js/.test(details)) {
-        runtime.error(
-          warn(
-            "It looks like another OpenClaw instance is already running. Stop it or pick a different port.",
-          ),
-        );
-      }
     }
     runtime.error(
       info("Resolve by stopping the process using the port or passing --port <free-port>."),
@@ -92,7 +82,6 @@ export async function handlePortError(
 }
 
 export { PortInUseError };
-export type { PortUsage };
 export {
   classifyPortListener,
   formatPortDiagnostics,

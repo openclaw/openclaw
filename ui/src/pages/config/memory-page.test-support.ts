@@ -230,15 +230,30 @@ export function createMemoryPage(params: {
     navigate: params.navigate ?? vi.fn(),
     replace: params.replace ?? vi.fn(),
   } as unknown as ApplicationContext;
-  const agentSelection = createAgentSelectionCapability(
+  const settingsAgentSelection = createAgentSelectionCapability(
     {
       connection: { gatewayUrl: "ws://memory.test" },
       snapshot: { assistantAgentId: params.selectedAgentId ?? params.agents?.[0]?.id ?? "main" },
       subscribe: () => () => undefined,
     },
     context.agents,
+    undefined,
+    undefined,
+    { requireConfiguredAgent: true },
   );
-  Object.assign(context, { agentSelection });
+  if (params.selectedAgentId) {
+    settingsAgentSelection.set(params.selectedAgentId);
+  }
+  Object.assign(context, { settingsAgentSelection });
+  if (element.routeData) {
+    element.routeData = {
+      ...element.routeData,
+      agentSelectionIntent: {
+        owner: settingsAgentSelection,
+        revision: settingsAgentSelection.intentRevision,
+      },
+    };
+  }
   const connectionLifecycle = createGatewayConnectionLifecycle(context.gateway.snapshot);
   (element as unknown as { context: ApplicationContext }).context = context;
   new ContextProvider(element, { context: applicationContext, initialValue: context }).setValue(
@@ -280,7 +295,7 @@ export function createMemoryPage(params: {
   };
   return {
     element,
-    agentSelection,
+    settingsAgentSelection,
     request,
     setPhase,
     publishPluginGeneration,
@@ -311,7 +326,7 @@ export function addonSwitch(element: HTMLElement, label: string) {
   const row = [...element.querySelectorAll(".settings-row--toggle")].find((entry) =>
     entry.textContent?.includes(label),
   );
-  return row?.querySelector<HTMLElement & { checked: boolean }>("wa-switch") ?? null;
+  return row?.querySelector<HTMLInputElement>(".settings-toggle__input") ?? null;
 }
 
 export function toggleAddon(element: HTMLElement, label: string, checked: boolean) {
@@ -325,12 +340,16 @@ export function toggleAddon(element: HTMLElement, label: string, checked: boolea
 
 export function activeEngine(element: HTMLElement): string | null {
   return (
-    element.querySelector("wa-radio.settings-segmented__btn--active")?.getAttribute("value") ?? null
+    element.querySelector<HTMLInputElement>(".settings-segmented__input:checked")?.value ?? null
   );
 }
 
 export function selectEngine(element: HTMLElement, value: string) {
-  const group = element.querySelector("wa-radio-group") as HTMLElement & { value?: string };
-  group.value = value;
-  group.dispatchEvent(new Event("change"));
+  const input = [...element.querySelectorAll<HTMLInputElement>(".settings-segmented__input")].find(
+    (candidate) => candidate.value === value,
+  );
+  if (!input) {
+    throw new Error(`Missing memory engine: ${value}`);
+  }
+  input.click();
 }

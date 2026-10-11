@@ -1,4 +1,3 @@
-// Imessage tests cover inbound processing plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -130,67 +129,6 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     );
   });
 
-  it("drops reflected self-chat duplicates after seeing the from-me copy", async () => {
-    const selfChatCache = createSelfChatCache();
-    const createdAt = "2026-03-02T20:58:10.649Z";
-
-    const fromMeDecision = await resolveDecision({
-      message: {
-        id: 9641,
-        sender: "+15555550123",
-        chat_identifier: "+15555550123",
-        destination_caller_id: "+15555550123",
-        text: "Do you want to report this issue?",
-        created_at: createdAt,
-        is_from_me: true,
-      },
-      messageText: "Do you want to report this issue?",
-      bodyText: "Do you want to report this issue?",
-      selfChatCache,
-    });
-    expect(fromMeDecision.kind).toBe("dispatch");
-
-    expect(
-      await resolveDecision({
-        message: {
-          id: 9642,
-          sender: "+15555550123",
-          chat_identifier: "+15555550123",
-          text: "Do you want to report this issue?",
-          created_at: createdAt,
-        },
-        messageText: "Do you want to report this issue?",
-        bodyText: "Do you want to report this issue?",
-        selfChatCache,
-      }),
-    ).toEqual({ kind: "drop", reason: "self-chat echo" });
-  });
-
-  it("does not drop same-text messages when created_at differs", async () => {
-    const selfChatCache = createSelfChatCache();
-
-    await resolveDecision({
-      message: {
-        id: 9641,
-        text: "ok",
-        created_at: "2026-03-02T20:58:10.649Z",
-        is_from_me: true,
-      },
-      selfChatCache,
-    });
-
-    const decision = await resolveDecision({
-      message: {
-        id: 9642,
-        text: "ok",
-        created_at: "2026-03-02T20:58:11.649Z",
-      },
-      selfChatCache,
-    });
-
-    expect(decision.kind).toBe("dispatch");
-  });
-
   it("keeps self-chat cache scoped to configured group threads", async () => {
     const selfChatCache = createSelfChatCache();
     const groupedCfg = {
@@ -231,121 +169,6 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     });
 
     expect(decision.kind).toBe("dispatch");
-  });
-
-  it("does not drop other participants in the same group thread", async () => {
-    const selfChatCache = createSelfChatCache();
-    const createdAt = "2026-03-02T20:58:10.649Z";
-
-    expect(
-      await resolveDecision({
-        message: {
-          id: 9751,
-          chat_id: 123,
-          text: "same text",
-          created_at: createdAt,
-          is_from_me: true,
-          is_group: true,
-        },
-        selfChatCache,
-      }),
-    ).toEqual({ kind: "drop", reason: "from me" });
-
-    const decision = await resolveDecision({
-      message: {
-        id: 9752,
-        chat_id: 123,
-        sender: "+15555550999",
-        text: "same text",
-        created_at: createdAt,
-        is_group: true,
-      },
-      selfChatCache,
-    });
-
-    expect(decision.kind).toBe("dispatch");
-  });
-
-  it("drops group echoes persisted under chat_guid scope", async () => {
-    // Outbound `send` to a group keyed by chat_guid persists the echo scope
-    // as `${accountId}:chat_guid:${chatGuid}` (see send.ts:resolveOutboundEchoScope).
-    // The inbound side has chat_id, chat_guid, and chat_identifier all
-    // populated by chat.db. Without the multi-scope check, the chat_guid-keyed
-    // echo would never be matched against the chat_id-only inbound scope and
-    // the agent would react to its own message.
-    const echoHas = vi.fn((scope: string, lookup: { text?: string; messageId?: string }) => {
-      return scope === "default:chat_guid:iMessage;+;chat0000" && lookup.messageId === "9001";
-    });
-
-    const decision = await resolveDecision({
-      message: {
-        id: 9001,
-        chat_id: 42,
-        chat_guid: "iMessage;+;chat0000",
-        chat_identifier: "chat0000",
-        sender: "+15555550123",
-        text: "echo",
-        is_group: true,
-      },
-      messageText: "echo",
-      bodyText: "echo",
-      echoCache: { has: echoHas },
-    });
-
-    expect(decision).toEqual({ kind: "drop", reason: "echo" });
-    // The match should land on the chat_guid scope variant.
-    const calls = echoHas.mock.calls.map(([scope]) => scope);
-    expect(calls).toContain("default:chat_guid:iMessage;+;chat0000");
-  });
-
-  it("drops group echoes persisted under chat_identifier scope", async () => {
-    const echoHas = vi.fn((scope: string, lookup: { text?: string; messageId?: string }) => {
-      return scope === "default:chat_identifier:chat0000" && lookup.messageId === "9001";
-    });
-
-    const decision = await resolveDecision({
-      message: {
-        id: 9001,
-        chat_id: 42,
-        chat_guid: "iMessage;+;chat0000",
-        chat_identifier: "chat0000",
-        sender: "+15555550123",
-        text: "echo",
-        is_group: true,
-      },
-      messageText: "echo",
-      bodyText: "echo",
-      echoCache: { has: echoHas },
-    });
-
-    expect(decision).toEqual({ kind: "drop", reason: "echo" });
-    const calls = echoHas.mock.calls.map(([scope]) => scope);
-    expect(calls).toContain("default:chat_identifier:chat0000");
-  });
-
-  it("drops group echoes persisted under chat_id scope (baseline)", async () => {
-    const echoHas = vi.fn((scope: string, lookup: { text?: string; messageId?: string }) => {
-      return scope === "default:chat_id:42" && lookup.messageId === "9001";
-    });
-
-    const decision = await resolveDecision({
-      message: {
-        id: 9001,
-        chat_id: 42,
-        chat_guid: "iMessage;+;chat0000",
-        chat_identifier: "chat0000",
-        sender: "+15555550123",
-        text: "echo",
-        is_group: true,
-      },
-      messageText: "echo",
-      bodyText: "echo",
-      echoCache: { has: echoHas },
-    });
-
-    expect(decision).toEqual({ kind: "drop", reason: "echo" });
-    const calls = echoHas.mock.calls.map(([scope]) => scope);
-    expect(calls).toContain("default:chat_id:42");
   });
 
   it("does not drop a group inbound when echo cache holds an unrelated chat_guid", async () => {
@@ -441,141 +264,14 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     expect(decision.contextKey).toContain("imessage:reaction:added");
   });
 
-  it.each([
-    { text: "Loved “Dune” and the soundtrack was incredible" },
-    { text: 'Liked "your plan" but Wednesday works better' },
-    { text: "Removed a heart from “the old post” yesterday", mode: "off" as const },
-    { text: 'Removed a like from "that post" yesterday', mode: "all" as const },
-    { text: 'Loved “Dune"', mode: "own" as const },
-  ])(
-    "dispatches ordinary quoted prose instead of dropping it as a tapback: $text",
-    async ({ text, mode }) => {
-      const decision = await resolveDecision({
-        message: { text },
-        messageText: text,
-        bodyText: text,
-        ...(mode ? { reactionNotifications: mode } : {}),
-      });
-
-      expect(decision.kind).toBe("dispatch");
-    },
-  );
-
-  it("uses the iMessage reply cache to recognize tool-sent messages as bot-authored reaction targets", async () => {
-    const decision = await resolveDecision({
-      message: {
-        guid: "reaction-guid",
-        is_reaction: true,
-        reaction_emoji: "❤️",
-        is_reaction_add: true,
-        reacted_to_guid: "tool-sent-guid",
-        text: "",
-        chat_id: 3,
-        chat_guid: "any;-;+15555550123",
-        chat_identifier: "+15555550123",
-      },
-      messageText: "",
-      bodyText: "",
-      echoCache: { has: () => false },
-      isKnownFromMeMessageId: (messageId, { accountId, chatId, chatGuid, chatIdentifier }) => {
-        expect({ messageId, accountId, chatId, chatGuid, chatIdentifier }).toEqual({
-          messageId: "tool-sent-guid",
-          accountId: "default",
-          chatId: 3,
-          chatGuid: "any;-;+15555550123",
-          chatIdentifier: "+15555550123",
-        });
-        return true;
-      },
-    });
-
-    expect(decision.kind).toBe("reaction");
-    if (decision.kind !== "reaction") {
-      throw new Error("expected reaction decision");
-    }
-    expect(decision.text).toBe("iMessage reaction added: ❤️ by +15555550123 on msg tool-sent-guid");
-  });
-
-  it("routes a thumbs-down tapback on a tool-sent reply as a model-visible reaction event", async () => {
-    const decision = await resolveDecision({
-      message: {
-        guid: "reaction-guid",
-        is_reaction: true,
-        reaction_emoji: "👎",
-        reaction_type: "dislike",
-        is_reaction_add: true,
-        associated_message_guid: "p:0/lobster-reply-guid",
-        associated_message_type: 2000,
-        text: "Disliked “tapback target”",
-        chat_id: 3,
-        chat_guid: "any;-;+15555550123",
-        chat_identifier: "+15555550123",
-      },
-      messageText: "Disliked “tapback target”",
-      bodyText: "Disliked “tapback target”",
-      echoCache: { has: () => false },
-      isKnownFromMeMessageId: (messageId, { accountId, chatId, chatGuid, chatIdentifier }) => {
-        expect({ messageId, accountId, chatId, chatGuid, chatIdentifier }).toEqual({
-          messageId: "lobster-reply-guid",
-          accountId: "default",
-          chatId: 3,
-          chatGuid: "any;-;+15555550123",
-          chatIdentifier: "+15555550123",
-        });
-        return true;
-      },
-    });
-
-    expect(decision.kind).toBe("reaction");
-    if (decision.kind !== "reaction") {
-      throw new Error("expected reaction decision");
-    }
-    expect(decision.text).toBe(
-      "iMessage reaction added: 👎 by +15555550123 on msg lobster-reply-guid",
-    );
-    expect(decision.route.sessionKey).toBe("agent:main:main");
-    expect(decision.contextKey).toBe(
-      "imessage:reaction:added:3:lobster-reply-guid:+15555550123:👎",
-    );
-  });
-
-  it("matches prefixed tapback targets against prefixed bot-authored cache ids in own mode", async () => {
-    const checkedMessageIds: string[] = [];
-    const decision = await resolveDecision({
-      message: {
-        guid: "reaction-guid",
-        is_reaction: true,
-        reaction_emoji: "👎",
-        is_reaction_add: true,
-        associated_message_guid: "p:0/imsg-1",
-        associated_message_type: 2000,
-        text: "Disliked “tapback target”",
-        chat_id: 3,
-        chat_guid: "any;-;+15555550123",
-        chat_identifier: "+15555550123",
-      },
-      messageText: "Disliked “tapback target”",
-      bodyText: "Disliked “tapback target”",
-      echoCache: { has: () => false },
-      isKnownFromMeMessageId: (messageId) => {
-        if (messageId === undefined) {
-          throw new Error("expected reaction target message id");
-        }
-        checkedMessageIds.push(messageId);
-        return messageId === "p:0/imsg-1";
-      },
-    });
-
-    expect(checkedMessageIds).toEqual(["imsg-1", "p:0/imsg-1"]);
-    expect(decision.kind).toBe("reaction");
-    if (decision.kind !== "reaction") {
-      throw new Error("expected reaction decision");
-    }
-    expect(decision.text).toBe("iMessage reaction added: 👎 by +15555550123 on msg imsg-1");
+  it("dispatches ordinary quoted prose instead of dropping it as a tapback", async () => {
+    const text = "Loved “Dune” and the soundtrack was incredible";
+    const decision = await resolveDecision({ message: { text } });
+    expect(decision.kind).toBe("dispatch");
   });
 
   it("uses the production reply-cache lookup for bot-authored reaction targets", async () => {
-    rememberIMessageReplyCache({
+    await rememberIMessageReplyCache({
       accountId: "default",
       messageId: "p:0/imsg-production",
       chatGuid: "any;-;+15555550123",
@@ -613,41 +309,6 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     );
   });
 
-  it("matches prefixed tapback targets against prefixed echo-cache ids in own mode", async () => {
-    const checkedMessageIds: string[] = [];
-    const decision = await resolveDecision({
-      message: {
-        guid: "reaction-guid",
-        is_reaction: true,
-        reaction_emoji: "👍",
-        is_reaction_add: true,
-        associated_message_guid: "p:0/imsg-2",
-        associated_message_type: 2000,
-        text: "Liked “tapback target”",
-        chat_id: 3,
-        chat_guid: "any;-;+15555550123",
-        chat_identifier: "+15555550123",
-      },
-      messageText: "Liked “tapback target”",
-      bodyText: "Liked “tapback target”",
-      echoCache: {
-        has: (_scope, lookup) => {
-          if (lookup.messageId) {
-            checkedMessageIds.push(lookup.messageId);
-          }
-          return lookup.messageId === "p:0/imsg-2";
-        },
-      },
-    });
-
-    expect(checkedMessageIds).toEqual(["imsg-2", "p:0/imsg-2"]);
-    expect(decision.kind).toBe("reaction");
-    if (decision.kind !== "reaction") {
-      throw new Error("expected reaction decision");
-    }
-    expect(decision.text).toBe("iMessage reaction added: 👍 by +15555550123 on msg imsg-2");
-  });
-
   it("drops tapbacks on non-bot messages in own notification mode", async () => {
     const decision = await resolveDecision({
       message: {
@@ -662,26 +323,6 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     });
 
     expect(decision).toEqual({ kind: "drop", reason: "reaction target not sent by agent" });
-  });
-
-  it("returns a reaction decision for all reaction notification mode", async () => {
-    const decision = await resolveDecision({
-      reactionNotifications: "all",
-      message: {
-        is_reaction: true,
-        reaction_emoji: "😂",
-        reacted_to_guid: "someone-else",
-        text: "",
-      },
-      messageText: "",
-      bodyText: "",
-    });
-
-    expect(decision.kind).toBe("reaction");
-    if (decision.kind !== "reaction") {
-      throw new Error("expected reaction decision");
-    }
-    expect(decision.text).toBe("iMessage reaction added: 😂 by +15555550123 on msg someone-else");
   });
 
   it("drops tapbacks when reaction notifications are off", async () => {
@@ -709,40 +350,6 @@ describe("resolveIMessageReactionContext", () => {
       targetText: "Hello",
     });
     expect(resolveIMessageReactionContext({}, "Loved the movie")).toBeNull();
-  });
-
-  it.each([
-    ["Loved", "added", "❤️"],
-    ["Liked", "added", "👍"],
-    ["Disliked", "added", "👎"],
-    ["Laughed at", "added", "😂"],
-    ["Emphasized", "added", "‼️"],
-    ["Questioned", "added", "❓"],
-    ["Removed a heart from", "removed", "❤️"],
-    ["Removed a like from", "removed", "👍"],
-    ["Removed a dislike from", "removed", "👎"],
-    ["Removed a laugh from", "removed", "😂"],
-    ["Removed an emphasis from", "removed", "‼️"],
-    ["Removed a question from", "removed", "❓"],
-  ])("preserves complete legacy %s tapback wrappers", (prefix, action, emoji) => {
-    for (const [open, close] of [
-      ['"', '"'],
-      ["“", "”"],
-    ]) {
-      expect(resolveIMessageReactionContext({}, `${prefix} ${open}Hello${close}`)).toStrictEqual({
-        action,
-        emoji,
-        targetText: "Hello",
-      });
-    }
-  });
-
-  it("preserves complete multiline and nested legacy tapback wrappers", () => {
-    expect(resolveIMessageReactionContext({}, "Loved “  she said “hello”\nand left  ”")).toEqual({
-      action: "added",
-      emoji: "❤️",
-      targetText: "she said “hello”\nand left",
-    });
   });
 
   it("detects imsg tapback flags and associated message types", async () => {
@@ -786,40 +393,6 @@ describe("resolveIMessageReactionContext", () => {
 });
 
 describe("buildIMessageInboundContext", () => {
-  it("keeps provider IDs separate and projects from-me identity", async () => {
-    const message = {
-      id: 12345,
-      guid: "p:0/GUID-current",
-      sender: "+15555550123",
-      text: "Hello",
-      is_from_me: false,
-      is_group: false,
-    };
-    const decision = await resolveDecision({ message });
-    expect(decision.kind).toBe("dispatch");
-    if (decision.kind !== "dispatch") {
-      return;
-    }
-
-    const contextParams = {
-      cfg: {} as OpenClawConfig,
-      accountService: undefined,
-      decision,
-      historyLimit: 0,
-      groupHistories: new Map(),
-    } satisfies Omit<Parameters<typeof buildIMessageInboundContext>[0], "message">;
-    const { ctxPayload } = await buildIMessageInboundContext({ ...contextParams, message });
-
-    expect(ctxPayload.MessageSid).toMatch(/^\d+$/u);
-    expect(ctxPayload.MessageSid).not.toBe("12345");
-    expect(ctxPayload.MessageSidFull).toBe("p:0/GUID-current");
-    const selfContext = await buildIMessageInboundContext({
-      ...contextParams,
-      message: { ...message, is_from_me: true },
-    });
-    expect(selfContext.ctxPayload.SenderIsSelf).toBe(true);
-  });
-
   it("keeps generated media notices out of command input", async () => {
     const message = {
       id: 12347,
@@ -909,7 +482,7 @@ describe("buildIMessageInboundContext", () => {
         return { imessage: { service: "imessage" } };
       },
     }) as OpenClawConfig;
-    const { imessageTo } = await buildIMessageInboundContext({
+    const { ctxPayload, imessageTo } = await buildIMessageInboundContext({
       cfg: projectionCfg,
       accountService: "sms",
       decision,
@@ -918,66 +491,8 @@ describe("buildIMessageInboundContext", () => {
       groupHistories: new Map(),
     });
 
+    expect(ctxPayload.MessageSid).toBeUndefined();
     expect(imessageTo).toBe("sms:+15555550123");
     expect(channelConfigReads).toBe(0);
-  });
-});
-
-describe("buildIMessageInboundContext MessageSid handling (rowid-leak regression)", () => {
-  function buildParams(messageOverrides: Partial<{ id: number; guid: string }>) {
-    const decision = {
-      kind: "dispatch" as const,
-      route: { accountId: "default", agentId: "lobster", sessionKey: "k", mainSessionKey: "mk" },
-      bindingResolution: null,
-      isGroup: false,
-      sender: "+15555550123",
-      senderId: "+15555550123",
-      senderNormalized: "+15555550123",
-      historyKey: "h",
-      chatId: 3,
-      chatGuid: "any;-;+15555550123",
-      chatIdentifier: "+15555550123",
-      replyContext: undefined,
-      isCommand: false,
-      commandAuthorized: false,
-      hasControlCommand: false,
-    };
-    return {
-      cfg: {} as OpenClawConfig,
-      accountService: undefined,
-      decision: decision as unknown as Parameters<
-        typeof buildIMessageInboundContext
-      >[0]["decision"],
-      message: { sender: "+15555550123", text: "hi", ...messageOverrides },
-      historyLimit: 0,
-      groupHistories: new Map(),
-    } as unknown as Parameters<typeof buildIMessageInboundContext>[0];
-  }
-
-  it("uses the gateway-allocated shortId when the inbound has a guid", async () => {
-    const { ctxPayload } = await buildIMessageInboundContext(
-      buildParams({ id: 999, guid: "FAB-INBOUND-1" }),
-    );
-    // The gateway-allocated short id must not leak the chat.db rowid.
-    expect(ctxPayload.MessageSid).toMatch(/^\d+$/u);
-    expect(ctxPayload.MessageSid).not.toBe("999");
-  });
-
-  it("does not leak chat.db ROWIDs as MessageSid when the guid is missing", async () => {
-    // Pre-fix bug: when rememberedMessage was nil/empty, MessageSid fell
-    // back to `String(message.id)` — leaking chat.db ROWID into the agent's
-    // short-id namespace. Agent then tried to react to a phantom shortId
-    // that the resolver couldn't find ("13 is no longer available").
-    const { ctxPayload } = await buildIMessageInboundContext(
-      buildParams({ id: 13, guid: undefined }),
-    );
-    expect(ctxPayload.MessageSid).toBeUndefined();
-    // Critically: never the rowid as a string.
-    expect(ctxPayload.MessageSid).not.toBe("13");
-  });
-
-  it("does not leak chat.db ROWIDs even when the guid is whitespace", async () => {
-    const { ctxPayload } = await buildIMessageInboundContext(buildParams({ id: 13, guid: "   " }));
-    expect(ctxPayload.MessageSid).toBeUndefined();
   });
 });

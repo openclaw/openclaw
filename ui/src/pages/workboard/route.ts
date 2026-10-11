@@ -9,8 +9,6 @@ import {
   type WorkboardRouteData,
 } from "./route-location.ts";
 
-export type { WorkboardRouteData } from "./route-location.ts";
-
 export const page = definePage({
   ...routePageSpec("workboard"),
   loaderDeps: (context: ApplicationContext, location: RouteLocation) => {

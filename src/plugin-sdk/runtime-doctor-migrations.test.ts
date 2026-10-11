@@ -7,6 +7,7 @@ import {
   createPluginStateKeyedStore,
   resetPluginStateStoreForTests,
 } from "../plugin-state/plugin-state-store.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import {
   defineLegacyJsonStateMigration,
   definePluginDoctorMigrationFromPlans,
@@ -37,6 +38,7 @@ describe("defineLegacyJsonStateMigration retention", () => {
   });
 
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     await fs.rm(stateDir, { recursive: true, force: true });
   });

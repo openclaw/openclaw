@@ -93,7 +93,7 @@ function expectAckReactionRuntimeOptions(
   }
 }
 
-export function requireReactionCall(
+function requireReactionCall(
   mock: typeof sendMocks.reactMessageDiscord | typeof sendMocks.removeReactionDiscord,
   index: number,
 ) {
@@ -117,7 +117,7 @@ function expectReactionCallAt(
 ) {
   const call = requireReactionCall(mock, index);
   expect(call[0]).toBe(params?.channelId ?? "c1");
-  expect(call[1]).toBe(params?.messageId ?? "m1");
+  expect(call[1]).toBe(params?.messageId ?? "1001");
   expect(call[2]).toBe(emoji);
   expectAckReactionRuntimeOptions(call[3], params);
 }

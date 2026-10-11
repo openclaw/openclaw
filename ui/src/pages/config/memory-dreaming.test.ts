@@ -50,7 +50,7 @@ function toggleStates(container: HTMLElement): Record<string, boolean> {
     const title = row.querySelector(".settings-row__title")?.textContent?.trim() ?? "";
     const section = row.closest(".settings-section")?.querySelector(".settings-section__heading");
     const key = `${section?.textContent?.trim() ?? ""}/${title}`;
-    const toggle = row.querySelector<HTMLElement & { checked?: boolean }>("wa-switch");
+    const toggle = row.querySelector<HTMLInputElement>(".settings-toggle__input");
     states[key] = toggle?.checked === true;
   }
   return states;
@@ -58,8 +58,7 @@ function toggleStates(container: HTMLElement): Record<string, boolean> {
 
 function selectedSegment(container: HTMLElement): string | null {
   return (
-    container.querySelector("wa-radio.settings-segmented__btn--active")?.getAttribute("value") ??
-    null
+    container.querySelector<HTMLInputElement>(".settings-segmented__input:checked")?.value ?? null
   );
 }
 
@@ -98,15 +97,17 @@ describe("renderDreamingSettings", () => {
     expect(selectedSegment(renderInto({ storage: { mode: "nonsense" } }))).toBe("separate");
   });
 
-  it("shows inherited values and dynamic timezone provenance", () => {
+  it("shows inherited values in placeholders without repeating default status", () => {
     const container = renderInto(null);
 
-    expect(rowFor(container, "Dreaming frequency").textContent).toContain(
-      "Using default: 0 3 * * *",
+    expect(container.textContent).not.toContain("Using default:");
+    expect(rowFor(container, "Dreaming frequency").querySelector("input")?.placeholder).toBe(
+      "0 3 * * *",
     );
-    expect(rowFor(container, "Timezone").textContent).toContain("Using default: Asia/Singapore");
+    expect(rowFor(container, "Timezone").querySelector("input")?.placeholder).toBe(
+      "Asia/Singapore",
+    );
     expect(numberInput(container, "Lookback days").placeholder).toBe("2");
-    expect(rowFor(container, "Lookback days").textContent).toContain("Using default: 2");
   });
 
   it("shows the advanced execution model as the inherited model default", async () => {
@@ -139,9 +140,7 @@ describe("renderDreamingSettings", () => {
     expect(onPatch).toHaveBeenCalledWith(["model"], undefined);
 
     const inherited = renderInto({ execution: { defaults: { model: "openai/gpt-5.6" } } });
-    expect(rowFor(inherited, "Dreaming model").textContent).toContain(
-      "Using default: openai/gpt-5.6",
-    );
+    expect(rowFor(inherited, "Dreaming model").textContent).not.toContain("Using default:");
   });
 
   it("displays runtime defaults for malformed explicit values", () => {
@@ -177,12 +176,14 @@ describe("renderDreamingSettings", () => {
       [...container.querySelectorAll<HTMLInputElement>("input")].every((input) => input.disabled),
     ).toBe(true);
     expect(
-      [...container.querySelectorAll<HTMLElement & { disabled?: boolean }>("wa-switch")].every(
-        (toggle) => toggle.disabled === true,
+      [...container.querySelectorAll<HTMLInputElement>(".settings-toggle__input")].every(
+        (toggle) => toggle.disabled,
       ),
     ).toBe(true);
     expect(
-      container.querySelector<HTMLElement & { disabled?: boolean }>("wa-radio-group")?.disabled,
+      [...container.querySelectorAll<HTMLInputElement>(".settings-segmented__input")].every(
+        (input) => input.disabled,
+      ),
     ).toBe(true);
   });
 });

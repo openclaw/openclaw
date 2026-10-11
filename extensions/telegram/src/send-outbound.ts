@@ -24,9 +24,14 @@ import {
   normalizeMessageId,
   resolveAndPersistChatId,
   resolveTelegramMessageIdOrThrow,
+  withTelegramApiContext,
   type TelegramApiContext,
 } from "./send-context.js";
-import type { TelegramSendOpts, TelegramSendResult } from "./send-message-types.js";
+import type {
+  TelegramMessageActionOpts,
+  TelegramSendOpts,
+  TelegramSendResult,
+} from "./send-message-types.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 import { parseTelegramTarget } from "./targets.js";
 
@@ -37,8 +42,42 @@ type PreparedTelegramOutbound = {
   request: ReturnType<typeof createTelegramRequestWithDiag>;
 };
 
-type PreparedTelegramOutboundWithMessageId<T> = PreparedTelegramOutbound &
-  (T extends string | number ? { messageId: number } : { messageId?: undefined });
+type TelegramMessageActionContext<T> = TelegramApiContext & {
+  chatId: string;
+  request: ReturnType<typeof createTelegramRequestWithDiag>;
+} & (T extends string | number ? { messageId: number } : { messageId?: undefined });
+
+export function withTelegramMessageAction<T, TMessageId extends string | number | undefined>(
+  to: string | number,
+  messageIdInput: TMessageId,
+  opts: TelegramMessageActionOpts,
+  operation: (context: TelegramMessageActionContext<TMessageId>) => Promise<T>,
+  shouldRetry?: (error: unknown) => boolean,
+  writebackAuthority: "caller" | "internal" = "caller",
+): Promise<T> {
+  return withTelegramApiContext(opts, async (context) => {
+    const { cfg } = context;
+    const rawTarget = String(to);
+    const chatId = await resolveAndPersistChatId(context, {
+      lookupTarget: parseTelegramTarget(rawTarget).chatId,
+      persistTarget: rawTarget,
+      verbose: opts.verbose,
+      gatewayClientScopes: writebackAuthority === "internal" ? undefined : opts.gatewayClientScopes,
+    });
+    const request = createTelegramRequestWithDiag({
+      cfg,
+      retry: opts.retry,
+      verbose: opts.verbose,
+      shouldRetry,
+    });
+    return operation({
+      ...context,
+      chatId,
+      ...(messageIdInput !== undefined ? { messageId: normalizeMessageId(messageIdInput) } : {}),
+      request,
+    } as TelegramMessageActionContext<TMessageId>);
+  });
+}
 
 export function buildTelegramProviderDeliveryResult(params: {
   message: TelegramOutboundPromptContextMessage;
@@ -94,11 +133,10 @@ export async function reportTelegramProviderDelivery(
   return delivery;
 }
 
-export async function prepareTelegramOutbound<T extends string | number | undefined>(params: {
+export async function prepareTelegramOutbound(params: {
   to: string | number;
   context: TelegramApiContext;
   opts: Pick<TelegramSendOpts, "verbose" | "retry" | "gatewayClientScopes">;
-  messageIdInput?: T;
   thread?: {
     messageThreadId?: number;
     directMessagesTopicId?: number;
@@ -106,21 +144,12 @@ export async function prepareTelegramOutbound<T extends string | number | undefi
     replyQuoteText?: string;
     useReplyIdAsQuoteSource?: boolean;
   };
-  request:
-    | { kind: "nonIdempotent"; useApiErrorLogging?: boolean }
-    | { kind: "standard"; shouldRetry?: (err: unknown) => boolean };
-}): Promise<PreparedTelegramOutboundWithMessageId<T>> {
-  const { cfg, account, api } = params.context;
+  useApiErrorLogging?: boolean;
+  wrapChatNotFound?: boolean;
+}): Promise<PreparedTelegramOutbound> {
+  const { cfg } = params.context;
   const rawTarget = String(params.to);
   const target = parseTelegramTarget(rawTarget);
-  const chatId = await resolveAndPersistChatId({
-    cfg,
-    api,
-    lookupTarget: target.chatId,
-    persistTarget: rawTarget,
-    verbose: params.opts.verbose,
-    gatewayClientScopes: params.opts.gatewayClientScopes,
-  });
   const threadSpec = params.thread
     ? resolveTelegramSendThreadSpec({
         targetMessageThreadId: target.messageThreadId,
@@ -130,41 +159,33 @@ export async function prepareTelegramOutbound<T extends string | number | undefi
         chatType: target.chatType,
       })
     : undefined;
+  const chatId = await resolveAndPersistChatId(params.context, {
+    lookupTarget: target.chatId,
+    persistTarget: rawTarget,
+    verbose: params.opts.verbose,
+    gatewayClientScopes: params.opts.gatewayClientScopes,
+  });
   const threadParams = buildTelegramThreadReplyParams({
     thread: threadSpec,
     replyToMessageId: params.thread?.replyToMessageId,
     replyQuoteText: params.thread?.replyQuoteText,
     useReplyIdAsQuoteSource: params.thread?.useReplyIdAsQuoteSource,
   });
-  const requestWithDiag =
-    params.request.kind === "nonIdempotent"
-      ? createTelegramNonIdempotentRequestWithDiag({
-          cfg,
-          account,
-          retry: params.opts.retry,
-          verbose: params.opts.verbose,
-          useApiErrorLogging: params.request.useApiErrorLogging,
-        })
-      : createTelegramRequestWithDiag({
-          cfg,
-          account,
-          retry: params.opts.retry,
-          verbose: params.opts.verbose,
-          shouldRetry: params.request.shouldRetry,
-        });
-  const request =
-    params.request.kind === "nonIdempotent"
-      ? createRequestWithChatNotFound({ requestWithDiag, chatId, input: rawTarget })
-      : requestWithDiag;
+  const requestWithDiag = createTelegramNonIdempotentRequestWithDiag({
+    cfg,
+    retry: params.opts.retry,
+    verbose: params.opts.verbose,
+    useApiErrorLogging: params.useApiErrorLogging,
+  });
   return {
     chatId,
-    ...(params.messageIdInput !== undefined
-      ? { messageId: normalizeMessageId(params.messageIdInput) }
-      : {}),
     threadSpec,
     threadParams,
-    request,
-  } as PreparedTelegramOutboundWithMessageId<T>;
+    request:
+      params.wrapChatNotFound === false
+        ? requestWithDiag
+        : createRequestWithChatNotFound({ requestWithDiag, chatId, input: rawTarget }),
+  };
 }
 
 export async function finalizeTelegramOutbound(params: {
@@ -181,7 +202,7 @@ export async function finalizeTelegramOutbound(params: {
 }): Promise<TelegramSendResult> {
   const { cfg, account, ownerAgentId } = params.context;
   const messageId = resolveTelegramMessageIdOrThrow(params.result, params.resultContext);
-  recordSentMessage(params.prepared.chatId, messageId, cfg, {
+  await recordSentMessage(params.prepared.chatId, messageId, cfg, {
     accountId: account.accountId,
     agentId: ownerAgentId,
   });
@@ -195,21 +216,30 @@ export async function finalizeTelegramOutbound(params: {
   const projection = params.promptContextProjectionPlan?.cursor.take(
     params.promptContextProjectionPlan.finalPart,
   );
-  const recorded = await recordOutboundMessageForPromptContext({
-    cfg,
-    ownerAgentId,
-    account,
-    botUserId: params.botUserId,
-    chatId: params.prepared.chatId,
-    message: params.result,
-    messageId,
-    text: params.text,
-    messageThreadId: params.messageThreadId ?? params.prepared.threadSpec?.id,
-    successfulSendThread: params.prepared.threadSpec,
-    promptContextProjection: projection,
-  });
-  if (projection && !recorded) {
+  try {
+    const recorded = await recordOutboundMessageForPromptContext({
+      cfg,
+      ownerAgentId,
+      account,
+      botUserId: params.botUserId,
+      chatId: params.prepared.chatId,
+      message: params.result,
+      messageId,
+      text: params.text,
+      messageThreadId: params.messageThreadId ?? params.prepared.threadSpec?.id,
+      successfulSendThread: params.prepared.threadSpec,
+      promptContextProjection: projection,
+    });
+    if (projection && !recorded) {
+      params.promptContextProjectionPlan?.cursor.invalidate();
+    }
+  } catch (error) {
     params.promptContextProjectionPlan?.cursor.invalidate();
+    throw createChannelPartialDeliveryError(error, {
+      messageIds: [resultIds.messageId],
+      ...(resultIds.receipt ? { receipt: resultIds.receipt } : {}),
+      visibleReplySent: true,
+    });
   }
   params.beforeActivity?.(resultIds);
   recordChannelActivity({

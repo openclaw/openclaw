@@ -9,15 +9,14 @@ import type { AiProviderRequestCapabilities, AiProviderRequestPolicyInput } from
 import { isKnownOpenAIJsonSchemaModelId } from "../providers/openai-response-format.js";
 import { resolveProviderRequestCapabilities as resolveModelProviderRequestCapabilities } from "./host-policy.js";
 
-type ProviderEndpointClass = string;
-type ProviderRequestCapabilities = AiProviderRequestCapabilities;
 type OpenAICompletionsSessionAffinity = "none" | "openai" | "openrouter";
 
 type OpenAICompletionsCompatDefaultsInput = {
   provider?: string;
   modelId?: string;
+  reasoning?: boolean;
   baseUrl?: string;
-  endpointClass: ProviderEndpointClass;
+  endpointClass: string;
   knownProviderFamily: string;
   supportsNativeStreamingUsageCompat?: boolean;
   supportsOpenAICompletionsStreamingUsageCompat?: boolean;
@@ -41,22 +40,23 @@ type OpenAICompletionsCompatDefaults = {
   supportsLongCacheRetention: boolean;
 };
 
-type DetectedOpenAICompletionsCompat = {
-  capabilities: ProviderRequestCapabilities;
-  defaults: OpenAICompletionsCompatDefaults;
-};
-
 export type ResolvedOpenAICompletionsCompat = Omit<
   Required<OpenAICompletionsCompat>,
-  "cacheControlFormat" | "openRouterRouting" | "sendSessionAffinityHeaders" | "reasoningEffortMap"
-> & {
-  cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
-  openRouterRouting?: OpenAICompletionsCompat["openRouterRouting"];
-  sessionAffinity: OpenAICompletionsSessionAffinity;
-  visibleReasoningDetailTypes: string[];
-  requiresNonEmptyUserOrAssistantMessage: boolean;
-  configuredSupportsLongCacheRetention?: boolean;
-};
+  | "cacheControlFormat"
+  | "openRouterRouting"
+  | "sendSessionAffinityHeaders"
+  | "reasoningEffortMap"
+  | "supportedReasoningEfforts"
+> &
+  Pick<OpenAICompletionsCompat, "reasoningEffortMap" | "supportedReasoningEfforts"> & {
+    cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
+    openRouterRouting?: OpenAICompletionsCompat["openRouterRouting"];
+    sessionAffinity: OpenAICompletionsSessionAffinity;
+    visibleReasoningDetailTypes: string[];
+    requiresNonEmptyUserOrAssistantMessage: boolean;
+    configuredSupportsLongCacheRetention?: boolean;
+    reasoningEffortForOff: "none" | null;
+  };
 
 function isDefaultRouteProvider(provider: string | undefined, ...ids: string[]) {
   return provider !== undefined && ids.includes(provider);
@@ -89,28 +89,21 @@ export function isOpenAICodexResponsesModel(model: {
 
 function isNativeOpenAICodexResponsesBaseUrl(baseUrl?: string): boolean {
   const trimmed = typeof baseUrl === "string" ? baseUrl.trim() : "";
-  if (!trimmed) {
+  const url = URL.parse(trimmed);
+  if (!url || (url.protocol !== "http:" && url.protocol !== "https:")) {
     return false;
   }
-  try {
-    const url = new URL(trimmed);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      return false;
-    }
-    if (url.hostname.toLowerCase() !== "chatgpt.com") {
-      return false;
-    }
-    const pathname = url.pathname.replace(/\/+$/u, "").toLowerCase();
-    return [
-      "/backend-api",
-      "/backend-api/v1",
-      "/backend-api/codex",
-      "/backend-api/codex/v1",
-      "/backend-api/codex/responses",
-    ].includes(pathname);
-  } catch {
+  if (url.hostname.toLowerCase() !== "chatgpt.com") {
     return false;
   }
+  const pathname = url.pathname.replace(/\/+$/u, "").toLowerCase();
+  return [
+    "/backend-api",
+    "/backend-api/v1",
+    "/backend-api/codex",
+    "/backend-api/codex/v1",
+    "/backend-api/codex/responses",
+  ].includes(pathname);
 }
 
 export function usesNativeOpenAICodexResponsesBackend(model: {
@@ -190,25 +183,24 @@ function resolveOpenAICompletionsCompatDefaults(
       isDefaultRouteProvider(input.provider, "cerebras", "chutes", "deepseek", "opencode", "xai"));
   const isOpenRouterLike = input.provider === "openrouter" || endpointClass === "openrouter";
   const isLocalEndpoint = endpointClass === "local";
+  const isMistral = knownProviderFamily === "mistral" || endpointClass === "mistral-public";
   const usesMaxTokens =
     endpointClass === "chutes-native" ||
-    endpointClass === "mistral-public" ||
-    knownProviderFamily === "mistral" ||
+    isMistral ||
     isMoonshot ||
     isCloudflareAiGateway ||
     isZai ||
     isTogether ||
     (isDefaultRoute && isDefaultRouteProvider(provider, "chutes"));
   return {
-    supportsStore:
-      !isNonStandard && knownProviderFamily !== "mistral" && !usesExplicitProxyLikeEndpoint,
+    supportsStore: !isNonStandard && !isMistral && !usesExplicitProxyLikeEndpoint,
     supportsDeveloperRole: !isNonStandard && !isMoonshotLike && !usesConfiguredNonOpenAIEndpoint,
     supportsReasoningEffort:
       !isZai &&
       !isTogether &&
-      knownProviderFamily !== "mistral" &&
+      !isMistral &&
       endpointClass !== "xai-native" &&
-      !usesExplicitProxyLikeEndpoint,
+      (!usesExplicitProxyLikeEndpoint || input.reasoning === true),
     supportsUsageInStreaming:
       supportsOpenAICompletionsStreamingUsageCompat ||
       (!isNonStandard &&
@@ -255,30 +247,13 @@ function resolveOpenAICompletionsCompatDefaults(
   };
 }
 
-function resolveOpenAICompletionsCompatDefaultsFromCapabilities(
-  input: Pick<
-    ProviderRequestCapabilities,
-    | "endpointClass"
-    | "knownProviderFamily"
-    | "supportsNativeStreamingUsageCompat"
-    | "supportsOpenAICompletionsStreamingUsageCompat"
-    | "usesExplicitProxyLikeEndpoint"
-  > & {
-    provider?: string;
-    modelId?: string;
-    baseUrl?: string;
-  },
-): OpenAICompletionsCompatDefaults {
-  return resolveOpenAICompletionsCompatDefaults(input);
-}
-
 /** Detects endpoint capabilities and defaults for an OpenAI-completions model. */
 export function detectOpenAICompletionsCompat(
-  model: Pick<Model<"openai-completions">, "provider" | "baseUrl" | "id"> & {
+  model: Pick<Model<"openai-completions">, "provider" | "baseUrl" | "id" | "reasoning"> & {
     compat?: { supportsStore?: boolean } | null;
   },
-  resolveCapabilities?: (input: AiProviderRequestPolicyInput) => ProviderRequestCapabilities,
-): DetectedOpenAICompletionsCompat {
+  resolveCapabilities?: (input: AiProviderRequestPolicyInput) => AiProviderRequestCapabilities,
+) {
   const capabilities = (
     resolveCapabilities ?? ((input) => resolveModelProviderRequestCapabilities(input, model))
   )({
@@ -295,9 +270,10 @@ export function detectOpenAICompletionsCompat(
   });
   return {
     capabilities,
-    defaults: resolveOpenAICompletionsCompatDefaultsFromCapabilities({
+    defaults: resolveOpenAICompletionsCompatDefaults({
       provider: model.provider,
       modelId: model.id,
+      reasoning: model.reasoning,
       baseUrl: model.baseUrl,
       ...capabilities,
     }),
@@ -323,16 +299,26 @@ function resolveSessionAffinity(
 
 /** Applies explicit model overrides once on top of the canonical transport defaults. */
 export function resolveOpenAICompletionsCompat(
-  model: Pick<Model<"openai-completions">, "id" | "provider" | "baseUrl" | "compat">,
-  resolveCapabilities?: (input: AiProviderRequestPolicyInput) => ProviderRequestCapabilities,
+  model: Pick<Model<"openai-completions">, "id" | "provider" | "baseUrl" | "compat" | "reasoning">,
+  resolveCapabilities?: (input: AiProviderRequestPolicyInput) => AiProviderRequestCapabilities,
 ): ResolvedOpenAICompletionsCompat {
-  const { defaults } = detectOpenAICompletionsCompat(model, resolveCapabilities);
+  const { defaults, capabilities } = detectOpenAICompletionsCompat(model, resolveCapabilities);
   const configured = model.compat;
+  const thinkingFormat = configured?.thinkingFormat ?? defaults.thinkingFormat;
   return {
     supportsStore: configured?.supportsStore ?? defaults.supportsStore,
     supportsDeveloperRole: configured?.supportsDeveloperRole ?? defaults.supportsDeveloperRole,
     supportsReasoningEffort:
       configured?.supportsReasoningEffort ?? defaults.supportsReasoningEffort,
+    supportedReasoningEfforts: configured?.supportedReasoningEfforts,
+    reasoningEffortMap: configured?.reasoningEffortMap,
+    // Custom servers often accept only enabled efforts; declared off contracts still win.
+    reasoningEffortForOff:
+      capabilities.usesExplicitProxyLikeEndpoint &&
+      thinkingFormat === "openai" &&
+      !configured?.supportedReasoningEfforts?.includes("none")
+        ? null
+        : "none",
     supportsUsageInStreaming:
       configured?.supportsUsageInStreaming ?? defaults.supportsUsageInStreaming,
     maxTokensField: configured?.maxTokensField ?? defaults.maxTokensField,
@@ -342,7 +328,7 @@ export function resolveOpenAICompletionsCompat(
     requiresReasoningContentOnAssistantMessages:
       configured?.requiresReasoningContentOnAssistantMessages ??
       defaults.requiresReasoningContentOnAssistantMessages,
-    thinkingFormat: configured?.thinkingFormat ?? defaults.thinkingFormat,
+    thinkingFormat,
     openRouterRouting: configured?.openRouterRouting,
     vercelGatewayRouting: configured?.vercelGatewayRouting ?? {},
     zaiToolStream: configured?.zaiToolStream ?? false,

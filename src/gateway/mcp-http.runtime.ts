@@ -1,6 +1,11 @@
 // MCP loopback runtime scope cache.
 // Resolves Gateway-visible tools for MCP clients with short-lived schema caching.
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
+import {
+  readAdmittedRunOperatorAuthority,
+  type AdmittedRunContext,
+} from "../agents/admitted-run-context.js";
+import { resolveSessionAgentIds } from "../agents/agent-scope.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   loadPairedComputerUseAvailabilityForSurface,
@@ -12,8 +17,11 @@ import {
 } from "../agents/core-tool-factory-descriptors.js";
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { loadNodeExecAvailability } from "../agents/node-exec-availability.js";
-import type { PreparedRootedExecutionCapability } from "../agents/rooted-run-params.js";
-import { normalizeToolPolicyName } from "../agents/tool-policy.js";
+import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
+import { normalizeToolPolicyName, toolPolicyRestrictsTools } from "../agents/tool-policy.js";
+import { getInProcessGatewayToolContext } from "../agents/tools/in-process-gateway.js";
+import { hasSessionControlAuthority } from "../agents/tools/sessions-operator-authority.js";
+import type { SessionEventSourcePolicy } from "../auto-reply/reply/session-event-contract.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DirectoryCache } from "../infra/outbound/directory-cache.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
@@ -25,6 +33,9 @@ import {
   type McpLoopbackTool,
   type McpToolSchemaEntry,
 } from "./mcp-http.schema.js";
+import { withReadySessionRows } from "./session-row-prepared-read.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
+import { assertCompletionGrantLineage } from "./tool-resolution-completion.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 // MCP loopback runtime scopes gateway tools to the current session/channel
@@ -46,15 +57,20 @@ type CachedScopedTools = {
   workspaceDir: string | undefined;
   tools: McpLoopbackTool[];
   toolSchema: McpToolSchemaEntry[];
+  sessionFacts: ReturnType<typeof captureMcpCatalogSessionFacts>;
 };
 
 type McpLoopbackScopeParams = {
+  admittedRunContext?: AdmittedRunContext;
+  sessionEventSourcePolicy?: SessionEventSourcePolicy;
   context: Omit<McpLoopbackRequestContext, "senderIsOwner"> & { senderIsOwner?: boolean };
   cfg: OpenClawConfig;
   authProfileStore?: AuthProfileStore;
   authProfileStoreAgentDir?: string;
   skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
-  rootedExecution?: PreparedRootedExecutionCapability;
+  /** Host-selected coding owners for pre-grant projection only. */
+  defaultMediatedToolNames?: readonly string[];
+  messageActionTurnCapability?: string;
   grantToken?: string;
   /**
    * Liveness of the authenticating client grant. Deliberately absent from the
@@ -72,6 +88,62 @@ type McpLoopbackScopeParams = {
 
 type LoopbackToolsAllowMode = "exact" | "policy";
 
+function captureMcpLoopbackScope(params: McpLoopbackScopeParams) {
+  const canPreparePortal =
+    params.context.senderIsOwner === false &&
+    Boolean(params.context.sessionKey.trim() && params.context.sessionId);
+  const gateway = canPreparePortal ? getInProcessGatewayToolContext() : undefined;
+  const projection = gateway ? getSessionRowProjection(gateway) : undefined;
+  const assertCurrent = () => {
+    params.signal?.throwIfAborted();
+    assertCompletionGrantLineage(params);
+    hasSessionControlAuthority(readAdmittedRunOperatorAuthority(params.admittedRunContext));
+    if (params.isGrantCurrent?.() === false) {
+      throw new Error("MCP tool grant is no longer current");
+    }
+    if (
+      canPreparePortal &&
+      (getInProcessGatewayToolContext() !== gateway ||
+        getSessionRowProjection(gateway) !== projection)
+    ) {
+      throw new Error("MCP tool preparation belongs to a retired Gateway");
+    }
+  };
+  assertCurrent();
+  return { ...params, projection, assertCurrent };
+}
+
+type CapturedMcpLoopbackScope = ReturnType<typeof captureMcpLoopbackScope>;
+
+function captureMcpCatalogSessionFacts(params: CapturedMcpLoopbackScope) {
+  if (!params.projection) {
+    return undefined;
+  }
+  const { sessionAgentId: agentId } = resolveSessionAgentIds({
+    config: params.cfg,
+    sessionKey: params.context.sessionKey,
+    agentId: params.context.agentId,
+  });
+  const row = params.projection.capture({ agentId, key: params.context.sessionKey });
+  return {
+    projection: params.projection,
+    generation: row?.generation,
+    revision: row?.databaseFactsRevision,
+  };
+}
+
+function isMcpCatalogSessionCurrent(
+  catalog: Pick<CachedScopedTools, "sessionFacts">,
+  params: CapturedMcpLoopbackScope,
+) {
+  const current = captureMcpCatalogSessionFacts(params);
+  return (
+    catalog.sessionFacts?.projection === current?.projection &&
+    catalog.sessionFacts?.generation === current?.generation &&
+    catalog.sessionFacts?.revision === current?.revision
+  );
+}
+
 function resolveMediatedNativeTools(
   toolsAllow: string[] | undefined,
   mode: LoopbackToolsAllowMode,
@@ -83,10 +155,7 @@ function resolveMediatedNativeTools(
         .filter((name) => NATIVE_TOOL_EXCLUDE.has(name)),
     );
   }
-  if (
-    toolsAllow === undefined ||
-    toolsAllow.some((toolName) => normalizeToolPolicyName(toolName) === "*")
-  ) {
+  if (toolsAllow === undefined) {
     return new Set();
   }
   return new Set(
@@ -98,17 +167,21 @@ function resolveMediatedNativeTools(
 }
 
 async function resolveNodeExecScope(
-  params: McpLoopbackScopeParams,
+  params: CapturedMcpLoopbackScope,
   mode: LoopbackToolsAllowMode,
-): Promise<McpLoopbackScopeParams> {
+): Promise<CapturedMcpLoopbackScope> {
   const shouldResolveExec =
-    !params.rootedExecution &&
+    !params.context.trustedInternalHandoff &&
+    !toolPolicyRestrictsTools(pickSandboxToolPolicy(params.context.conversationToolPolicy)) &&
     params.context.nodeExecAllowed === true &&
+    !params.defaultMediatedToolNames?.length &&
     resolveMediatedNativeTools(params.context.toolsAllow, mode).size === 0;
   if (!shouldResolveExec) {
     return params;
   }
-  return { ...params, nodeExecAvailability: await loadNodeExecAvailability(params.signal) };
+  const nodeExecAvailability = await loadNodeExecAvailability(params.signal);
+  params.assertCurrent();
+  return { ...params, nodeExecAvailability };
 }
 
 function isComputerAllowedByMcpScope(
@@ -126,45 +199,34 @@ function isComputerAllowedByMcpScope(
 }
 
 type ResolvedNodeScope = {
-  params: McpLoopbackScopeParams;
-  policyResolved?: {
-    agentId: string | undefined;
-    workspaceDir?: string;
-    tools: McpLoopbackTool[];
-  };
+  params: CapturedMcpLoopbackScope;
+  policyResolved?: CachedScopedTools;
 };
 
-async function resolveNodeScope(
-  input: McpLoopbackScopeParams,
-  mode: LoopbackToolsAllowMode,
-): Promise<ResolvedNodeScope> {
-  return resolvePairedComputerNodeScope(await resolveNodeExecScope(input, mode), mode);
-}
-
 async function resolvePairedComputerNodeScope(
-  params: McpLoopbackScopeParams,
+  params: CapturedMcpLoopbackScope,
   mode: LoopbackToolsAllowMode,
 ): Promise<ResolvedNodeScope> {
+  params.assertCurrent();
   const canReachOrdinaryComputerSurface =
-    isComputerAllowedByMcpScope(params, mode) &&
-    params.context.modelHasVision !== false &&
-    !params.rootedExecution;
+    isComputerAllowedByMcpScope(params, mode) && params.context.modelHasVision !== false;
   if (!canReachOrdinaryComputerSurface) {
     return { params };
   }
   // Resolve the actual configured surface before contacting Gateway. Grant policy
   // alone is insufficient: profile, agent, sandbox, sender, and Gateway policy
   // can all remove computer from the final catalog.
-  const policyResolved = resolveMcpLoopbackTools(params, mode);
+  const policyResolved = await resolveMcpLoopbackTools(params, mode);
+  params.assertCurrent();
   const computerAllowed = policyResolved.tools.some(
     (tool) => readMcpLoopbackToolName(tool) === "computer",
   );
   const pairedComputerUseAvailability = await loadPairedComputerUseAvailabilityForSurface({
     computerAllowed,
     modelHasVision: params.context.modelHasVision,
-    computerTransport: params.rootedExecution ? null : undefined,
     signal: params.signal,
   });
+  params.assertCurrent();
   if (!pairedComputerUseAvailability) {
     return { params, policyResolved };
   }
@@ -180,22 +242,83 @@ async function resolvePairedComputerNodeScope(
     : { ...resolvedParams, policyResolved };
 }
 
-function resolveMcpLoopbackTools(
-  params: McpLoopbackScopeParams,
+async function resolveMcpLoopbackTools(
+  params: CapturedMcpLoopbackScope,
   mode: LoopbackToolsAllowMode,
-): {
-  agentId: string | undefined;
-  workspaceDir?: string;
-  tools: McpLoopbackTool[];
-} {
-  params.signal?.throwIfAborted();
-  const { toolsAllow, ...context } = params.context;
+  policyResolved?: CachedScopedTools,
+): Promise<CachedScopedTools> {
+  return withReadyMcpSession(params, () =>
+    policyResolved && isMcpCatalogSessionCurrent(policyResolved, params)
+      ? policyResolved
+      : constructMcpLoopbackTools(params, mode),
+  );
+}
+
+async function withReadyMcpSession<T>(
+  params: CapturedMcpLoopbackScope,
+  consume: () => T,
+): Promise<T> {
+  params.assertCurrent();
+  const { sessionKey, sessionId, senderIsOwner } = params.context;
+  if (!params.projection || !sessionId || senderIsOwner !== false) {
+    return consume();
+  }
+  const { sessionAgentId: agentId } = resolveSessionAgentIds({
+    config: params.cfg,
+    sessionKey,
+    agentId: params.context.agentId,
+  });
+  let receipt: {
+    sessionFacts: ReturnType<typeof captureMcpCatalogSessionFacts>;
+    sharingRevision: object | undefined;
+  };
+  do {
+    receipt = await withReadySessionRows(
+      params.projection,
+      () => [{ agentId, key: sessionKey }],
+      () => {
+        params.assertCurrent();
+        return {
+          sessionFacts: captureMcpCatalogSessionFacts(params),
+          sharingRevision: params.projection?.sharingRevision,
+        };
+      },
+    );
+    params.assertCurrent();
+  } while (
+    receipt.sharingRevision === undefined ||
+    receipt.sharingRevision !== params.projection.sharingRevision ||
+    !isMcpCatalogSessionCurrent(receipt, params)
+  );
+  return consume();
+}
+
+async function constructMcpLoopbackTools(
+  params: CapturedMcpLoopbackScope,
+  mode: LoopbackToolsAllowMode,
+): Promise<CachedScopedTools> {
+  params.assertCurrent();
+  // Retain the row identity so construction cannot publish facts from before an awaited read.
+  const sessionFacts = captureMcpCatalogSessionFacts(params);
+  const { toolsAllow, webSearchDisabled, ...context } = params.context;
   const excludeToolNames = new Set(NATIVE_TOOL_EXCLUDE);
+  if (webSearchDisabled) {
+    excludeToolNames.add("web_search");
+  }
   // Restricted CLI grants use OpenClaw's implementations for coding tools;
   // native CLI tools bypass path, approval, sandbox, and exec policy.
-  const mediatedNativeTools = params.rootedExecution
-    ? new Set(NATIVE_TOOL_EXCLUDE)
-    : resolveMediatedNativeTools(toolsAllow, mode);
+  const mediatedNativeTools =
+    context.trustedInternalHandoff ||
+    toolPolicyRestrictsTools(pickSandboxToolPolicy(context.conversationToolPolicy))
+      ? new Set(NATIVE_TOOL_EXCLUDE)
+      : resolveMediatedNativeTools(toolsAllow, mode);
+  for (const toolName of params.defaultMediatedToolNames ?? []) {
+    const name = normalizeToolPolicyName(toolName);
+    if (!NATIVE_TOOL_EXCLUDE.has(name)) {
+      throw new Error(`Unknown host-owned coding tool: ${toolName}`);
+    }
+    mediatedNativeTools.add(name);
+  }
   for (const toolName of mediatedNativeTools) {
     excludeToolNames.delete(toolName);
   }
@@ -203,13 +326,12 @@ function resolveMcpLoopbackTools(
   if (includeNodeExecTool) {
     excludeToolNames.delete("exec");
   }
-  const skillWorkshop =
-    context.skillWorkshop || params.skillLibraryAuthoring
-      ? { ...context.skillWorkshop, libraryAuthoring: params.skillLibraryAuthoring }
-      : undefined;
-  const scoped = resolveGatewayScopedTools({
+  const skillWorkshop = params.skillLibraryAuthoring
+    ? { libraryAuthoring: params.skillLibraryAuthoring }
+    : undefined;
+  const scopeOptions: Parameters<typeof resolveGatewayScopedTools>[0] = {
     ...context,
-    rootedExecution: params.rootedExecution,
+    messageActionTurnCapability: params.messageActionTurnCapability,
     cfg: params.cfg,
     authProfileStore: params.authProfileStore,
     onYield: params.onYield,
@@ -218,40 +340,64 @@ function resolveMcpLoopbackTools(
     agentDir: params.authProfileStoreAgentDir,
     conversationReadOrigin: "delegated",
     surface: "loopback",
+    admittedRunContext: params.admittedRunContext,
+    sessionEventSourcePolicy: params.sessionEventSourcePolicy,
     isGrantCurrent: params.isGrantCurrent,
     excludeToolNames,
     mediatedToolNames: mediatedNativeTools,
     includeNodeExecTool,
     nodeExecAvailable: params.nodeExecAvailability?.isAvailable,
     pairedNodeComputerUse: params.pairedComputerUseAvailability?.prepared,
-  });
+  };
+  const scoped = await resolveGatewayScopedTools(scopeOptions, params.assertCurrent);
+  params.assertCurrent();
+  const tools =
+    mode === "exact"
+      ? applyGrantToolsAllow(scoped.tools, toolsAllow)
+      : applyPolicyToolsAllow(scoped.tools, toolsAllow);
+  const toolSchema = buildMcpToolSchema(tools);
+  scoped.captureFinalCronCreatorTools?.(new Set(toolSchema.map((tool) => tool.name)));
   return {
     agentId: scoped.agentId,
     workspaceDir: scoped.workspaceDir,
-    tools:
-      mode === "exact"
-        ? applyGrantToolsAllow(scoped.tools, toolsAllow)
-        : applyPolicyToolsAllow(scoped.tools, toolsAllow),
+    tools,
+    toolSchema,
+    sessionFacts,
   };
 }
 
+async function resolveMcpLoopbackCatalog(
+  params: McpLoopbackScopeParams,
+  mode: LoopbackToolsAllowMode,
+): Promise<CachedScopedTools> {
+  const resolved = await resolvePairedComputerNodeScope(
+    await resolveNodeExecScope(captureMcpLoopbackScope(params), mode),
+    mode,
+  );
+  for (;;) {
+    const tools = await resolveMcpLoopbackTools(resolved.params, mode, resolved.policyResolved);
+    resolved.params.assertCurrent();
+    if (isMcpCatalogSessionCurrent(tools, resolved.params)) {
+      return tools;
+    }
+  }
+}
+
 /** Resolves loopback-visible tools from the exact names carried by a minted grant. */
-export async function resolveMcpLoopbackScopedTools(params: McpLoopbackScopeParams): Promise<{
+export function resolveMcpLoopbackScopedTools(params: McpLoopbackScopeParams): Promise<{
   agentId: string | undefined;
   workspaceDir?: string;
   tools: McpLoopbackTool[];
 }> {
-  const resolved = await resolveNodeScope(params, "exact");
-  return resolved.policyResolved ?? resolveMcpLoopbackTools(resolved.params, "exact");
+  return resolveMcpLoopbackCatalog(params, "exact");
 }
 
 /** Materializes runtime policy expressions against the concrete loopback catalog. */
-export async function resolveMcpLoopbackPolicyTools(params: McpLoopbackScopeParams): Promise<{
+export function resolveMcpLoopbackPolicyTools(params: McpLoopbackScopeParams): Promise<{
   agentId: string | undefined;
   tools: McpLoopbackTool[];
 }> {
-  const resolved = await resolveNodeScope(params, "policy");
-  return resolved.policyResolved ?? resolveMcpLoopbackTools(resolved.params, "policy");
+  return resolveMcpLoopbackCatalog(params, "policy");
 }
 
 /**
@@ -302,7 +448,6 @@ function buildMcpLoopbackToolCacheKey(params: McpLoopbackScopeParams): string {
       clientCaps: [...new Set(context.clientCaps ?? [])].toSorted(),
       // Missing allows all; an empty list denies all.
       toolsAllow: context.toolsAllow ? [...new Set(context.toolsAllow)].toSorted() : undefined,
-      modelHasVision: context.modelHasVision,
       pinnedWidgetAuthoring: context.pinnedWidgetAuthoring === true,
       currentInboundAudio: context.currentInboundAudio === true,
       sourceReplyOnly: context.sourceReplyOnly === true,
@@ -311,6 +456,11 @@ function buildMcpLoopbackToolCacheKey(params: McpLoopbackScopeParams): string {
       delegationCapability:
         context.delegationCapability === "report_only" ? "report_only" : undefined,
     },
+    admittedRunInstance: params.admittedRunContext?.operationalRunInstance,
+    defaultMediatedToolNames: params.defaultMediatedToolNames,
+    sessionControlsAllowed: hasSessionControlAuthority(
+      readAdmittedRunOperatorAuthority(params.admittedRunContext),
+    ),
     authProfileStoreAgentDir: params.authProfileStoreAgentDir,
     yieldContextCacheKey: params.yieldContextCacheKey,
     nodeExecAvailability: params.nodeExecAvailability?.cacheKey,
@@ -327,44 +477,56 @@ export class McpLoopbackToolCache {
 
   async resolve(input: McpLoopbackScopeParams): Promise<CachedScopedTools> {
     const epoch = this.#epoch;
-    const nodeExecParams = await resolveNodeExecScope(input, "exact");
-    input.signal?.throwIfAborted();
-    // A policy-excluded computer scope has no inventory component. It can use
-    // the ordinary cached catalog without touching Gateway again.
-    const preDiscoveryCacheKey = buildMcpLoopbackToolCacheKey(nodeExecParams);
-    const preDiscoveryCached = this.#entries.get(preDiscoveryCacheKey, nodeExecParams.cfg);
-    if (preDiscoveryCached) {
-      return preDiscoveryCached;
-    }
+    const nodeExecParams = await resolveNodeExecScope(captureMcpLoopbackScope(input), "exact");
+    for (;;) {
+      nodeExecParams.assertCurrent();
+      // A policy-excluded computer scope has no inventory component. It can use
+      // the ordinary cached catalog without touching Gateway again.
+      const preDiscoveryCacheKey = buildMcpLoopbackToolCacheKey(nodeExecParams);
+      let preDiscoveryCached = this.#entries.get(preDiscoveryCacheKey, nodeExecParams.cfg);
+      if (preDiscoveryCached) {
+        preDiscoveryCached = await withReadyMcpSession(nodeExecParams, () => {
+          const cached = this.#entries.get(preDiscoveryCacheKey, nodeExecParams.cfg);
+          return cached && isMcpCatalogSessionCurrent(cached, nodeExecParams) ? cached : undefined;
+        });
+        nodeExecParams.assertCurrent();
+        if (preDiscoveryCached && isMcpCatalogSessionCurrent(preDiscoveryCached, nodeExecParams)) {
+          return preDiscoveryCached;
+        }
+      }
 
-    // Availability belongs to the current connection, not the schema TTL.
-    const resolved = await resolvePairedComputerNodeScope(nodeExecParams, "exact");
-    input.signal?.throwIfAborted();
-    const { params } = resolved;
-    const cacheKey = buildMcpLoopbackToolCacheKey(params);
-    const cached = this.#entries.get(cacheKey, params.cfg);
-    if (cached) {
-      return cached;
+      // Availability belongs to the current connection, not the schema TTL.
+      const resolved = await resolvePairedComputerNodeScope(nodeExecParams, "exact");
+      nodeExecParams.assertCurrent();
+      const { params } = resolved;
+      const cacheKey = buildMcpLoopbackToolCacheKey(params);
+      const nextEntry = await withReadyMcpSession(params, async () => {
+        const cached = this.#entries.get(cacheKey, params.cfg);
+        if (cached && isMcpCatalogSessionCurrent(cached, params)) {
+          return cached;
+        }
+        const next =
+          resolved.policyResolved && isMcpCatalogSessionCurrent(resolved.policyResolved, params)
+            ? resolved.policyResolved
+            : await constructMcpLoopbackTools(params, "exact");
+        params.assertCurrent();
+        // Revocation may overtake discovery before a grant owns any cached rows.
+        if (epoch === this.#epoch && isMcpCatalogSessionCurrent(next, params)) {
+          this.#entries.set(cacheKey, next, params.cfg);
+          if (params.grantToken) {
+            const scopes =
+              this.#grantConfigScopes.get(params.grantToken) ?? new Set<OpenClawConfig>();
+            scopes.add(params.cfg);
+            this.#grantConfigScopes.set(params.grantToken, scopes);
+          }
+        }
+        return next;
+      });
+      params.assertCurrent();
+      if (isMcpCatalogSessionCurrent(nextEntry, params)) {
+        return nextEntry;
+      }
     }
-
-    const next = resolved.policyResolved ?? resolveMcpLoopbackTools(params, "exact");
-    const nextEntry: CachedScopedTools = {
-      agentId: next.agentId,
-      workspaceDir: next.workspaceDir,
-      tools: next.tools,
-      toolSchema: buildMcpToolSchema(next.tools),
-    };
-    // Revocation may overtake discovery before a grant owns any cached rows.
-    if (epoch !== this.#epoch) {
-      return nextEntry;
-    }
-    this.#entries.set(cacheKey, nextEntry, params.cfg);
-    if (params.grantToken) {
-      const scopes = this.#grantConfigScopes.get(params.grantToken) ?? new Set<OpenClawConfig>();
-      scopes.add(params.cfg);
-      this.#grantConfigScopes.set(params.grantToken, scopes);
-    }
-    return nextEntry;
   }
 
   evictGrant(token: string): boolean {

@@ -10,6 +10,7 @@ import {
   createRecoveryChannelManager,
   type RecoveryFixtureFactory,
 } from "./server-plugin-reload.recovery.test-support.js";
+import { createReadinessChecker } from "./server/readiness.js";
 
 export async function verifyPreparedSidecarRecovery(
   createFixture: RecoveryFixtureFactory,
@@ -126,6 +127,10 @@ export async function verifyServiceCleanupRecovery(createFixture: RecoveryFixtur
       throw new Error("fixture service could not close");
     },
   });
+  await expect(fixture.reload()).rejects.toMatchObject({
+    details: { phase: "drain", committed: false },
+  });
+  expect(fixture.rollbackConfigEffects).toHaveBeenCalledOnce();
   const disabled = await fixture.reload({
     plugins: { allow: ["first", "sibling"], entries: { first: { enabled: false } } },
   });
@@ -151,9 +156,7 @@ export async function verifyServiceCleanupRecovery(createFixture: RecoveryFixtur
 export async function verifyIndependentPostCommitActivation(
   createFixture: RecoveryFixtureFactory,
   boundary:
-    | "channel"
     | "channel-retry"
-    | "hook"
     | "publication"
     | "notification"
     | "memory"
@@ -161,8 +164,7 @@ export async function verifyIndependentPostCommitActivation(
     | "hook-and-channel",
 ) {
   const failure = new Error(`${boundary} activation refused`);
-  const channelFailure =
-    boundary === "hook-and-channel" ? new Error("channel preparation refused") : failure;
+  const channelFailure = new Error("channel preparation refused");
   const starts: string[] = [];
   let generation = 0;
   const fixture = await createFixture({
@@ -211,7 +213,7 @@ export async function verifyIndependentPostCommitActivation(
         });
       }
       api.on("gateway_start", () => {
-        if ((boundary === "hook" || boundary === "hook-and-channel") && current > 1) {
+        if (boundary === "hook-and-channel" && current > 1) {
           throw failure;
         }
       });
@@ -226,11 +228,7 @@ export async function verifyIndependentPostCommitActivation(
               id,
               config: {
                 listAccountIds: () => {
-                  if (
-                    (boundary === "channel" || boundary === "hook-and-channel") &&
-                    current > 1 &&
-                    id === "first-channel"
-                  ) {
+                  if (boundary === "hook-and-channel" && current > 1 && id === "first-channel") {
                     throw channelFailure;
                   }
                   return ["default"];
@@ -293,6 +291,16 @@ export async function verifyIndependentPostCommitActivation(
     }
     const result = await fixture.reload().catch((error: unknown) => error);
     expect(result).toMatchObject({ details: { committed: true, phase: "activate" } });
+    const readiness = createReadinessChecker({
+      channelManager: manager,
+      startedAt: Date.now(),
+      getPluginReloadStatus: fixture.owner.getReloadStatus,
+    });
+    expect(readiness()).toMatchObject({
+      ready: false,
+      failing: ["plugin-reload"],
+      pluginReload: { phase: "failed" },
+    });
     assert(result instanceof Error);
     if (boundary === "hook-and-channel") {
       expect(result.cause).toMatchObject({ errors: [{ cause: failure }, channelFailure] });
@@ -300,8 +308,6 @@ export async function verifyIndependentPostCommitActivation(
       expect(result.message).toContain(channelFailure.message);
     } else if (boundary === "memory") {
       expect(result.cause).toMatchObject({ errors: [failure] });
-    } else if (boundary === "hook") {
-      expect(result.cause).toMatchObject({ cause: failure });
     } else if (boundary === "channel-retry") {
       expect(result.cause).toMatchObject({
         message: "Plugin channel first-channel could not start: default",
@@ -314,7 +320,7 @@ export async function verifyIndependentPostCommitActivation(
     expect(starts).toContain("healthy-channel:2");
     expect(resumed).toHaveBeenCalledWith(1);
     expect(fixture.siblingStart).toHaveBeenCalledOnce();
-    expect(fixture.siblingStop).not.toHaveBeenCalled();
+    expect(fixture.siblingStop).toHaveBeenCalledTimes(boundary === "memory" ? 1 : 0);
     const routes = fixture.registryOwner.registry.httpRoutes;
     expect(routes.some((route) => route.handoff)).toBe(false);
     expect(routes.some((route) => route.path === "/removed-channel")).toBe(false);
@@ -397,7 +403,7 @@ export async function verifyLifecycleHookSettlement(
     });
     expect(starts).toEqual([1]);
     if (phase === "stop") {
-      expect(fixture.firstStop).not.toHaveBeenCalled();
+      expect(fixture.firstStop).toHaveBeenCalledOnce();
     }
     release.resolve();
     const result = await reloading;
@@ -405,10 +411,14 @@ export async function verifyLifecycleHookSettlement(
       expect(result).toMatchObject({ details: { committed: true }, cause: { cause: failure } });
     } else {
       expect(result).toMatchObject({
-        runtime: { warnings: [expect.stringContaining(failure.message)] },
+        details: { committed: false, phase: "drain" },
+        message: expect.stringContaining(failure.message),
       });
+      expect(fixture.candidates).toHaveLength(0);
+      expect(fixture.firstStart).toHaveBeenCalledOnce();
+      expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
     }
-    expect(starts).toEqual([1, 2]);
+    expect(starts).toEqual(phase === "start" ? [1, 2] : [1]);
   } finally {
     release.resolve();
     await reloading;
@@ -484,7 +494,14 @@ export async function verifyIndependentRollbackRestoration(
     await manager.startChannel("healthy-restore");
     const result = await fixture.reload().catch((error: unknown) => error);
     expect(result).toMatchObject({ details: { committed: false } });
-    expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
+    expect(fixture.registryOwner.registry).not.toBe(fixture.previousRegistry);
+    const restoredRecord = fixture.registryOwner.registry.plugins.find(
+      (record) => record.id === "first",
+    );
+    expect(restoredRecord).not.toBe(fixture.previousRegistry.plugins[0]);
+    expect(fixture.registryOwner.registry.plugins.find((record) => record.id === "sibling")).toBe(
+      fixture.previousRegistry.plugins[1],
+    );
     expect(resumed).toEqual([0, 1]);
     if (boundary === "services") {
       expect(result).toMatchObject({
@@ -501,8 +518,12 @@ export async function verifyIndependentRollbackRestoration(
         manager
           .getRuntimeSnapshot({ channelId: "healthy-restore", inspectAccounts: false })
           .reloadingChannels?.has("healthy-restore"),
-      ).toBe(true);
+      ).toBe(false);
       expect(starts).toEqual(["first-restore", "healthy-restore"]);
+      await manager.startChannel("healthy-restore");
+      await vi.waitFor(() =>
+        expect(starts).toEqual(["first-restore", "healthy-restore", "healthy-restore"]),
+      );
     } else {
       expect(result).toMatchObject({ cause: { errors: [expect.any(Error), failure] } });
       expect(starts).toEqual(["first-restore", "healthy-restore", "healthy-restore"]);
@@ -514,6 +535,13 @@ export async function verifyIndependentRollbackRestoration(
     expect(fixture.siblingStart).toHaveBeenCalledOnce();
     expect(fixture.siblingStop).not.toHaveBeenCalled();
     expect(fixture.owner.currentServices()).not.toBeNull();
+    if (boundary === "channel") {
+      await fixture.reload(fixture.getConfig(), ["sibling"]);
+      expect(fixture.owner.getReloadStatus()).toMatchObject({
+        phase: "failed",
+        pluginIds: ["first"],
+      });
+    }
   } finally {
     await manager.stopChannel("first-restore");
     await manager.stopChannel("healthy-restore");

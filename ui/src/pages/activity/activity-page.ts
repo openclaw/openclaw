@@ -16,9 +16,12 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { readPresenceEntries, type PresencePayload } from "../../app/user-profile.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { icons } from "../../components/icons.ts";
+import { renderLoadingState } from "../../components/loading-state.ts";
+import { renderSettingsStatus } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
@@ -31,10 +34,11 @@ import {
   resolveUiDefaultAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { createPresenceActivityController } from "../../lit/presence-activity-controller.ts";
 import { StreamAutoFollowController } from "../../lit/stream-auto-follow-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderCurrentWork } from "./current-work-view.ts";
-import type { LiveActivity } from "./live-activity.ts";
+import { createLiveActivity } from "./live-activity.ts";
 import {
   activityRunInspectorSearch,
   mergeDecisionPage,
@@ -53,15 +57,11 @@ import { renderSessionActivityView } from "./session-activity-view.ts";
 import type { ActivityEntry, ActivityStatus } from "./tool-activity.ts";
 import { renderActivity } from "./view.ts";
 
-function selectorKey(selector: RunInspectorSelector | null): string | null {
-  return selector ? `${selector.kind}:${selector.id}` : null;
-}
-
-function inspectorRequestKey(route: ActivityRouteData): string | null {
-  if (route.mode !== "run" || !route.selector) {
+function inspectorRequestKey(route: ActivityRouteData | undefined): string | null {
+  if (route?.mode !== "run" || !route.selector) {
     return null;
   }
-  return `${selectorKey(route.selector)}:${route.decisionCursor ?? ""}`;
+  return `${route.selector.kind}:${route.selector.id}:${route.decisionCursor ?? ""}`;
 }
 
 function isExpiredDecisionCursorError(error: unknown): boolean {
@@ -72,20 +72,24 @@ function isExpiredDecisionCursorError(error: unknown): boolean {
   );
 }
 
+function updateExpandedIds(ids: ReadonlySet<string>, id: string, open?: boolean): Set<string> {
+  const next = new Set(ids);
+  if (open ?? !next.has(id)) {
+    next.add(id);
+  } else {
+    next.delete(id);
+  }
+  return next;
+}
+
 class ActivityPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
-  @property({ attribute: false }) routeLocation: RouteLocation = {
-    pathname: "/activity",
-    search: "",
-    hash: "",
-  };
-  private routeData: ActivityRouteData = {
-    mode: "sessions",
-    filters: { personId: null, query: "", time: "7d" },
-    selector: null,
-  };
+  // A loaded route module can still be waiting for its location data.
+  @property({ attribute: false }) routeLocation?: RouteLocation;
+  private routeData?: ActivityRouteData;
+  private presentedRoute?: { location: RouteLocation; data: ActivityRouteData };
 
   @state() private entries: readonly ActivityEntry[] = [];
   @state() private filterText = "";
@@ -100,8 +104,12 @@ class ActivityPage extends OpenClawLightDomElement {
   @state() private autoFollow = true;
   @state() private runInspector: RunInspectorState = { status: "empty" };
   @state() private presencePayload: PresencePayload | undefined;
+  private readonly activityExpiry = createPresenceActivityController(
+    this,
+    () => projectPresencePayload(this.presencePayload).users,
+  );
 
-  private liveActivitySource: LiveActivity | null = null;
+  private liveActivity: ReturnType<typeof createLiveActivity> | null = null;
   private liveActivityRevision = -1;
   private readonly sessionActivity = new SessionActivityController(this);
   private sessionActivityRevision = -1;
@@ -115,29 +123,23 @@ class ActivityPage extends OpenClawLightDomElement {
     isEnabled: () => this.autoFollow,
   });
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.agents,
-      (agents, notify) => agents.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.liveActivity,
-      (activity, notify) => activity.subscribe(notify),
-      (activity) => {
-        const snapshot = activity.snapshot;
-        const reset =
-          activity !== this.liveActivitySource || snapshot.revision !== this.liveActivityRevision;
-        this.liveActivitySource = activity;
-        this.liveActivityRevision = snapshot.revision;
-        this.entries = snapshot.entries;
-        if (reset) {
-          this.expandedIds = new Set();
-          this.streamFollow.atBottom = true;
-        }
-      },
-    )
+    .watchStore(() => this.context?.agents)
     .effect(
       () => this.context?.gateway,
       (gateway) => {
+        const activity = createLiveActivity(gateway, this.context.sessions);
+        this.liveActivity = activity;
+        this.entries = [];
+        this.expandedIds = new Set();
+        const stopActivity = activity.subscribe((snapshot) => {
+          this.entries = snapshot.entries;
+          this.requestUpdate();
+          if (snapshot.revision !== this.liveActivityRevision) {
+            this.liveActivityRevision = snapshot.revision;
+            this.expandedIds = new Set();
+            this.streamFollow.atBottom = true;
+          }
+        });
         this.applyGatewaySnapshot(gateway, gateway.snapshot, true);
         const stopEvents = gateway.subscribeEvents((event) => {
           this.applyGatewayEvent(gateway, event);
@@ -146,6 +148,9 @@ class ActivityPage extends OpenClawLightDomElement {
           this.applyGatewaySnapshot(gateway, snapshot, false),
         );
         return () => {
+          stopActivity();
+          activity.dispose();
+          this.liveActivity = null;
           stopGateway();
           stopEvents();
         };
@@ -153,24 +158,35 @@ class ActivityPage extends OpenClawLightDomElement {
     );
 
   override willUpdate(changed: PropertyValues) {
+    this.activityExpiry.sync();
     if (changed.has("routeLocation")) {
-      this.routeData = resolveActivityRouteData(
-        this.routeLocation.search,
-        activityPersonFromPath(this.routeLocation.pathname, this.context?.basePath),
-      );
+      this.routeData = this.routeLocation
+        ? resolveActivityRouteData(
+            this.routeLocation.search,
+            activityPersonFromPath(this.routeLocation.pathname, this.context?.basePath),
+          )
+        : undefined;
+      if (this.routeLocation && this.routeData) {
+        this.presentedRoute = { location: this.routeLocation, data: this.routeData };
+      }
       this.syncSessionActivity();
     }
   }
 
   override updated(changed: PropertyValues) {
+    this.liveActivity?.syncSessions(
+      this.routeData?.mode === "live" ? (this.sessionActivity.result?.sessions ?? []) : [],
+    );
     if (changed.has("routeLocation")) {
       this.bindInspectorRoute();
     }
-    const canonical = this.sessionActivity.canonicalLocation(
-      this.routeLocation,
-      this.context.basePath,
-      projectPresencePayload(this.presencePayload).users,
-    );
+    const canonical = this.routeLocation
+      ? this.sessionActivity.canonicalLocation(
+          this.routeLocation,
+          this.context.basePath,
+          projectPresencePayload(this.presencePayload).users,
+        )
+      : null;
     if (canonical) {
       this.context.replace("activity", canonical);
     }
@@ -186,6 +202,7 @@ class ActivityPage extends OpenClawLightDomElement {
   override disconnectedCallback() {
     this.subscriptions.clear();
     this.cancelInspectorRequest();
+    this.presentedRoute = undefined;
     super.disconnectedCallback();
   }
 
@@ -196,7 +213,8 @@ class ActivityPage extends OpenClawLightDomElement {
   ) {
     if (sourceChanged || gateway.eventLogRevision !== this.sessionActivityRevision) {
       this.sessionActivityRevision = gateway.eventLogRevision;
-      this.sessionActivity.load(null, null);
+      this.presentedRoute = undefined;
+      void this.sessionActivity.load(null, null);
     }
     if (sourceChanged || snapshot.client !== this.presenceClient) {
       this.presenceClient = snapshot.client;
@@ -212,11 +230,11 @@ class ActivityPage extends OpenClawLightDomElement {
 
   private syncSessionActivity(reason: "query" | "retry" = "query") {
     const snapshot = this.context?.gateway.snapshot;
-    this.sessionActivity.load(
+    void this.sessionActivity.load(
       snapshot?.phase === "connected" ? snapshot.client : null,
-      this.routeData.mode === "sessions"
+      this.routeData?.mode === "sessions"
         ? this.routeData.filters
-        : this.routeData.mode === "live"
+        : this.routeData?.mode === "live"
           ? "current"
           : null,
       reason,
@@ -271,16 +289,16 @@ class ActivityPage extends OpenClawLightDomElement {
       this.runInspector = { status: "disconnected" };
       return;
     }
-    if (isGatewayMethodAdvertised(snapshot, "audit.run.inspect") === false) {
+    const unavailable =
+      isGatewayMethodAdvertised(snapshot, "audit.run.inspect") === false
+        ? "unsupported"
+        : !canCallGatewayMethod(snapshot, "audit.run.inspect", "operator.read")
+          ? "unauthorized"
+          : null;
+    if (unavailable) {
       this.cancelInspectorRequest();
       this.inspectorClient = snapshot.client;
-      this.runInspector = { status: "unsupported" };
-      return;
-    }
-    if (!canCallGatewayMethod(snapshot, "audit.run.inspect", "operator.read")) {
-      this.cancelInspectorRequest();
-      this.inspectorClient = snapshot.client;
-      this.runInspector = { status: "unauthorized" };
+      this.runInspector = { status: unavailable };
       return;
     }
     if (
@@ -307,14 +325,16 @@ class ActivityPage extends OpenClawLightDomElement {
     client: GatewayBrowserClient,
     selector: RunInspectorSelector,
     previousState?: Extract<RunInspectorState, { status: "ready" }>,
+    pageKind: "executions" | "decisions" = "executions",
   ) {
     this.cancelInspectorRequest();
     const epoch = this.inspectorEpoch;
     const abort = new AbortController();
     this.inspectorAbort = abort;
     this.inspectorClient = client;
+    const pageStatus = pageKind === "decisions" ? "decisionPageStatus" : "executionPageStatus";
     this.runInspector = previousState
-      ? { ...previousState, executionPageStatus: "loading" }
+      ? { ...previousState, [pageStatus]: "loading" }
       : { status: "loading", waitingForGateway: false };
     const requestSelectorKey = inspectorRequestKey(this.routeData);
     const isCurrent = () =>
@@ -324,60 +344,62 @@ class ActivityPage extends OpenClawLightDomElement {
       gateway.snapshot.phase === "connected" &&
       this.routeData?.mode === "run" &&
       inspectorRequestKey(this.routeData) === requestSelectorKey;
-    const decisionCursor = this.routeData.mode === "run" ? this.routeData.decisionCursor : null;
+    const decisionCursor =
+      pageKind === "decisions"
+        ? previousState?.result.nextDecisionCursor
+        : this.routeData?.mode === "run"
+          ? this.routeData.decisionCursor
+          : null;
     try {
-      const params =
-        selector.kind === "run"
+      const params = {
+        ...(selector.kind === "run"
           ? {
               runId: selector.id,
-              decisionLimit: 50,
               executionLimit: 50,
-              ...(decisionCursor ? { decisionCursor } : {}),
-              ...(previousState?.result.nextExecutionCursor
+              ...(pageKind === "executions" && previousState?.result.nextExecutionCursor
                 ? { executionCursor: previousState.result.nextExecutionCursor }
                 : {}),
             }
-          : {
-              executionId: selector.id,
-              decisionLimit: 50,
-              ...(decisionCursor ? { decisionCursor } : {}),
-            };
-      const result = await client.request<AuditRunInspectResult>("audit.run.inspect", params, {
+          : { executionId: selector.id }),
+        decisionLimit: 50,
+        ...(decisionCursor ? { decisionCursor } : {}),
+      };
+      let result = await client.request<AuditRunInspectResult>("audit.run.inspect", params, {
         signal: abort.signal,
       });
-      if (isCurrent()) {
-        if (
-          previousState?.result.identity.state === "ambiguous" &&
-          result.identity.state === "ambiguous"
-        ) {
-          const candidates = new Map(
-            previousState.result.identity.candidates.map((candidate) => [
-              candidate.executionId,
-              candidate,
-            ]),
-          );
-          for (const candidate of result.identity.candidates) {
-            candidates.set(candidate.executionId, candidate);
-          }
-          this.runInspector = {
-            status: "ready",
-            result: {
-              ...result,
-              identity: { ...result.identity, candidates: [...candidates.values()] },
-            },
-            receiptPageCursors: previousState.receiptPageCursors,
-          };
-        } else {
-          this.runInspector = {
-            status: "ready",
-            result,
-            receiptPageCursors: receiptPageCursors(
-              result.decisionDisplays,
-              decisionCursor ?? undefined,
-            ),
-          };
-        }
+      if (!isCurrent()) {
+        return;
       }
+      let cursors: ReturnType<typeof receiptPageCursors>;
+      if (previousState && pageKind === "decisions") {
+        const merged = mergeDecisionPage(previousState.result, result);
+        if (!merged) {
+          this.runInspector = { ...previousState, decisionPageStatus: "error" };
+          return;
+        }
+        cursors = new Map([
+          ...previousState.receiptPageCursors,
+          ...receiptPageCursors(result.decisionDisplays, decisionCursor ?? undefined),
+        ]);
+        result = merged;
+      } else if (
+        previousState?.result.identity.state === "ambiguous" &&
+        result.identity.state === "ambiguous"
+      ) {
+        const candidates = new Map(
+          [...previousState.result.identity.candidates, ...result.identity.candidates].map(
+            (candidate) => [candidate.executionId, candidate],
+          ),
+        );
+        result = {
+          ...result,
+          identity: { ...result.identity, candidates: [...candidates.values()] },
+        };
+        cursors = previousState.receiptPageCursors;
+      } else {
+        cursors = receiptPageCursors(result.decisionDisplays, decisionCursor ?? undefined);
+      }
+      this.runInspector = { status: "ready", result, receiptPageCursors: cursors };
     } catch (error) {
       if (!isCurrent() || abort.signal.aborted) {
         return;
@@ -387,7 +409,7 @@ class ActivityPage extends OpenClawLightDomElement {
         : this.isUnknownInspectMethod(error)
           ? { status: "unsupported" }
           : previousState
-            ? { ...previousState, executionPageStatus: "error" }
+            ? { ...previousState, [pageStatus]: "error" }
             : {
                 status: "error",
                 recovery:
@@ -400,110 +422,40 @@ class ActivityPage extends OpenClawLightDomElement {
     }
   }
 
-  private loadMoreExecutions() {
-    const route = this.routeData;
-    const snapshot = this.context.gateway.snapshot;
-    const inspectorState = this.runInspector;
-    if (
-      route?.mode !== "run" ||
-      route.selector?.kind !== "run" ||
-      snapshot.phase !== "connected" ||
-      !snapshot.client ||
-      inspectorState.status !== "ready" ||
-      inspectorState.executionPageStatus === "loading" ||
-      inspectorState.result.identity.state !== "ambiguous" ||
-      !inspectorState.result.nextExecutionCursor
-    ) {
-      return;
-    }
-    void this.loadRunInspector(
-      this.context.gateway,
-      snapshot.client,
-      route.selector,
-      inspectorState,
-    );
-  }
-
-  private loadMoreDecisions() {
+  private loadMoreInspectorPage(kind: "executions" | "decisions") {
     const route = this.routeData;
     const gateway = this.context.gateway;
     const snapshot = gateway.snapshot;
     const inspectorState = this.runInspector;
     if (
-      route.mode !== "run" ||
+      route?.mode !== "run" ||
       !route.selector ||
       snapshot.phase !== "connected" ||
       !snapshot.client ||
-      inspectorState.status !== "ready" ||
-      inspectorState.decisionPageStatus === "loading" ||
-      inspectorState.result.identity.state !== "present" ||
-      !inspectorState.result.nextDecisionCursor
+      inspectorState.status !== "ready"
     ) {
       return;
     }
-    const cursor = inspectorState.result.nextDecisionCursor;
-    const selector = route.selector;
-    const client = snapshot.client;
-    const requestSelectorKey = inspectorRequestKey(route);
-    this.cancelInspectorRequest();
-    const epoch = this.inspectorEpoch;
-    const abort = new AbortController();
-    this.inspectorAbort = abort;
-    this.runInspector = { ...inspectorState, decisionPageStatus: "loading" };
-    const isCurrent = () =>
-      this.inspectorEpoch === epoch &&
-      this.context.gateway === gateway &&
-      gateway.snapshot.client === client &&
-      gateway.snapshot.phase === "connected" &&
-      inspectorRequestKey(this.routeData) === requestSelectorKey;
-    const params =
-      selector.kind === "run"
-        ? { runId: selector.id, decisionCursor: cursor, decisionLimit: 50, executionLimit: 50 }
-        : { executionId: selector.id, decisionCursor: cursor, decisionLimit: 50 };
-    void client
-      .request<AuditRunInspectResult>("audit.run.inspect", params, { signal: abort.signal })
-      .then((page) => {
-        if (!isCurrent()) {
-          return;
-        }
-        const result = mergeDecisionPage(inspectorState.result, page);
-        if (!result) {
-          this.runInspector = { ...inspectorState, decisionPageStatus: "error" };
-          return;
-        }
-        const cursors = new Map(inspectorState.receiptPageCursors);
-        for (const receipt of page.decisionDisplays) {
-          cursors.set(receipt.selectorId, cursor);
-        }
-        this.runInspector = { status: "ready", result, receiptPageCursors: cursors };
-      })
-      .catch((error: unknown) => {
-        if (!isCurrent() || abort.signal.aborted) {
-          return;
-        }
-        this.runInspector = isMissingOperatorReadScopeError(error)
-          ? { status: "unauthorized" }
-          : this.isUnknownInspectMethod(error)
-            ? { status: "unsupported" }
-            : { ...inspectorState, decisionPageStatus: "error" };
-      })
-      .finally(() => {
-        if (this.inspectorAbort === abort) {
-          this.inspectorAbort = null;
-        }
-      });
+    const available =
+      kind === "executions"
+        ? route.selector.kind === "run" &&
+          inspectorState.executionPageStatus !== "loading" &&
+          inspectorState.result.identity.state === "ambiguous" &&
+          inspectorState.result.nextExecutionCursor
+        : inspectorState.decisionPageStatus !== "loading" &&
+          inspectorState.result.identity.state === "present" &&
+          inspectorState.result.nextDecisionCursor;
+    if (available) {
+      void this.loadRunInspector(gateway, snapshot.client, route.selector, inspectorState, kind);
+    }
   }
 
   private restartRunInspector() {
     const route = this.routeData;
-    if (route.mode !== "run" || !route.selector) {
+    if (route?.mode !== "run" || !route.selector) {
       return;
     }
     this.context.navigate("activity", { search: activityRunInspectorSearch(route.selector) });
-  }
-
-  private selectMode(mode: "sessions" | "live") {
-    this.context.navigate("activity", { search: mode === "live" ? "?view=live" : "" });
   }
 
   private applyGatewayEvent(gateway: ApplicationContext["gateway"], event: GatewayEventFrame) {
@@ -516,7 +468,10 @@ class ActivityPage extends OpenClawLightDomElement {
       change &&
       (change.hasActiveRun === false ||
         (change.status !== null && change.status !== "running" && change.status !== "queued"));
-    if (event.event === "sessions.changed" || (this.routeData.mode === "live" && terminalMessage)) {
+    if (
+      event.event === "sessions.changed" ||
+      (this.routeData?.mode === "live" && terminalMessage)
+    ) {
       this.sessionActivity.invalidate(event.payload);
     }
     if (event.event === "presence") {
@@ -525,12 +480,10 @@ class ActivityPage extends OpenClawLightDomElement {
     }
   }
 
-  private clearEntries() {
-    this.context.liveActivity.clear();
-  }
-
-  private renderMode() {
-    const route = this.routeData;
+  private renderMode(route: ActivityRouteData, location: RouteLocation, pending: boolean) {
+    if (pending && route.mode === "run") {
+      return renderLoadingState();
+    }
     if (route.mode === "sessions") {
       const presenceViewers = projectPresencePayload(this.presencePayload).users;
       return renderSessionActivityView({
@@ -542,7 +495,7 @@ class ActivityPage extends OpenClawLightDomElement {
         },
         presenceViewers,
         result: this.sessionActivity.result,
-        loading: this.sessionActivity.loading,
+        loading: pending || this.sessionActivity.loading,
         retrying: this.sessionActivity.retrying,
         error: this.sessionActivity.error,
         onRetry: () => this.syncSessionActivity("retry"),
@@ -555,20 +508,14 @@ class ActivityPage extends OpenClawLightDomElement {
           ? (row) => this.sessionActivity.retrySummary(row)
           : undefined,
         onAutomationDayToggle: (dayKey) => {
-          const next = new Set(this.expandedAutomationDays);
-          if (next.has(dayKey)) {
-            next.delete(dayKey);
-          } else {
-            next.add(dayKey);
-          }
-          this.expandedAutomationDays = next;
+          this.expandedAutomationDays = updateExpandedIds(this.expandedAutomationDays, dayKey);
         },
         onFiltersChange: (next) =>
           this.context.navigate(
             "activity",
             this.sessionActivity.locationForFilters(
               next,
-              this.routeLocation,
+              location,
               this.context.basePath,
               presenceViewers,
             ),
@@ -584,8 +531,8 @@ class ActivityPage extends OpenClawLightDomElement {
         ${renderRunInspector({
           basePath: this.context.basePath,
           state: this.runInspector,
-          onLoadMoreExecutions: () => this.loadMoreExecutions(),
-          onLoadMoreDecisions: () => this.loadMoreDecisions(),
+          onLoadMoreExecutions: () => this.loadMoreInspectorPage("executions"),
+          onLoadMoreDecisions: () => this.loadMoreInspectorPage("decisions"),
           selectorId: route.selectorId,
           selector: route.selector,
           onRestart: () => this.restartRunInspector(),
@@ -606,11 +553,21 @@ class ActivityPage extends OpenClawLightDomElement {
         navigate: this.context.navigate,
         connected: this.context.gateway.snapshot.phase === "connected",
         result: this.sessionActivity.result,
-        loading: this.sessionActivity.loading,
+        loading: pending || this.sessionActivity.loading,
         incomplete: this.sessionActivity.incomplete,
         error: this.sessionActivity.error,
         onRetry: () => this.syncSessionActivity("retry"),
       })}
+      ${
+        this.liveActivity?.snapshot.error
+          ? html`<div role="alert">
+              ${renderSettingsStatus({ kind: "danger", label: this.liveActivity.snapshot.error })}
+              <button type="button" class="btn btn--sm" @click=${() => this.liveActivity?.retry()}>
+                ${t("common.retry")}
+              </button>
+            </div>`
+          : nothing
+      }
       ${renderActivity({
         basePath: this.context.basePath,
         entries: this.entries,
@@ -625,7 +582,7 @@ class ActivityPage extends OpenClawLightDomElement {
           this.statusFilters = { ...this.statusFilters, [status]: enabled };
         },
         onToggleAutoFollow: (next) => (this.autoFollow = next),
-        onClear: () => this.clearEntries(),
+        onClear: () => this.liveActivity?.clear(),
         onExpandAll: () => {
           this.expandedIds = new Set(this.entries.map((entry) => entry.id));
         },
@@ -633,13 +590,7 @@ class ActivityPage extends OpenClawLightDomElement {
           this.expandedIds = new Set();
         },
         onEntryToggle: (id, open) => {
-          const next = new Set(this.expandedIds);
-          if (open) {
-            next.add(id);
-          } else {
-            next.delete(id);
-          }
-          this.expandedIds = next;
+          this.expandedIds = updateExpandedIds(this.expandedIds, id, open);
         },
         onScroll: (event) => this.streamFollow.handleScroll(event),
       })}
@@ -647,7 +598,14 @@ class ActivityPage extends OpenClawLightDomElement {
   }
 
   override render() {
-    const mode = this.routeData.mode;
+    const pending = !this.routeData || !this.routeLocation;
+    // Keep editing controls mounted; retained presentation never authorizes requests.
+    const route = this.routeData ?? this.presentedRoute?.data;
+    const location = this.routeLocation ?? this.presentedRoute?.location;
+    if (!route || !location) {
+      return renderLoadingState();
+    }
+    const mode = route.mode;
     const body = html`
       ${
         mode === "run"
@@ -663,7 +621,10 @@ class ActivityPage extends OpenClawLightDomElement {
               panelId: "activity-mode-panel",
               className: "activity-mode-tabs",
               variant: "sub",
-              onSelect: (selected) => this.selectMode(selected),
+              onSelect: (selected) =>
+                this.context.navigate("activity", {
+                  search: selected === "live" ? "?view=live" : "",
+                }),
             })
       }
       <div
@@ -671,11 +632,11 @@ class ActivityPage extends OpenClawLightDomElement {
         role=${mode === "run" ? nothing : "tabpanel"}
         aria-labelledby=${mode === "run" ? nothing : `activity-mode-tab-${mode}`}
       >
-        ${this.renderMode()}
+        ${this.renderMode(route, location, pending)}
       </div>
     `;
     return html`
-      <section class="content-header">
+      <section class="content-header" ${shellLayoutTraits({ toolbarHeader: true })}>
         <div>
           <div class="page-title">${titleForRoute("activity")}</div>
           ${
@@ -690,8 +651,11 @@ class ActivityPage extends OpenClawLightDomElement {
 
 export const activityPageComponent = {
   header: true,
-  render: (location: RouteLocation = { pathname: "/activity", search: "", hash: "" }) =>
-    html`<openclaw-activity-page .routeLocation=${location}></openclaw-activity-page>`,
+  render: (location: RouteLocation | undefined) =>
+    html`<openclaw-activity-page
+      .routeLocation=${location}
+      ${shellLayoutTraits({ activityPage: true })}
+    ></openclaw-activity-page>`,
 };
 
 if (!customElements.get("openclaw-activity-page")) {

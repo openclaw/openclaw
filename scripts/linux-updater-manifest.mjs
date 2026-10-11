@@ -108,15 +108,15 @@ function verifyManifestSource(repository, manifest, allowDraftTag) {
   }
 }
 
-function readManifest(repository, carrier, allowDraftTag) {
-  const assets = carrier.assets.filter((asset) => asset.name === "latest.json");
+function readManifest(repository, carrier, allowDraftTag, name = "latest.json") {
+  const assets = carrier.assets.filter((asset) => asset.name === name);
   if (assets.length === 0) {
     return null;
   }
   if (assets.length !== 1) {
     throw new Error(`Release ${carrier.tagName} has ambiguous Linux manifests.`);
   }
-  const bytes = downloadAsset(repository, carrier.tagName);
+  const bytes = downloadAsset(repository, carrier.tagName, name);
   const value = JSON.parse(bytes.toString("utf8"));
   const version = isRecord(value) ? value.version : undefined;
   if (typeof version !== "string") {
@@ -126,10 +126,15 @@ function readManifest(repository, carrier, allowDraftTag) {
   const platform = isRecord(value?.platforms) ? value.platforms["linux-x86_64"] : undefined;
   const assetName = `OpenClaw-${version}-amd64.AppImage`;
   const url = `https://github.com/${repository}/releases/download/${sourceTag}/${assetName}`;
+  const canonicalChannel =
+    carrier.tagName === "linux-stable" && !carrier.isDraft && carrier.isPrerelease;
   if (
     !regularStable(sourceTag) ||
-    !regularStable(carrier.tagName) ||
-    compareReleaseVersions(version, carrier.tagName.slice(1)) > 0 ||
+    (!canonicalChannel &&
+      (!regularStable(carrier.tagName) ||
+        compareReleaseVersions(version, carrier.tagName.slice(1)) > 0)) ||
+    (name !== "latest.json" &&
+      (name !== `OpenClaw-${version}-linux.json` || carrier.tagName !== sourceTag)) ||
     !isRecord(platform) ||
     Object.keys(value.platforms).length !== 1 ||
     typeof platform.signature !== "string" ||
@@ -139,54 +144,109 @@ function readManifest(repository, carrier, allowDraftTag) {
   ) {
     throw new Error(`Release ${carrier.tagName} has a noncanonical Linux updater manifest.`);
   }
-  const manifest = { bytes, version, sourceTag, assetName };
+  const manifest = { bytes, version, sourceTag, assetName, value };
   verifyManifestSource(repository, manifest, allowDraftTag);
+  return manifest;
+}
+
+function readImmutableManifest(repository, source) {
+  const name = `OpenClaw-${source.tagName.slice(1)}-linux.json`;
+  const manifest = readManifest(repository, source, undefined, name);
+  if (!manifest) {
+    return null;
+  }
+  const current = JSON.parse(
+    gh(["api", `repos/${repository}/releases/tags/${source.tagName}`]).toString("utf8"),
+  );
+  if (
+    !isRecord(current) ||
+    current.tag_name !== source.tagName ||
+    current.draft !== false ||
+    current.prerelease !== false ||
+    !Number.isSafeInteger(current.id) ||
+    current.id < 1 ||
+    !Array.isArray(current.assets) ||
+    !current.assets.every((entry) => isRecord(entry) && typeof entry.name === "string")
+  ) {
+    throw new Error("GitHub returned invalid immutable Linux release identity.");
+  }
+  const proof = manifest.value.linuxPublication;
+  const expected = [
+    manifest.assetName,
+    `OpenClaw-${manifest.version}-amd64.deb`,
+    "SHA256SUMS.linux-app.txt",
+    ...(proof?.assets?.length === 6
+      ? [
+          `OpenClaw-${manifest.version}-darwin-aarch64.dmg`,
+          `OpenClaw-${manifest.version}-darwin-aarch64.app.tar.gz`,
+          `OpenClaw-${manifest.version}-windows-x86_64.exe`,
+        ]
+      : []),
+  ];
+  const metadata = current.assets.filter((entry) => entry.name === name);
+  if (
+    !publicStable(source) ||
+    !isRecord(proof) ||
+    proof.schemaVersion !== 1 ||
+    !["sourceSha", "toolingSha", "channelSha"].every((key) => /^[a-f0-9]{40}$/u.test(proof[key])) ||
+    !/^[a-f0-9]{64}$/u.test(proof.publicKeySha256) ||
+    !Number.isSafeInteger(proof.releaseId) ||
+    proof.releaseId < 1 ||
+    proof.releaseId !== current.id ||
+    !Array.isArray(proof.assets) ||
+    proof.assets.length !== expected.length ||
+    !expected.every(
+      (assetName) => proof.assets.filter((entry) => entry.name === assetName).length === 1,
+    ) ||
+    metadata.length !== 1 ||
+    metadata[0].state !== "uploaded" ||
+    metadata[0].size !== manifest.bytes.length ||
+    metadata[0].digest !== `sha256:${hash(manifest.bytes)}`
+  ) {
+    throw new Error("Immutable Linux publication identity or metadata digest is invalid.");
+  }
+  for (const entry of proof.assets) {
+    const matches = current.assets.filter((asset) => asset.name === entry.name);
+    if (
+      !Number.isSafeInteger(entry.id) ||
+      entry.id < 1 ||
+      !Number.isSafeInteger(entry.size) ||
+      entry.size < 1 ||
+      !/^[a-f0-9]{64}$/u.test(entry.sha256) ||
+      matches.length !== 1 ||
+      matches[0].id !== entry.id ||
+      matches[0].state !== "uploaded" ||
+      matches[0].size !== entry.size ||
+      matches[0].digest !== `sha256:${entry.sha256}`
+    ) {
+      throw new Error("Immutable Linux publication differs from its public asset inventory.");
+    }
+  }
+  const sourceSha = gh(["api", `repos/${repository}/commits/${source.tagName}`, "--jq", ".sha"])
+    .toString("utf8")
+    .trim();
+  if (sourceSha !== proof.sourceSha) {
+    throw new Error("Immutable Linux publication source changed.");
+  }
+  inspectLinuxSourceAssets(repository, source, manifest);
   return manifest;
 }
 
 function verifyAuthority(options) {
   const runId = process.env.GITHUB_RUN_ID ?? "";
   const runAttempt = process.env.GITHUB_RUN_ATTEMPT ?? "";
-  const native = options.command === "publish";
   const prepared = Boolean(options["publication-request"]);
-  if (native && prepared) {
-    throw new Error(
-      "Native manifest publication requires its Linux release request, not a prepared carry request.",
-    );
-  }
-  const workflowPath = native
-    ? ".github/workflows/linux-app-release.yml"
-    : prepared
-      ? ".github/workflows/openclaw-release-promote.yml"
-      : ".github/workflows/openclaw-release-publish.yml";
+  const workflowPath = prepared
+    ? ".github/workflows/openclaw-release-promote.yml"
+    : ".github/workflows/openclaw-release-publish.yml";
   const common = { repository: options.repository, workflowSha: process.env.GITHUB_WORKFLOW_SHA };
 
-  let nativeRequest;
   if (!prepared) {
     if (!process.env.GITHUB_EVENT_PATH) {
       throw new Error("Actions event payload is required for Linux manifest publication.");
     }
     const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
-    if (native) {
-      const trigger = event?.workflow_run;
-      if (
-        !Number.isSafeInteger(trigger?.id) ||
-        trigger.id < 1 ||
-        !Number.isSafeInteger(trigger?.run_attempt) ||
-        trigger.run_attempt < 1
-      ) {
-        throw new Error("Actions event has no exact Linux release request run and attempt.");
-      }
-      nativeRequest = {
-        ...common,
-        runId: String(trigger.id),
-        runAttempt: String(trigger.run_attempt),
-        workflowPath: ".github/workflows/linux-app-release-request.yml",
-        workflowEvent: "workflow_dispatch",
-        workflowRef: "main",
-        workflowFullRef: "refs/heads/main",
-      };
-    } else if (event?.inputs?.tag !== options.tag || event?.inputs?.npm_dist_tag !== "latest") {
+    if (event?.inputs?.tag !== options.tag || event?.inputs?.npm_dist_tag !== "latest") {
       throw new Error("Actions release inputs differ from the Linux manifest operation.");
     }
   }
@@ -223,23 +283,12 @@ function verifyAuthority(options) {
     workflowSha: process.env.GITHUB_WORKFLOW_SHA,
     ...parent,
   });
-  if (nativeRequest) {
-    const request = verifyReleaseWorkflowRun({ ...nativeRequest, runStatePolicy: "success" });
-    if (
-      !["true", "false"].some(
-        (desktop) =>
-          request.display_title === `Linux App Release Request [${options.tag}] desktop=${desktop}`,
-      )
-    ) {
-      throw new Error("Linux release request source differs from the manifest publication tag.");
-    }
-  }
   verifyReleaseWorkflowRun({
     ...common,
     runId,
     runAttempt,
     workflowPath,
-    workflowEvent: native ? "workflow_run" : "workflow_dispatch",
+    workflowEvent: "workflow_dispatch",
     workflowRef: process.env.GITHUB_REF_NAME,
     workflowFullRef: process.env.GITHUB_REF,
     runStatePolicy: "active",
@@ -355,36 +404,6 @@ function carry(options, record) {
   uploadManifest(options, target, current, previous, latest, record);
 }
 
-function publish(options, record) {
-  const source = readRelease(options.repository, options.tag);
-  const latest = readRelease(options.repository, undefined, true);
-  if (
-    !publicStable(source) ||
-    !publicStable(latest) ||
-    compareReleaseVersions(options.tag.slice(1), latest.tagName.slice(1)) > 0
-  ) {
-    record({
-      state: "skipped",
-      reason: "Source is not eligible for the current stable Linux channel.",
-    });
-    return;
-  }
-  const candidate = readManifest(options.repository, source);
-  if (!candidate || candidate.sourceTag !== options.tag) {
-    throw new Error("Published Linux source is missing its own canonical updater manifest.");
-  }
-  const current =
-    latest.tagName === source.tagName ? candidate : readManifest(options.repository, latest);
-  if (current && compareReleaseVersions(current.version, candidate.version) >= 0) {
-    record({
-      state: "unchanged",
-      reason: "Current latest already has this Linux version or a newer one.",
-    });
-    return;
-  }
-  uploadManifest(options, latest, current, candidate, latest, record);
-}
-
 function inspectLinuxSourceAssets(repository, source, manifest) {
   const version = source.tagName.slice(1);
   const appimage = `OpenClaw-${version}-amd64.AppImage`;
@@ -431,9 +450,18 @@ function inspectLinuxSourceAssets(repository, source, manifest) {
 
 export function inspectLinuxUpdaterManifest({ repository, carrierTag }) {
   const carrier = readRelease(repository, carrierTag);
+  const immutable = readImmutableManifest(repository, carrier);
   const manifest = readManifest(repository, carrier);
   if (!manifest) {
-    return null;
+    return immutable
+      ? {
+          carrierTag,
+          immutableManifest: {
+            name: `OpenClaw-${immutable.version}-linux.json`,
+            sha256: hash(immutable.bytes),
+          },
+        }
+      : null;
   }
   const source = readRelease(repository, manifest.sourceTag);
   const publication = inspectLinuxSourceAssets(repository, source, manifest);
@@ -451,24 +479,75 @@ export function inspectLinuxUpdaterManifest({ repository, carrierTag }) {
   ) {
     throw new Error("Linux updater observation does not match the published carrier asset digest.");
   }
-  return { carrierTag, manifestSha256, sourceVersion: manifest.version };
+  return {
+    carrierTag,
+    manifestSha256,
+    sourceVersion: manifest.version,
+    ...(immutable
+      ? {
+          immutableManifest: {
+            name: `OpenClaw-${immutable.version}-linux.json`,
+            sha256: hash(immutable.bytes),
+          },
+        }
+      : {}),
+  };
 }
 
 function status(options, record) {
   const source = readRelease(options.repository, options.tag);
-  const manifest = readManifest(options.repository, source);
+  const immutable = readImmutableManifest(options.repository, source);
+  const manifest = immutable ?? readManifest(options.repository, source);
   const publication = inspectLinuxSourceAssets(options.repository, source, manifest);
   if (!publication) {
-    record({ state: "pending", reason: "No Linux bundles have been published for this tag." });
+    record({
+      state: "pending",
+      assetsComplete: false,
+      reason: "No Linux bundles have been published for this tag.",
+    });
     return;
   }
   const version = options.tag.slice(1);
+  const channel = readRelease(options.repository, "linux-stable", true);
+  const canonical = channel ? readManifest(options.repository, channel) : null;
+  if (canonical) {
+    const canonicalSource = readRelease(options.repository, canonical.sourceTag);
+    const published = readImmutableManifest(options.repository, canonicalSource);
+    const channelSha = gh([
+      "api",
+      `repos/${options.repository}/commits/linux-stable`,
+      "--jq",
+      ".sha",
+    ])
+      .toString("utf8")
+      .trim();
+    if (
+      !published ||
+      !published.bytes.equals(canonical.bytes) ||
+      published.value.linuxPublication.channelSha !== channelSha
+    ) {
+      throw new Error("Canonical Linux metadata differs from its immutable publication.");
+    }
+  }
+  const needsChannelPublication =
+    !immutable || !canonical || compareReleaseVersions(canonical.version, version) < 0;
+  if (
+    immutable &&
+    canonical &&
+    canonical.version === version &&
+    !canonical.bytes.equals(immutable.bytes)
+  ) {
+    throw new Error("Same-version canonical Linux metadata conflicts with immutable publication.");
+  }
   const latest = readRelease(options.repository, undefined, true);
   let needsUpdaterPublication = false;
   if (publicStable(latest) && compareReleaseVersions(version, latest.tagName.slice(1)) <= 0) {
-    const current =
-      latest.tagName === source.tagName ? manifest : readManifest(options.repository, latest);
-    needsUpdaterPublication = !current || compareReleaseVersions(current.version, version) < 0;
+    const current = readManifest(options.repository, latest);
+    const selected = canonical ?? manifest;
+    needsUpdaterPublication =
+      !current ||
+      compareReleaseVersions(current.version, selected.version) < 0 ||
+      (current.version === selected.version && !current.bytes.equals(selected.bytes));
   }
   writeFileSync(join(options.output, "latest.json"), manifest.bytes, { flag: "wx" });
   writeFileSync(join(options.output, publication.checksumsName), publication.checksumBytes, {
@@ -476,9 +555,11 @@ function status(options, record) {
   });
   record({
     state: "published",
+    assetsComplete: true,
     version,
     manifestSha256: hash(manifest.bytes),
     needsUpdaterPublication,
+    needsChannelPublication,
   });
 }
 
@@ -494,7 +575,7 @@ function main() {
   });
   if (
     positionals.length !== 1 ||
-    !["carry", "publish", "status"].includes(positionals[0]) ||
+    !["carry", "status"].includes(positionals[0]) ||
     !values.output ||
     !values.repository ||
     !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(values.repository) ||
@@ -502,7 +583,7 @@ function main() {
     (values["source-sha"] && !/^[a-f0-9]{40}$/u.test(values["source-sha"]))
   ) {
     throw new Error(
-      "Usage: linux-updater-manifest.mjs <carry|publish|status> --tag vYYYY.M.PATCH --repository owner/repo --output DIR [--publication-request FILE] [--source-sha SHA]",
+      "Usage: linux-updater-manifest.mjs <carry|status> --tag vYYYY.M.PATCH --repository owner/repo --output DIR [--publication-request FILE] [--source-sha SHA]",
     );
   }
   const options = { ...values, output: resolve(values.output), command: positionals[0] };
@@ -529,8 +610,6 @@ function main() {
       carry(options, record);
     } else if (options.command === "status") {
       status(options, record);
-    } else {
-      publish(options, record);
     }
   } catch (error) {
     record({ state: "failed", error: error.message });

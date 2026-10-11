@@ -1,10 +1,9 @@
-/** Interactive stdio ACP client used to connect a terminal session to an OpenClaw ACP server. */
 import { spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import * as readline from "node:readline";
 import { Readable, Writable } from "node:stream";
-import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import {
   ClientSideConnection,
@@ -16,6 +15,7 @@ import {
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { killProcessTree, signalProcessTree } from "../process/kill-tree.js";
+import { settlesWithin } from "../shared/settle-within.js";
 import {
   buildAcpClientStripKeys,
   resolveAcpClientSpawnEnv,
@@ -32,24 +32,16 @@ type AcpClientOptions = {
   verbose?: boolean;
 };
 
-type AcpClientHandle = {
-  client: ClientSideConnection;
-  agent: ChildProcess;
-  sessionId: string;
-};
-
 const ACP_SERVER_KILL_GRACE_MS = 1000;
 const ACP_SERVER_FORCE_KILL_TIMEOUT_MS = 1000;
-const ACP_SERVER_EXIT_POLL_MS = 25;
 
 function hasChildExited(child: ChildProcess): boolean {
   return child.exitCode !== null || child.signalCode !== null;
 }
 
 async function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (!hasChildExited(child) && Date.now() < deadline) {
-    await delay(ACP_SERVER_EXIT_POLL_MS);
+  if (!hasChildExited(child)) {
+    await once(child, "exit", { signal: AbortSignal.timeout(timeoutMs) }).catch(() => {});
   }
   return hasChildExited(child);
 }
@@ -80,21 +72,6 @@ async function terminateAcpServer(child: ChildProcess): Promise<void> {
     child.kill("SIGKILL");
   }
   await waitForChildExit(child, ACP_SERVER_FORCE_KILL_TIMEOUT_MS);
-}
-
-function toArgs(value: string[] | string | undefined): string[] {
-  if (!value) {
-    return [];
-  }
-  return Array.isArray(value) ? value : [value];
-}
-
-function buildServerArgs(opts: AcpClientOptions): string[] {
-  const args = ["acp", ...toArgs(opts.serverArgs)];
-  if (opts.serverVerbose && !args.includes("--verbose") && !args.includes("-v")) {
-    args.push("--verbose");
-  }
-  return args;
 }
 
 function resolveSelfEntryPath(): string | null {
@@ -145,20 +122,23 @@ function printSessionUpdate(notification: SessionNotification): void {
   }
 }
 
-async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpClientHandle> {
+async function createAcpClient(opts: AcpClientOptions = {}) {
   const cwd = opts.cwd ?? process.cwd();
   const verbose = Boolean(opts.verbose);
   const log = verbose ? (msg: string) => console.error(`[acp-client] ${msg}`) : () => {};
 
   ensureOpenClawCliOnPath();
-  const serverArgs = buildServerArgs(opts);
+  const serverArgs = ["acp", ...(opts.serverArgs ?? [])];
+  if (opts.serverVerbose && !serverArgs.includes("--verbose") && !serverArgs.includes("-v")) {
+    serverArgs.push("--verbose");
+  }
 
   const entryPath = resolveSelfEntryPath();
   const defaultServerCommand = entryPath ? process.execPath : "openclaw";
   const defaultServerArgs = entryPath ? [entryPath, ...serverArgs] : serverArgs;
   const serverCommand = opts.serverCommand ?? defaultServerCommand;
   const effectiveArgs = opts.serverCommand || !entryPath ? serverArgs : defaultServerArgs;
-  const { getActiveSkillEnvKeys } = await import("../skills/runtime/env-overrides.runtime.js");
+  const { getActiveSkillEnvKeysCore } = await import("../skills/runtime/env-overrides.js");
   const stripProviderAuthEnvVars = shouldStripProviderAuthEnvVarsForAcpServer({
     serverCommand,
     serverArgs: effectiveArgs,
@@ -167,7 +147,7 @@ async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpClientHa
   });
   const stripKeys = buildAcpClientStripKeys({
     stripProviderAuthEnvVars,
-    activeSkillEnvKeys: getActiveSkillEnvKeys(),
+    activeSkillEnvKeys: getActiveSkillEnvKeysCore(),
   });
   const spawnEnv = resolveAcpClientSpawnEnv(process.env, { stripKeys });
   const spawnInvocation = resolveAcpClientSpawnInvocation(
@@ -189,6 +169,11 @@ async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpClientHa
     windowsHide: spawnInvocation.windowsHide,
   });
 
+  const permissions = new AbortController();
+  // Close joins stdio as well as process exit; install before the handshake.
+  const closed = new Promise<void>((resolve) => {
+    agent.once("close", () => resolve());
+  });
   agent.on("error", (err) => {
     log(`agent error: ${String(err)}`);
   });
@@ -208,12 +193,13 @@ async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpClientHa
           printSessionUpdate(params);
         },
         requestPermission: async (params: RequestPermissionRequest) => {
-          return resolvePermissionRequest(params, { cwd });
+          return resolvePermissionRequest(params, { cwd, signal: permissions.signal });
         },
       }),
       stream,
     );
 
+    void client.closed.then(() => permissions.abort());
     log("initializing");
     await client.initialize({
       protocolVersion: PROTOCOL_VERSION,
@@ -234,60 +220,118 @@ async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpClientHa
       client,
       agent,
       sessionId: session.sessionId,
+      closed,
+      cancelPermissions: () => permissions.abort(),
     };
   } catch (error) {
+    permissions.abort();
     await terminateAcpServer(agent);
+    await closed;
     throw error;
   }
 }
 
-/** Starts the terminal prompt loop for a local ACP client session. */
-export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Promise<void> {
-  const { client, agent, sessionId } = await createAcpClient(opts);
-
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  console.log("OpenClaw ACP client");
-  console.log(`Session: ${sessionId}`);
-  console.log('Type a prompt, or "exit" to quit.\n');
-
-  const prompt = () => {
-    rl.question("> ", (input) => {
-      void (async () => {
-        const text = input.trim();
-        if (!text) {
-          prompt();
-          return;
+/** Runs until the interactive session and its owned server have closed. */
+export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Promise<number> {
+  const { client, agent, sessionId, closed, cancelPermissions } = await createAcpClient(opts);
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  let quitting = false;
+  let shutdown: Promise<void> | undefined;
+  let promptTask: Promise<void> | undefined;
+  let signalCode: number | undefined;
+  const quit = () => {
+    if (shutdown) {
+      return shutdown;
+    }
+    quitting = true;
+    // Readable schedules read-ahead after dispatching the data callback. Closing
+    // readline inside that callback queues stdin's native readStop too early:
+    // read-ahead can restart the pipe even though stdin is already paused.
+    shutdown = Promise.resolve().then(async () => {
+      cancelPermissions();
+      rl.close();
+      process.stdin.pause();
+      if (!hasChildExited(agent)) {
+        // Let the peer settle a prompt before closing its transport. Keep the
+        // reader alive for final updates and the prompt's cancellation response.
+        const activePrompt = promptTask;
+        if (activePrompt) {
+          await settlesWithin(
+            client.cancel({ sessionId }).catch(() => {}),
+            ACP_SERVER_KILL_GRACE_MS,
+          );
+          await settlesWithin(activePrompt, ACP_SERVER_KILL_GRACE_MS);
         }
-        if (text === "exit" || text === "quit") {
+        agent.stdin?.end();
+        if (!(await waitForChildExit(agent, ACP_SERVER_KILL_GRACE_MS))) {
           await terminateAcpServer(agent);
-          rl.close();
-          process.exit(0);
         }
-
+      }
+      await closed;
+    });
+    return shutdown;
+  };
+  const onInputClose = () => {
+    if (!quitting) {
+      void quit();
+    }
+  };
+  const onSigint = () => {
+    signalCode = 130;
+    void quit();
+  };
+  const onSigterm = () => {
+    signalCode = 143;
+    void quit();
+  };
+  rl.once("close", onInputClose);
+  process.on("SIGINT", onSigint);
+  process.on("SIGTERM", onSigterm);
+  const prompt = () => {
+    if (quitting || hasChildExited(agent)) {
+      return;
+    }
+    rl.question("> ", (input) => {
+      const text = input.trim();
+      if (!text) {
+        prompt();
+        return;
+      }
+      if (text === "exit" || text === "quit") {
+        void quit();
+        return;
+      }
+      promptTask = (async () => {
         try {
-          const response = await client.prompt({
-            sessionId,
-            prompt: [{ type: "text", text }],
-          });
+          const response = await client.prompt({ sessionId, prompt: [{ type: "text", text }] });
           console.log(`\n[${response.stopReason}]\n`);
         } catch (err) {
           console.error(`\n[error] ${String(err)}\n`);
         }
-
+        promptTask = undefined;
         prompt();
       })();
     });
   };
-
-  prompt();
-
-  agent.on("exit", (code) => {
-    console.log(`\nAgent exited with code ${code ?? 0}`);
-    rl.close();
-    process.exit(code ?? 0);
-  });
+  try {
+    console.log("OpenClaw ACP client");
+    console.log(`Session: ${sessionId}`);
+    console.log('Type a prompt, or "exit" to quit.\n');
+    prompt();
+    await closed;
+    const code = agent.exitCode ?? (quitting ? 0 : 1);
+    console.log(
+      `\nAgent exited with ${agent.signalCode ? `signal ${agent.signalCode}` : `code ${agent.exitCode}`}`,
+    );
+    return code !== 0 ? code : (signalCode ?? code);
+  } finally {
+    // Unexpected server exit takes the same cleanup path, without claiming a
+    // successful client-owned cancellation for its exit status.
+    await quit();
+    await client.closed;
+    await promptTask;
+    rl.off("close", onInputClose);
+    process.off("SIGINT", onSigint);
+    process.off("SIGTERM", onSigterm);
+  }
 }

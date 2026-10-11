@@ -6,15 +6,37 @@ import { gatewayServiceCommandUsesRoot } from "../cli/update-cli/update-command-
 import { summarizeGatewayServiceLayout } from "./service-layout.js";
 
 describe("summarizeGatewayServiceLayout", () => {
-  it("resolves a relative entrypoint against an absolute working directory", async () => {
+  it.each(
+    [
+      ["node", "dist/index.js", "gateway", "run"],
+      ["node", "--title", "gateway", "dist/index.js", "--profile", "dev", "gateway"],
+      ["bun", "run", "dist/index.js", "--profile=gateway", "gateway"],
+      ["tsx", "watch", "dist/index.js", "--dev", "gateway"],
+      ["dist/index.js", "--profile", "dev", "gateway"],
+    ].map((programArguments) => ({ programArguments })),
+  )(
+    "resolves a relative entrypoint against an absolute working directory: $programArguments",
+    async ({ programArguments }) => {
+      expect(
+        (
+          await summarizeGatewayServiceLayout({
+            programArguments,
+            workingDirectory: "/repo/openclaw",
+          })
+        )?.entrypoint,
+      ).toBe(path.join("/repo/openclaw", "dist", "index.js"));
+    },
+  );
+
+  it("resolves a shell file launcher without mistaking CLI root options for the script", async () => {
     expect(
       (
         await summarizeGatewayServiceLayout({
-          programArguments: ["node", "dist/index.js", "gateway", "run"],
+          programArguments: ["/bin/sh", "bin/gateway.sh", "--profile", "dev", "gateway"],
           workingDirectory: "/repo/openclaw",
         })
       )?.entrypoint,
-    ).toBe(path.join("/repo/openclaw", "dist", "index.js"));
+    ).toBe(path.join("/repo/openclaw", "bin", "gateway.sh"));
   });
 
   it("resolves Windows service entrypoints with Windows path semantics", async () => {

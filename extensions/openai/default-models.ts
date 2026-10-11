@@ -1,4 +1,3 @@
-// Openai plugin module implements default models behavior.
 import {
   applyAgentDefaultModelPrimary,
   ensureModelAllowlistEntry,

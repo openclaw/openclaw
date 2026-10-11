@@ -160,7 +160,7 @@ class RoomChatTranscriptCacheDiskTest {
         assertTrue(loaded[1].turnBoundary)
         assertTrue(loaded[1].content.isEmpty())
         val timeline =
-          prepareChatHistory(loaded, "agent:main:dashboard:review").buildTimeline(0, emptyList(), null)
+          prepareChatHistory(loaded, "agent:main:dashboard:review", mainSessionKey = "agent:main:main").buildTimeline(0, emptyList(), null)
         assertEquals(
           listOf("second complete", "first complete"),
           timeline.items.filterIsInstance<ChatTimelineItem.Message>().map {

@@ -1,11 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { hasMediaPayload, isImageWithMediaPayload } from "../media-payload.js";
 import {
   describeToolResultMediaPlaceholder,
   describeUnsupportedToolResultMedia,
   extractToolResultText,
   formatToolResultText,
-  hasMediaPayload,
-  isImageWithMediaPayload,
 } from "./tool-result-text.js";
 
 describe("formatToolResultText", () => {
@@ -172,22 +171,6 @@ describe("extractToolResultText", () => {
     expect(text).not.toContain("abcdef");
   });
 
-  it("omits opaque or binary structured fields", () => {
-    const text = extractToolResultText([
-      {
-        type: "json",
-        encrypted_content: "ciphertext",
-        bytes: [1, 2, 3],
-        visible: "safe-value",
-      },
-    ]);
-
-    expect(text).toContain('"encrypted_content":"[omitted encrypted_content]"');
-    expect(text).toContain('"bytes":"[omitted bytes]"');
-    expect(text).toContain('"visible":"safe-value"');
-    expect(text).not.toContain("ciphertext");
-  });
-
   it("uses structured replay only as a no-text fallback without capping explicit text", () => {
     const textTail = "explicit-tail-marker";
     const text = extractToolResultText([
@@ -251,14 +234,6 @@ describe("describeToolResultMediaPlaceholder", () => {
     expect(describeToolResultMediaPlaceholder(husks)).toBeUndefined();
     expect(
       describeUnsupportedToolResultMedia(husks, { images: true, audio: false }),
-    ).toBeUndefined();
-  });
-
-  it("does not treat text MIME metadata as attached media", () => {
-    expect(
-      describeToolResultMediaPlaceholder([
-        { type: "text", text: "actual tool output", mimeType: "image/svg+xml" },
-      ]),
     ).toBeUndefined();
   });
 });

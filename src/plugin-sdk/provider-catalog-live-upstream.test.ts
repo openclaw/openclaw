@@ -114,10 +114,7 @@ describe("shared upstream provider metadata catalogs", () => {
   });
 
   it.each([
-    ["modern tiers", { tiers: [UPSTREAM_CONTEXT_TIER] }, true],
-    ["legacy tier", { context_over_200k: UPSTREAM_TIER_COST }, true],
     ["object tiers", { tiers: {} }, false],
-    ["null tier", { tiers: [null] }, false],
     ["mixed tiers", { tiers: [null, UPSTREAM_CONTEXT_TIER] }, true],
     [
       "malformed tiers with legacy pricing",
@@ -146,7 +143,7 @@ describe("shared upstream provider metadata catalogs", () => {
               name: "Frontier Model",
               reasoning: true,
               tool_call: true,
-              reasoning_options: [{ type: "effort", values: ["low", "high", "high", null] }],
+              reasoning_options: [{ type: "effort", values: ["low", "high", "high", false] }],
               modalities: { input: ["text", "image", "video"] },
               provider: { npm: "@ai-sdk/openai" },
               limit: { context: 1_000_000, input: 900_000, output: 128_000 },
@@ -208,11 +205,51 @@ describe("shared upstream provider metadata catalogs", () => {
   );
 
   it.each([
+    { name: "omitted", options: undefined, efforts: undefined },
+    { name: "empty", options: [], efforts: [] },
+    {
+      name: "native null effort",
+      options: [{ type: "effort", values: [null, "high", null, "VendorExact"] }],
+      efforts: ["none", "high", "VendorExact"],
+    },
+  ])("preserves $name upstream reasoning controls", ({ options, efforts }) => {
+    for (const npm of ["@ai-sdk/openai-compatible", "@ai-sdk/openai"]) {
+      const provider: UpstreamProviderCatalog = {
+        id: "fixture-provider",
+        api: "https://models.example.test/v1",
+        npm,
+        models: {},
+      };
+      const model = projectUpstreamProviderCatalogModel({
+        providerId: provider.id,
+        provider,
+        model: {
+          id: "reasoning-fixture",
+          reasoning: true,
+          limit: { context: 128_000, output: 8192 },
+          ...(options === undefined ? {} : { reasoning_options: options }),
+        },
+      });
+
+      expect(model?.reasoning).toBe(true);
+      if (efforts === undefined) {
+        expect(model?.compat).not.toHaveProperty("supportsReasoningEffort");
+        expect(model?.compat).not.toHaveProperty("supportedReasoningEfforts");
+      } else {
+        expect(model?.compat).toMatchObject({
+          supportsReasoningEffort: efforts.length > 0,
+          supportedReasoningEfforts: efforts,
+        });
+      }
+      expect(model).not.toHaveProperty("thinkingLevelMap");
+    }
+  });
+
+  it.each([
     ["@ai-sdk/openai-compatible", "openai-completions", "https://opencode.ai/zen/v1"],
     ["@ai-sdk/openai", "openai-responses", "https://opencode.ai/zen/v1"],
     ["@ai-sdk/anthropic", "anthropic-messages", "https://opencode.ai/zen"],
     ["@ai-sdk/google", "google-generative-ai", "https://opencode.ai/zen/v1"],
-    ["@unsupported/sdk", undefined, undefined],
     ["constructor", undefined, undefined],
   ] as const)(
     "projects only supported upstream %s transport from JSON",

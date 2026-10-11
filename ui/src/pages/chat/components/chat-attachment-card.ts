@@ -1,6 +1,8 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
 import {
   renderAttachmentFileIcon,
@@ -9,18 +11,17 @@ import {
 } from "./chat-attachment-file-icon.ts";
 import type { AttachmentItem } from "./chat-message-media.ts";
 
-type AttachmentCardKind = Extract<
-  AttachmentItem["attachment"]["kind"],
-  "audio" | "document" | "image" | "video"
->;
+registerChatMessageMetadataEnglish();
 
 export type AttachmentCardHeaderOptions = {
-  kind: AttachmentCardKind;
+  kind: AttachmentItem["attachment"]["kind"];
   label: string;
   mimeType?: string;
   sizeBytes?: number;
   downloadHref?: string;
   downloadPending?: boolean;
+  downloadPendingFocusable?: boolean;
+  onDownload?: () => void;
   loading?: boolean;
   expandLabel?: string;
   onExpand?: () => void;
@@ -28,10 +29,16 @@ export type AttachmentCardHeaderOptions = {
   voiceNote?: boolean;
 };
 
-export function renderCompactAttachmentCard(options: AttachmentCardHeaderOptions): TemplateResult {
+export function renderCompactAttachmentCard(
+  options: AttachmentCardHeaderOptions,
+  elementRef?: (element: Element | undefined) => void,
+  onFocus?: () => void,
+): TemplateResult {
   return html`<div
+    ${elementRef ? ref(elementRef) : nothing}
     class="chat-assistant-attachment-card chat-assistant-attachment-card--compact"
     ?data-openable=${Boolean(options.onExpand)}
+    @focusin=${onFocus ?? nothing}
     @click=${(event: MouseEvent) => openAttachmentCardFromClick(event, options.onExpand)}
   >
     ${renderAttachmentCardHeader({ ...options, visualMode: "large-placeholder" })}
@@ -60,56 +67,34 @@ export function openAttachmentCardFromClick(
   if (!onOpen || event.defaultPrevented) {
     return;
   }
-  const target = event.target;
-  const card = event.currentTarget;
-  if (target instanceof Element && card instanceof Element) {
-    const interactive = target.closest(attachmentCardInteractiveSelector);
-    if (interactive && card.contains(interactive)) {
+  // A control can replace its SVG during this event (for example mute/unmute).
+  // The dispatch path retains the original button even after its icon detaches.
+  for (const target of event.composedPath()) {
+    if (target === event.currentTarget) {
+      break;
+    }
+    if (target instanceof Element && target.matches(attachmentCardInteractiveSelector)) {
       return;
     }
   }
   onOpen();
 }
 
-function attachmentTypeLabel(
-  kind: AttachmentCardKind,
-  label: string,
-  mimeType: string | undefined,
-): string {
-  if (kind === "audio") {
-    return t("chat.attachments.audio");
-  }
-  if (kind === "video") {
-    return t("chat.attachments.video");
-  }
-  if (kind === "image") {
-    return t("chat.attachments.attachedFile");
-  }
-  return resolveAttachmentFileIcon(label, mimeType).extensionLabel;
-}
-
-export function renderAttachmentCardIcon(options: {
-  label: string;
-  mimeType?: string;
-  visualMode?: AttachmentFileVisualMode;
-  unavailable?: boolean;
-  loading?: boolean;
-}) {
-  return renderAttachmentFileIcon({
-    filename: options.label,
-    mimeType: options.mimeType,
-    mode: options.visualMode ?? "large-placeholder",
-    unavailable: options.unavailable,
-    loading: options.loading,
-  });
-}
+const attachmentTypeLabels = new Map([
+  ["audio", "chat.attachments.audio"],
+  ["video", "chat.attachments.video"],
+  ["image", "chat.attachments.attachedFile"],
+]);
 
 export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions): TemplateResult {
   const skeleton = options.loading ? "skeleton" : "";
   const compactPreview = options.visualMode === "preview-with-favicon";
   const formattedSize =
     options.sizeBytes === undefined ? undefined : formatBytes(options.sizeBytes);
-  const typeLabel = attachmentTypeLabel(options.kind, options.label, options.mimeType);
+  const typeLabelKey = attachmentTypeLabels.get(options.kind);
+  const typeLabel = typeLabelKey
+    ? t(typeLabelKey)
+    : resolveAttachmentFileIcon(options.label, options.mimeType).extensionLabel;
   const metadata = [typeLabel, formattedSize].filter(Boolean).join(" · ");
   const downloadTitle = t("chat.mediaPlayer.download", { filename: options.label });
   const hasOpenAction = options.onExpand !== undefined;
@@ -125,10 +110,10 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
       }"
     >
       <div class="chat-assistant-attachment-card__identity">
-        ${renderAttachmentCardIcon({
-          label: options.label,
+        ${renderAttachmentFileIcon({
+          filename: options.label,
           mimeType: options.mimeType,
-          visualMode: options.visualMode,
+          mode: options.visualMode ?? "large-placeholder",
           loading: options.loading,
         })}
         <span
@@ -161,20 +146,32 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
             : null
         }
         ${
-          options.downloadHref || options.downloadPending
-            ? html`<a
+          options.onDownload
+            ? html`<button
+                type="button"
                 class=${`${downloadClass} ${skeleton}`}
-                href=${options.downloadPending ? nothing : options.downloadHref}
-                aria-disabled=${options.downloadPending ? "true" : nothing}
-                role="link"
-                download=${options.label}
-                target="_blank"
-                rel="noreferrer"
+                ?disabled=${options.downloadPending}
                 aria-label=${downloadTitle}
                 title=${downloadTitle}
-                >${icons.download}</a
-              >`
-            : null
+                @click=${options.onDownload}
+              >
+                ${icons.download}
+              </button>`
+            : options.downloadHref || options.downloadPending
+              ? html`<a
+                  class=${`${downloadClass} ${skeleton}`}
+                  href=${options.downloadPending ? nothing : options.downloadHref}
+                  aria-disabled=${options.downloadPending ? "true" : nothing}
+                  tabindex=${options.downloadPending && options.downloadPendingFocusable ? 0 : nothing}
+                  role="link"
+                  download=${options.label}
+                  target="_blank"
+                  rel="noreferrer"
+                  aria-label=${downloadTitle}
+                  title=${downloadTitle}
+                  >${icons.download}</a
+                >`
+              : null
         }
         ${
           hasOpenAction

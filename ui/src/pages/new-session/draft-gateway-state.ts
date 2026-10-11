@@ -1,34 +1,35 @@
 import { initialState, Task, TaskStatus } from "@lit/task";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReactiveControllerHost } from "lit";
-import type {
-  UsersPrefsGetResult,
-  UsersPrefsSetResult,
-} from "../../../../packages/gateway-protocol/src/index.js";
+import { readOfflineStorageScope } from "../../app/boot-record.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
+import { canReadSystemInfo, readSystemInfo } from "../../lib/system-info.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import * as catalog from "./catalog-target.ts";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "./cloud-profile-discovery.ts";
-import { requestPlaceCatalog } from "./cloud-target.ts";
+import { requestPlaceCatalog, requestSessionPlacement } from "./cloud-target.ts";
 import type { DraftCloudProfile, DraftEnvironment } from "./discovery.ts";
-import { discoverGatewayName } from "./gateway-name-discovery.ts";
+import {
+  DraftPreferenceState,
+  type SubmittedWorktreePreference,
+} from "./draft-preference-state.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import {
-  decodeIdentityPreferences,
-  encodeIdentityPreferences,
-  loadBrowserPreferences,
-  loadNewSessionPreference,
-  patchNewSessionPreference,
-  PREFS_MIGRATION_KEY,
-  replaceBrowserPreference,
-  type NewSessionPreference,
-} from "./preferences.ts";
+  acquirePaletteIdentityPreferences,
+  type PaletteIdentityPreferences,
+} from "./palette-identity-preferences.ts";
+import type { NewSessionPreference, PaletteSessionPreference } from "./preferences.ts";
 import {
   resolveSubmissionOutcomeReason,
   type SubmissionOutcomeReason,
 } from "./session-placement-recovery-state.ts";
+
+registerNewSessionSetupEnglish();
 
 const CATALOG_RETRY_DELAYS_MS = [0, 1_000, 3_000] as const;
 
@@ -49,7 +50,12 @@ type DraftGatewaySnapshot = Readonly<{
   runtimeId: string;
 }>;
 
-type DraftGatewayCallbacks = {
+export type DraftPreferenceOptions = {
+  preferenceScope?: "palette";
+  readPalettePreference?: () => PaletteSessionPreference | null;
+};
+
+type DraftGatewayCallbacks = DraftPreferenceOptions & {
   requestUpdate: () => void;
   updateComplete: () => Promise<unknown>;
   onInvalidate: (resetHostSelection: boolean, outcome: SubmissionOutcomeReason) => void;
@@ -62,7 +68,14 @@ type DraftGatewayCallbacks = {
 };
 
 export class DraftGatewayState {
+  static requiredPlacement(gateway: DraftGatewayState, data: NewSessionRouteData | undefined) {
+    return Boolean(gateway.requiredProfile) && !catalog.isTarget(data);
+  }
+
   private cloudProfilesValue: DraftCloudProfile[] = [];
+  private requiredProfileValue: string | undefined;
+  private placementPolicyReadyValue = false;
+  private gatewayAuthorityValue = "";
   private environmentsValue: DraftEnvironment[] | null = null;
   private cloudProfilesReadyValue = false;
   private catalogRetryingValue = false;
@@ -80,17 +93,16 @@ export class DraftGatewayState {
   private catalogRetryTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
   private cloudProfileRetryAttempt = 0;
   private cloudProfileRefresh: Promise<void> | null = null;
+  private cloudProfileTaskHasClient = false;
   private cloudProfileRetryTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
-  private preferenceScope = "";
-  private preferenceModeValue: "local" | "loading" | "remote" = "local";
-  private identityPreferences: Record<string, NewSessionPreference> = {};
-  private preferenceLoad: Promise<void> = Promise.resolve();
-  private preferenceWrite: Promise<void> = Promise.resolve();
+  private readonly preferences: DraftPreferenceState;
+  private identityPreferences: PaletteIdentityPreferences | undefined;
+  private stopPreferences: (() => void) | undefined;
 
   private readonly gatewayNameTask: Task<readonly unknown[], string>;
   private readonly cloudProfileTask: Task<
     readonly unknown[],
-    { profiles: DraftCloudProfile[]; environments: DraftEnvironment[] }
+    Awaited<ReturnType<typeof requestPlaceCatalog>>
   >;
 
   constructor(
@@ -98,17 +110,53 @@ export class DraftGatewayState {
     private readonly read: () => DraftGatewaySnapshot,
     private readonly callbacks: DraftGatewayCallbacks,
   ) {
+    this.preferences = new DraftPreferenceState(
+      () => ({
+        source: this.gatewaySource,
+        client: this.gatewayClientValue,
+        gatewayUrl: this.gatewayUrlValue,
+        recoveryScope: this.gatewayRecoveryScopeValue,
+        bootId: this.gatewayBootIdValue,
+        connected: this.gatewayConnectedValue,
+        connectionEpoch: this.gatewayConnectionEpochValue,
+        data: this.read().data,
+        pendingPlacementSessionKey: this.read().pendingPlacement.sessionKey,
+        agentsHydrated: this.read().agentsHydrated,
+      }),
+      callbacks,
+    );
     this.gatewayNameTask = new Task(host, {
       args: () =>
         [
-          this.read().isConnected && this.gatewayConnectedValue ? this.gatewayClientValue : null,
-          isGatewayMethodAdvertised(this.read().context?.gateway.snapshot ?? {}, "system.info") ===
-            true,
+          this.read().isConnected && this.gatewayConnectedValue ? this.gatewaySource : null,
+          canReadSystemInfo(this.read().context?.gateway.snapshot) &&
+            document.visibilityState !== "hidden",
           this.gatewayConnectionEpochValue,
         ] as const,
-      task: ([client, advertised, _connectionEpoch], { signal }) =>
-        discoverGatewayName(client, advertised, signal),
+      task: async ([gateway, available, _connectionEpoch], { signal }) => {
+        if (!gateway || !available) {
+          return "";
+        }
+        try {
+          const { value: result } = await readSystemInfo(gateway, signal, { fresh: true });
+          return (
+            normalizeOptionalString(result.machineName) ??
+            normalizeOptionalString(result.hostname)?.split(".", 1)[0] ??
+            ""
+          );
+        } catch {
+          return "";
+        }
+      },
     });
+    // Shared system reads pause in background tabs; visibility must wake this one-shot task.
+    new SubscriptionsController(host).watch(
+      () => document,
+      (source, notify) => {
+        source.addEventListener("visibilitychange", notify);
+        return () => source.removeEventListener("visibilitychange", notify);
+      },
+    );
     this.cloudProfileTask = new Task(host, {
       args: () =>
         [
@@ -119,21 +167,36 @@ export class DraftGatewayState {
           this.gatewayRecoveryScopeValue,
           this.read().runtimeId,
         ] as const,
-      task: async ([client, _connectionEpoch, canWrite, isAdmin, _recoveryScope, runtimeId]) => {
+      task: async (
+        [client, _connectionEpoch, canWrite, isAdmin, _recoveryScope, runtimeId],
+        { signal },
+      ) => {
+        this.cloudProfileTaskHasClient = client !== null;
         if (!client) {
           return initialState;
         }
-        if (!canWrite) {
-          return { profiles: [], environments: [] };
+        const policy = await requestSessionPlacement(client);
+        signal.throwIfAborted();
+        this.requiredProfileValue = policy.requiredProfile;
+        if (policy.requiredProfile || !canWrite) {
+          return { profiles: policy.profiles, environments: [] };
         }
+        // Local starts need the directive, not optional inventory latency/availability.
+        this.placementPolicyReadyValue = true;
+        this.callbacks.requestUpdate();
         const result = await requestPlaceCatalog(client, runtimeId);
-        return { ...result, profiles: isAdmin ? result.profiles : [] };
+        return {
+          ...result,
+          profiles: isAdmin ? result.profiles : [],
+        };
       },
       onComplete: (placeCatalog) => {
         this.resetCloudProfileRetry();
         this.environmentsValue = placeCatalog.environments;
         this.applyCloudProfiles(placeCatalog.profiles);
         this.cloudProfilesReadyValue = true;
+        // Required starts need their profiles before an accepted cold Send can resume.
+        this.placementPolicyReadyValue = true;
       },
       onError: () => {
         // A failed refresh cannot invalidate this Gateway's last successful place catalog.
@@ -151,6 +214,14 @@ export class DraftGatewayState {
 
   get cloudProfiles(): readonly DraftCloudProfile[] {
     return this.cloudProfilesValue;
+  }
+
+  get requiredProfile(): string | undefined {
+    return this.requiredProfileValue;
+  }
+
+  get placementPolicyReady(): boolean {
+    return this.placementPolicyReadyValue;
   }
 
   get environments(): readonly DraftEnvironment[] | null {
@@ -202,7 +273,7 @@ export class DraftGatewayState {
   }
 
   get preferenceLoading(): boolean {
-    return this.preferenceModeValue === "loading";
+    return this.preferences.loading || this.identityPreferences?.mode === "loading";
   }
 
   resolvedGroupCategory(): string | undefined {
@@ -216,7 +287,8 @@ export class DraftGatewayState {
   }
 
   refreshCloudProfiles(): Promise<void> {
-    if (this.cloudProfileTask.status === TaskStatus.PENDING) {
+    // A retirement run returns Lit's initialState, which does not settle taskComplete.
+    if (this.cloudProfileTask.status === TaskStatus.PENDING && this.cloudProfileTaskHasClient) {
       const queued =
         this.cloudProfileRefresh ??
         this.cloudProfileTask.taskComplete
@@ -251,8 +323,17 @@ export class DraftGatewayState {
       bootId !== this.gatewayBootIdValue;
     const gatewayUrlChanged = !firstBind && this.gatewayUrlValue !== gateway.connection.gatewayUrl;
     const gatewaySourceChanged = !firstBind && this.gatewaySource !== gateway;
+    const authority = connected
+      ? JSON.stringify([
+          snapshot.selfUser?.id,
+          snapshot.hello?.auth?.role,
+          snapshot.hello?.auth?.scopes?.toSorted(),
+        ])
+      : this.gatewayAuthorityValue;
+    const authorityChanged = !firstBind && this.gatewayAuthorityValue !== authority;
     const identityChanged =
-      !firstBind && (gatewaySourceChanged || this.gatewayClientValue !== snapshot.client);
+      !firstBind &&
+      (gatewaySourceChanged || this.gatewayClientValue !== snapshot.client || authorityChanged);
     const connectionChanged = !firstBind && this.gatewayConnectedValue !== connected;
     const becameConnected = connected && (identityChanged || !this.gatewayConnectedValue);
     const recoveryScopeBecameReady =
@@ -261,8 +342,9 @@ export class DraftGatewayState {
     // Delaying this binding revokes live starts and lets reconnects replay under the old scope.
     const recoveryScope = connected
       ? (snapshot.hello?.auth?.recoveryScope ?? "")
-      : this.gatewayRecoveryScopeValue;
+      : (readOfflineStorageScope({ client: snapshot.client }) ?? "");
     const recoveryScopeChanged = !firstBind && this.gatewayRecoveryScopeValue !== recoveryScope;
+    this.gatewayAuthorityValue = authority;
     this.gatewaySource = gateway;
     this.gatewayClientValue = snapshot.client;
     this.gatewayUrlValue = gateway.connection.gatewayUrl;
@@ -280,7 +362,8 @@ export class DraftGatewayState {
       connectionChanged ||
       recoveryScopeChanged
     ) {
-      const ownerChanged = gatewaySourceChanged || gatewayUrlChanged || recoveryScopeChanged;
+      const ownerChanged =
+        gatewaySourceChanged || gatewayUrlChanged || recoveryScopeChanged || authorityChanged;
       const gatewayIdentityChanged = gatewayUrlChanged || recoveryScopeChanged;
       this.invalidateDiscovery(
         ownerChanged,
@@ -305,7 +388,7 @@ export class DraftGatewayState {
       ) {
         this.callbacks.onPendingPlacementReset();
       }
-      if (connected && snapshot.client?.recoveryScopeReady) {
+      if (recoveryScope && (!connected || snapshot.client?.recoveryScopeReady)) {
         this.callbacks.onRecoveryReady(this.gatewayUrlValue, this.gatewayRecoveryScopeValue);
       }
     }
@@ -317,6 +400,7 @@ export class DraftGatewayState {
         this.retryPendingCatalogTarget();
       }
     }
+    this.preferences.synchronize();
     this.synchronizeIdentityPreferences(snapshot.selfUser?.id);
     this.callbacks.requestUpdate();
   }
@@ -326,6 +410,8 @@ export class DraftGatewayState {
     // Retire pending results synchronously; Lit may not run hostUpdate before they settle.
     void this.cloudProfileTask.run([null, -1, false, false, ""]);
     this.cloudProfilesValue = [];
+    this.requiredProfileValue = undefined;
+    this.placementPolicyReadyValue = false;
     this.cloudProfilesReadyValue = false;
     if (resetHostSelection) {
       this.environmentsValue = null;
@@ -428,6 +514,31 @@ export class DraftGatewayState {
       });
   };
 
+  get preferenceState(): PaletteIdentityPreferences | undefined {
+    return this.identityPreferences;
+  }
+
+  savePalettePreference(preference: PaletteSessionPreference | null): Promise<boolean> {
+    const state = this.identityPreferences;
+    const snapshot = this.read().context?.gateway.snapshot;
+    const client = snapshot?.client;
+    const hello = snapshot?.hello;
+    const profileId = snapshot?.selfUser?.id;
+    const gatewayUrl = this.gatewayUrlValue;
+    return (
+      state?.setPalettePreference(
+        preference,
+        () =>
+          this.identityPreferences === state &&
+          this.gatewayConnectedValue &&
+          this.read().context?.gateway.snapshot.client === client &&
+          this.read().context?.gateway.snapshot.hello === hello &&
+          this.read().context?.gateway.snapshot.selfUser?.id === profileId &&
+          this.read().context?.gateway.connection.gatewayUrl === gatewayUrl,
+      ) ?? Promise.resolve(false)
+    );
+  }
+
   readPreference(agentId: string): NewSessionPreference | null {
     const snapshot = this.read();
     if (
@@ -437,59 +548,51 @@ export class DraftGatewayState {
     ) {
       return null;
     }
-    return this.preferenceModeValue === "remote"
-      ? (this.identityPreferences[normalizeAgentId(agentId)] ?? null)
-      : loadNewSessionPreference(this.gatewayUrlValue, agentId);
+    const ordinary = this.preferences.readPreference(agentId);
+    if (this.callbacks.preferenceScope !== "palette") {
+      return ordinary;
+    }
+    const palette = this.callbacks.readPalettePreference?.();
+    // Name is one-use input belonging to the foreground draft, not a default
+    // the lightweight launcher can silently borrow or consume.
+    return {
+      ...ordinary,
+      ...(palette?.agentId === normalizeAgentId(agentId) ? palette.selection : {}),
+      worktreeName: "",
+    };
   }
 
-  persistPreference(agentIdValue: string, workspace: string, patch: NewSessionPreference) {
-    const snapshot = this.read();
-    if (
-      catalog.isTarget(snapshot.data) ||
-      snapshot.data?.group ||
-      snapshot.pendingPlacement.sessionKey
-    ) {
+  capturePreferenceConsumption(
+    agentId: string,
+    workspace: string,
+    expected: SubmittedWorktreePreference,
+  ) {
+    if (this.callbacks.preferenceScope === "palette") {
+      return undefined;
+    }
+    return this.preferences.capturePreferenceConsumption(agentId, workspace, expected);
+  }
+
+  persistPreference(agentId: string, workspace: string, patch: NewSessionPreference) {
+    if (this.callbacks.preferenceScope === "palette") {
       return;
     }
-    const agentId = normalizeAgentId(agentIdValue);
-    const nextPatch = { workspace, ...patch };
-    if (this.preferenceModeValue === "local") {
-      patchNewSessionPreference(this.gatewayUrlValue, agentId, nextPatch);
-      return;
-    }
-    const scope = this.preferenceScope;
-    const client = this.gatewayClientValue;
-    const gatewayUrl = this.gatewayUrlValue;
-    const write = async () => {
-      await this.preferenceLoad;
-      if (!client || this.preferenceScope !== scope) {
-        return;
-      }
-      if (this.preferenceModeValue === "local") {
-        patchNewSessionPreference(gatewayUrl, agentId, nextPatch);
-        return;
-      }
-      const next = { ...this.identityPreferences[agentId], ...nextPatch };
-      try {
-        const result = await client.request<UsersPrefsSetResult>("users.prefs.set", {
-          entries: encodeIdentityPreferences({ [agentId]: next }),
-        });
-        if (result.status !== "ok" || this.preferenceScope !== scope) {
-          return;
-        }
-        this.identityPreferences = { ...this.identityPreferences, [agentId]: next };
-        replaceBrowserPreference(gatewayUrl, agentId, next);
-        this.callbacks.requestUpdate();
-      } catch {
-        // Gateway state is authoritative for identified users; retain the last mirrored value.
-      }
-    };
-    this.preferenceWrite = this.preferenceWrite.then(write, write);
+    return this.preferences.persistPreference(agentId, workspace, patch);
   }
 
   disconnect() {
+    this.preferences.disconnect();
+    this.stopPreferences?.();
+    this.stopPreferences = undefined;
+    this.identityPreferences = undefined;
+    this.cloudProfilesValue = [];
+    this.requiredProfileValue = undefined;
+    this.placementPolicyReadyValue = false;
+    this.cloudProfilesReadyValue = false;
+    this.environmentsValue = null;
     this.cloudProfileRefresh = null;
     this.gatewaySource = null;
+    this.gatewayAuthorityValue = "";
     this.gatewayClientValue = null;
     this.gatewayConnectedValue = false;
     this.gatewayConnectionEpochValue = 0;
@@ -535,10 +638,7 @@ export class DraftGatewayState {
       return;
     }
     if (this.cloudProfileRetryAttempt >= CLOUD_PROFILE_RETRY_DELAYS_MS.length) {
-      if (!this.cloudProfilesReadyValue) {
-        this.applyCloudProfiles([]);
-        this.cloudProfilesReadyValue = true;
-      }
+      // Unknown policy is not an optional empty catalog: keep new starts closed.
       return;
     }
     const delayMs = CLOUD_PROFILE_RETRY_DELAYS_MS[this.cloudProfileRetryAttempt];
@@ -554,97 +654,46 @@ export class DraftGatewayState {
   private synchronizeIdentityPreferences(profileId: string | undefined) {
     const client = this.gatewayConnectedValue ? this.gatewayClientValue : null;
     const context = this.read().context;
+    const hello = context?.gateway.snapshot.hello;
     const advertised =
       context &&
       isGatewayMethodAdvertised(context.gateway.snapshot, "users.prefs.get") === true &&
       isGatewayMethodAdvertised(context.gateway.snapshot, "users.prefs.set") === true;
-    const scope =
-      client && profileId && advertised
-        ? `${this.gatewayConnectionEpochValue}\0${profileId}`
-        : "local";
-    if (scope === this.preferenceScope) {
+    const preferences =
+      this.callbacks.preferenceScope === "palette" && client && hello && profileId && advertised
+        ? acquirePaletteIdentityPreferences({
+            client,
+            hello,
+            profileId,
+            gatewayUrl: this.gatewayUrlValue,
+          })
+        : undefined;
+    if (preferences === this.identityPreferences) {
       return;
     }
-    this.preferenceScope = scope;
-    this.identityPreferences = {};
-    if (!client || !profileId || !advertised) {
-      this.preferenceModeValue = "local";
-      this.preferenceLoad = Promise.resolve();
+    this.stopPreferences?.();
+    this.stopPreferences = undefined;
+    this.identityPreferences = preferences;
+    if (!preferences) {
       return;
     }
-    this.preferenceModeValue = "loading";
-    this.preferenceLoad = this.loadIdentityPreferences({
-      client,
-      gatewayUrl: this.gatewayUrlValue,
-      scope,
-    });
-  }
-
-  private async loadIdentityPreferences(params: {
-    client: NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
-    gatewayUrl: string;
-    scope: string;
-  }): Promise<void> {
-    try {
-      const result = await params.client.request<UsersPrefsGetResult>("users.prefs.get", {});
-      if (this.preferenceScope !== params.scope) {
+    const notify = () => {
+      if (this.identityPreferences !== preferences) {
         return;
-      }
-      if (result.status !== "ok") {
-        this.preferenceModeValue = "local";
-        return;
-      }
-      let preferences = decodeIdentityPreferences(result.entries);
-      const browserPreferences = loadBrowserPreferences(params.gatewayUrl);
-      if (result.entries[PREFS_MIGRATION_KEY] !== true) {
-        const missingBrowserPreferences = Object.fromEntries(
-          Object.entries(browserPreferences).filter(
-            ([agentId]) => !Object.hasOwn(preferences, agentId),
-          ),
-        );
-        const migrationEntries = [
-          ...Object.entries(encodeIdentityPreferences(missingBrowserPreferences)),
-          [PREFS_MIGRATION_KEY, true] as const,
-        ];
-        let migrationFailed = false;
-        for (let offset = 0; offset < migrationEntries.length; offset += 32) {
-          const batch = Object.fromEntries(migrationEntries.slice(offset, offset + 32));
-          let response: UsersPrefsSetResult;
-          try {
-            response = await params.client.request<UsersPrefsSetResult>("users.prefs.set", {
-              entries: batch,
-            });
-          } catch {
-            migrationFailed = true;
-            break;
-          }
-          if (this.preferenceScope !== params.scope) {
-            return;
-          }
-          if (response.status !== "ok") {
-            migrationFailed = true;
-            break;
-          }
-          Object.assign(preferences, decodeIdentityPreferences(batch));
-        }
-        if (migrationFailed) {
-          preferences = { ...browserPreferences, ...preferences };
-        }
-      }
-      this.identityPreferences = preferences;
-      this.preferenceModeValue = "remote";
-      for (const [agentId, preference] of Object.entries(preferences)) {
-        replaceBrowserPreference(params.gatewayUrl, agentId, preference);
-      }
-      if (this.read().agentsHydrated) {
-        this.callbacks.onAdoptAgentDefaults();
       }
       this.callbacks.requestUpdate();
-    } catch {
-      if (this.preferenceScope === params.scope) {
-        this.preferenceModeValue = "local";
-        this.callbacks.requestUpdate();
-      }
+    };
+    this.stopPreferences = preferences.subscribe(
+      notify,
+      () =>
+        this.identityPreferences === preferences &&
+        this.gatewayConnectedValue &&
+        this.read().context?.gateway.snapshot.client === client &&
+        this.read().context?.gateway.snapshot.hello === hello &&
+        this.read().context?.gateway.connection.gatewayUrl === this.gatewayUrlValue,
+    );
+    if (preferences.mode !== "loading") {
+      notify();
     }
   }
 }

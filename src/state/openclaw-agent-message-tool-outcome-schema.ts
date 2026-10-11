@@ -8,19 +8,32 @@ export const MESSAGE_TOOL_RUN_OUTCOMES_TABLE = "message_tool_run_outcomes";
 const ENSURED_DATABASES = new WeakSet<DatabaseSync>();
 
 /** Lazily installs the additive outcome table on first use. */
-export function ensureMessageToolRunOutcomeSchema(db: DatabaseSync): void {
+export function ensureMessageToolRunOutcomeSchema(
+  db: DatabaseSync,
+  admit?: (stage: "transaction" | "commit") => void,
+): void {
   if (ENSURED_DATABASES.has(db)) {
     return;
   }
-  runSqliteImmediateTransactionSync(db, () => {
-    // sqlite-allow-raw -- Canonical additive DDL only.
-    db.exec(
-      extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, MESSAGE_TOOL_RUN_OUTCOMES_TABLE, {
-        endMarker: "CREATE TABLE IF NOT EXISTS session_goal_operations (",
-        includeEndMarker: false,
-        errorMessage: "OpenClaw message-tool run outcome schema markers are missing.",
-      }),
-    );
-  });
+  runSqliteImmediateTransactionSync(
+    db,
+    () => {
+      admit?.("transaction");
+      // sqlite-allow-raw -- Canonical additive DDL only.
+      db.exec(
+        extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, MESSAGE_TOOL_RUN_OUTCOMES_TABLE, {
+          endMarker: "CREATE TABLE IF NOT EXISTS session_goal_operations (",
+          includeEndMarker: false,
+          errorMessage: "OpenClaw message-tool run outcome schema markers are missing.",
+        }),
+      );
+    },
+    {
+      withCommit(commit) {
+        admit?.("commit");
+        commit();
+      },
+    },
+  );
   ENSURED_DATABASES.add(db);
 }

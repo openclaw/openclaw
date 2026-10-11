@@ -1,4 +1,3 @@
-// Zalo plugin module implements channel behavior.
 import { describeWebhookAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
@@ -102,15 +101,15 @@ async function sendZaloDelivery(ctx: {
   text: string;
   accountId?: string | null;
   mediaUrl?: string;
+  assertDirectAdapterHandoff?: () => void;
 }): Promise<{ messageId: string; receipt: MessageReceipt }> {
   const result = await (
     await loadZaloChannelRuntime()
-  ).sendZaloText({
-    to: ctx.to,
-    text: ctx.text,
+  ).sendMessageZalo(ctx.to, ctx.text, {
     accountId: ctx.accountId ?? undefined,
     mediaUrl: ctx.mediaUrl,
     cfg: ctx.cfg,
+    assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
   });
   if (!result.ok) {
     throw new Error(result.error ?? `Failed to send Zalo ${ctx.mediaUrl ? "media" : "message"}`);

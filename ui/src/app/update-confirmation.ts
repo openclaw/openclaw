@@ -30,6 +30,7 @@ type UpdateProgressSources = {
       updateRunning: boolean;
       updateReconciliationPending: boolean;
       updateStatusBanner: { tone: string; text: string; source?: "read" } | null;
+      updateStatusCheckBanner: { text: string } | null;
     };
     subscribe: (listener: () => void) => () => void;
   };
@@ -47,7 +48,8 @@ export function createUpdateProgressWatcher(
         busy: update.updateRunning || update.updateReconciliationPending,
         connected: context.gateway.snapshot.phase === "connected",
         failure: banner && banner.tone !== "info" && banner.source !== "read" ? banner.text : null,
-        readError: banner?.source === "read" ? banner.text : null,
+        readError:
+          update.updateStatusCheckBanner?.text ?? (banner?.source === "read" ? banner.text : null),
       });
     };
     const stopOverlays = context.overlays.subscribe(emit);

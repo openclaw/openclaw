@@ -1,37 +1,21 @@
 // Matrix tests cover actions plugin behavior.
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 import { matrixMessageActions } from "./actions.js";
+import type { MatrixCredentialStateRecord } from "./matrix/credentials-state.js";
 import { setMatrixRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
 const profileAction = "set-profile" as const;
+const lookupStoredCredentials = vi.fn<() => Promise<MatrixCredentialStateRecord | undefined>>();
 
 const runtimeStub = {
   config: {
     current: () => ({}),
   },
-  media: {
-    loadWebMedia: async () => {
-      throw new Error("not used");
-    },
-    mediaKindFromMime: () => "image",
-    isVoiceCompatibleAudio: () => false,
-    getImageMetadata: async () => null,
-    resizeToJpeg: async () => Buffer.from(""),
-  },
   state: {
     resolveStateDir: () => "/tmp/openclaw-matrix-test",
-  },
-  channel: {
-    text: {
-      resolveTextChunkLimit: () => 4000,
-      resolveChunkMode: () => "length",
-      chunkMarkdownText: (text: string) => (text ? [text] : []),
-      chunkMarkdownTextWithMode: (text: string) => (text ? [text] : []),
-      resolveMarkdownTableMode: () => "code",
-      convertMarkdownTables: (text: string) => text,
-    },
+    openKeyedStoreV2: () => ({ lookup: lookupStoredCredentials }),
   },
 } as unknown as PluginRuntime;
 
@@ -50,7 +34,43 @@ function createConfiguredMatrixConfig(): CoreConfig {
 
 describe("matrixMessageActions", () => {
   beforeEach(() => {
+    lookupStoredCredentials.mockReset().mockResolvedValue(undefined);
     setMatrixRuntime(runtimeStub);
+  });
+
+  it("discovers saved-login actions and schema after credential preparation", async () => {
+    const credentials = Promise.withResolvers<MatrixCredentialStateRecord | undefined>();
+    lookupStoredCredentials.mockReturnValue(credentials.promise);
+    const discovery = matrixMessageActions.describeMessageToolAsync!({
+      cfg: {
+        channels: {
+          matrix: {
+            homeserver: "https://matrix.example.org",
+            userId: "@bot:example.org",
+            encryption: true,
+          },
+        },
+      },
+      senderIsOwner: true,
+    });
+    credentials.resolve({
+      accountId: "default",
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      accessToken: "stored-token",
+      createdAt: "2026-03-19T00:00:00.000Z",
+    });
+
+    const resolved = await discovery;
+    expect(resolved?.actions).toEqual(
+      expect.arrayContaining(["send", "react", "set-profile", "permissions"]),
+    );
+    expect(resolved?.capabilities).toEqual(["presentation"]);
+    expect(resolved?.mediaSourceParams).toEqual({ "set-profile": ["avatarUrl", "avatarPath"] });
+    const schemas = Array.isArray(resolved?.schema) ? resolved.schema : [resolved?.schema];
+    expect(
+      schemas.find((schema) => schema?.actions?.includes("set-profile"))?.properties,
+    ).toHaveProperty("avatarUrl");
   });
 
   it("exposes poll create but only handles poll votes inside the plugin", () => {

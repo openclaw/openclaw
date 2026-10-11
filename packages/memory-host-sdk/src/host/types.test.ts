@@ -43,7 +43,7 @@ describe("memory search staleness", () => {
     ).toMatchObject({ warning: expect.stringContaining("embedding model changed") });
   });
 
-  it.each(["provenance_version", "chunking_version"])(
+  it.each(["provenance_version", "chunking_version", "embedding_input_format"])(
     "reports the failed repair prerequisite while %s is still incompatible",
     (code) => {
       expect(
@@ -71,7 +71,7 @@ describe("memory search staleness", () => {
     },
   );
 
-  it.each(["provenance_version", "chunking_version"])(
+  it.each(["provenance_version", "chunking_version", "embedding_input_format"])(
     "keeps newer-index recovery visible after a prior sync failure (%s)",
     (code) => {
       const status: MemoryProviderStatus = {
@@ -124,6 +124,54 @@ describe("memory search staleness", () => {
       action:
         "Run: openclaw memory status --index --agent main. Rebuilding may call the configured embedding provider and can incur provider cost.",
     });
+  });
+
+  it("preserves the keyword-only marker only when a pending upgrade carries it", () => {
+    const base = {
+      status: "mismatched",
+      reason: "index chunking implementation changed",
+      code: "chunking_version",
+      owner: "openclaw",
+    } as const;
+    expect(
+      resolveMemoryIndexIdentityDiagnostic({
+        custom: { indexIdentity: { ...base, chunkingVersionOnly: true } },
+      }),
+    ).toEqual({ ...base, chunkingVersionOnly: true });
+    expect(
+      resolveMemoryIndexIdentityDiagnostic({
+        custom: { indexIdentity: { ...base, versionOrder: "newer", chunkingVersionOnly: true } },
+      }),
+    ).toEqual(base);
+    expect(
+      resolveMemoryIndexIdentityDiagnostic({
+        custom: { indexIdentity: { ...base } },
+      }),
+    ).toEqual({ ...base });
+  });
+
+  it("preserves lexical compatibility only for an older embedding format", () => {
+    const base = {
+      status: "mismatched",
+      reason: "index embedding input format changed",
+      code: "embedding_input_format",
+      owner: "openclaw",
+    } as const;
+    expect(
+      resolveMemoryIndexIdentityDiagnostic({
+        custom: { indexIdentity: { ...base, lexicalCompatible: true } },
+      }),
+    ).toEqual({ ...base, lexicalCompatible: true });
+    expect(
+      resolveMemoryIndexIdentityDiagnostic({
+        custom: { indexIdentity: { ...base, versionOrder: "newer", lexicalCompatible: true } },
+      }),
+    ).toEqual(base);
+    expect(
+      resolveMemoryIndexIdentityDiagnostic({
+        custom: { indexIdentity: { ...base, code: "provenance_version", lexicalCompatible: true } },
+      }),
+    ).toEqual({ ...base, code: "provenance_version" });
   });
 
   it("does not claim provider cost for a keyword-only index", () => {

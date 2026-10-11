@@ -74,10 +74,11 @@ interactive onboarding or pass the shared OpenCode API key directly.
 ## Catalog
 
 Run `openclaw models list --provider opencode-go` for the current model list.
-OpenClaw combines Go's advertised model IDs with authoritative metadata from
-`https://models.opencode.ai/api.json`, so new upstream models appear without an
-OpenClaw update when they use a supported transport on the trusted OpenCode
-endpoint. The upstream catalog is downloaded and
+OpenClaw shows every model ID Go's model list advertises and enriches it with
+metadata from `https://models.opencode.ai/api.json`, so new models appear without
+an OpenClaw update. IDs the metadata does not describe yet use Go's
+OpenAI-compatible route with default limits. OpenClaw also identifies itself with
+its `openclaw/<version>` User-Agent on model-list requests. The upstream catalog is downloaded and
 cached only when OpenCode Zen or Go is configured or explicitly selected with
 OpenCode credentials; it is never fetched at startup or while using unrelated
 providers.
@@ -92,6 +93,12 @@ Existing explicit refs in the bundled seed remain resolvable.
 The Go model-list endpoint is a general inventory, not an account-entitlement
 check. A successful listing does not grant access: inference still requires an
 active Go subscription, including for promotional models.
+
+DeepSeek V4 models apply the same thinking controls in agent turns and standalone
+completions. Explicit `off` disables native thinking and removes reasoning from
+replayed history; enabled thinking preserves the reasoning needed for follow-up turns.
+Both paths also omit unsupported controls for MiniMax models with fixed reasoning
+and remove Kimi K2 reasoning replay fields.
 
 ## Privacy
 

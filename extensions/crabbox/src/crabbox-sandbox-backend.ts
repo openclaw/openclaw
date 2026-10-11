@@ -1,5 +1,6 @@
 // Crabbox owns provider admission and execution; the shared remote-shell backend
 // owns workspace seeding, skills, workdir validation, and file operations.
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import {
   createRemoteShellSandboxBackend,
@@ -14,31 +15,20 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCrabboxBinary } from "./crabbox-binary.js";
 import type { ResolvedCrabboxSandboxConfig } from "./crabbox-sandbox-config.js";
 import { CRABBOX_SANDBOX_LEASE_ID_PATTERN } from "./crabbox-sandbox-lease.js";
+import { CRABBOX_LIFECYCLE_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 export const CRABBOX_SANDBOX_BACKEND_ID = "crabbox";
 const CRABBOX_SANDBOX_SLUG = "openclaw-sandbox";
 const READY_STATES = new Set(["started", "running", "ready"]);
 
-type CrabboxSandboxCommandRunner = (
-  argv: string[],
-  options: {
-    cwd?: string;
-    killProcessTree: boolean;
-    maxOutputBytes: number;
-    timeoutMs: number;
-  },
-) => Promise<SpawnResult>;
-
-export type CrabboxSandboxBackendDependencies = {
+type CrabboxSandboxBackendDependencies = {
   openclawRoot: string;
   pluginConfig: ResolvedCrabboxSandboxConfig;
-  runCommand?: CrabboxSandboxCommandRunner;
 };
 
 type CrabboxSandboxClient = {
   binary: string;
   pluginConfig: ResolvedCrabboxSandboxConfig;
-  runCommand: CrabboxSandboxCommandRunner;
   execSupport?: Promise<void>;
 };
 
@@ -53,7 +43,6 @@ function createClient(dependencies: CrabboxSandboxBackendDependencies): CrabboxS
       openclawRoot: dependencies.openclawRoot,
     }),
     pluginConfig: dependencies.pluginConfig,
-    runCommand: dependencies.runCommand ?? runCommandWithTimeout,
   };
 }
 
@@ -66,17 +55,16 @@ async function runCrabbox(
 ): Promise<SpawnResult> {
   let result: SpawnResult;
   try {
-    result = await client.runCommand([client.binary, ...args], {
+    result = await runCommandWithTimeout([client.binary, ...args], {
       ...(cwd ? { cwd } : {}),
       killProcessTree: true,
       maxOutputBytes: 64 * 1024,
       timeoutMs,
     });
   } catch (error) {
-    throw new Error(
-      `Crabbox sandbox ${action} could not start: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
-    );
+    throw new Error(`Crabbox sandbox ${action} could not start: ${coerceErrorMessage(error)}`, {
+      cause: error,
+    });
   }
   if (result.code !== 0) {
     // Warmup can print token-bearing SSH commands even when a later step fails.
@@ -127,7 +115,7 @@ async function inspectLease(client: CrabboxSandboxClient, leaseId: string, cwd?:
     "inspect",
     ["inspect", "--id", leaseId, "--json"],
     cwd,
-    60_000,
+    CRABBOX_LIFECYCLE_TIMEOUT_MS,
   );
   let parsed: unknown;
   try {

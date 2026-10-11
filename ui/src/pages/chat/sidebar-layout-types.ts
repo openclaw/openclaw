@@ -1,16 +1,24 @@
 export type SidebarSlotId =
   | "browser"
+  | "link-reader"
   | "companion"
   | "conversation"
   | "dashboard"
   | "desktop"
   | "detail"
   | "discussion"
-  | "tasks"
+  | "portal"
+  | "processes"
+  | "subagents"
   | "terminal"
   | "workspace"
   | `plugin:${string}/${string}`;
-export type SidebarPanel = { id: string; slot: SidebarSlotId };
+export type SidebarPanel = {
+  id: string;
+  slot: SidebarSlotId;
+  environmentId?: string;
+  portalId?: string;
+};
 export type SidebarDock = "bottom" | "left" | "right";
 export type SidebarColumn = {
   id: string;
@@ -19,6 +27,8 @@ export type SidebarColumn = {
   activePanelId: string;
   height: number;
   width: number;
+  /** New columns choose their browser width once the pane can be measured. */
+  browserWidthPending?: true;
 };
 export type SidebarLayout = {
   columns: SidebarColumn[];
@@ -30,4 +40,6 @@ export type SidebarLayout = {
   dashboardPresentationOverride?: "split" | "expanded" | null;
   /** Focus the active side panel without swapping its saved main/side placement. */
   expandedSide?: boolean;
+  /** Explicit panel dismissal suppresses automatic resource reveals for this session. */
+  resourceAutoOpenDismissed?: boolean;
 };

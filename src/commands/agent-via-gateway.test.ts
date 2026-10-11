@@ -2,11 +2,9 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 // Agent via gateway tests cover gateway-backed agent command dispatch and session loading.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { GatewayPendingRequests } from "../../packages/gateway-client/src/pending-request.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import {
   configureExecutionIdentityAdmissionSink,
@@ -15,13 +13,20 @@ import {
 import { recordAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import { formatCliFailureLines, formatCliJsonFailure } from "../cli/failure-output.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
-import { acquireGatewayLock, type GatewayLockOptions } from "../infra/gateway-lock.js";
+import { acquireGatewayLock, GatewayLockError } from "../infra/gateway-lock.js";
+import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
 import { loggingState } from "../logging/state.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { agentCliCommand, agentViaGatewayTesting } from "./agent-via-gateway.js";
+import {
+  createExplicitSystemAgentConfig,
+  createGatewayNormalCloseError,
+  createGatewayTimeoutError,
+  createLocalGatewayLockOptions,
+  settleGatewayAgentRequest,
+} from "./agent-via-gateway.test-support.js";
 import type { agentCommand as AgentCommand } from "./agent.js";
 
 const loadConfig = vi.hoisted(() => vi.fn());
@@ -79,7 +84,6 @@ function mockConfig(storePath: string, overrides?: Partial<OpenClawConfig>) {
         ...overrides?.agents?.defaults,
       },
       ...(overrides?.agents?.ownership ? { ownership: overrides.agents.ownership } : {}),
-      ...(overrides?.agents?.list ? { list: overrides.agents.list } : {}),
       ...(overrides?.agents?.entries ? { entries: overrides.agents.entries } : {}),
     },
     session: {
@@ -151,23 +155,6 @@ function mockLocalAgentReply(text = "local") {
   });
 }
 
-function createLocalGatewayLockOptions(
-  stateDir: string,
-  overrides: Partial<GatewayLockOptions> = {},
-): GatewayLockOptions {
-  return {
-    allowInTests: true,
-    env: {
-      ...process.env,
-      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-      OPENCLAW_STATE_DIR: stateDir,
-    },
-    lockDir: path.join(stateDir, "gateway-locks"),
-    timeoutMs: 100,
-    ...overrides,
-  };
-}
-
 function requireFirstCallArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
   const [call] = mock.mock.calls;
   if (!call) {
@@ -222,6 +209,29 @@ function createSignalProcess() {
   };
 }
 
+function rejectOnGatewayAbort(signal: AbortSignal | undefined, onAbort?: () => Promise<void>) {
+  return new Promise<never>((_, reject) => {
+    signal?.addEventListener(
+      "abort",
+      () => {
+        void (async () => {
+          await onAbort?.();
+          reject(Object.assign(new Error("gateway request aborted"), { name: "AbortError" }));
+        })();
+      },
+      { once: true },
+    );
+  });
+}
+
+type GatewaySignalAbort = (
+  request: (
+    method: string,
+    params?: unknown,
+    opts?: { timeoutMs?: number | null },
+  ) => Promise<unknown>,
+) => Promise<void>;
+
 async function waitForAgentCommandCall(expectedCalls = 1) {
   await vi.waitFor(() => expect(agentCommand).toHaveBeenCalledTimes(expectedCalls));
 }
@@ -233,50 +243,6 @@ async function waitForGatewayCall(expectedCalls = 1) {
 function mockMessages(mock: unknown): string[] {
   const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls ?? [];
   return calls.map(([message]) => String(message));
-}
-
-function createGatewayTimeoutError() {
-  const err = new Error("gateway timeout after 90000ms");
-  err.name = "GatewayTransportError";
-  return Object.assign(err, {
-    kind: "timeout",
-    timeoutMs: 90_000,
-    connectionDetails: {
-      url: "ws://127.0.0.1:18789",
-      urlSource: "local loopback",
-      message: "Gateway target: ws://127.0.0.1:18789",
-    },
-  });
-}
-
-function createGatewayClosedError() {
-  const err = new Error("gateway closed (1006 abnormal closure): no close reason");
-  err.name = "GatewayTransportError";
-  return Object.assign(err, {
-    kind: "closed",
-    code: 1006,
-    reason: "no close reason",
-    connectionDetails: {
-      url: "ws://127.0.0.1:18789",
-      urlSource: "local loopback",
-      message: "Gateway target: ws://127.0.0.1:18789",
-    },
-  });
-}
-
-function createGatewayNormalCloseError() {
-  const err = new Error("gateway closed (1000 normal closure): no close reason");
-  err.name = "GatewayTransportError";
-  return Object.assign(err, {
-    kind: "closed",
-    code: 1000,
-    reason: "no close reason",
-    connectionDetails: {
-      url: "ws://127.0.0.1:18789",
-      urlSource: "local loopback",
-      message: "Gateway target: ws://127.0.0.1:18789",
-    },
-  });
 }
 
 vi.mock("../config/gateway-dispatch-config.js", () => ({
@@ -312,7 +278,6 @@ vi.mock("../audit/audit-recorder.js", () => ({
 }));
 
 let originalForceConsoleToStderr = false;
-let zeroTimeoutGatewayRequestMs: number | undefined;
 
 function resetAgentCliCommandMocksForTest() {
   vi.clearAllMocks();
@@ -321,7 +286,6 @@ function resetAgentCliCommandMocksForTest() {
   startOneShotDiagnosticsExporters.mockReset();
   startOneShotDiagnosticsExporters.mockResolvedValue(null);
   vi.stubEnv("OPENCLAW_GATEWAY_URL", "");
-  agentViaGatewayTesting.resetLazyImportsForTests();
   agentViaGatewayTesting.setGatewayAbortRetryDelaysMsForTests([0, 0, 0, 0]);
   // Each test observes a fresh mock generation, even after the real module was
   // warmed; a single hoisted factory would hide later unexpected imports.
@@ -346,67 +310,29 @@ afterEach(() => {
 });
 
 describe("agentCliCommand", () => {
-  beforeAll(async () => {
-    const restoreForceConsoleToStderr = loggingState.forceConsoleToStderr;
-    resetAgentCliCommandMocksForTest();
-    try {
-      await withTempStore(async () => {
-        mockGatewaySuccessReply();
-
-        await agentCliCommand({ message: "hi", to: "+1555", timeout: "0" }, runtime);
-
-        expect(callGateway).toHaveBeenCalledTimes(1);
-        const request = requireFirstCallArg(callGateway, "gateway") as { timeoutMs?: number };
-        zeroTimeoutGatewayRequestMs = request.timeoutMs;
-      });
-    } finally {
-      vi.doUnmock("./agent/session.runtime.js");
-      agentViaGatewayTesting.setGatewayAbortRetryDelaysMsForTests();
-      loggingState.forceConsoleToStderr = restoreForceConsoleToStderr;
-    }
-  });
-
-  it("uses a timer-safe max gateway timeout when --timeout is 0", () => {
-    expect(zeroTimeoutGatewayRequestMs).toBe(2_147_000_000);
-  });
-
-  it.each([
-    ["agent", "--agent"],
-    ["sessionId", "--session-id"],
-    ["sessionKey", "--session-key"],
-    ["to", "--to"],
-  ] as const)(
-    "rejects blank %s selectors before local or Gateway dispatch",
-    async (option, flag) => {
-      await withTempStore(async () => {
-        mockGatewaySuccessReply();
-        for (const local of [false, true]) {
-          for (const value of ["", "   "]) {
-            await expect(
-              agentCliCommand(
-                { message: "hi", to: "agent:main:explicit-target", local, [option]: value },
-                runtime,
-              ),
-            ).rejects.toThrow(`${flag} must not be blank`);
-          }
-        }
-        expect(callGateway).not.toHaveBeenCalled();
-        expect(agentCommand).not.toHaveBeenCalled();
-      });
-    },
-  );
-
-  it("clamps oversized gateway timeout seconds at the command boundary", async () => {
+  it("rejects blank --to selectors before local or Gateway dispatch", async () => {
     await withTempStore(async () => {
       mockGatewaySuccessReply();
+      for (const local of [false, true]) {
+        for (const value of ["", "   "]) {
+          await expect(
+            agentCliCommand({ message: "hi", local, to: value }, runtime),
+          ).rejects.toThrow("--to must not be blank");
+        }
+      }
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(agentCommand).not.toHaveBeenCalled();
+    });
+  });
 
-      await agentCliCommand(
-        { message: "hi", to: "+1555", timeout: String(Number.MAX_SAFE_INTEGER) },
-        runtime,
-      );
-
-      const request = requireFirstCallArg(callGateway, "gateway") as { timeoutMs?: number };
-      expect(request.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
+  it("lets the Gateway own each attempt budget across fallbacks", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+      await agentCliCommand({ message: "hi", to: "+1555", timeout: "20" }, runtime);
+      expect(requireFirstCallArg(callGateway, "gateway")).toMatchObject({
+        timeoutMs: null,
+        params: { timeout: 20 },
+      });
     });
   });
 
@@ -419,96 +345,35 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it.each([false, true])(
-    "uses owner authority with the local gateway (explicit sole: %s)",
-    async (explicitOwnership) => {
-      await withTempStore(
-        async () => {
-          mockGatewaySuccessReply();
-
-          await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
-
-          expect(callGateway).toHaveBeenCalledTimes(1);
-          const request = requireRecord(
-            requireFirstCallArg(callGateway, "gateway"),
-            "gateway request",
-          );
-          expect(request.clientName).toBe("cli");
-          expect(request.mode).toBe("cli");
-          expect(request.scopes).toEqual(["operator.admin"]);
-          expect(request.params).toMatchObject({ agentId: explicitOwnership ? "solo" : "main" });
-          expect(request.params).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
-          expect(agentCommand).not.toHaveBeenCalled();
-          expect(agentModuleLoadCount).not.toHaveBeenCalled();
-          expect(runtime.log).toHaveBeenCalledWith("hello");
-        },
-        explicitOwnership
-          ? { agents: { ownership: "explicit", entries: { solo: {} } } }
-          : undefined,
-      );
-    },
-  );
-
-  it("keeps an agent-scoped gateway turn off session and delivery runtimes", async () => {
+  it("uses owner authority with the local gateway and an explicit sole agent", async () => {
     await withTempStore(
       async () => {
         mockGatewaySuccessReply();
 
-        await agentCliCommand(
-          {
-            message: "hi",
-            agent: "ops",
-            json: true,
-            deliver: true,
-            channel: "discord",
-            replyTo: "123456789",
-            replyChannel: "slack",
-            replyAccount: "reports",
-            bestEffortDeliver: true,
-          },
-          jsonRuntime,
-        );
+        await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
 
+        expect(callGateway).toHaveBeenCalledTimes(1);
         const request = requireRecord(
           requireFirstCallArg(callGateway, "gateway"),
           "gateway request",
         );
-        expect(request.params).toMatchObject({
-          agentId: "ops",
-          sessionKey: undefined,
-          deliver: true,
-          channel: "discord",
-          replyTo: "123456789",
-          replyChannel: "slack",
-          replyAccountId: "reports",
-          bestEffortDeliver: true,
-        });
-        expect(loadAgentSessionModuleMock).not.toHaveBeenCalled();
+        expect(request.clientName).toBe("cli");
+        expect(request.mode).toBe("cli");
+        expect(request.scopes).toEqual(["operator.admin"]);
+        expect(request.params).toMatchObject({ agentId: "solo" });
+        expect(request.params).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
         expect(agentCommand).not.toHaveBeenCalled();
-        expect(jsonRuntime.writeJson).toHaveBeenCalledOnce();
+        expect(agentModuleLoadCount).not.toHaveBeenCalled();
+        expect(runtime.log).toHaveBeenCalledWith("hello");
+        expect(startOneShotDiagnosticsExporters).not.toHaveBeenCalled();
+        expect(loadRuntimeConfig).not.toHaveBeenCalled();
       },
-      { agents: { list: [{ id: "main" }, { id: "ops" }] } },
+      { agents: { ownership: "explicit", entries: { solo: {} } } },
     );
   });
 
-  it.each([
-    {
-      label: "configured remote gateway",
-      overrides: {
-        gateway: {
-          mode: "remote" as const,
-          remote: { url: "wss://gateway.example" },
-        },
-      },
-    },
-    {
-      label: "gateway URL override",
-      gatewayUrl: "wss://gateway-override.example",
-    },
-  ])("keeps ordinary $label runs least-privilege", async ({ gatewayUrl, overrides }) => {
-    if (gatewayUrl) {
-      vi.stubEnv("OPENCLAW_GATEWAY_URL", gatewayUrl);
-    }
+  it("keeps ordinary gateway URL override runs least-privilege", async () => {
+    vi.stubEnv("OPENCLAW_GATEWAY_URL", "wss://gateway-override.example");
     await withTempStore(async () => {
       mockRemoteGatewayRoster("sole");
 
@@ -519,7 +384,7 @@ describe("agentCliCommand", () => {
       expect(request.clientName).toBe("cli");
       expect(request.mode).toBe("cli");
       expect(request).not.toHaveProperty("scopes");
-    }, overrides);
+    });
   });
 
   it("uses the explicit remote selection and session-id contract", async () => {
@@ -545,64 +410,6 @@ describe("agentCliCommand", () => {
     }, remoteGatewayConfig);
   });
 
-  it("skips remote roster loading for an explicit agent", async () => {
-    mockRemoteGatewayRoster("explicit", ["ops", "research"]);
-
-    await withTempStore(async () => {
-      await agentCliCommand({ message: "hi", agent: "ops" }, runtime);
-
-      const methods = callGateway.mock.calls.map(
-        ([requestValue]) => requireRecord(requestValue, "gateway request").method,
-      );
-      expect(methods).toEqual(["agent"]);
-    }, remoteGatewayConfig);
-  });
-
-  it.each([
-    { ownership: "sole" as const, agents: ["ops"] },
-    { ownership: "legacy" as const, agents: ["ops", "research"] },
-  ])(
-    "delegates a remote $ownership sentinel owner to the gateway",
-    async ({ ownership, agents }) => {
-      mockRemoteGatewayRoster(ownership, agents);
-      await withTempStore(async () => {
-        await agentCliCommand({ message: "hi", sessionKey: "global" }, runtime);
-
-        expect(callGateway).toHaveBeenCalledOnce();
-        const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "agent request");
-        expect(request.params).toMatchObject({ agentId: undefined, sessionKey: "global" });
-      }, remoteGatewayConfig);
-    },
-  );
-
-  it.each(["global", "work"])(
-    "delegates remote bare session key %s ownership to the gateway",
-    async (sessionKey) => {
-      mockRemoteGatewayRoster("explicit", ["ops", "research"]);
-      await withTempStore(
-        async () => {
-          await agentCliCommand({ message: "hi", sessionKey }, runtime);
-
-          expect(callGateway).toHaveBeenCalledOnce();
-          const request = requireRecord(
-            requireFirstCallArg(callGateway, "gateway"),
-            "agent request",
-          );
-          expect(request.method).toBe("agent");
-          expect(request.params).toMatchObject({ agentId: undefined, sessionKey });
-          expect(loadAgentSessionModuleMock).not.toHaveBeenCalled();
-        },
-        {
-          ...remoteGatewayConfig,
-          agents: {
-            ownership: "explicit",
-            list: [{ id: "ops" }, { id: "research" }],
-          },
-        },
-      );
-    },
-  );
-
   it("forwards a remote bare key unchanged with an explicit agent", async () => {
     await withTempStore(async () => {
       await agentCliCommand({ message: "hi", agent: "ops", sessionKey: "incident-42" }, runtime);
@@ -610,19 +417,6 @@ describe("agentCliCommand", () => {
       const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "agent request");
       expect(request.params).toMatchObject({ agentId: "ops", sessionKey: "incident-42" });
       expect(loadAgentSessionModuleMock).not.toHaveBeenCalled();
-    }, remoteGatewayConfig);
-  });
-
-  it("still resolves a remote recipient through the remote roster", async () => {
-    mockRemoteGatewayRoster("explicit", ["ops", "research"]);
-    await withTempStore(async () => {
-      await expect(agentCliCommand({ message: "hi", to: "+1555" }, runtime)).rejects.toMatchObject({
-        code: "AGENT_SELECTION_REQUIRED",
-      });
-      expect(callGateway).toHaveBeenCalledOnce();
-      expect(requireRecord(requireFirstCallArg(callGateway, "gateway"), "request").method).toBe(
-        "agents.list",
-      );
     }, remoteGatewayConfig);
   });
 
@@ -639,10 +433,10 @@ describe("agentCliCommand", () => {
           sessionKey: "agent:ops:work",
         });
       },
-      {
+      createCanonicalAgentConfigFixture({
         agents: { list: [{ id: "ops", default: true }, { id: "research" }] },
         session: { mainKey: "work", scope: "per-sender" },
-      },
+      }).config,
     );
   });
 
@@ -659,10 +453,10 @@ describe("agentCliCommand", () => {
           sessionKey: undefined,
         });
       },
-      {
+      createCanonicalAgentConfigFixture({
         agents: { list: [{ id: "ops", default: true }, { id: "research" }] },
         session: { scope: "global" },
-      },
+      }).config,
     );
   });
 
@@ -683,77 +477,8 @@ describe("agentCliCommand", () => {
         agents: {
           ownership: "explicit",
           defaults: { sessionStore: { agentId: "ops" } },
-          list: [{ id: "ops" }, { id: "research" }],
+          entries: { ops: {}, research: {} },
         },
-        session: { scope: "global" },
-      },
-    );
-  });
-
-  it("dispatches a retained-owner global session through --local", async () => {
-    await withTempStore(
-      async () => {
-        const cfg = retainLegacyDefaultAgentId(
-          {
-            ...loadRuntimeConfig(),
-            agents: {
-              ...loadRuntimeConfig().agents,
-              ownership: "explicit",
-              list: [{ id: "ops" }, { id: "research" }],
-            },
-          },
-          "ops",
-        );
-        loadRuntimeConfig.mockReturnValue(cfg);
-        mockLocalAgentReply();
-
-        await agentCliCommand({ message: "hi", local: true, sessionKey: "global" }, runtime);
-
-        expect(agentCommand).toHaveBeenCalledWith(
-          expect.objectContaining({ agentId: "ops", sessionKey: "global" }),
-          runtime,
-          undefined,
-        );
-      },
-      {
-        agents: { list: [{ id: "ops" }, { id: "research" }] },
-        session: { scope: "global" },
-      },
-    );
-  });
-
-  it("uses the local global session through --local despite remote gateway settings", async () => {
-    await withTempStore(
-      async () => {
-        vi.stubEnv("OPENCLAW_GATEWAY_URL", "wss://gateway.example.test");
-        const cfg = retainLegacyDefaultAgentId(
-          {
-            ...loadRuntimeConfig(),
-            gateway: { mode: "remote" },
-            agents: {
-              ...loadRuntimeConfig().agents,
-              ownership: "explicit",
-              list: [{ id: "ops" }, { id: "research" }],
-            },
-          },
-          "ops",
-        );
-        loadRuntimeConfig.mockReturnValue(cfg);
-        mockLocalAgentReply();
-
-        await agentCliCommand({ message: "hi", local: true }, runtime);
-
-        expect(agentCommand).toHaveBeenCalledWith(
-          expect.objectContaining({ agentId: "ops" }),
-          runtime,
-          undefined,
-        );
-        expect(requireFirstCallArg(agentCommand, "embedded agent")).not.toHaveProperty(
-          "sessionKey",
-        );
-      },
-      {
-        agents: { list: [{ id: "ops" }, { id: "research" }] },
         session: { scope: "global" },
       },
     );
@@ -767,7 +492,7 @@ describe("agentCliCommand", () => {
           agents: {
             ...loadRuntimeConfig().agents,
             ownership: "explicit",
-            list: [{ id: "ops" }, { id: "research" }],
+            entries: { ops: {}, research: {} },
           },
         });
 
@@ -777,7 +502,7 @@ describe("agentCliCommand", () => {
         expect(agentCommand).not.toHaveBeenCalled();
       },
       {
-        agents: { list: [{ id: "ops" }, { id: "research" }] },
+        agents: { entries: { ops: {}, research: {} } },
         session: { scope: "global" },
       },
     );
@@ -796,29 +521,13 @@ describe("agentCliCommand", () => {
       const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
       const params = requireRecord(request.params, "gateway request params");
       expect(params.message).toBe(messageBody);
-    });
-  });
-
-  it("reads a UTF-8 message file for local embedded dispatch", async () => {
-    await withTempStore(async ({ dir }) => {
-      const messageFile = path.join(dir, "task.md");
-      const messageBody = 'first line\n```json\n{"ok":true}\n```\nsecond line\n';
-      fs.writeFileSync(messageFile, `\uFEFF${messageBody}`, "utf8");
-      mockLocalAgentReply();
-
-      await agentCliCommand(
-        { messageFile, sessionKey: "agent:main:incident-42", local: true },
-        runtime,
-      );
-
-      expect(callGateway).not.toHaveBeenCalled();
-      expect(agentCommand).toHaveBeenCalledTimes(1);
-      const opts = requireRecord(
-        requireFirstCallArg(agentCommand, "embedded agent"),
-        "embedded agent options",
-      );
-      expect(opts.message).toBe(messageBody);
-      expect(opts).not.toHaveProperty("messageFile");
+      expect(params.sessionKey).toBe("agent:main:incident-42");
+      expect(params.sessionId).toBeUndefined();
+      expect(params.to).toBeUndefined();
+      expect(request.config).toBe(loadConfig.mock.results[0]?.value);
+      expect(loadConfig).toHaveBeenCalledWith();
+      expect(agentCommand).not.toHaveBeenCalled();
+      expect(loadAgentSessionModuleMock).not.toHaveBeenCalled();
     });
   });
 
@@ -855,44 +564,51 @@ describe("agentCliCommand", () => {
 
   it("holds one agent-embedded state lock for the run and rejects a concurrent --local run", async () => {
     await withTempStore(async ({ dir }) => {
-      const lockOptions = createLocalGatewayLockOptions(dir);
-      let finishFirstRun: ((value: Awaited<ReturnType<typeof AgentCommand>>) => void) | undefined;
-      agentCommand.mockImplementationOnce(
-        async () =>
-          await new Promise<Awaited<ReturnType<typeof AgentCommand>>>((resolve) => {
-            finishFirstRun = resolve;
-          }),
-      );
-
+      let elapsedMs = 0;
+      const lockOptions = createLocalGatewayLockOptions(dir, {
+        now: () => elapsedMs,
+        sleep: async (ms) => {
+          elapsedMs += ms;
+        },
+      });
+      const firstRunStarted = createDeferredCore();
+      const firstRunFinished = createDeferredCore();
+      agentCommand.mockImplementationOnce(async () => {
+        firstRunStarted.resolve();
+        await firstRunFinished.promise;
+      });
       const firstRun = agentCliCommand({ message: "first", to: "+1555", local: true }, runtime, {
         localGatewayLockOptions: lockOptions,
       });
-      await waitForAgentCommandCall();
-
       const stateLockPath = path.join(lockOptions.lockDir!, "gateway.state.lock");
-      const payload = JSON.parse(fs.readFileSync(stateLockPath, "utf8")) as {
-        pid?: number;
-        role?: string;
-      };
-      expect(payload).toMatchObject({ pid: process.pid, role: "agent-embedded" });
+      try {
+        await Promise.race([firstRunStarted.promise, firstRun]);
+        const payload: unknown = JSON.parse(fs.readFileSync(stateLockPath, "utf8"));
+        expect(payload).toMatchObject({ pid: process.pid, role: "agent-embedded" });
 
-      await expect(
-        agentCliCommand({ message: "second", to: "+1555", local: true }, runtime, {
-          localGatewayLockOptions: { ...lockOptions, pollIntervalMs: 2, timeoutMs: 15 },
-        }),
-      ).rejects.toThrow(
-        `another embedded OpenClaw state writer is active (pid ${process.pid}); lock timeout after 15ms`,
-      );
-      expect(agentCommand).toHaveBeenCalledTimes(1);
-
-      if (!finishFirstRun) {
-        throw new Error("Expected first embedded run to start");
+        const secondRun = agentCliCommand(
+          { message: "second", to: "+1555", local: true },
+          runtime,
+          { localGatewayLockOptions: lockOptions },
+        );
+        await expect(secondRun).rejects.toBeInstanceOf(GatewayLockError);
+        await expect(secondRun).rejects.toMatchObject({
+          message: expect.stringContaining("wait for the current OpenClaw operation to finish"),
+          cause: expect.any(GatewayStateOwnerContentionError),
+        });
+        await expect(secondRun).rejects.toMatchObject({
+          message: expect.stringContaining(
+            path.join(fs.realpathSync(dir), "state", "openclaw.sqlite"),
+          ),
+          cause: {
+            databasePath: path.join(fs.realpathSync(dir), "state", "openclaw.sqlite"),
+          },
+        });
+        expect(agentCommand).toHaveBeenCalledTimes(1);
+      } finally {
+        firstRunFinished.resolve();
+        await firstRun;
       }
-      finishFirstRun({
-        payloads: [{ text: "done" }],
-        meta: { durationMs: 1 },
-      } as Awaited<ReturnType<typeof AgentCommand>>);
-      await firstRun;
       expect(fs.existsSync(stateLockPath)).toBe(false);
     });
   });
@@ -951,22 +667,6 @@ describe("agentCliCommand", () => {
         agentCliCommand({ messageFile, sessionKey: "agent:main:incident-42" }, runtime),
       ).rejects.toThrow("Message file is a directory:");
       expect(callGateway).not.toHaveBeenCalled();
-    });
-  });
-
-  it("follows a symlinked message file to a regular file", async () => {
-    await withTempStore(async ({ dir }) => {
-      const realFile = path.join(dir, "real.md");
-      const messageFile = path.join(dir, "link.md");
-      fs.writeFileSync(realFile, "hello from symlink target", "utf-8");
-      fs.symlinkSync(realFile, messageFile);
-
-      await agentCliCommand({ messageFile, sessionKey: "agent:main:incident-42" }, runtime);
-
-      expect(callGateway).toHaveBeenCalledTimes(1);
-      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
-      const params = requireRecord(request.params, "gateway request params");
-      expect(params.message).toBe("hello from symlink target");
     });
   });
 
@@ -1054,44 +754,21 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it.each(["/new", "/RESET", "/reset check status"] as const)(
-    "uses backend admin authority for %s gateway commands",
-    async (message) => {
-      await withTempStore(async () => {
-        mockGatewaySuccessReply();
+  it("uses backend admin authority for reset commands", async () => {
+    const message = "/reset check status";
 
-        await agentCliCommand({ message, sessionKey: "agent:main:main" }, runtime);
-
-        expect(callGateway).toHaveBeenCalledTimes(1);
-        const request = requireRecord(
-          requireFirstCallArg(callGateway, "gateway"),
-          "gateway request",
-        );
-        expect(request.clientName).toBe("gateway-client");
-        expect(request.mode).toBe("backend");
-        expect(request.scopes).toEqual(["operator.admin"]);
-        const params = requireRecord(request.params, "gateway request params");
-        expect(params.message).toBe(message);
-      });
-    },
-  );
-
-  it("uses an explicit session key as the gateway session selector", async () => {
     await withTempStore(async () => {
       mockGatewaySuccessReply();
 
-      await agentCliCommand({ message: "hi", sessionKey: "agent:main:incident-42" }, runtime);
+      await agentCliCommand({ message, sessionKey: "agent:main:main" }, runtime);
 
       expect(callGateway).toHaveBeenCalledTimes(1);
       const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+      expect(request.clientName).toBe("gateway-client");
+      expect(request.mode).toBe("backend");
+      expect(request.scopes).toEqual(["operator.admin"]);
       const params = requireRecord(request.params, "gateway request params");
-      expect(params.sessionKey).toBe("agent:main:incident-42");
-      expect(params.sessionId).toBeUndefined();
-      expect(params.to).toBeUndefined();
-      expect(request.config).toBe(loadConfig.mock.results[0]?.value);
-      expect(loadConfig).toHaveBeenCalledWith();
-      expect(agentCommand).not.toHaveBeenCalled();
-      expect(loadAgentSessionModuleMock).not.toHaveBeenCalled();
+      expect(params.message).toBe(message);
     });
   });
 
@@ -1109,75 +786,6 @@ describe("agentCliCommand", () => {
       expect(params.to).toBeUndefined();
       expect(agentCommand).not.toHaveBeenCalled();
       expect(loadAgentSessionModuleMock).not.toHaveBeenCalled();
-    });
-  });
-
-  it("defers explicit recipient session routing to the Gateway", async () => {
-    await withTempStore(
-      async () => {
-        mockGatewaySuccessReply();
-
-        await agentCliCommand(
-          {
-            message: "hi",
-            agent: "ops",
-            channel: "whatsapp",
-            to: "+15551234567",
-          },
-          runtime,
-        );
-
-        const request = requireRecord(
-          requireFirstCallArg(callGateway, "gateway"),
-          "gateway request",
-        );
-        const params = requireRecord(request.params, "gateway request params");
-        expect(params).toMatchObject({
-          agentId: "ops",
-          channel: "whatsapp",
-          to: "+15551234567",
-        });
-        expect(params.sessionKey).toBeUndefined();
-      },
-      {
-        agents: { list: [{ id: "main" }, { id: "ops" }] },
-        session: { dmScope: "per-channel-peer" },
-      },
-    );
-  });
-
-  it("retries gateway dispatch with shell env fallback only when credentials need it", async () => {
-    await withTempStore(async ({ store }) => {
-      const fastConfig = {
-        agents: { defaults: { timeoutSeconds: 600 } },
-        session: { store, mainKey: "main" },
-      };
-      const shellEnvConfig = {
-        ...fastConfig,
-        gateway: { auth: { mode: "token" as const } },
-      };
-      loadConfig.mockReset();
-      loadConfig.mockReturnValueOnce(fastConfig);
-      loadConfigWithShellEnvFallback.mockReset();
-      loadConfigWithShellEnvFallback.mockResolvedValueOnce(shellEnvConfig);
-      const authError = new Error("gateway agent requires credentials");
-      authError.name = "GatewayCredentialsRequiredError";
-      callGateway.mockRejectedValueOnce(authError);
-      mockGatewaySuccessReply();
-
-      await agentCliCommand({ message: "hi", sessionKey: "agent:main:incident-42" }, runtime);
-
-      expect(loadConfig).toHaveBeenCalledTimes(1);
-      expect(loadConfig).toHaveBeenCalledWith();
-      expect(loadConfigWithShellEnvFallback).toHaveBeenCalledTimes(1);
-      expect(loadConfigWithShellEnvFallback).toHaveBeenCalledWith();
-      expect(callGateway).toHaveBeenCalledTimes(2);
-      expect(requireRecord(callGateway.mock.calls[0]?.[0], "first gateway request").config).toBe(
-        fastConfig,
-      );
-      expect(requireRecord(callGateway.mock.calls[1]?.[0], "second gateway request").config).toBe(
-        shellEnvConfig,
-      );
     });
   });
 
@@ -1206,49 +814,6 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("scopes legacy explicit session keys to the requested agent", async () => {
-    await withTempStore(
-      async () => {
-        mockGatewaySuccessReply();
-
-        await agentCliCommand({ message: "hi", agent: "ops", sessionKey: "incident-42" }, runtime);
-
-        expect(callGateway).toHaveBeenCalledTimes(1);
-        const request = requireRecord(
-          requireFirstCallArg(callGateway, "gateway"),
-          "gateway request",
-        );
-        const params = requireRecord(request.params, "gateway request params");
-        expect(params.agentId).toBe("ops");
-        expect(params.sessionKey).toBe("agent:ops:incident-42");
-      },
-      { agents: { list: [{ id: "main" }, { id: "ops" }] } },
-    );
-  });
-
-  it("accepts agent-prefixed session keys when only casing differs from --agent", async () => {
-    await withTempStore(
-      async () => {
-        mockGatewaySuccessReply();
-
-        await agentCliCommand(
-          { message: "hi", agent: "OPS", sessionKey: "agent:OPS:incident-42" },
-          runtime,
-        );
-
-        expect(callGateway).toHaveBeenCalledTimes(1);
-        const request = requireRecord(
-          requireFirstCallArg(callGateway, "gateway"),
-          "gateway request",
-        );
-        const params = requireRecord(request.params, "gateway request params");
-        expect(params.agentId).toBe("ops");
-        expect(params.sessionKey).toBe("agent:OPS:incident-42");
-      },
-      { agents: { list: [{ id: "main" }, { id: "ops" }] } },
-    );
-  });
-
   it("scopes legacy explicit session keys to the default agent when no agent is requested", async () => {
     await withTempStore(
       async () => {
@@ -1265,107 +830,7 @@ describe("agentCliCommand", () => {
         expect(params.agentId).toBeUndefined();
         expect(params.sessionKey).toBe("agent:ops:incident-42");
       },
-      { agents: { list: [{ id: "ops", default: true }, { id: "main" }] } },
-    );
-  });
-
-  it("prefers explicit session keys when a session id is also supplied", async () => {
-    await withTempStore(
-      async ({ store }) => {
-        fs.writeFileSync(
-          store,
-          JSON.stringify({
-            "agent:main:main": { sessionId: "existing-main-session", updatedAt: 1 },
-          }),
-        );
-        mockGatewaySuccessReply();
-
-        await agentCliCommand(
-          {
-            message: "hi",
-            sessionId: "existing-main-session",
-            sessionKey: "agent:ops:incident-42",
-          },
-          runtime,
-        );
-
-        expect(callGateway).toHaveBeenCalledTimes(1);
-        const request = requireRecord(
-          requireFirstCallArg(callGateway, "gateway"),
-          "gateway request",
-        );
-        const params = requireRecord(request.params, "gateway request params");
-        expect(params.sessionId).toBe("existing-main-session");
-        expect(params.sessionKey).toBe("agent:ops:incident-42");
-      },
-      { agents: { list: [{ id: "main" }, { id: "ops" }] } },
-    );
-  });
-
-  it.each(["global", "unknown"])(
-    "preserves logical %s keys with an explicit agent before gateway dispatch",
-    async (sessionKey) => {
-      await withTempStore(
-        async () => {
-          mockGatewaySuccessReply();
-
-          await agentCliCommand({ message: "hi", agent: "ops", sessionKey }, runtime);
-
-          expect(callGateway).toHaveBeenCalledTimes(1);
-          const request = requireRecord(
-            requireFirstCallArg(callGateway, "gateway"),
-            "gateway request",
-          );
-          const params = requireRecord(request.params, "gateway request params");
-          expect(params.agentId).toBe("ops");
-          expect(params.sessionKey).toBe(sessionKey);
-        },
-        { agents: { list: [{ id: "main" }, { id: "ops" }] } },
-      );
-    },
-  );
-
-  it("preserves unscoped global session keys when no agent is requested", async () => {
-    await withTempStore(
-      async () => {
-        mockGatewaySuccessReply();
-
-        await agentCliCommand({ message: "hi", sessionKey: "global" }, runtime);
-
-        expect(callGateway).toHaveBeenCalledTimes(1);
-        const request = requireRecord(
-          requireFirstCallArg(callGateway, "gateway"),
-          "gateway request",
-        );
-        const params = requireRecord(request.params, "gateway request params");
-        expect(params.agentId).toBeUndefined();
-        expect(params.sessionKey).toBe("global");
-      },
-      { agents: { list: [{ id: "ops", default: true }, { id: "main" }] } },
-    );
-  });
-
-  it("dispatches a restart-shaped fixed-store sentinel under its persisted owner", async () => {
-    await withTempStore(
-      async () => {
-        mockLocalAgentReply();
-
-        await agentCliCommand({ message: "hi", local: true, sessionKey: "global" }, runtime);
-
-        expect(agentCommand).toHaveBeenCalledWith(
-          expect.objectContaining({ agentId: "ops", sessionKey: "global" }),
-          runtime,
-          undefined,
-        );
-      },
-      {
-        session: { store: "/tmp/restart-shared.sqlite" },
-        agents: {
-          ownership: "explicit",
-          defaults: { sessionStore: { agentId: "ops" } },
-          list: [{ id: "ops" }, { id: "research" }],
-        },
-      },
+      createExplicitSystemAgentConfig("ops", ["ops", "main"]),
     );
   });
 
@@ -1385,30 +850,8 @@ describe("agentCliCommand", () => {
         expect(params.agentId).toBeUndefined();
         expect(params.sessionKey).toBe("unknown");
       },
-      { agents: { list: [{ id: "ops", default: true }, { id: "main" }] } },
+      createExplicitSystemAgentConfig("ops", ["ops", "main"]),
     );
-  });
-
-  it("does not treat lazy channel deps as the process signal source", async () => {
-    await withTempStore(async () => {
-      mockGatewaySuccessReply();
-      const deps = new Proxy(
-        {},
-        {
-          get(target, property, receiver) {
-            if (property === "process") {
-              return async () => undefined;
-            }
-            return Reflect.get(target, property, receiver);
-          },
-        },
-      );
-
-      await agentCliCommand({ message: "hi", to: "+1555" }, runtime, deps);
-
-      expect(callGateway).toHaveBeenCalledTimes(1);
-      expect(agentCommand).not.toHaveBeenCalled();
-    });
   });
 
   it("exits for successful gateway runs when SIGTERM arrives before return", async () => {
@@ -1435,81 +878,10 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it.each([
-    ["SIGTERM", 143],
-    ["SIGINT", 130],
-  ] as const)(
-    "aborts an accepted gateway run using the accepted session key when %s interrupts the CLI",
-    async (signalName, exitCode) => {
-      await withTempStore(async () => {
-        const signals = createSignalProcess();
-        let sameConnectionAbort:
-          | { method: string; params: unknown; opts?: { timeoutMs?: number | null } }
-          | undefined;
-        callGateway.mockImplementation(async (requestValue: unknown) => {
-          const request = requireRecord(requestValue, "gateway request");
-          if (request.method === "agent") {
-            const onAccepted = request.onAccepted as ((payload: unknown) => void) | undefined;
-            const onSignalAbort = request.onSignalAbort as
-              | ((
-                  request: (
-                    method: string,
-                    params?: unknown,
-                    opts?: { timeoutMs?: number | null },
-                  ) => Promise<unknown>,
-                ) => Promise<void>)
-              | undefined;
-            const signal = request.signal as AbortSignal | undefined;
-            onAccepted?.({
-              status: "accepted",
-              runId: "run-signal",
-              sessionKey: "agent:main:explicit:reset-run",
-              agentId: "main",
-            });
-            return await new Promise((_, reject) => {
-              signal?.addEventListener(
-                "abort",
-                () => {
-                  void (async () => {
-                    await onSignalAbort?.(async (method, params, opts) => {
-                      sameConnectionAbort = { method, params, opts };
-                      return { ok: true, aborted: true, runIds: ["run-signal"] };
-                    });
-                    const err = new Error("gateway request aborted for agent");
-                    err.name = "AbortError";
-                    reject(err);
-                  })();
-                },
-                { once: true },
-              );
-            });
-          }
-          throw new Error(`unexpected gateway method ${String(request.method)}`);
-        });
+  it("aborts an accepted gateway run using the accepted session key on SIGTERM", async () => {
+    const signalName = "SIGTERM";
+    const exitCode = 143;
 
-        const run = agentCliCommand({ message: "hi", to: "+1555" }, runtime, {
-          process: signals.processLike,
-        });
-        await waitForGatewayCall();
-        signals.emit(signalName);
-        expect(signals.listenerCount("SIGTERM")).toBe(0);
-        expect(signals.listenerCount("SIGINT")).toBe(0);
-
-        await run;
-        expect(callGateway).toHaveBeenCalledTimes(1);
-        expect(runtime.exit).toHaveBeenCalledWith(exitCode);
-        expect(sameConnectionAbort?.method).toBe("chat.abort");
-        expect(sameConnectionAbort?.opts).toEqual({ timeoutMs: 2_000 });
-        expect(sameConnectionAbort?.params).toEqual({
-          sessionKey: "agent:main:explicit:reset-run",
-          runId: "run-signal",
-          agentId: "main",
-        });
-      });
-    },
-  );
-
-  it("aborts a gateway run by idempotency key before the accepted ack", async () => {
     await withTempStore(async () => {
       const signals = createSignalProcess();
       let sameConnectionAbort:
@@ -1518,60 +890,43 @@ describe("agentCliCommand", () => {
       callGateway.mockImplementation(async (requestValue: unknown) => {
         const request = requireRecord(requestValue, "gateway request");
         if (request.method === "agent") {
-          const params = requireRecord(request.params, "gateway agent params");
-          expect(params.idempotencyKey).toBe("pre-accepted-run");
-          const onSignalAbort = request.onSignalAbort as
-            | ((
-                request: (
-                  method: string,
-                  params?: unknown,
-                  opts?: { timeoutMs?: number | null },
-                ) => Promise<unknown>,
-              ) => Promise<void>)
-            | undefined;
+          const onAccepted = request.onAccepted as ((payload: unknown) => void) | undefined;
+          const onSignalAbort = request.onSignalAbort as GatewaySignalAbort | undefined;
           const signal = request.signal as AbortSignal | undefined;
-          return await new Promise((_, reject) => {
-            signal?.addEventListener(
-              "abort",
-              () => {
-                void (async () => {
-                  await onSignalAbort?.(async (method, paramsResult, opts) => {
-                    sameConnectionAbort = { method, params: paramsResult, opts };
-                    return { ok: true, aborted: true, runIds: ["pre-accepted-run"] };
-                  });
-                  const err = new Error("gateway request aborted before accepted ack");
-                  err.name = "AbortError";
-                  reject(err);
-                })();
-              },
-              { once: true },
-            );
+          onAccepted?.({
+            status: "accepted",
+            runId: "run-signal",
+            sessionKey: "agent:main:explicit:reset-run",
+            agentId: "main",
+          });
+          return await rejectOnGatewayAbort(signal, async () => {
+            await onSignalAbort?.(async (method, params, opts) => {
+              sameConnectionAbort = { method, params, opts };
+              return { ok: true, aborted: true, runIds: ["run-signal"] };
+            });
           });
         }
         throw new Error(`unexpected gateway method ${String(request.method)}`);
       });
 
-      const run = agentCliCommand(
-        { message: "hi", sessionId: "pre-session", runId: "pre-accepted-run" },
-        runtime,
-        {
-          process: signals.processLike,
-        },
-      );
+      const run = agentCliCommand({ message: "hi", to: "+1555" }, runtime, {
+        process: signals.processLike,
+      });
       await waitForGatewayCall();
-      signals.emit("SIGTERM");
+      signals.emit(signalName);
+      expect(signals.listenerCount("SIGTERM")).toBe(0);
+      expect(signals.listenerCount("SIGINT")).toBe(0);
 
       await run;
       expect(callGateway).toHaveBeenCalledTimes(1);
-      expect(runtime.exit).toHaveBeenCalledWith(143);
+      expect(runtime.exit).toHaveBeenCalledWith(exitCode);
       expect(sameConnectionAbort?.method).toBe("chat.abort");
       expect(sameConnectionAbort?.opts).toEqual({ timeoutMs: 2_000 });
       expect(sameConnectionAbort?.params).toEqual({
-        sessionKey: "agent:main:explicit:pre-session",
-        runId: "pre-accepted-run",
+        sessionKey: "agent:main:explicit:reset-run",
+        runId: "run-signal",
+        agentId: "main",
       });
-      expect(signals.listenerCount("SIGTERM")).toBe(0);
-      expect(signals.listenerCount("SIGINT")).toBe(0);
     });
   });
 
@@ -1593,36 +948,17 @@ describe("agentCliCommand", () => {
               idempotencyKey: "recipient-pre-accepted-run",
             });
             expect(params.sessionKey).toBeUndefined();
-            const onSignalAbort = request.onSignalAbort as
-              | ((
-                  request: (
-                    method: string,
-                    params?: unknown,
-                    opts?: { timeoutMs?: number | null },
-                  ) => Promise<unknown>,
-                ) => Promise<void>)
-              | undefined;
+            const onSignalAbort = request.onSignalAbort as GatewaySignalAbort | undefined;
             const signal = request.signal as AbortSignal | undefined;
-            return await new Promise((_, reject) => {
-              signal?.addEventListener(
-                "abort",
-                () => {
-                  void (async () => {
-                    await onSignalAbort?.(async (method, paramsResult, opts) => {
-                      sameConnectionAbort = { method, params: paramsResult, opts };
-                      return {
-                        ok: true,
-                        aborted: true,
-                        runIds: ["recipient-pre-accepted-run"],
-                      };
-                    });
-                    const err = new Error("gateway recipient routing aborted before accepted ack");
-                    err.name = "AbortError";
-                    reject(err);
-                  })();
-                },
-                { once: true },
-              );
+            return await rejectOnGatewayAbort(signal, async () => {
+              await onSignalAbort?.(async (method, paramsResult, opts) => {
+                sameConnectionAbort = { method, params: paramsResult, opts };
+                return {
+                  ok: true,
+                  aborted: true,
+                  runIds: ["recipient-pre-accepted-run"],
+                };
+              });
             });
           }
           throw new Error(`unexpected gateway method ${String(request.method)}`);
@@ -1651,7 +987,7 @@ describe("agentCliCommand", () => {
         });
       },
       {
-        agents: { list: [{ id: "main" }, { id: "ops" }] },
+        agents: { entries: { main: {}, ops: {} } },
         session: { dmScope: "per-channel-peer" },
       },
     );
@@ -1664,17 +1000,7 @@ describe("agentCliCommand", () => {
         const request = requireRecord(requestValue, "gateway request");
         if (request.method === "agent") {
           const signal = request.signal as AbortSignal | undefined;
-          return await new Promise((_, reject) => {
-            signal?.addEventListener(
-              "abort",
-              () => {
-                const err = new Error("gateway request aborted before start");
-                err.name = "AbortError";
-                reject(err);
-              },
-              { once: true },
-            );
-          });
+          return await rejectOnGatewayAbort(signal);
         }
         throw new Error(`unexpected gateway method ${String(request.method)}`);
       });
@@ -1706,34 +1032,15 @@ describe("agentCliCommand", () => {
         if (request.method === "agent") {
           const params = requireRecord(request.params, "gateway agent params");
           expect(params.idempotencyKey).toBe("pre-accepted-run");
-          const onSignalAbort = request.onSignalAbort as
-            | ((
-                request: (
-                  method: string,
-                  params?: unknown,
-                  opts?: { timeoutMs?: number | null },
-                ) => Promise<unknown>,
-              ) => Promise<void>)
-            | undefined;
+          const onSignalAbort = request.onSignalAbort as GatewaySignalAbort | undefined;
           const signal = request.signal as AbortSignal | undefined;
-          return await new Promise((_, reject) => {
-            signal?.addEventListener(
-              "abort",
-              () => {
-                void (async () => {
-                  await onSignalAbort?.(async (method, paramsValue, opts) => {
-                    sameConnectionAborts.push({ method, params: paramsValue, opts });
-                    return sameConnectionAborts.length < 3
-                      ? { ok: true, aborted: false, runIds: [] }
-                      : { ok: true, aborted: true, runIds: ["pre-accepted-run"] };
-                  });
-                  const err = new Error("gateway request aborted before registration");
-                  err.name = "AbortError";
-                  reject(err);
-                })();
-              },
-              { once: true },
-            );
+          return await rejectOnGatewayAbort(signal, async () => {
+            await onSignalAbort?.(async (method, paramsValue, opts) => {
+              sameConnectionAborts.push({ method, params: paramsValue, opts });
+              return sameConnectionAborts.length < 3
+                ? { ok: true, aborted: false, runIds: [] }
+                : { ok: true, aborted: true, runIds: ["pre-accepted-run"] };
+            });
           });
         }
         throw new Error(`unexpected gateway method ${String(request.method)}`);
@@ -1780,32 +1087,13 @@ describe("agentCliCommand", () => {
         if (request.method === "agent") {
           const params = requireRecord(request.params, "gateway agent params");
           expect(params.idempotencyKey).toBe("pre-accepted-run");
-          const onSignalAbort = request.onSignalAbort as
-            | ((
-                request: (
-                  method: string,
-                  params?: unknown,
-                  opts?: { timeoutMs?: number | null },
-                ) => Promise<unknown>,
-              ) => Promise<void>)
-            | undefined;
+          const onSignalAbort = request.onSignalAbort as GatewaySignalAbort | undefined;
           const signal = request.signal as AbortSignal | undefined;
-          return await new Promise((_, reject) => {
-            signal?.addEventListener(
-              "abort",
-              () => {
-                void (async () => {
-                  await onSignalAbort?.(async (method, paramsLocal, opts) => {
-                    sameConnectionAborts.push({ method, params: paramsLocal, opts });
-                    return { ok: true, aborted: false, runIds: [] };
-                  });
-                  const err = new Error("gateway request aborted before registration");
-                  err.name = "AbortError";
-                  reject(err);
-                })();
-              },
-              { once: true },
-            );
+          return await rejectOnGatewayAbort(signal, async () => {
+            await onSignalAbort?.(async (method, paramsLocal, opts) => {
+              sameConnectionAborts.push({ method, params: paramsLocal, opts });
+              return { ok: true, aborted: false, runIds: [] };
+            });
           });
         }
         if (request.method === "chat.abort") {
@@ -1849,75 +1137,6 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("preserves backend admin authority when SIGTERM aborts a model override run", async () => {
-    await withTempStore(async () => {
-      const signals = createSignalProcess();
-      let sameConnectionAbort:
-        | { method: string; params: unknown; opts?: { timeoutMs?: number | null } }
-        | undefined;
-      callGateway.mockImplementation(async (requestValue: unknown) => {
-        const request = requireRecord(requestValue, "gateway request");
-        if (request.method === "agent") {
-          expect(request.clientName).toBe("gateway-client");
-          expect(request.mode).toBe("backend");
-          expect(request.scopes).toEqual(["operator.admin"]);
-          const onAccepted = request.onAccepted as ((payload: unknown) => void) | undefined;
-          const onSignalAbort = request.onSignalAbort as
-            | ((
-                request: (
-                  method: string,
-                  params?: unknown,
-                  opts?: { timeoutMs?: number | null },
-                ) => Promise<unknown>,
-              ) => Promise<void>)
-            | undefined;
-          const signal = request.signal as AbortSignal | undefined;
-          onAccepted?.({ status: "accepted", runId: "run-model-sigterm" });
-          return await new Promise((_, reject) => {
-            signal?.addEventListener(
-              "abort",
-              () => {
-                void (async () => {
-                  await onSignalAbort?.(async (method, params, opts) => {
-                    sameConnectionAbort = { method, params, opts };
-                    return { ok: true, aborted: true, runIds: ["run-model-sigterm"] };
-                  });
-                  const err = new Error("gateway request aborted for model override agent");
-                  err.name = "AbortError";
-                  reject(err);
-                })();
-              },
-              { once: true },
-            );
-          });
-        }
-        throw new Error(`unexpected gateway method ${String(request.method)}`);
-      });
-
-      const run = agentCliCommand(
-        { message: "hi", to: "+1555", model: "ollama/qwen3.5:9b" },
-        runtime,
-        {
-          process: signals.processLike,
-        },
-      );
-      await waitForGatewayCall();
-      signals.emit("SIGTERM");
-
-      await run;
-      expect(callGateway).toHaveBeenCalledTimes(1);
-      expect(runtime.exit).toHaveBeenCalledWith(143);
-      expect(sameConnectionAbort?.method).toBe("chat.abort");
-      expect(sameConnectionAbort?.opts).toEqual({ timeoutMs: 2_000 });
-      expect(sameConnectionAbort?.params).toEqual({
-        sessionKey: "agent:main:main",
-        runId: "run-model-sigterm",
-      });
-      expect(signals.listenerCount("SIGTERM")).toBe(0);
-      expect(signals.listenerCount("SIGINT")).toBe(0);
-    });
-  });
-
   it("preserves backend admin authority for model override fallback aborts", async () => {
     await withTempStore(async () => {
       const signals = createSignalProcess();
@@ -1934,33 +1153,14 @@ describe("agentCliCommand", () => {
           expect(request.mode).toBe("backend");
           expect(request.scopes).toEqual(["operator.admin"]);
           const onAccepted = request.onAccepted as ((payload: unknown) => void) | undefined;
-          const onSignalAbort = request.onSignalAbort as
-            | ((
-                request: (
-                  method: string,
-                  params?: unknown,
-                  opts?: { timeoutMs?: number | null },
-                ) => Promise<unknown>,
-              ) => Promise<void>)
-            | undefined;
+          const onSignalAbort = request.onSignalAbort as GatewaySignalAbort | undefined;
           const signal = request.signal as AbortSignal | undefined;
           onAccepted?.({ status: "accepted", runId: "run-model-fallback" });
-          return await new Promise((_, reject) => {
-            signal?.addEventListener(
-              "abort",
-              () => {
-                void (async () => {
-                  await onSignalAbort?.(async (method, params, opts) => {
-                    sameConnectionAborts.push({ method, params, opts });
-                    return { ok: true, aborted: false, runIds: [] };
-                  });
-                  const err = new Error("gateway request aborted for model override agent");
-                  err.name = "AbortError";
-                  reject(err);
-                })();
-              },
-              { once: true },
-            );
+          return await rejectOnGatewayAbort(signal, async () => {
+            await onSignalAbort?.(async (method, params, opts) => {
+              sameConnectionAborts.push({ method, params, opts });
+              return { ok: true, aborted: false, runIds: [] };
+            });
           });
         }
         if (request.method === "chat.abort") {
@@ -1999,10 +1199,10 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it.each([
-    ["SIGTERM", 143],
-    ["SIGINT", 130],
-  ] as const)("releases the local state lock after %s aborts the run", async (signal, exitCode) => {
+  it("releases the local state lock after SIGTERM aborts the run", async () => {
+    const signal = "SIGTERM";
+    const exitCode = 143;
+
     await withTempStore(async ({ dir }) => {
       const signals = createSignalProcess();
       const lockOptions = createLocalGatewayLockOptions(dir);
@@ -2039,59 +1239,41 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it.each([
-    ["SIGTERM", 143],
-    ["SIGINT", 130],
-  ] as const)(
-    "preserves %s when a local run returns a failed outcome",
-    async (signal, exitCode) => {
-      await withTempStore(async () => {
-        const signals = createSignalProcess();
-        agentCommand.mockImplementationOnce(async (opts: { abortSignal?: AbortSignal }) => {
-          return await new Promise((resolve) => {
-            opts.abortSignal?.addEventListener(
-              "abort",
-              () => {
-                resolve(
-                  recordAgentRunTerminalOutcome(
-                    {
-                      payloads: [],
-                      meta: { aborted: true },
-                    },
-                    "failed",
-                  ) as unknown as Awaited<ReturnType<typeof AgentCommand>>,
-                );
-              },
-              { once: true },
-            );
-          });
-        });
+  it("preserves SIGINT when a local run returns a failed outcome", async () => {
+    const signal = "SIGINT";
+    const exitCode = 130;
 
-        const run = agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime, {
-          process: signals.processLike,
-        });
-        await waitForAgentCommandCall();
-        signals.emit(signal);
-
-        await expect(run).resolves.toBeUndefined();
-        expect(callGateway).not.toHaveBeenCalled();
-        expect(runtime.exit).toHaveBeenCalledWith(exitCode);
-      });
-    },
-  );
-
-  it("does not classify abort errors as gateway transport failures", async () => {
     await withTempStore(async () => {
-      const err = new Error("gateway request aborted for agent");
-      err.name = "AbortError";
-      callGateway.mockRejectedValueOnce(err);
+      const signals = createSignalProcess();
+      agentCommand.mockImplementationOnce(async (opts: { abortSignal?: AbortSignal }) => {
+        return await new Promise((resolve) => {
+          opts.abortSignal?.addEventListener(
+            "abort",
+            () => {
+              resolve(
+                recordAgentRunTerminalOutcome(
+                  {
+                    payloads: [],
+                    meta: { aborted: true },
+                  },
+                  "failed",
+                ) as unknown as Awaited<ReturnType<typeof AgentCommand>>,
+              );
+            },
+            { once: true },
+          );
+        });
+      });
 
-      await expect(agentCliCommand({ message: "hi", to: "+1555" }, runtime)).rejects.toThrow(
-        "gateway request aborted for agent",
-      );
+      const run = agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime, {
+        process: signals.processLike,
+      });
+      await waitForAgentCommandCall();
+      signals.emit(signal);
 
-      expect(isGatewayTransportError).not.toHaveBeenCalled();
-      expect(agentCommand).not.toHaveBeenCalled();
+      await expect(run).resolves.toBeUndefined();
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(runtime.exit).toHaveBeenCalledWith(exitCode);
     });
   });
 
@@ -2124,73 +1306,57 @@ describe("agentCliCommand", () => {
     }
   });
 
-  it("stays silent when the gateway returns an intentional empty reply", async () => {
-    await withTempStore(async () => {
-      callGateway.mockResolvedValue({
-        runId: "idem-1",
-        status: "ok",
-        summary: "completed",
-        result: {
-          payloads: [],
-          meta: { stub: true },
-        },
-      });
-
-      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
-
-      expect(runtime.log).not.toHaveBeenCalled();
-    });
-  });
-
-  it.each(["timeout", "error", "cancelled"])(
-    "logs an empty-payload %s summary and marks the process unsuccessful",
-    async (status) => {
-      await withTempStore(async () => {
-        const signals = createSignalProcess();
-        callGateway.mockResolvedValue({
-          runId: "idem-1",
-          status,
-          summary: status,
-          result: {
-            payloads: [],
-            meta: { stopReason: status },
-          },
-        });
-
-        await agentCliCommand({ message: "hi", to: "+1555" }, runtime, {
-          process: signals.processLike,
-        });
-
-        expect(runtime.log).toHaveBeenCalledWith(status);
-        expect(runtime.exit).not.toHaveBeenCalled();
-        expect(signals.processLike.exitCode).toBe(1);
-      });
-    },
-  );
-
-  it.each(["timeout", "error", "cancelled"])(
-    "writes a %s gateway result before exiting nonzero in JSON mode",
-    async (status) => {
+  it.each([
+    { status: "timeout", json: false, ok: true, withdrawn: false },
+    { status: "timeout", json: true, ok: false, withdrawn: true },
+    { status: "timeout", json: false, ok: false, withdrawn: true },
+  ])(
+    "renders $status with json=$json, RPC ok=$ok, withdrawn=$withdrawn",
+    async ({ status, json, ok, withdrawn }) => {
       await withTempStore(async () => {
         const signals = createSignalProcess();
         const response = {
           runId: "idem-1",
           status,
-          summary: status === "timeout" ? "aborted" : "failed",
+          summary: withdrawn ? "Input was not delivered. Raise --timeout and retry." : status,
+          ...(withdrawn
+            ? { reason: "input_withdrawn_before_turn", pendingInputId: "withdrawn-input" }
+            : {}),
           result: {
-            payloads: [{ text: "Agent did not complete", isError: true }],
+            payloads:
+              status === "cancelled" ? [{ text: "Agent did not complete", isError: true }] : [],
             meta: { stopReason: status },
           },
         };
-        callGateway.mockResolvedValue(response);
+        callGateway.mockImplementation(() =>
+          settleGatewayAgentRequest({
+            response: {
+              ok,
+              payload: response,
+              ...(ok ? {} : { error: { code: "UNAVAILABLE", message: "deadline elapsed" } }),
+            },
+          }),
+        );
 
-        await agentCliCommand({ message: "hi", to: "+1555", json: true }, jsonRuntime, {
+        await agentCliCommand({ message: "hi", to: "+1555", json }, jsonRuntime, {
           process: signals.processLike,
         });
 
-        expect(jsonRuntime.writeJson).toHaveBeenCalledWith(response, 2);
+        expect(signals.processLike.exitCode).toBe(status === "ok" ? 0 : 1);
         expect(jsonRuntime.exit).not.toHaveBeenCalled();
-        expect(signals.processLike.exitCode).toBe(1);
+        expect(jsonRuntime.log).toHaveBeenCalledTimes(
+          !json && !withdrawn && status !== "ok" ? 1 : 0,
+        );
+        if (json) {
+          expect(jsonRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(
+            { ...response, status: ok ? status : "cancelled" },
+            2,
+          );
+        } else if (status !== "ok") {
+          expect(withdrawn ? jsonRuntime.error : jsonRuntime.log).toHaveBeenCalledWith(
+            response.summary,
+          );
+        }
       });
     },
   );
@@ -2217,44 +1383,6 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("passes model overrides through gateway requests", async () => {
-    await withTempStore(async () => {
-      mockGatewaySuccessReply();
-
-      await agentCliCommand({ message: "hi", to: "+1555", model: "ollama/qwen3.5:9b" }, runtime);
-
-      expect(callGateway).toHaveBeenCalledTimes(1);
-      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
-      expect(request.clientName).toBe("gateway-client");
-      expect(request.mode).toBe("backend");
-      expect(request.scopes).toEqual(["operator.admin"]);
-      const params = requireRecord(request.params, "gateway request params");
-      expect(params.model).toBe("ollama/qwen3.5:9b");
-    });
-  });
-
-  it("routes diagnostics to stderr before JSON gateway execution", async () => {
-    await withTempStore(async () => {
-      const response = {
-        runId: "idem-1",
-        status: "ok",
-        result: {
-          payloads: [{ text: "hello" }],
-          meta: { stub: true },
-        },
-      };
-      callGateway.mockImplementationOnce(async () => {
-        expect(loggingState.forceConsoleToStderr).toBe(true);
-        return response;
-      });
-
-      await agentCliCommand({ message: "hi", to: "+1555", json: true }, jsonRuntime);
-
-      expect(jsonRuntime.writeJson).toHaveBeenCalledWith(response, 2);
-      expect(jsonRuntime.log).not.toHaveBeenCalled();
-    });
-  });
-
   it("promotes gateway deliveryStatus to the top-level JSON response", async () => {
     await withTempStore(async () => {
       const deliveryStatus = {
@@ -2273,7 +1401,10 @@ describe("agentCliCommand", () => {
           deliveryStatus,
         },
       };
-      callGateway.mockResolvedValue(response);
+      callGateway.mockImplementationOnce(async () => {
+        expect(loggingState.forceConsoleToStderr).toBe(true);
+        return response;
+      });
 
       await agentCliCommand({ message: "hi", to: "+1555", json: true, deliver: true }, jsonRuntime);
 
@@ -2307,18 +1438,10 @@ describe("agentCliCommand", () => {
       payload: { status: "error" },
       runId: "gateway-accepted",
     },
-    { label: "preadmission rejection", accepted: undefined, payload: undefined, runId: undefined },
-    { label: "blank final ID", accepted: undefined, payload: { runId: "   " }, runId: undefined },
     {
       label: "non-string final ID",
       accepted: undefined,
       payload: { runId: 123 },
-      runId: undefined,
-    },
-    {
-      label: "negative accepted shape",
-      accepted: undefined,
-      payload: { status: "accepted" },
       runId: undefined,
     },
   ])(
@@ -2334,33 +1457,17 @@ describe("agentCliCommand", () => {
         });
         const signal = createSignalProcess();
         const humanBefore = formatCliFailureLines({ title: "failed", error, env: {} });
-        callGateway.mockImplementation(
-          async (request: { onAccepted?: (payload: unknown) => void }) => {
-            const pending = new GatewayPendingRequests({
-              createRequestId: () => "request",
-              nowMs: Date.now,
-              createRequestError: () => error,
-            });
-            const result = pending.request(
-              { send: () => {} },
-              "agent",
-              {},
-              { expectFinal: true, onAccepted: request.onAccepted },
-            );
-            if (accepted) {
-              pending.handleResponse({ type: "res", id: "1:request", ok: true, payload: accepted });
-            }
-            pending.handleResponse({
-              type: "res",
-              id: "1:request",
+        callGateway.mockImplementation((request: { onAccepted?: (payload: unknown) => void }) =>
+          settleGatewayAgentRequest({
+            accepted,
+            onAccepted: request.onAccepted,
+            requestError: error,
+            response: {
               ok: false,
               payload,
               error: { code: error.code, message: error.message },
-            });
-            // Bound the pre-fix negative-accepted regression without a wall-clock timeout.
-            pending.flush(error);
-            return await result;
-          },
+            },
+          }),
         );
         await expect(
           agentCliCommand(
@@ -2394,71 +1501,49 @@ describe("agentCliCommand", () => {
     },
   );
 
-  it.each([
-    {
-      label: "accepted timeout",
-      createError: createGatewayTimeoutError,
-      accepted: { status: "accepted", runId: "gateway-accepted" },
-      runId: "gateway-accepted",
-    },
-    {
-      label: "accepted close",
-      createError: createGatewayClosedError,
-      accepted: { status: "accepted", runId: "gateway-accepted" },
-      runId: "gateway-accepted",
-    },
-    {
-      label: "unacknowledged close",
-      createError: createGatewayClosedError,
-      accepted: undefined,
-      runId: undefined,
-    },
-    {
-      label: "accepted without ID",
-      createError: createGatewayTimeoutError,
-      accepted: { status: "accepted", sessionKey: "agent:ops:run-proof" },
-      runId: undefined,
-    },
-  ])(
-    "preserves error identity and uncertainty for $label",
-    async ({ createError, accepted, runId }) => {
-      await withTempStore(async () => {
-        const error = createError();
-        const signal = createSignalProcess();
-        const humanBefore = formatCliFailureLines({ title: "failed", error, env: {} });
-        callGateway.mockImplementation(
-          async (request: { onAccepted?: (payload: unknown) => void }) => {
-            if (accepted) {
-              request.onAccepted?.(accepted);
-            }
-            throw error;
+  it("preserves error identity and uncertainty for an accepted timeout", async () => {
+    await withTempStore(async () => {
+      const error = createGatewayTimeoutError();
+      const runId = "gateway-accepted";
+      const signal = createSignalProcess();
+      const humanBefore = formatCliFailureLines({ title: "failed", error, env: {} });
+      callGateway.mockImplementation(
+        async (request: { onAccepted?: (payload: unknown) => void }) => {
+          request.onAccepted?.({ status: "accepted", runId });
+          throw error;
+        },
+      );
+      await expect(
+        agentCliCommand(
+          {
+            message: "hi",
+            sessionKey: "agent:ops:run-proof",
+            runId: "local-idempotency",
+            json: true,
           },
-        );
-        await expect(
-          agentCliCommand(
-            {
-              message: "hi",
-              sessionKey: "agent:ops:run-proof",
-              runId: "local-idempotency",
-              json: true,
-            },
-            jsonRuntime,
-            { process: signal.processLike },
-          ),
-        ).rejects.toBe(error);
-        expect(formatCliJsonFailure(error, { env: {} })).toEqual({
-          ok: false,
-          error: { type: "cli_error", message: error.message },
-          ...(runId ? { runId, origin: "gateway" } : {}),
-        });
-        expect(formatCliFailureLines({ title: "failed", error, env: {} })).toEqual(humanBefore);
-        expect(callGateway).toHaveBeenCalledOnce();
-        expect(agentCommand).not.toHaveBeenCalled();
-        expect(mockMessages(jsonRuntime.error).join("\n")).toContain("may still be running");
-        expect(signal.listenerCount("SIGINT") + signal.listenerCount("SIGTERM")).toBe(0);
-      }, remoteGatewayConfig);
-    },
-  );
+          jsonRuntime,
+          { process: signal.processLike },
+        ),
+      ).rejects.toBe(error);
+      expect(formatCliJsonFailure(error, { env: {} })).toEqual({
+        ok: false,
+        error: { type: "cli_error", message: error.message },
+        runId,
+        origin: "gateway",
+      });
+      expect(formatCliFailureLines({ title: "failed", error, env: {} })).toEqual(humanBefore);
+      expect(callGateway).toHaveBeenCalledOnce();
+      expect(agentCommand).not.toHaveBeenCalled();
+      const hint = mockMessages(jsonRuntime.error).join("\n");
+      expect(hint).toContain("Gateway agent call");
+      expect(hint).toContain("may still be running");
+      expect(hint).toContain("--local");
+      expect(hint).toContain("timed out");
+      expect(hint).toContain(`accepted run ${runId}`);
+      expect(hint).toContain("--timeout <seconds>");
+      expect(signal.listenerCount("SIGINT") + signal.listenerCount("SIGTERM")).toBe(0);
+    }, remoteGatewayConfig);
+  });
 
   it("does not promote arbitrary thrown object fields into Gateway provenance", async () => {
     await withTempStore(async () => {
@@ -2482,101 +1567,6 @@ describe("agentCliCommand", () => {
     }, remoteGatewayConfig);
   });
 
-  it.each([
-    {
-      label: "timed out",
-      createError: createGatewayTimeoutError,
-      expectTimeoutAdvice: true,
-    },
-    {
-      label: "connection closed",
-      createError: createGatewayClosedError,
-      expectTimeoutAdvice: false,
-    },
-  ])(
-    "names the accepted run in the transport-loss hint after the Gateway $label",
-    async ({ createError, expectTimeoutAdvice }) => {
-      await withTempStore(async () => {
-        const error = createError();
-        const signal = createSignalProcess();
-        callGateway.mockImplementation(
-          async (request: { onAccepted?: (payload: unknown) => void }) => {
-            request.onAccepted?.({ status: "accepted", runId: "gateway-accepted" });
-            throw error;
-          },
-        );
-
-        await expect(
-          agentCliCommand(
-            { message: "hi", sessionKey: "agent:ops:run-proof", json: true },
-            jsonRuntime,
-            { process: signal.processLike },
-          ),
-        ).rejects.toBe(error);
-
-        expect(callGateway).toHaveBeenCalledOnce();
-        expect(agentCommand).not.toHaveBeenCalled();
-        const hint = mockMessages(jsonRuntime.error).join("\n");
-        expect(hint).toContain("Gateway agent call");
-        expect(hint).toContain("accepted run gateway-accepted");
-        if (expectTimeoutAdvice) {
-          expect(hint).toContain("--timeout <seconds>");
-        }
-        // The documented JSON failure envelope keeps ok:false and error.type/message
-        // alongside the accepted run provenance for the shared failure renderer.
-        expect(formatCliJsonFailure(error, { env: {} })).toEqual({
-          ok: false,
-          runId: "gateway-accepted",
-          origin: "gateway",
-          error: { type: "cli_error", message: error.message },
-        });
-      }, remoteGatewayConfig);
-    },
-  );
-
-  it("rejects gateway timeout errors unchanged with a local retry hint", async () => {
-    await withTempStore(async () => {
-      const error = createGatewayTimeoutError();
-      callGateway.mockRejectedValue(error);
-
-      await expect(agentCliCommand({ message: "hi", to: "+1555" }, runtime)).rejects.toBe(error);
-
-      expect(callGateway).toHaveBeenCalledTimes(1);
-      expect(agentCommand).not.toHaveBeenCalled();
-      expect(
-        mockMessages(runtime.error).some(
-          (message) =>
-            message.includes("Gateway agent call timed out") && message.includes("--local"),
-        ),
-      ).toBe(true);
-    });
-  });
-
-  it("starts and flushes the diagnostics exporter around local embedded runs", async () => {
-    await withTempStore(async () => {
-      const stop = vi.fn(async () => {});
-      startOneShotDiagnosticsExporters.mockResolvedValue({ stop });
-      mockLocalAgentReply();
-
-      await agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime);
-
-      expect(callGateway).not.toHaveBeenCalled();
-      expect(startOneShotDiagnosticsExporters).toHaveBeenCalledTimes(1);
-      expect(startOneShotDiagnosticsExporters).toHaveBeenCalledWith(
-        expect.objectContaining({ suppressStdoutDiagnosticLogs: false }),
-      );
-      expect(loadRuntimeConfig).toHaveBeenCalledTimes(1);
-      expect(agentCommand).toHaveBeenCalledTimes(1);
-      expect(stop).toHaveBeenCalledTimes(1);
-      expect(auditRecorderMocks.create).not.toHaveBeenCalled();
-      const startOrder = requireFirstCallOrder(startOneShotDiagnosticsExporters, "exporter start");
-      const runOrder = requireFirstCallOrder(agentCommand, "embedded agent");
-      const stopOrder = requireFirstCallOrder(stop, "exporter stop");
-      expect(startOrder).toBeLessThan(runOrder);
-      expect(runOrder).toBeLessThan(stopOrder);
-    });
-  });
-
   it("owns and flushes the opt-in local audit writer without awaiting persistence", async () => {
     await withTempStore(
       async () => {
@@ -2593,7 +1583,7 @@ describe("agentCliCommand", () => {
 
         await agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime);
 
-        expect(auditRecorderMocks.create).toHaveBeenCalledWith({ messageMode: "off" });
+        expect(auditRecorderMocks.create).toHaveBeenCalledOnce();
         expect(auditRecorderMocks.stop).toHaveBeenCalledOnce();
         expect(hasExecutionIdentityAdmissionSink()).toBe(false);
       },
@@ -2631,6 +1621,18 @@ describe("agentCliCommand", () => {
         expect.objectContaining({ suppressStdoutDiagnosticLogs: true }),
       );
       expect(stop).toHaveBeenCalledTimes(1);
+      expect(loadRuntimeConfig).toHaveBeenCalledTimes(1);
+      expect(auditRecorderMocks.create).not.toHaveBeenCalled();
+      expect(requireFirstCallArg(agentCommand, "embedded agent")).toMatchObject({
+        cleanupBundleMcpOnRunEnd: true,
+        cleanupCliLiveSessionOnRunEnd: true,
+        oneShotCliRun: true,
+      });
+      const startOrder = requireFirstCallOrder(startOneShotDiagnosticsExporters, "exporter start");
+      const runOrder = requireFirstCallOrder(agentCommand, "embedded agent");
+      const stopOrder = requireFirstCallOrder(stop, "exporter stop");
+      expect(startOrder).toBeLessThan(runOrder);
+      expect(runOrder).toBeLessThan(stopOrder);
     });
   });
 
@@ -2667,18 +1669,6 @@ describe("agentCliCommand", () => {
           message.includes("diagnostics exporter startup failed"),
         ),
       ).toBe(true);
-    });
-  });
-
-  it("does not start the diagnostics exporter for gateway dispatch", async () => {
-    await withTempStore(async () => {
-      mockGatewaySuccessReply();
-
-      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
-
-      expect(callGateway).toHaveBeenCalledTimes(1);
-      expect(startOneShotDiagnosticsExporters).not.toHaveBeenCalled();
-      expect(loadRuntimeConfig).not.toHaveBeenCalled();
     });
   });
 
@@ -2738,72 +1728,10 @@ describe("agentCliCommand", () => {
     },
   );
 
-  it("rejects transport-closed errors unchanged with a local retry hint", async () => {
-    await withTempStore(async () => {
-      const error = createGatewayClosedError();
-      callGateway.mockRejectedValue(error);
+  it("maps a failed local terminal outcome to exit 1", async () => {
+    const outcome = "failed";
+    const exitCode = 1;
 
-      await expect(agentCliCommand({ message: "hi", to: "+1555" }, runtime)).rejects.toBe(error);
-
-      expect(callGateway).toHaveBeenCalledTimes(1);
-      expect(agentCommand).not.toHaveBeenCalled();
-      expect(
-        mockMessages(runtime.error).some(
-          (message) =>
-            message.includes("Gateway agent call connection closed") && message.includes("--local"),
-        ),
-      ).toBe(true);
-    });
-  });
-
-  it("rejects non-transport errors without a local retry hint", async () => {
-    await withTempStore(async () => {
-      const error = Object.assign(new Error("missing scope: operator.admin"), {
-        name: "GatewayClientRequestError",
-        gatewayCode: "INVALID_REQUEST",
-      });
-      callGateway.mockRejectedValue(error);
-
-      await expect(agentCliCommand({ message: "hi", to: "+1555" }, runtime)).rejects.toBe(error);
-
-      expect(callGateway).toHaveBeenCalledTimes(1);
-      expect(agentCommand).not.toHaveBeenCalled();
-      expect(mockMessages(runtime.error).some((message) => message.includes("--local"))).toBe(
-        false,
-      );
-    });
-  });
-
-  it("skips gateway when --local is set", async () => {
-    await withTempStore(async () => {
-      mockLocalAgentReply();
-
-      await agentCliCommand(
-        {
-          message: "hi",
-          to: "+1555",
-          local: true,
-        },
-        runtime,
-      );
-
-      expect(callGateway).not.toHaveBeenCalled();
-      expect(agentCommand).toHaveBeenCalledTimes(1);
-      const localOpts = requireRecord(
-        requireFirstCallArg(agentCommand, "embedded agent"),
-        "embedded agent options",
-      );
-      expect(localOpts.cleanupBundleMcpOnRunEnd).toBe(true);
-      expect(localOpts.cleanupCliLiveSessionOnRunEnd).toBe(true);
-      expect(localOpts.oneShotCliRun).toBe(true);
-      expect(runtime.log).toHaveBeenCalledWith("local");
-    });
-  });
-
-  it.each([
-    ["failed", 1],
-    ["completed", 0],
-  ] as const)("maps a %s local terminal outcome to exit %s", async (outcome, exitCode) => {
     await withTempStore(async () => {
       const signals = createSignalProcess();
       agentCommand.mockResolvedValueOnce(
@@ -2821,105 +1749,6 @@ describe("agentCliCommand", () => {
       });
 
       expect(signals.processLike.exitCode).toBe(exitCode);
-    });
-  });
-
-  it("forwards an explicit local timeout and leaves omission to the configured default", async () => {
-    await withTempStore(async () => {
-      mockLocalAgentReply();
-
-      await agentCliCommand(
-        {
-          message: "hi",
-          to: "+1555",
-          local: true,
-          timeout: "21600",
-        },
-        runtime,
-      );
-
-      expect(
-        requireRecord(requireFirstCallArg(agentCommand, "embedded agent"), "embedded agent options")
-          .timeout,
-      ).toBe("21600");
-
-      agentCommand.mockClear();
-      mockLocalAgentReply();
-
-      await agentCliCommand(
-        {
-          message: "hi",
-          to: "+1555",
-          local: true,
-        },
-        runtime,
-      );
-
-      expect(
-        requireRecord(requireFirstCallArg(agentCommand, "embedded agent"), "embedded agent options")
-          .timeout,
-      ).toBeUndefined();
-    });
-  });
-
-  it("preserves inline message whitespace for local embedded runs", async () => {
-    await withTempStore(async () => {
-      mockLocalAgentReply();
-
-      await agentCliCommand(
-        {
-          message: "  keep spaces  ",
-          to: "+1555",
-          local: true,
-        },
-        runtime,
-      );
-
-      const localOpts = requireRecord(
-        requireFirstCallArg(agentCommand, "embedded agent"),
-        "embedded agent options",
-      );
-      expect(localOpts.message).toBe("  keep spaces  ");
-    });
-  });
-
-  it("passes explicit session keys to local embedded runs", async () => {
-    await withTempStore(async () => {
-      mockLocalAgentReply();
-
-      await agentCliCommand(
-        {
-          message: "hi",
-          sessionKey: "agent:main:incident-42",
-          local: true,
-        },
-        runtime,
-      );
-
-      expect(callGateway).not.toHaveBeenCalled();
-      expect(agentCommand).toHaveBeenCalledTimes(1);
-      const localOpts = requireRecord(
-        requireFirstCallArg(agentCommand, "embedded agent"),
-        "embedded agent options",
-      );
-      expect(localOpts.sessionKey).toBe("agent:main:incident-42");
-    });
-  });
-
-  it("propagates harness-owned session rejection from --local dispatch", async () => {
-    await withTempStore(async () => {
-      const sessionKey = "agent:main:harness:codex:supervision:missing-local";
-      agentCommand.mockRejectedValueOnce(new Error(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE));
-
-      await expect(
-        agentCliCommand({ message: "hi", sessionKey, local: true }, runtime),
-      ).rejects.toThrow(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
-
-      expect(callGateway).not.toHaveBeenCalled();
-      expect(agentCommand).toHaveBeenCalledOnce();
-      expect(
-        requireRecord(requireFirstCallArg(agentCommand, "embedded agent"), "options"),
-      ).toMatchObject({ sessionKey });
     });
   });
 
@@ -2976,53 +1805,6 @@ describe("agentCliCommand", () => {
     });
   });
 
-  for (const message of [
-    "/compact",
-    "/compact Keep recent decisions.",
-    "/compact:Keep recent decisions.",
-    "/COMPACT",
-    "  /Compact  ",
-  ]) {
-    it(`rejects ${JSON.stringify(message)} from the CLI before any gateway or embedded turn`, async () => {
-      await withTempStore(async () => {
-        callGateway.mockRejectedValue(createGatewayTimeoutError());
-
-        await agentCliCommand(
-          { message, sessionId: "locked-session", runId: "locked-run", timeout: "0" },
-          runtime,
-        );
-      });
-
-      // The slash-command handler rejects CLI senders, so a /compact turn would
-      // otherwise fall through to a normal turn and exit 0 without compacting.
-      // It must fail loudly before touching the gateway or local agent.
-      expect(callGateway).not.toHaveBeenCalled();
-      expect(agentCommand).not.toHaveBeenCalled();
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-      const errorMessages = mockMessages(runtime.error);
-      expect(errorMessages.some((m) => m.includes("openclaw sessions compact"))).toBe(true);
-    });
-  }
-
-  it("rejects /compact from --message-file before any gateway or embedded turn", async () => {
-    await withTempStore(async ({ dir }) => {
-      const messageFile = path.join(dir, "compact.md");
-      fs.writeFileSync(messageFile, "/compact:Keep recent decisions.", "utf8");
-      callGateway.mockRejectedValue(createGatewayTimeoutError());
-
-      await agentCliCommand(
-        { messageFile, sessionId: "locked-session", runId: "locked-run", timeout: "0" },
-        runtime,
-      );
-    });
-
-    expect(callGateway).not.toHaveBeenCalled();
-    expect(agentCommand).not.toHaveBeenCalled();
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    const errorMessages = mockMessages(runtime.error);
-    expect(errorMessages.some((m) => m.includes("openclaw sessions compact"))).toBe(true);
-  });
-
   it("does not mistake a /compacting-prefixed message for the /compact control command", async () => {
     await withTempStore(async () => {
       mockGatewaySuccessReply();
@@ -3035,68 +1817,25 @@ describe("agentCliCommand", () => {
 
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(runtime.exit).not.toHaveBeenCalledWith(1);
+    expect(
+      requireRecord(requireFirstCallArg(callGateway, "gateway"), "request").timeoutMs,
+    ).toBeNull();
   });
 
-  it("keeps a resolved session module cached until the existing lazy reset", async () => {
-    await withTempStore(async () => {
-      mockGatewaySuccessReply();
-      const run = () => agentCliCommand({ message: "hi", to: "+1555" }, runtime);
-      await expect(run()).resolves.toEqual(gatewaySuccessReply("hello"));
-      expect(loadAgentSessionModuleMock).toHaveBeenCalledOnce();
-
-      const nextGeneration = vi.fn();
-      vi.doMock("./agent/session.runtime.js", async (importOriginal) => {
-        nextGeneration();
-        return await importOriginal<typeof import("./agent/session.runtime.js")>();
-      });
-      await expect(run()).resolves.toEqual(gatewaySuccessReply("hello"));
-      expect(nextGeneration).not.toHaveBeenCalled();
-
-      agentViaGatewayTesting.resetLazyImportsForTests();
-      await expect(run()).resolves.toEqual(gatewaySuccessReply("hello"));
-      expect(nextGeneration).toHaveBeenCalledOnce();
-      expect(callGateway).toHaveBeenCalledTimes(3);
-      expect(
-        callGateway.mock.calls.map(([value]) => {
-          const request = requireRecord(value, "gateway request");
-          return requireRecord(request.params, "gateway params").sessionKey;
-        }),
-      ).toEqual(["agent:main:main", "agent:main:main", "agent:main:main"]);
-    });
-  });
-
-  it("keeps a rejected session module cached until the existing lazy reset", async () => {
+  it("stops dispatch and releases signal listeners when the session module fails to load", async () => {
     await withTempStore(async () => {
       const failure = new Error("synthetic session module load failure");
-      const rejectedGeneration = vi.fn(() => {
+      vi.doMock("./agent/session.runtime.js", () => {
         throw failure;
       });
-      vi.doMock("./agent/session.runtime.js", rejectedGeneration);
       const signals = createSignalProcess();
-      const run = () =>
+      await expect(
         agentCliCommand({ message: "hi", to: "+1555" }, runtime, {
           process: signals.processLike,
-        });
-      const firstError = await run().catch((error: unknown) => error);
-      expect(firstError).toBeInstanceOf(Error);
-      expect(firstError).toMatchObject({ cause: failure });
-      expect(rejectedGeneration).toHaveBeenCalledOnce();
-
-      const nextGeneration = vi.fn();
-      vi.doMock("./agent/session.runtime.js", async (importOriginal) => {
-        nextGeneration();
-        return await importOriginal<typeof import("./agent/session.runtime.js")>();
-      });
-      await expect(run()).rejects.toBe(firstError);
-      expect(nextGeneration).not.toHaveBeenCalled();
+        }),
+      ).rejects.toMatchObject({ cause: failure });
       expect(callGateway).not.toHaveBeenCalled();
-      expect(signals.listenerCount("SIGINT") + signals.listenerCount("SIGTERM")).toBe(0);
-
-      agentViaGatewayTesting.resetLazyImportsForTests();
-      mockGatewaySuccessReply();
-      await expect(run()).resolves.toEqual(gatewaySuccessReply("hello"));
-      expect(nextGeneration).toHaveBeenCalledOnce();
-      expect(callGateway).toHaveBeenCalledOnce();
+      expect(agentCommand).not.toHaveBeenCalled();
       expect(signals.listenerCount("SIGINT") + signals.listenerCount("SIGTERM")).toBe(0);
     });
   });

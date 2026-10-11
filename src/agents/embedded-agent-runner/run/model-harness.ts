@@ -95,66 +95,38 @@ function buildHarnessModelProvider(
   };
 }
 
-function assertPinnedHarness(
-  pinnedHarnessId: string | undefined,
-  selected: AgentHarness,
-  subject: string,
-): void {
-  if (pinnedHarnessId && selected.id !== pinnedHarnessId) {
+export function selectEmbeddedRunHarness(
+  params: Parameters<typeof buildHarnessModelProvider>[0] & {
+    attempts?: readonly PreparedAgentRuntimeAuthAttempt[];
+  },
+): AgentHarness {
+  const selection = {
+    provider: params.provider,
+    modelId: params.modelId,
+    config: params.runParams.config,
+    agentId: params.runParams.agentId,
+    sessionKey: params.runParams.sessionKey,
+    agentHarnessId: params.runParams.agentHarnessId,
+    agentHarnessRuntimeOverride: params.runParams.agentHarnessRuntimeOverride,
+  };
+  const selected =
+    params.attempts !== undefined
+      ? selectAgentHarnessForPreparedModelProviders({
+          ...selection,
+          modelProviders: params.attempts.map((attempt) =>
+            buildHarnessModelProvider({
+              ...params,
+              plan: attempt.plan,
+              preparedAuthAttempt: attempt,
+            }),
+          ),
+        })
+      : selectAgentHarness({ ...selection, modelProvider: buildHarnessModelProvider(params) });
+  if (params.pinnedHarnessId && selected.id !== params.pinnedHarnessId) {
+    const subject = params.attempts !== undefined ? "Prepared auth routes" : "Prepared model route";
     throw new AgentHarnessPreflightError(
-      `${subject} changed the session-pinned agent harness from "${pinnedHarnessId}" to "${selected.id}". Reattach the original native session or use a concrete model chat.`,
+      `${subject} changed the session-pinned agent harness from "${params.pinnedHarnessId}" to "${selected.id}". Reattach the original native session or use a concrete model chat.`,
     );
   }
-}
-
-export function selectEmbeddedRunHarness(
-  params: HarnessSelectionContext & {
-    model: Model;
-    plan?: AgentRuntimeAuthPlan;
-    preparedAuthAttempt?: PreparedAgentRuntimeAuthAttempt;
-  },
-): AgentHarness {
-  const selected = selectAgentHarness({
-    provider: params.provider,
-    modelId: params.modelId,
-    modelProvider: buildHarnessModelProvider(params),
-    config: params.runParams.config,
-    agentId: params.runParams.agentId,
-    sessionKey: params.runParams.sessionKey,
-    agentHarnessId: params.runParams.agentHarnessId,
-    agentHarnessRuntimeOverride: params.runParams.agentHarnessRuntimeOverride,
-  });
-  assertPinnedHarness(params.pinnedHarnessId, selected, "Prepared model route");
-  return selected;
-}
-
-export function selectEmbeddedRunHarnessForPreparedAttempts(
-  params: HarnessSelectionContext & {
-    model: Model;
-    attempts: readonly PreparedAgentRuntimeAuthAttempt[];
-  },
-): AgentHarness {
-  const selected = selectAgentHarnessForPreparedModelProviders({
-    provider: params.provider,
-    modelId: params.modelId,
-    modelProviders: params.attempts.map((attempt) => {
-      const route = attempt.plan.modelRoute;
-      const model = route
-        ? { ...params.model, api: route.api, baseUrl: route.baseUrl }
-        : params.model;
-      return buildHarnessModelProvider({
-        ...params,
-        model,
-        plan: attempt.plan,
-        preparedAuthAttempt: attempt,
-      });
-    }),
-    config: params.runParams.config,
-    agentId: params.runParams.agentId,
-    sessionKey: params.runParams.sessionKey,
-    agentHarnessId: params.runParams.agentHarnessId,
-    agentHarnessRuntimeOverride: params.runParams.agentHarnessRuntimeOverride,
-  });
-  assertPinnedHarness(params.pinnedHarnessId, selected, "Prepared auth routes");
   return selected;
 }

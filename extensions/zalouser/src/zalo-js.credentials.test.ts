@@ -1,30 +1,47 @@
-// Zalouser tests cover zalo js.credentials plugin behavior.
 import { access, mkdtemp, rm } from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  OpenAsyncKeyedStoreOptions,
+  OpenKeyedStoreOptions,
+  PluginStateActionAuthority,
+  PluginStateKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
+  createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createPluginRuntimeMock,
+  createPluginSetupWizardConfigure,
+  createTestWizardPrompter,
+  runSetupWizardConfigure,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { useAutoCleanupTempDirTracker, withEnvAsync } from "openclaw/plugin-sdk/test-env";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { API, LoginQRCallbackEvent } from "./zca-client.js";
 import { LoginQRCallbackEventType } from "./zca-constants.js";
 
 const createZaloMock = vi.hoisted(() => vi.fn());
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
 
 vi.mock("./zca-client.js", () => ({
   createZalo: createZaloMock,
-  TextStyle: { Indent: 9 },
 }));
+vi.mock("./qr-temp-file.js", () => ({ writeQrDataUrlToTempFile: async () => undefined }));
 
-import { setZalouserRuntime } from "./runtime.js";
+import { zalouserSetupPlugin } from "./channel.setup.js";
+import { getZalouserRuntime, setZalouserRuntime } from "./runtime.js";
 import {
   clearStoredZaloCredentials,
+  isZaloCredentialRevocation,
   loadStoredZaloCredentials,
   refreshStoredZaloCredentials,
   resolveLegacyZalouserCredentialsPath,
@@ -33,7 +50,9 @@ import {
 } from "./session-state.js";
 import {
   checkZaloAuthenticated,
+  getZaloUserInfo,
   listZaloFriends,
+  logoutZaloProfile,
   sendZaloLink,
   sendZaloReaction,
   startZaloQrLogin,
@@ -44,19 +63,19 @@ async function readStoredCredentials(
   stateDir: string,
   profile: string,
 ): Promise<StoredZaloCredentials> {
-  const stored = loadStoredZaloCredentials(profile, { OPENCLAW_STATE_DIR: stateDir });
+  const stored = await loadStoredZaloCredentials(profile, { OPENCLAW_STATE_DIR: stateDir });
   if (!stored) {
     throw new Error("Expected stored Zalo credentials");
   }
   return stored;
 }
 
-function seedStoredCredentials(
+async function seedStoredCredentials(
   stateDir: string,
   profile: string,
   credentials: Omit<StoredZaloCredentials, "profile">,
-): void {
-  saveStoredZaloCredentials(profile, credentials, { OPENCLAW_STATE_DIR: stateDir });
+): Promise<void> {
+  await saveStoredZaloCredentials(profile, credentials, { OPENCLAW_STATE_DIR: stateDir });
 }
 
 // Credential reads and writes leave the shared state database open under the temporary
@@ -102,17 +121,68 @@ function createMockApi(params: {
   } as unknown as API;
 }
 
+function mockQrLogin(api: API, cookie?: unknown[]) {
+  createZaloMock.mockResolvedValueOnce({
+    loginQR: async (_options: unknown, callback?: (event: LoginQRCallbackEvent) => unknown) => {
+      callback?.({
+        type: LoginQRCallbackEventType.QRCodeGenerated,
+        data: { code: "qr-code", image: "data:image/png;base64,abc123" },
+        actions: { saveToFile: vi.fn(async () => undefined), retry: vi.fn(), abort: vi.fn() },
+      });
+      if (cookie) {
+        callback?.({
+          type: LoginQRCallbackEventType.GotLoginInfo,
+          data: { cookie, imei: "callback-imei", userAgent: "callback-user-agent" },
+          actions: null,
+        });
+      }
+      return api;
+    },
+  });
+}
+
 describe("zalouser credential persistence", () => {
+  let beforeCredentialApply: (() => Promise<void>) | undefined;
+  let beforeCredentialRevocation: (() => Promise<void>) | undefined;
+  let beforeCredentialRegister: (() => Promise<void>) | undefined;
+  let afterCredentialRegister: (() => void) | undefined;
   beforeEach(() => {
     resetPluginStateStoreForTests();
     const runtime = createPluginRuntimeMock();
+    beforeCredentialApply = undefined;
+    beforeCredentialRevocation = undefined;
+    beforeCredentialRegister = undefined;
+    afterCredentialRegister = undefined;
+    runtime.state.openKeyedStoreV2 = <T>(
+      options: OpenAsyncKeyedStoreOptions,
+      authority: PluginStateActionAuthority = { assertCurrent: () => {} },
+    ): PluginStateKeyedStore<T, 2> => {
+      const store = createPluginStateKeyedStoreV2ForTests<T>("zalouser", options, authority);
+      return {
+        ...store,
+        register: async (...args) => {
+          await beforeCredentialRegister?.();
+          await store.register(...args);
+          afterCredentialRegister?.();
+        },
+        compareAndApply: async (...args) => {
+          const intent = args[2];
+          if (intent.action === "set" && isZaloCredentialRevocation(intent.value)) {
+            await beforeCredentialRevocation?.();
+          } else {
+            await beforeCredentialApply?.();
+          }
+          return await store.compareAndApply(...args);
+        },
+      };
+    };
     runtime.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
       createPluginStateSyncKeyedStoreForTests<T>("zalouser", options);
     setZalouserRuntime(runtime);
     createZaloMock.mockReset();
   });
 
-  it("does not let a delayed credential refresh undo explicit logout", async () => {
+  it("preserves credential refresh and logout on worker stores", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const profile = "revoked-refresh";
@@ -123,23 +193,134 @@ describe("zalouser credential persistence", () => {
       createdAt: "2026-04-01T00:00:00.000Z",
     };
     try {
-      saveStoredZaloCredentials(profile, stored, env);
-      clearStoredZaloCredentials(profile, env);
+      await saveStoredZaloCredentials(profile, stored, env);
+      const refreshedCookie = [{ key: "zpsid", value: "refreshed", domain: "chat.zalo.me" }];
+      await refreshStoredZaloCredentials(
+        profile,
+        { ...stored, cookie: refreshedCookie },
+        () => true,
+        env,
+      );
+      expect((await loadStoredZaloCredentials(profile, env))?.cookie).toEqual(refreshedCookie);
+      await clearStoredZaloCredentials(profile, env);
 
       expect(
-        refreshStoredZaloCredentials(
+        await refreshStoredZaloCredentials(
           profile,
           { ...stored, cookie: [{ key: "zpsid", value: "late", domain: "chat.zalo.me" }] },
+          () => true,
           env,
         ),
-      ).toBe(false);
-      expect(loadStoredZaloCredentials(profile, env)).toBeNull();
+      ).toBeNull();
+      expect(await loadStoredZaloCredentials(profile, env)).toBeNull();
     } finally {
       await removeCredentialStateDir(stateDir);
     }
   });
 
-  it("persists the final API cookie jar after QR login", async () => {
+  it("keeps restoration on its original state directory while waiting for logout", async () => {
+    const stateDir = tempDirs.make("openclaw-zalouser-credentials-");
+    const otherStateDir = tempDirs.make("openclaw-zalouser-other-credentials-");
+    const profile = "logout-state-root";
+    const stored = {
+      imei: "device",
+      cookie: [{ key: "zpsid", value: "stored", domain: "chat.zalo.me" }],
+      userAgent: "agent",
+      createdAt: "2026-04-01T00:00:00.000Z",
+    };
+    await seedStoredCredentials(stateDir, profile, stored);
+    await seedStoredCredentials(otherStateDir, profile, stored);
+    createZaloMock.mockResolvedValue({
+      login: async () =>
+        createMockApi({ imei: stored.imei, userAgent: stored.userAgent, cookies: stored.cookie }),
+    });
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    beforeCredentialRevocation = async () => {
+      entered.resolve();
+      await release.promise;
+    };
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const syncOpen = vi.spyOn(getZalouserRuntime().state, "openSyncKeyedStore");
+      const logout = logoutZaloProfile(profile);
+      await expect(
+        Promise.race([entered.promise.then(() => "pending"), logout.then(() => "completed")]),
+      ).resolves.toBe("pending");
+      expect(syncOpen).not.toHaveBeenCalled();
+      const restored = getZaloUserInfo(profile).then(
+        () => "restored",
+        () => "missing",
+      );
+      try {
+        await withEnvAsync({ OPENCLAW_STATE_DIR: otherStateDir }, async () => {
+          release.resolve();
+          await logout;
+          await expect(restored).resolves.toBe("missing");
+        });
+        expect(createZaloMock).not.toHaveBeenCalled();
+        await expect(logout).resolves.toMatchObject({ cleared: true, loggedOut: true });
+        expect(await loadStoredZaloCredentials(profile)).toBeNull();
+      } finally {
+        release.resolve();
+        await Promise.all([logout, restored]);
+        syncOpen.mockRestore();
+      }
+    });
+  });
+
+  it("does not persist a registered setup login after its host closes during the credential write", async () => {
+    const stateDir = tempDirs.make("openclaw-zalouser-credentials-");
+    const profile = "setup-closed";
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    let closed = false;
+    const assertPersistentEffectCurrent = () => {
+      if (closed) {
+        throw new Error("setup host closed");
+      }
+    };
+    beforeCredentialRegister = async () => {
+      entered.resolve();
+      await release.promise;
+    };
+    const api = createMockApi({
+      imei: "device",
+      userAgent: "agent",
+      cookies: [{ key: "zpsid", value: "new", domain: "chat.zalo.me" }],
+    });
+    mockQrLogin(api);
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const setup = runSetupWizardConfigure({
+        configure: createPluginSetupWizardConfigure(zalouserSetupPlugin),
+        cfg: { channels: { zalouser: { profile } } },
+        prompter: createTestWizardPrompter({
+          confirm: vi.fn(async ({ message }) =>
+            ["Login via QR code now?", "Did you scan and approve the QR on your phone?"].includes(
+              message,
+            ),
+          ),
+        }),
+        options: {
+          beforePersistentEffect: async () => assertPersistentEffectCurrent(),
+          assertPersistentEffectCurrent,
+        },
+      });
+      try {
+        await expect(
+          Promise.race([entered.promise.then(() => "pending"), setup.then(() => "completed")]),
+        ).resolves.toBe("pending");
+        closed = true;
+      } finally {
+        release.resolve();
+        await setup;
+      }
+      expect(await loadStoredZaloCredentials(profile)).toBeNull();
+    });
+  });
+
+  it("persists the final API cookie jar and logs out without parent SQLite work", async () => {
+    const registered = createDeferred<void>();
+    afterCredentialRegister = () => registered.resolve();
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
     const profile = "qr-refresh";
     const callbackCookie = [{ key: "zpsid", value: "callback", domain: "chat.zalo.me" }];
@@ -151,47 +332,66 @@ describe("zalouser credential persistence", () => {
       cookies: refreshedCookie,
     });
 
-    createZaloMock.mockResolvedValueOnce({
-      loginQR: async (_options: unknown, callback?: (event: LoginQRCallbackEvent) => unknown) => {
-        callback?.({
-          type: LoginQRCallbackEventType.QRCodeGenerated,
-          data: {
-            code: "qr-code",
-            image: "data:image/png;base64,abc123",
-          },
-          actions: {
-            saveToFile: vi.fn(async () => undefined),
-            retry: vi.fn(),
-            abort: vi.fn(),
-          },
-        });
-        callback?.({
-          type: LoginQRCallbackEventType.GotLoginInfo,
-          data: {
-            cookie: callbackCookie,
-            imei: "callback-imei",
-            userAgent: "callback-user-agent",
-          },
-          actions: null,
-        });
-        return api;
-      },
-    });
+    mockQrLogin(api, callbackCookie);
 
+    const native = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
+    const Database = native.DatabaseSync;
+    const sql = [
+      vi.spyOn(native, "DatabaseSync"),
+      ...(["close", "prepare", "exec"] as const).map((method) =>
+        vi.spyOn(Database.prototype, method),
+      ),
+      ...(["get", "all", "run", "iterate"] as const).map((method) =>
+        vi.spyOn(native.StatementSync.prototype, method),
+      ),
+    ];
     try {
+      // Calibrate every observer and finish runtime capability checks before the cold flow.
+      const calibration = openNodeSqliteDatabase(":memory:");
+      calibration.exec("CREATE TABLE calibration (value INTEGER)");
+      calibration.prepare("INSERT INTO calibration VALUES (?)").run(1);
+      const query = calibration.prepare("SELECT value FROM calibration");
+      query.get();
+      query.all();
+      Array.from(query.iterate());
+      calibration.close();
+      for (const call of sql) {
+        expect(call).toHaveBeenCalled();
+        call.mockClear();
+      }
+      await expect(access(path.join(stateDir, "state", "openclaw.sqlite"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
         await startZaloQrLogin({ profile, timeoutMs: 1000 });
+        await registered.promise;
 
         const loginResult = await waitForZaloQrLogin({ profile, timeoutMs: 1000 });
-        expect(loginResult.connected).toBe(true);
+        expect(loginResult.connected, loginResult.message).toBe(true);
 
         const stored = await readStoredCredentials(stateDir, profile);
         expect(stored.imei).toBe("api-imei");
         expect(stored.userAgent).toBe("api-user-agent");
         expect(stored.language).toBe("vi");
         expect(stored.cookie).toEqual(refreshedCookie);
+        await expect(
+          access(resolveLegacyZalouserCredentialsPath(profile, { OPENCLAW_STATE_DIR: stateDir })),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(
+          access(path.join(stateDir, "state", "openclaw.sqlite")),
+        ).resolves.toBeUndefined();
+        await expect(logoutZaloProfile(profile)).resolves.toMatchObject({
+          cleared: true,
+          loggedOut: true,
+        });
+        expect(await loadStoredZaloCredentials(profile)).toBeNull();
+        await closeOpenClawStateDatabaseAsync();
+        for (const call of sql) {
+          expect(call).not.toHaveBeenCalled();
+        }
       });
     } finally {
+      sql.forEach((call) => call.mockRestore());
       await removeCredentialStateDir(stateDir);
     }
   });
@@ -209,23 +409,7 @@ describe("zalouser credential persistence", () => {
       cookies: [{ key: "zpsid", value: "stale-owner", domain: "chat.zalo.me" }],
     });
 
-    createZaloMock.mockResolvedValueOnce({
-      loginQR: async (_options: unknown, callback?: (event: LoginQRCallbackEvent) => unknown) => {
-        callback?.({
-          type: LoginQRCallbackEventType.QRCodeGenerated,
-          data: {
-            code: "qr-code",
-            image: "data:image/png;base64,abc123",
-          },
-          actions: {
-            saveToFile: vi.fn(async () => undefined),
-            retry: vi.fn(),
-            abort: vi.fn(),
-          },
-        });
-        return api;
-      },
-    });
+    mockQrLogin(api);
 
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
@@ -238,7 +422,7 @@ describe("zalouser credential persistence", () => {
 
         expect(`${started.message} ${waited.message}`).toContain(guardError.message);
         expect(beforeCredentialPersistence).toHaveBeenCalledTimes(1);
-        expect(loadStoredZaloCredentials(profile)).toBeNull();
+        expect(await loadStoredZaloCredentials(profile)).toBeNull();
       });
     } finally {
       await removeCredentialStateDir(stateDir);
@@ -275,239 +459,267 @@ describe("zalouser credential persistence", () => {
     }
   });
 
-  it("rewrites restored sessions with cookies refreshed by zca-js login", async () => {
-    const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
-    const profile = "restore-refresh";
-    const storedCookie = [{ key: "zpsid", value: "stored", domain: "chat.zalo.me" }];
-    const refreshedCookie = [{ key: "zpsid", value: "refreshed", domain: "chat.zalo.me" }];
-    seedStoredCredentials(stateDir, profile, {
-      imei: "stored-imei",
-      cookie: storedCookie,
-      userAgent: "stored-user-agent",
-      createdAt: "2026-04-01T00:00:00.000Z",
-    });
-
-    const api = createMockApi({
-      imei: "stored-imei",
-      userAgent: "stored-user-agent",
-      language: "vi",
-      cookies: refreshedCookie,
-    });
-    const login = vi.fn(async () => api);
-    createZaloMock.mockResolvedValueOnce({ login });
-
-    try {
-      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        await expect(checkZaloAuthenticated(profile)).resolves.toBe(true);
-
-        expect(login).toHaveBeenCalledWith({
-          imei: "stored-imei",
-          cookie: storedCookie,
-          userAgent: "stored-user-agent",
-          language: undefined,
+  it.each(["persist", "read-only", "reorder"] as const)(
+    "handles API cookie changes in %s mode",
+    async (mode) => {
+      const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
+      const profile = `cookies-${mode}`;
+      const storedCookie = [
+        { key: "zpsid", value: "stored", domain: "chat.zalo.me" },
+        { key: "zpw", value: "secondary", domain: "chat.zalo.me" },
+      ];
+      const loginCookie = [{ key: "zpsid", value: "login", domain: "chat.zalo.me" }];
+      const refreshedCookie = [{ key: "zpsid", value: "refreshed", domain: "chat.zalo.me" }];
+      await seedStoredCredentials(stateDir, profile, {
+        imei: "stored-imei",
+        cookie: storedCookie,
+        userAgent: "stored-user-agent",
+        createdAt: "2026-04-01T00:00:00.000Z",
+      });
+      const storedBefore = await readStoredCredentials(stateDir, profile);
+      let currentCookie = mode === "reorder" ? storedCookie : loginCookie;
+      const api = createMockApi({
+        imei: "stored-imei",
+        userAgent: "stored-user-agent",
+        language: "vi",
+        cookies: () => currentCookie,
+        getAllFriends: async () => {
+          if (mode !== "reorder") {
+            currentCookie = refreshedCookie;
+          }
+          return mode === "persist"
+            ? [
+                {
+                  userId: "friend-1",
+                  username: "friend-1",
+                  displayName: "Friend One",
+                  zaloName: "Friend One",
+                  avatar: "",
+                },
+              ]
+            : [];
+        },
+      });
+      const login = vi.fn(async () => api);
+      createZaloMock.mockResolvedValueOnce({ login });
+      try {
+        await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+          if (mode === "persist") {
+            await expect(checkZaloAuthenticated(profile)).resolves.toBe(true);
+            expect(login).toHaveBeenCalledWith({
+              imei: "stored-imei",
+              cookie: storedCookie,
+              userAgent: "stored-user-agent",
+              language: undefined,
+            });
+            const restored = await readStoredCredentials(stateDir, profile);
+            expect(restored.cookie).toEqual(loginCookie);
+            expect(restored.createdAt).toBe("2026-04-01T00:00:00.000Z");
+            expect(restored.lastUsedAt).toMatch(ISO_TIMESTAMP_RE);
+          }
+          await expect(
+            listZaloFriends(profile, {
+              credentialPersistence: mode === "read-only" ? "read-only" : "persist",
+            }),
+          ).resolves.toStrictEqual(
+            mode === "persist"
+              ? [{ userId: "friend-1", displayName: "Friend One", avatar: undefined }]
+              : [],
+          );
+          const stored = await readStoredCredentials(stateDir, profile);
+          if (mode === "reorder") {
+            currentCookie = [...storedCookie].toReversed();
+            await expect(listZaloFriends(profile)).resolves.toStrictEqual([]);
+            expect(await readStoredCredentials(stateDir, profile)).toEqual(stored);
+          } else if (mode === "read-only") {
+            expect(stored).toEqual(storedBefore);
+          } else {
+            expect(stored.cookie).toEqual(refreshedCookie);
+            expect(stored.createdAt).toBe("2026-04-01T00:00:00.000Z");
+            expect(stored.lastUsedAt).toMatch(ISO_TIMESTAMP_RE);
+          }
         });
-        const stored = await readStoredCredentials(stateDir, profile);
-        expect(stored.cookie).toEqual(refreshedCookie);
-        expect(stored.createdAt).toBe("2026-04-01T00:00:00.000Z");
-        expect(stored.lastUsedAt).toMatch(ISO_TIMESTAMP_RE);
-      });
-    } finally {
-      await removeCredentialStateDir(stateDir);
-    }
-  });
+      } finally {
+        await removeCredentialStateDir(stateDir);
+      }
+    },
+  );
 
-  it("keeps setup-style read-only API calls from rewriting refreshed credentials", async () => {
-    const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
-    const profile = "read-only-refresh";
-    const storedCookie = [{ key: "zpsid", value: "stored", domain: "chat.zalo.me" }];
-    const loginCookie = [{ key: "zpsid", value: "login", domain: "chat.zalo.me" }];
-    const refreshedCookie = [{ key: "zpsid", value: "refreshed", domain: "chat.zalo.me" }];
-    seedStoredCredentials(stateDir, profile, {
-      imei: "stored-imei",
-      cookie: storedCookie,
-      userAgent: "stored-user-agent",
+  it.each(["save", "logout", "failure"] as const)(
+    "settles ordinary API refresh before returning after %s",
+    async (outcome) => {
+      const stateDir = tempDirs.make("openclaw-zalouser-credentials-");
+      const profile = `settlement-${outcome}`;
+      const storedCookie = [{ key: "zpsid", value: "stored", domain: "chat.zalo.me" }];
+      const refreshedCookie = [{ key: "zpsid", value: "refreshed", domain: "chat.zalo.me" }];
+      await seedStoredCredentials(stateDir, profile, {
+        imei: "device",
+        cookie: storedCookie,
+        userAgent: "agent",
+        createdAt: "2026-04-01T00:00:00.000Z",
+      });
+      let currentCookie = storedCookie;
+      let nextCookie = refreshedCookie;
+      const newestCookie = [{ key: "zpsid", value: "newest", domain: "chat.zalo.me" }];
+      const secondApiCall = createDeferred<void>();
+      let apiCalls = 0;
+      let applyCalls = 0;
+      let secondResult: Promise<unknown> | undefined;
+      const api = createMockApi({
+        imei: "device",
+        userAgent: "agent",
+        cookies: () => currentCookie,
+        getAllFriends: async () => {
+          currentCookie = nextCookie;
+          if (++apiCalls === 2) {
+            secondApiCall.resolve();
+          }
+          return [];
+        },
+      });
+      createZaloMock.mockResolvedValueOnce({ login: async () => api });
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      try {
+        await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+          await expect(getZaloUserInfo(profile)).resolves.toMatchObject({ userId: "user-1" });
+          const syncOpen = vi.spyOn(getZalouserRuntime().state, "openSyncKeyedStore");
+          beforeCredentialApply = async () => {
+            applyCalls += 1;
+            entered.resolve();
+            await release.promise;
+            if (outcome === "failure") {
+              throw new Error("synthetic persistence failure");
+            }
+          };
+          const result = listZaloFriends(profile);
+          try {
+            await expect(
+              Promise.race([entered.promise.then(() => "pending"), result.then(() => "completed")]),
+            ).resolves.toBe("pending");
+            expect(syncOpen).not.toHaveBeenCalled();
+            if (outcome === "logout") {
+              await logoutZaloProfile(profile);
+            } else if (outcome === "save") {
+              nextCookie = newestCookie;
+              secondResult = listZaloFriends(profile);
+              await secondApiCall.promise;
+              expect(applyCalls).toBe(1);
+            }
+          } finally {
+            release.resolve();
+            await Promise.all([result, secondResult]);
+          }
+          await expect(result).resolves.toEqual([]);
+          const stored = await loadStoredZaloCredentials(profile);
+          expect(stored?.cookie ?? null).toEqual(
+            outcome === "logout" ? null : outcome === "failure" ? storedCookie : newestCookie,
+          );
+          if (outcome === "failure") {
+            beforeCredentialApply = undefined;
+            await listZaloFriends(profile);
+            expect((await loadStoredZaloCredentials(profile))?.cookie).toEqual(refreshedCookie);
+          }
+          syncOpen.mockRestore();
+        });
+      } finally {
+        release.resolve();
+        resetPluginStateStoreForTests();
+      }
+    },
+  );
+
+  it("does not let a superseded restore overwrite or invalidate a replacement session", async () => {
+    const stateDir = tempDirs.make("openclaw-zalouser-credentials-");
+    const profile = "restore-logout";
+    const cookie = [{ key: "zpsid", value: "stored", domain: "chat.zalo.me" }];
+    await seedStoredCredentials(stateDir, profile, {
+      imei: "device",
+      cookie,
+      userAgent: "agent",
       createdAt: "2026-04-01T00:00:00.000Z",
     });
-    const storedBefore = await readStoredCredentials(stateDir, profile);
-
-    let currentCookie = loginCookie;
+    const originalFriends = vi.fn(async () => []);
+    const replacementFriends = vi.fn(async () => []);
     const api = createMockApi({
-      imei: "stored-imei",
-      userAgent: "stored-user-agent",
-      language: "vi",
-      cookies: () => currentCookie,
-      getAllFriends: vi.fn(async () => {
-        currentCookie = refreshedCookie;
-        return [];
-      }),
+      imei: "device",
+      userAgent: "agent",
+      cookies: cookie,
+      getAllFriends: originalFriends,
     });
-    createZaloMock.mockResolvedValueOnce({ login: vi.fn(async () => api) });
-
+    const replacementCookie = [{ key: "zpsid", value: "replacement", domain: "chat.zalo.me" }];
+    const replacementApi = createMockApi({
+      imei: "replacement",
+      userAgent: "agent",
+      cookies: replacementCookie,
+      getAllFriends: replacementFriends,
+    });
+    createZaloMock.mockResolvedValueOnce({ login: async () => api });
+    createZaloMock.mockResolvedValueOnce({ login: async () => replacementApi });
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    beforeCredentialApply = async () => {
+      entered.resolve();
+      await release.promise;
+    };
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        await expect(
-          listZaloFriends(profile, { credentialPersistence: "read-only" }),
-        ).resolves.toStrictEqual([]);
-
-        expect(await readStoredCredentials(stateDir, profile)).toEqual(storedBefore);
+        const restored = checkZaloAuthenticated(profile);
+        try {
+          await expect(
+            Promise.race([entered.promise.then(() => "pending"), restored.then(() => "completed")]),
+          ).resolves.toBe("pending");
+          await logoutZaloProfile(profile);
+          beforeCredentialApply = undefined;
+          await seedStoredCredentials(stateDir, profile, {
+            imei: "replacement",
+            cookie: replacementCookie,
+            userAgent: "agent",
+            createdAt: "2026-04-02T00:00:00.000Z",
+          });
+          await expect(getZaloUserInfo(profile.toUpperCase())).resolves.toMatchObject({
+            userId: "user-1",
+          });
+        } finally {
+          release.resolve();
+          await restored;
+        }
+        await expect(restored).resolves.toBe(false);
+        await expect(listZaloFriends(profile)).resolves.toEqual([]);
+        expect((await loadStoredZaloCredentials(profile))?.cookie).toEqual(replacementCookie);
+        expect(originalFriends).not.toHaveBeenCalled();
+        expect(replacementFriends).toHaveBeenCalledOnce();
       });
     } finally {
-      await removeCredentialStateDir(stateDir);
+      release.resolve();
+      resetPluginStateStoreForTests();
     }
   });
 
-  it("persists cookie changes after a successful API call", async () => {
-    const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
-    const profile = "api-refresh";
-    const storedCookie: unknown[] = [{ key: "zpsid", value: "stored", domain: "chat.zalo.me" }];
-    const loginCookie: unknown[] = [{ key: "zpsid", value: "login", domain: "chat.zalo.me" }];
-    const refreshedCookie: unknown[] = [
-      { key: "zpsid", value: "api-refreshed", domain: "chat.zalo.me" },
-    ];
-    seedStoredCredentials(stateDir, profile, {
-      imei: "stored-imei",
-      cookie: storedCookie,
-      userAgent: "stored-user-agent",
-      createdAt: "2026-04-01T00:00:00.000Z",
-    });
-
-    let currentCookie = loginCookie;
-    const api = createMockApi({
-      imei: "stored-imei",
-      userAgent: "stored-user-agent",
-      language: "vi",
-      cookies: () => currentCookie,
-      getAllFriends: vi.fn(async () => {
-        currentCookie = refreshedCookie;
-        return [
-          {
-            userId: "friend-1",
-            username: "friend-1",
-            displayName: "Friend One",
-            zaloName: "Friend One",
-            avatar: "",
-          },
-        ];
-      }),
-    });
-    createZaloMock.mockResolvedValueOnce({ login: vi.fn(async () => api) });
-
-    try {
-      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        await expect(listZaloFriends(profile)).resolves.toEqual([
-          {
-            userId: "friend-1",
-            displayName: "Friend One",
-            avatar: undefined,
-          },
-        ]);
-
-        const stored = await readStoredCredentials(stateDir, profile);
-        expect(stored.cookie).toEqual(refreshedCookie);
-        expect(stored.createdAt).toBe("2026-04-01T00:00:00.000Z");
-        expect(stored.lastUsedAt).toMatch(ISO_TIMESTAMP_RE);
-      });
-    } finally {
-      await removeCredentialStateDir(stateDir);
-    }
-  });
-
-  it("does not rewrite credentials when the live cookie jar only reorders cookies", async () => {
-    const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
-    const profile = "api-stable";
-    const cookieA: unknown[] = [
-      { key: "zpsid", value: "same", domain: "chat.zalo.me" },
-      { key: "zpw", value: "same-secondary", domain: "chat.zalo.me" },
-    ];
-    const cookieB = [...cookieA].toReversed();
-    seedStoredCredentials(stateDir, profile, {
-      imei: "stored-imei",
-      cookie: cookieA,
-      userAgent: "stored-user-agent",
-      createdAt: "2026-04-01T00:00:00.000Z",
-    });
-
-    let currentCookie = cookieA;
-    const api = createMockApi({
-      imei: "stored-imei",
-      userAgent: "stored-user-agent",
-      language: "vi",
-      cookies: () => currentCookie,
-      getAllFriends: vi.fn(async () => []),
-    });
-    createZaloMock.mockResolvedValueOnce({ login: vi.fn(async () => api) });
-
-    try {
-      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        await expect(listZaloFriends(profile)).resolves.toStrictEqual([]);
-        const firstStored = await readStoredCredentials(stateDir, profile);
-
-        currentCookie = cookieB;
-
-        await expect(listZaloFriends(profile)).resolves.toStrictEqual([]);
-        expect(await readStoredCredentials(stateDir, profile)).toEqual(firstStored);
-      });
-    } finally {
-      await removeCredentialStateDir(stateDir);
-    }
-  });
-
-  function expectMissingSessionResult(result: { ok: boolean; error?: string }) {
-    expect(result.ok).toBe(false);
-    expect(result.error).toContain("No saved Zalo session");
-  }
-
-  it("keeps reaction sends non-throwing when session restore fails", async () => {
-    const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
-
-    try {
-      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        const result = await sendZaloReaction({
+  it.each([
+    {
+      name: "reaction",
+      send: () =>
+        sendZaloReaction({
           profile: "missing-session",
           threadId: "thread-1",
           msgId: "msg-1",
           cliMsgId: "cli-1",
           emoji: "like",
-        });
-        expectMissingSessionResult(result);
-      });
-    } finally {
-      await removeCredentialStateDir(stateDir);
-    }
-  });
-
-  it("keeps link sends non-throwing when session restore fails", async () => {
+        }),
+    },
+    {
+      name: "link",
+      send: () => sendZaloLink("thread-1", "https://example.com", { profile: "missing-session" }),
+    },
+  ])("returns a missing-session error for $name", async ({ send }) => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
-
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        const result = await sendZaloLink("thread-1", "https://example.com", {
-          profile: "missing-session",
-        });
-        expectMissingSessionResult(result);
+        const result = await send();
+        expect(result.ok).toBe(false);
+        expect(result.error).toContain("No saved Zalo session");
       });
-    } finally {
-      await removeCredentialStateDir(stateDir);
-    }
-  });
-
-  it("writes plugin-state SQLite without recreating the retired credential blob", async () => {
-    const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
-    const profile = "sqlite-only";
-    seedStoredCredentials(stateDir, profile, {
-      imei: "api-imei",
-      userAgent: "api-user-agent",
-      cookie: [{ key: "zpsid", value: "sqlite", domain: "chat.zalo.me" }],
-      createdAt: "2026-04-01T00:00:00.000Z",
-    });
-
-    try {
-      await expect(
-        access(resolveLegacyZalouserCredentialsPath(profile, { OPENCLAW_STATE_DIR: stateDir })),
-      ).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(
-        access(path.join(stateDir, "state", "openclaw.sqlite")),
-      ).resolves.toBeUndefined();
     } finally {
       await removeCredentialStateDir(stateDir);
     }

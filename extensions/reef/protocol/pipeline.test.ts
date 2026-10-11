@@ -2,13 +2,15 @@ import { gcm } from "@noble/ciphers/aes.js";
 import { ed25519, x25519 } from "@noble/curves/ed25519.js";
 import { hkdf } from "@noble/hashes/hkdf.js";
 import { sha256 } from "@noble/hashes/sha2.js";
-import { describe, expect, it } from "vitest";
-import { MemoryAuditStore, type AuditEntry, type AuditStore } from "./audit.js";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { describe, expect, it, vi } from "vitest";
+import type { AuditEntry, AuditStore } from "./audit.js";
 import { canonicalBytes } from "./canonical.js";
 import { base64, fromBase64url, utf8 } from "./encoding.js";
 import { seal, type Envelope } from "./envelope.js";
 import type { GuardAdapter, Verdict } from "./guard.js";
 import { generateIdentity } from "./identity.js";
+import { MemoryAuditStore, MemoryReplayStore } from "./memory-stores.test-support.js";
 import {
   composeInbound,
   composeOutbound,
@@ -18,7 +20,9 @@ import {
   type ReviewGate,
   type ReviewRequest,
 } from "./pipeline.js";
-import { MemoryReplayStore } from "./replay.js";
+
+const githubCommit = "430f975aacee445525c4663aa88ed1590f2f08b1";
+const githubBlob = `https://github.com/openclaw/openclaw/blob/${githubCommit}/.agents/skills/openclaw-pr-maintainer/SKILL.md#review-and-publish`;
 
 const now = 1_752_300_000;
 const auditKey = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
@@ -170,14 +174,105 @@ class FailOnceAuditStore implements AuditStore {
 }
 
 describe("pipeline", () => {
-  it("runs an allowed outbound and inbound exchange end to end", async () => {
+  it.each(["accepted", "failed"] as const)(
+    "joins an admitted heartbeat before %s inbound work settles",
+    async (outcome) => {
+      vi.useFakeTimers();
+      const guardEntered = createDeferred<void>();
+      const finishGuard = createDeferred<void>();
+      const finishRefresh = createDeferred<void>();
+      const finalized = createDeferred<void>();
+      try {
+        const { alice, bob } = identities();
+        const envelope = sealedEnvelope(alice, bob, "01JZ0000000000000000000000", {
+          text: "ordinary text",
+        });
+        const replay = new MemoryReplayStore();
+        const refresh = vi
+          .spyOn(replay, "refresh")
+          .mockImplementationOnce(() => finishRefresh.promise);
+        const complete = replay.complete.bind(replay);
+        vi.spyOn(replay, "complete").mockImplementation(async (...args) => {
+          await complete(...args);
+          finalized.resolve();
+        });
+        const release = replay.release.bind(replay);
+        vi.spyOn(replay, "release").mockImplementation(async (...args) => {
+          await release(...args);
+          finalized.resolve();
+        });
+        const guard = mockGuard(allow);
+        vi.spyOn(guard, "classify").mockImplementation(async () => {
+          guardEntered.resolve();
+          await finishGuard.promise;
+          if (outcome === "failed") {
+            throw new Error("synthetic guard interruption");
+          }
+          return allow;
+        });
+        let settled = false;
+        const pending = composeInbound(
+          inboundOptions(envelope, alice, bob, { replayStore: replay, guard }),
+        ).then(
+          (value) => {
+            settled = true;
+            return { value };
+          },
+          (error: unknown) => {
+            settled = true;
+            return { error };
+          },
+        );
+        await guardEntered.promise;
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(refresh).toHaveBeenCalledTimes(1);
+        finishGuard.resolve();
+        await finalized.promise;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(settled).toBe(false);
+        finishRefresh.resolve();
+        const result = await pending;
+        expect(settled).toBe(true);
+        if (outcome === "accepted") {
+          expect(result).toMatchObject({ value: { disposition: "accepted" } });
+        } else {
+          expect(result).toHaveProperty("error");
+        }
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        finishGuard.resolve();
+        finishRefresh.resolve();
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+      }
+    },
+  );
+
+  it.each([
+    "hello",
+    `See [the maintainer guide](${githubBlob}).`,
+    `Commit: <https://github.com/openclaw/openclaw/commit/${githubCommit}>`,
+    `Tree: https://github.com/openclaw/openclaw/tree/${githubCommit}/.agents`,
+    `Commit: 'https://github.com/openclaw/openclaw/commit/${githubCommit}'`,
+  ])("runs an allowed outbound and inbound exchange end to end: %s", async (text) => {
     const { alice, bob } = identities();
     const outboundAudit = audit();
+    const outboundGuard = mockGuard(allow);
+    const classifyOutbound = vi.spyOn(outboundGuard, "classify");
     const outbound = await composeOutbound(
-      outboundOptions(alice, bob, { body: { text: "hello" }, ts: now, audit: outboundAudit }),
+      outboundOptions(alice, bob, {
+        body: { text },
+        ts: now,
+        audit: outboundAudit,
+        guard: outboundGuard,
+      }),
+    );
+    expect(classifyOutbound).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ direction: "outbound", text }),
     );
     const inboundAudit = audit();
     const inboundGuard = mockGuard(allow);
+    const classifyInbound = vi.spyOn(inboundGuard, "classify");
     const replayStore = new MemoryReplayStore();
     const options = inboundOptions(outbound.envelope, alice, bob, {
       replayStore,
@@ -189,7 +284,10 @@ describe("pipeline", () => {
     if (inbound.disposition !== "accepted") {
       throw new Error("expected accepted result");
     }
-    expect(inbound.body.text).toBe("hello");
+    expect(inbound.body.text).toBe(text);
+    expect(classifyInbound).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ direction: "inbound", text }),
+    );
     expect(inbound.receipt).toMatchObject({ id: outbound.envelope.id, status: "accepted" });
     const outboundEntries = await outboundAudit.entries();
     const inboundEntries = await inboundAudit.entries();
@@ -237,14 +335,21 @@ describe("pipeline", () => {
     expect(guard.calls).toBe(0);
   });
 
-  it("stops a deterministic outbound denial before guard and sealing", async () => {
+  it.each([
+    `${githubBlob} ${["sk-", "abcdefghijklmnopqrstuvwxyz123456"].join("")}`,
+    `https://github.com/openclaw/openclaw/commit/${githubCommit}?token=${githubCommit}`,
+    `https://example.org/?next='${githubBlob}`,
+    `https://example.org/#'${githubBlob}`,
+    `_https://example.org/?next=${githubBlob}_`,
+    `mailto:review@example.org?next=${githubBlob}`,
+  ])("stops a deterministic outbound denial before guard and sealing: %s", async (text) => {
     const { alice, bob } = identities();
     const guard = mockGuard(allow);
     let rngCalls = 0;
     await expect(
       composeOutbound(
         outboundOptions(alice, bob, {
-          body: { text: ["sk-", "abcdefghijklmnopqrstuvwxyz123456"].join("") },
+          body: { text },
           guard,
           rng(length) {
             rngCalls++;
@@ -269,6 +374,7 @@ describe("pipeline", () => {
     await expect(
       composeOutbound(
         outboundOptions(alice, bob, {
+          body: { text: githubBlob },
           guard: mockGuard(deny),
           rng(length) {
             rngCalls++;
@@ -276,7 +382,7 @@ describe("pipeline", () => {
           },
         }),
       ),
-    ).rejects.toBeInstanceOf(PipelineError);
+    ).rejects.toMatchObject({ stage: "guard", verdict: deny });
     expect(rngCalls).toBe(0);
   });
 
@@ -334,30 +440,10 @@ describe("pipeline", () => {
     });
   });
 
-  it("parks an invalid structural inbound verdict instead of accepting or rejecting it", async () => {
-    const { alice, bob } = identities();
-    const envelope = sealedEnvelope(alice, bob, "01JZ0000000000000000000010", {
-      text: "inbound structural adapter",
-    });
-    // guard_failure records classifier unavailability, not a content decision:
-    // the message stays un-acked for retry instead of rejecting the peer.
-    await expect(
-      composeInbound(
-        inboundOptions(envelope, alice, bob, {
-          guard: structuralGuard(allow.model, { ...allow, policyVersion: "wrong" }),
-        }),
-      ),
-    ).rejects.toMatchObject({
-      stage: "guard",
-      verdict: { decision: "deny", category: "guard_failure" },
-      receipt: undefined,
-    });
-  });
-
   it("requires exact full-proposal approval and fresh classification for review", async () => {
     const { alice, bob } = identities();
     const review = reviewVerdict();
-    const common = outboundOptions(alice, bob);
+    const common = outboundOptions(alice, bob, { body: { text: githubBlob } });
     await expect(
       composeOutbound({ ...common, audit: audit(), guard: mockGuard(review) }),
     ).rejects.toMatchObject({ stage: "review" });
@@ -653,7 +739,7 @@ describe("pipeline", () => {
   it("completes deterministic inbound denial with a signed rejection", async () => {
     const { alice, bob } = identities();
     const envelope = sealedEnvelope(alice, bob, "01JZ0000000000000000000003", {
-      text: ["sk-", "abcdefghijklmnopqrstuvwxyz123456"].join(""),
+      text: `${githubBlob} ${["sk-", "abcdefghijklmnopqrstuvwxyz123456"].join("")}`,
     });
     const guard = mockGuard(allow);
     await expect(

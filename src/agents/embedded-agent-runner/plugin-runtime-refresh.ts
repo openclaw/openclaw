@@ -57,7 +57,6 @@ export function createEmbeddedAgentPluginRuntimeRefresh(
     pendingToolMedia.capture(attempt);
     const { runInput, sessionPromptState: session, usageAccumulator: usage } = input;
     const params = runInput.runParams;
-    const messages = attempt.pluginRuntimeRefreshMessages;
     continuation = {
       ...params,
       sessionId: session.sessionId,
@@ -71,9 +70,11 @@ export function createEmbeddedAgentPluginRuntimeRefresh(
       preparedRunAdmission: undefined,
       pluginGeneration: undefined,
       pluginRuntimeRefreshContinuation: true,
-      pluginRuntimeRefreshMessages: messages
-        ? [...(params.pluginRuntimeRefreshMessages ?? []), ...messages]
-        : params.pluginRuntimeRefreshMessages,
+      pluginRuntimeRefreshMessages: [
+        ...(params.pluginRuntimeRefreshMessages ?? []),
+        ...(session.continuation?.messages ?? []),
+        ...(attempt.pluginRuntimeRefreshMessages ?? []),
+      ],
       contextEngineLogicalTurnLease: undefined,
       modelHasVision: undefined,
       modelThinkingCapability: undefined,

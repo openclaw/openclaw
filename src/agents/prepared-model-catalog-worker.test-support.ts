@@ -2,12 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { threadId } from "node:worker_threads";
 import { expect, vi } from "vitest";
+import { fixtureReceiptWorkerClientSource } from "../../test/helpers/fixture-receipts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createGatewayChatMetadataRuntime } from "../gateway/server-methods/chat-metadata-runtime.js";
-import {
-  buildModelsListResult,
-  createGatewayAgentModelCatalogProjector,
-} from "../gateway/server-methods/models-list-result.js";
+import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
@@ -19,11 +17,7 @@ import {
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import { formatModelCatalogAuthLabel } from "./model-catalog-auth-labels.js";
-import {
-  encodePluginModelCatalogRelativePath,
-  PLUGIN_MODEL_CATALOG_GENERATED_BY,
-  replacePersistedPluginModelCatalogs,
-} from "./plugin-model-catalog.js";
+import { createModelCatalogDecisions } from "./model-catalog-decisions.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
 import { materializePreparedModelCatalogOwner } from "./prepared-model-catalog.js";
 import {
@@ -37,9 +31,15 @@ import type {
   PreparedModelRuntimeOwner,
   PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.types.js";
-import { writeSyntheticAuthDiscoveryFixture } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
+import {
+  refreshNativeCatalogDuringBoundedRead,
+  seedFixturePluginModelCatalog,
+  writeCatalogFailureControl,
+  writeSyntheticAuthDiscoveryFixture,
+} from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
 export const PROVIDER_ID = "worker-catalog-fixture";
+export const CATALOG_ALIAS_ID = `${PROVIDER_ID}-alias`;
 export const HARNESS_ID = "worker-catalog-fixture-harness";
 export const DISCOVERED_HARNESS_ID = `${PROVIDER_ID}-discovered-harness`;
 export const MISSING_AUTH_HARNESS_ID = `${PROVIDER_ID}-missing-auth-harness`;
@@ -117,16 +117,23 @@ export function writeCodexAuth(codexHome: string, marker: string): void {
 export function writeFixturePlugin(params: {
   root: string;
   spinMs: number;
+  receiptBroadcastName?: string;
   pluginVersion?: string;
   builtPluginVersion?: string;
   nativeCatalog?: boolean;
   asyncSyntheticAuth?: boolean;
   syntheticAuthAvailable?: boolean;
+  catalogControl?: boolean;
+  /** Publishes the Codex client version handed to this worker request as a model id. */
+  reportCodexClientVersion?: boolean;
 }): string {
   const pluginDir = path.join(params.root, "plugin");
   fs.mkdirSync(pluginDir, { recursive: true });
   let pluginFile = path.join(pluginDir, "index.cjs");
   const syntheticAuthProbePath = path.join(params.root, "synthetic-auth-probes.txt");
+  const catalogControlSource = params.catalogControl
+    ? writeCatalogFailureControl(params.root, PROVIDER_ID, CATALOG_ALIAS_ID)
+    : "";
   const catalogRoute = params.nativeCatalog
     ? `nativeRuntime: ${JSON.stringify(HARNESS_ID)},`
     : 'api: "openai-completions",\n          baseUrl: "https://worker-catalog.invalid/v1",';
@@ -145,6 +152,9 @@ export function writeFixturePlugin(params: {
   fs.writeFileSync(
     pluginFile,
     `const fs = require("node:fs");
+if (require("node:worker_threads").threadId !== ${threadId}) {
+  fs.appendFileSync(${JSON.stringify(path.join(params.root, "runtime-artifact-paths.txt"))}, __filename + "\\n");
+}
 module.exports = {
   id: ${JSON.stringify(PLUGIN_ID)},
   register(api) {
@@ -193,6 +203,7 @@ module.exports = {
     }
     api.registerProvider({
       id: ${JSON.stringify(PROVIDER_ID)},
+      ${params.catalogControl ? `aliases: [${JSON.stringify(CATALOG_ALIAS_ID)}],` : ""}
       label: "Worker catalog fixture",
       auth: [],
       resolveDynamicModel(context) {
@@ -219,6 +230,14 @@ module.exports = {
       },
       catalog: {
         run(context) {
+          ${catalogControlSource}
+          ${
+            params.reportCodexClientVersion
+              ? `// Same store the Codex client-version SDK facade reads inside a worker request.
+          const handedOff = globalThis[Symbol.for("openclaw.codexClientVersionHandoff")]?.getStore();
+          const codexClientVersion = handedOff ? (handedOff.version ?? "unreported") : "not-handed-off";`
+              : ""
+          }
           const refOnlyApi = context.resolveProviderApiKey(${JSON.stringify(REF_ONLY_API_PROVIDER_ID)}).apiKey;
           const refOnlyToken = context.resolveProviderApiKey(${JSON.stringify(REF_ONLY_TOKEN_PROVIDER_ID)}).apiKey;
           const durableAuth = context.resolveProviderApiKey(${JSON.stringify(DURABLE_AUTH_PROVIDER_ID)}).apiKey;
@@ -228,6 +247,8 @@ module.exports = {
             baseUrl: "https://worker-catalog.invalid/v1",
             api: "openai-completions",
             models: [
+              ${params.catalogControl ? "...legacyModels," : ""}
+              ${params.reportCodexClientVersion ? '{ id: "codex-client-" + codexClientVersion, name: "Codex client version proof" },' : ""}
               { id: "sqlite-model", name: "SQLite model" },
               {
                 id: ${JSON.stringify(`plugin-generation-${params.pluginVersion ?? "v1"}`)},
@@ -245,11 +266,13 @@ module.exports = {
         },
       },
       async augmentModelCatalog(context) {
+        ${params.receiptBroadcastName ? `const { sendReceipt } = await import(${JSON.stringify("data:text/javascript," + encodeURIComponent(fixtureReceiptWorkerClientSource(params.receiptBroadcastName) + "\nexport { sendReceipt };"))});` : ""}
         const marker = process.env.OPENCLAW_WORKER_CATALOG_MARKER;
         const invocation = fs.existsSync(marker)
           ? fs.readFileSync(marker, "utf8").split("start\\n").length
           : 1;
         fs.appendFileSync(process.env.OPENCLAW_WORKER_CATALOG_MARKER, "start\\n");
+        ${params.receiptBroadcastName ? 'sendReceipt(marker, "start");' : ""}
         const barrier = marker + ".hold";
         if (fs.existsSync(barrier)) {
           await new Promise((resolve) => {
@@ -268,7 +291,7 @@ module.exports = {
         const hasShared = context.resolveProviderApiKey(${JSON.stringify(SHARED_AUTH_PROVIDER_ID)}).apiKey === ${JSON.stringify(MATERIALIZED_SECRET)};
         const hasUnrelated = context.resolveProviderApiKey("unrelated-provider").apiKey === ${JSON.stringify(UNRELATED_SECRET)};
         fs.appendFileSync(process.env.OPENCLAW_WORKER_CATALOG_MARKER, "done\\n");
-        return [{
+        return [${params.catalogControl ? `{ provider: ${JSON.stringify(PROVIDER_ID)}, id: "configured-row", name: "Configured-only model", api: "openai-completions", baseUrl: "https://worker-catalog.invalid/v1", status: "available", statusReason: "refresh-" + invocation },` : ""}{
           provider: ${JSON.stringify(PROVIDER_ID)},
           id: \`proof-refresh-\${invocation}-sqlite-\${hasSqlite}-shared-\${hasShared}-unrelated-\${hasUnrelated}\`,
           name: "Worker boundary proof",
@@ -290,9 +313,11 @@ module.exports = {
     const builtFile = writeFixturePlugin({
       root: params.root,
       spinMs: params.spinMs,
+      receiptBroadcastName: params.receiptBroadcastName,
       pluginVersion: params.builtPluginVersion,
       asyncSyntheticAuth: params.asyncSyntheticAuth,
       syntheticAuthAvailable: params.syntheticAuthAvailable,
+      catalogControl: params.catalogControl,
     });
     const distDir = path.join(pluginDir, "dist");
     fs.mkdirSync(distDir);
@@ -307,7 +332,12 @@ module.exports = {
     path.join(pluginDir, "openclaw.plugin.json"),
     JSON.stringify({
       id: PLUGIN_ID,
-      providers: [PROVIDER_ID, DISCOVERED_HARNESS_ID, MISSING_AUTH_HARNESS_ID],
+      providers: [
+        PROVIDER_ID,
+        DISCOVERED_HARNESS_ID,
+        MISSING_AUTH_HARNESS_ID,
+        ...(params.catalogControl ? [CATALOG_ALIAS_ID] : []),
+      ],
       cliBackends: [
         HARNESS_ID,
         DISCOVERED_HARNESS_ID,
@@ -325,22 +355,32 @@ module.exports = {
         : "./provider-discovery.cjs",
       configSchema: { type: "object", additionalProperties: false, properties: {} },
       contracts: { externalAuthProviders: [PROVIDER_ID] },
-      modelCatalog: { discovery: { [PROVIDER_ID]: "runtime" }, runtimeAugment: true },
+      modelCatalog: {
+        discovery: { [PROVIDER_ID]: "runtime" },
+        runtimeAugment: true,
+        ...(params.catalogControl
+          ? { aliases: { [CATALOG_ALIAS_ID]: { provider: PROVIDER_ID } } }
+          : {}),
+      },
     }),
     "utf8",
   );
   return pluginFile;
 }
 
-export function createCatalogFixture(
+export async function createCatalogFixture(
   makeTempDir: (prefix: string) => string,
   spinMs: number,
   envOverride: NodeJS.ProcessEnv = {},
   options?: {
+    receiptBroadcastName?: string;
     hydrateExternalCliProviderIds?: readonly string[];
     codexNativeOwner?: boolean;
+    codexNativeHomeScope?: "agent" | "user";
     builtPluginVersion?: string;
     asyncSyntheticAuth?: boolean;
+    catalogControl?: boolean;
+    reportCodexClientVersion?: boolean;
   },
 ) {
   const root = makeTempDir("openclaw-model-catalog-worker-");
@@ -383,7 +423,15 @@ export function createCatalogFixture(
         ...(options?.codexNativeOwner
           ? {
               openai: { enabled: true },
-              codex: { enabled: true, config: { discovery: { enabled: false } } },
+              codex: {
+                enabled: true,
+                config: {
+                  discovery: { enabled: false },
+                  ...(options.codexNativeHomeScope
+                    ? { appServer: { homeScope: options.codexNativeHomeScope } }
+                    : {}),
+                },
+              },
             }
           : {}),
       },
@@ -421,22 +469,7 @@ export function createCatalogFixture(
         syncExternalCli: false,
       })
     : undefined;
-  replacePersistedPluginModelCatalogs({
-    agentDir,
-    pluginCatalogWrites: {
-      [encodePluginModelCatalogRelativePath(PLUGIN_ID)]: JSON.stringify({
-        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-        providers: {
-          [PROVIDER_ID]: {
-            baseUrl: "https://worker-catalog.invalid/v1",
-            api: "openai-completions",
-            apiKey: "WORKER_CATALOG_API_KEY",
-            models: [{ id: "sqlite-model", name: "SQLite model" }],
-          },
-        },
-      }),
-    },
-  });
+  await seedFixturePluginModelCatalog(agentDir, env, PLUGIN_ID, PROVIDER_ID);
   return { agentDir, config, env, marker, externalAuthPath, hydratedAuthStore, root, workspaceDir };
 }
 
@@ -444,6 +477,7 @@ async function expectNativeHarnessModelsPublished(params: {
   config: OpenClawConfig;
   metadataSnapshot: PluginMetadataSnapshot;
   snapshot: PreparedModelRuntimeSnapshot;
+  inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory">;
 }): Promise<void> {
   const registry = params.snapshot.pluginRegistry;
   if (!registry) {
@@ -455,7 +489,10 @@ async function expectNativeHarnessModelsPublished(params: {
     expect(params.snapshot.modelCatalog.entries).toContainEqual(
       expect.objectContaining({ provider: PROVIDER_ID, id: "configured-dynamic-model" }),
     );
-    const catalog = await params.snapshot.loadFullModelCatalog?.();
+    const catalog = await refreshNativeCatalogDuringBoundedRead({
+      ...params,
+      harnessId: HARNESS_ID,
+    });
     expect(catalog?.staticEntries).toContainEqual(
       expect.objectContaining({
         provider: PROVIDER_ID,
@@ -476,7 +513,7 @@ async function expectNativeHarnessModelsPublished(params: {
       getRuntimeConfig: () => params.config,
       logGateway: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     } as unknown as GatewayRequestContext;
-    const projector = createGatewayAgentModelCatalogProjector({
+    const projector = createModelCatalogDecisions({
       cfg: params.config,
       agentId: "main",
       snapshot: catalog,
@@ -487,7 +524,7 @@ async function expectNativeHarnessModelsPublished(params: {
       isCurrent: params.snapshot.isCurrent,
       observationConfig: params.snapshot.observationConfig,
     });
-    const hostEvaluation = await projector.evaluateEntry(nativeEntry!);
+    const hostEvaluation = projector.evaluateEntry(nativeEntry!);
     expect(projector.evaluateNative(nativeEntry!, hostEvaluation)).toMatchObject({
       availability: true,
     });
@@ -549,7 +586,9 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
   makeTempDir: (prefix: string) => string;
   retireAfterTest: (retire: () => void) => void;
 }): Promise<void> {
-  const inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory"> = {};
+  const inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory" | "provenance"> = {
+    provenance: "standalone",
+  };
   const root = params.makeTempDir("openclaw-native-model-catalog-worker-");
   const stateDir = path.join(root, "state");
   const agentDir = path.join(stateDir, "agents", "main", "agent");
@@ -602,22 +641,7 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
       },
     },
   ]);
-  replacePersistedPluginModelCatalogs({
-    agentDir,
-    pluginCatalogWrites: {
-      [encodePluginModelCatalogRelativePath(PLUGIN_ID)]: JSON.stringify({
-        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-        providers: {
-          [PROVIDER_ID]: {
-            baseUrl: "https://worker-catalog.invalid/v1",
-            api: "openai-completions",
-            apiKey: "WORKER_CATALOG_API_KEY",
-            models: [{ id: "sqlite-model", name: "SQLite model" }],
-          },
-        },
-      }),
-    },
-  });
+  await seedFixturePluginModelCatalog(agentDir, env, PLUGIN_ID, PROVIDER_ID);
   const input = {
     agentId: "main",
     agentDir,
@@ -626,10 +650,9 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
     config,
     env,
   };
-  let current = true;
-  params.retireAfterTest(() => {
-    current = false;
-  });
+  const retirement = new AbortController();
+  const isCurrent = () => !retirement.signal.aborted;
+  params.retireAfterTest(() => retirement.abort());
   const build = (
     await startSerializedSnapshotBuildBatch(
       [
@@ -637,8 +660,9 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
           input,
           catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
           inventoryOwner,
-          isGenerationCurrent: () => current,
-          isBuildCurrent: () => current,
+          isGenerationCurrent: isCurrent,
+          retirementSignal: retirement.signal,
+          isBuildCurrent: isCurrent,
         },
       ],
       new Map(),
@@ -652,6 +676,7 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
   };
   await expectNativeHarnessModelsPublished({
     config,
+    inventoryOwner,
     metadataSnapshot: build.pluginGeneration.pluginMetadataSnapshot,
     snapshot: build.snapshot,
   });

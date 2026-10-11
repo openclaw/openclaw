@@ -1,14 +1,5 @@
-import type { AudioPlayer, AudioResource } from "@discordjs/voice";
-import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
-
-export type DiscordRealtimePlayerRequest = {
-  isReady: () => boolean;
-  createResource: () => AudioResource;
-  onStart: () => void;
-  onIdle: () => void;
-  onBargeIn: (reason: string) => boolean;
-  onError: (error: unknown) => void;
-};
+import type { DiscordAudioTransport } from "./audio-transport.js";
+import type { DiscordAudioEvent } from "./audio-worker-protocol.js";
 
 type DiscordRealtimePlayerLane = {
   hasOutput: () => boolean;
@@ -16,119 +7,79 @@ type DiscordRealtimePlayerLane = {
   cancelForControl: () => void;
 };
 
-/** One physical player serves every speaker lane in the room. */
+/** Room-level policy stays on main; the worker owns the physical player and FIFO. */
 export class DiscordRealtimePlayer {
-  private current: DiscordRealtimePlayerRequest | undefined;
-  private queue: DiscordRealtimePlayerRequest[] = [];
   private readonly lanes = new Set<DiscordRealtimePlayerLane>();
-  private changing = false;
+  private readonly outputs = new Map<number, (reason: string) => boolean>();
+  private current?: number;
   private closed = false;
-  private readonly onIdle = () => {
-    const request = this.current;
-    this.current = undefined;
-    if (request) {
-      this.transition(() => request.onIdle());
+  private readonly onEvent = (event: DiscordAudioEvent) => {
+    if (event.type === "output-start" || event.type === "continuous-start") {
+      this.current = event.id;
+    }
+    if (
+      (event.type === "output-close" || event.type === "continuous-idle") &&
+      this.current === event.id
+    ) {
+      this.current = undefined;
     }
   };
 
-  constructor(private readonly player: AudioPlayer) {
-    player.on(loadDiscordVoiceSdk().AudioPlayerStatus.Idle, this.onIdle);
+  constructor(readonly audio: DiscordAudioTransport) {
+    audio.on("event", this.onEvent);
   }
 
   registerLane(lane: DiscordRealtimePlayerLane): () => void {
     this.lanes.add(lane);
     return () => this.lanes.delete(lane);
   }
-
-  enqueue(request: DiscordRealtimePlayerRequest): void {
-    if (this.closed || this.current === request) {
-      return;
-    }
-    if (!this.queue.includes(request)) {
-      this.queue.push(request);
-    }
-    this.drain();
+  registerOutput(id: number, onBargeIn: (reason: string) => boolean): () => void {
+    this.outputs.set(id, onBargeIn);
+    return () => {
+      this.outputs.delete(id);
+      if (this.current === id) {
+        this.current = undefined;
+      }
+    };
   }
-
-  cancel(request: DiscordRealtimePlayerRequest): void {
-    this.queue = this.queue.filter((queued) => queued !== request);
-    if (this.current !== request) {
-      this.drain();
-      return;
-    }
-    // stop(true) emits Idle synchronously. Retire ownership before stopping so
-    // that event cannot complete a replacement or another lane's queued answer.
-    this.current = undefined;
-    this.transition(() => this.player.stop(true));
-  }
-
   handleBargeIn(reason = "barge-in"): boolean {
-    const current = this.current;
+    const current = this.current === undefined ? undefined : this.outputs.get(this.current);
     if (current) {
-      return current.onBargeIn(reason);
+      return current(reason);
     }
     let interrupted = false;
-    const activeLanes = Array.from(this.lanes).filter((lane) => lane.hasOutput());
-    for (const lane of activeLanes) {
+    for (const lane of [...this.lanes].filter((candidate) => candidate.hasOutput())) {
       interrupted = lane.onBargeIn(reason) || interrupted;
     }
     return interrupted;
   }
-
   isActive(): boolean {
-    return this.current !== undefined || Array.from(this.lanes).some((lane) => lane.hasOutput());
+    return this.current !== undefined || [...this.lanes].some((lane) => lane.hasOutput());
   }
-
   cancelForControl(): void {
-    // A room control applies to every pending answer, including speech not yet
-    // synthesized. Block grants until every lane has released its old output.
     this.transition(() => {
-      this.queue = [];
       for (const lane of this.lanes) {
         lane.cancelForControl();
       }
     });
   }
-
-  close(): void {
-    this.closed = true;
-    this.queue = [];
-    this.lanes.clear();
-    this.current = undefined;
-    this.player.off(loadDiscordVoiceSdk().AudioPlayerStatus.Idle, this.onIdle);
-    this.player.stop(true);
-  }
-
-  private transition(action: () => void): void {
-    const wasChanging = this.changing;
-    this.changing = true;
+  transition(action: () => void): void {
+    this.audio.send({ type: "output-hold", hold: true });
     try {
       action();
     } finally {
-      this.changing = wasChanging;
-      this.drain();
+      this.audio.send({ type: "output-hold", hold: false });
     }
   }
-
-  private drain(): void {
-    if (this.closed || this.changing || this.current) {
+  close(): void {
+    if (this.closed) {
       return;
     }
-    const next = this.queue[0];
-    if (!next?.isReady()) {
-      return;
-    }
-    this.queue.shift();
-    this.current = next;
-    this.transition(() => {
-      try {
-        this.player.play(next.createResource());
-        next.onStart();
-      } catch (error) {
-        this.current = undefined;
-        this.player.stop(true);
-        next.onError(error);
-      }
-    });
+    this.closed = true;
+    this.lanes.clear();
+    this.outputs.clear();
+    this.current = undefined;
+    this.audio.off("event", this.onEvent);
+    this.audio.send({ type: "output-shutdown" });
   }
 }
