@@ -60,7 +60,7 @@ import {
   readSessionLogSnapshot,
   type TranscriptTokenEstimate,
 } from "./agent-runner-memory-transcript-context.js";
-import { buildRunEntrySelection } from "./agent-runner-run-params.js";
+import { buildCandidateChainParams, buildRunEntrySelection } from "./agent-runner-run-params.js";
 import {
   buildEmbeddedRunExecutionParams,
   buildModelResolveContext,
@@ -1104,8 +1104,7 @@ export async function runMemoryFlushIfNeeded(params: {
           transcriptPrompt: "",
           extraSystemPrompt: flushSystemPrompt,
           isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,
-          resolvedModelSelection: runOptions.resolvedModelSelection,
-          modelFallbacksOverride: runOptions.modelFallbacksOverride,
+          ...buildCandidateChainParams(runOptions),
           bootstrapPromptWarningSignaturesSeen,
           bootstrapPromptWarningSignature: bootstrapPromptWarningSignaturesSeen.at(-1),
           abortSignal: deferredLifecycle.signal,

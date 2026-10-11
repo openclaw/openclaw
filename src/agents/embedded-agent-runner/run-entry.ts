@@ -130,6 +130,8 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
           provider: hookSelection.provider,
           model: hookSelection.modelId,
           fallbacksOverride: hookSelection.fallbacksOverride,
+          // Hook chains are caller-owned, so configured priority never reorders them.
+          fallbacksOverrideSource: undefined,
           requestedRouteResolution:
             hookSelection.provider !== params.selection.provider ||
             hookSelection.modelId !== params.selection.model
@@ -381,6 +383,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
             const result = await params.runCandidate(provider, model, {
               resolvedModelSelection,
               modelFallbacksOverride: selection.fallbacksOverride,
+              modelFallbacksOverrideSource: selection.fallbacksOverrideSource,
               agentHarnessRuntimeOverride: resolveRuntimeOverride(provider, model),
               assistantErrorTranscript,
               // The original OpenAI refusal proves this turn's credential already

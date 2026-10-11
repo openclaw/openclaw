@@ -592,7 +592,7 @@ function createCronPromptExecutor(
           ).modelThinkingCapability,
           requestedRouteResolution: "resolved",
           modelFallbacksOverride: runOptions.modelFallbacksOverride,
-          modelFallbacksOverrideSource: cronFallbacks.fallbacksOverrideSource,
+          modelFallbacksOverrideSource: runOptions.modelFallbacksOverrideSource,
           resolvedModelSelection: runOptions.resolvedModelSelection,
           // Pairs the row's selection for live-switch comparison; cron lists stay job-owned.
           modelFallbackPolicy: params.cronSession.sessionEntry.modelFallbackPolicy,

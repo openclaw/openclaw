@@ -488,8 +488,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
               ),
               configuredAuthProfileId,
               modelFallbacksOverride: runOptions.modelFallbacksOverride,
-              modelFallbacksOverrideSource:
-                params.opts.modelFallbacksOverride === undefined ? "configured" : undefined,
+              modelFallbacksOverrideSource: runOptions.modelFallbacksOverrideSource,
               originalProvider: provider,
               cfg,
               sessionEntry: attemptSessionEntry,

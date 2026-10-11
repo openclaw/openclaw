@@ -37,6 +37,8 @@ export type ResolvedRunEntryModelSelection = {
 export type RunEntryCandidateOptions = {
   resolvedModelSelection?: ResolvedRunEntryModelSelection;
   modelFallbacksOverride?: string[];
+  /** Provenance of modelFallbacksOverride; caller-owned and hook chains carry none. */
+  modelFallbacksOverrideSource?: "configured";
   agentHarnessRuntimeOverride: string | undefined;
   assistantErrorTranscript: AssistantErrorTranscript;
   authProfileFailurePolicy?: AuthProfileFailurePolicy;
