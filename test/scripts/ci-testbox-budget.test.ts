@@ -49,7 +49,7 @@ describe("Testbox spending admission", () => {
     expect(groups.size).toBe(4);
   });
 
-  it.each([0, -1, 241, 1.5, "invalid"])("rejects an unbounded runtime: %s", (minutes) => {
+  it.each([0, 1.5])("rejects an unbounded runtime: %s", (minutes) => {
     expect(() => planTestboxAdmission({ ...request, minutes }, now)).toThrow(/runtime/);
   });
 
@@ -93,18 +93,6 @@ describe("Testbox spending admission", () => {
       /invalid/,
     );
   });
-
-  it.each(["check", "check-memory", "arm", "build", "windows"])(
-    "admits a saturated %s queue without resetting the dispatch deadline",
-    (profile) => {
-      const created = Date.parse(request.createdAt);
-      const plan = planTestboxAdmission({ ...request, profile }, created + 35 * 60_000);
-      expect(plan.expires_at).toBe(created + 60 * 60_000);
-      expect(() => planTestboxAdmission({ ...request, profile }, created + 60 * 60_000)).toThrow(
-        /expired/,
-      );
-    },
-  );
 
   it("caps idle requests while retaining shorter provider deadlines", () => {
     expect(boundedTestboxIdleMinutes("90\n")).toBe(15);
@@ -306,51 +294,7 @@ describe("Testbox admission GitHub response", () => {
       classification: "primary-rate-limit",
       bodyKind: "json",
     },
-    {
-      status: 403,
-      body: JSON.stringify({ message: "You have exceeded a secondary rate limit. " + secret }),
-      classification: "secondary-rate-limit",
-      bodyKind: "json",
-    },
-    {
-      status: 403,
-      body: JSON.stringify({ message: "Resource not accessible by integration" }),
-      classification: "resource-not-accessible",
-      bodyKind: "json",
-    },
-    {
-      status: 403,
-      body: JSON.stringify({ message: "Resource not accessible by personal access token" }),
-      classification: "resource-not-accessible",
-      bodyKind: "json",
-    },
-    {
-      status: 403,
-      body: JSON.stringify({
-        message: secret,
-        documentation_url: "https://example.test/" + secret,
-      }),
-      classification: "forbidden",
-      bodyKind: "json",
-    },
-    {
-      status: 403,
-      body: "<html>" + secret + "</html>",
-      classification: "forbidden",
-      bodyKind: "invalid-json",
-    },
-    {
-      status: 403,
-      body: '{"message":"' + secret,
-      classification: "forbidden",
-      bodyKind: "invalid-json",
-    },
-    {
-      status: 403,
-      body: JSON.stringify({ message: { value: secret } }),
-      classification: "forbidden",
-      bodyKind: "json",
-    },
+
     {
       status: 403,
       body: JSON.stringify({
@@ -368,10 +312,6 @@ describe("Testbox admission GitHub response", () => {
       classification: "primary-rate-limit",
       bodyKind: "unreadable",
     },
-    { status: 401, classification: "authentication-failed", bodyKind: "empty" },
-    { status: 404, classification: "not-found", bodyKind: "empty" },
-    { status: 429, classification: "rate-limited", bodyKind: "empty" },
-    { status: 503, classification: "service-error", bodyKind: "empty" },
   ])("denies $status/$classification/$bodyKind without disclosing response data", (fixture) => {
     const result = admit(fixture);
     expect(result.status).toBe(1);

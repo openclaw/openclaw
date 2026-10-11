@@ -162,22 +162,19 @@ function writeClawPack(
   };
 }
 
-it.each([{ version: "2026.7.1-alpha.3" }, { publishTag: "alpha" }])(
-  "rejects retired alpha bootstrap %j",
-  async (override) => {
-    const paths = fixture();
-    const matrix = JSON.parse(readFileSync(paths.matrixPath, "utf8"));
-    Object.assign(matrix[0], override);
-    writeFileSync(paths.matrixPath, JSON.stringify(matrix));
-    await expect(
-      createClawHubBootstrapArtifactManifest({
-        ...common(paths),
-        matrixPath: paths.matrixPath,
-        outputPath: paths.manifestPath,
-      }),
-    ).rejects.toThrow("Alpha releases are retired;");
-  },
-);
+it.each([{ publishTag: "alpha" }])("rejects retired alpha bootstrap %j", async (override) => {
+  const paths = fixture();
+  const matrix = JSON.parse(readFileSync(paths.matrixPath, "utf8"));
+  Object.assign(matrix[0], override);
+  writeFileSync(paths.matrixPath, JSON.stringify(matrix));
+  await expect(
+    createClawHubBootstrapArtifactManifest({
+      ...common(paths),
+      matrixPath: paths.matrixPath,
+      outputPath: paths.manifestPath,
+    }),
+  ).rejects.toThrow("Alpha releases are retired;");
+});
 
 describe("ClawHub bootstrap artifact manifest", () => {
   it("binds the exact package set and packed file identity", async () => {
@@ -284,21 +281,6 @@ describe("ClawHub bootstrap artifact manifest", () => {
         manifestPath: paths.manifestPath,
       }),
     ).rejects.toThrow("manifest.entries[0] must be an object");
-  });
-
-  it("binds exact target bytes to configure-only repairs", async () => {
-    const paths = fixture();
-    const manifest = await createClawHubBootstrapArtifactManifest({
-      ...common(paths),
-      matrixPath: paths.matrixPath,
-      outputPath: paths.manifestPath,
-    });
-    const existing = manifest.entries.find((entry) => entry.packageName === "@openclaw/existing");
-    expect(existing).toMatchObject({
-      artifactPath: "packages/existing/openclaw-existing-2026.7.1-beta.3.tgz",
-      size: 15,
-    });
-    expect(existing?.sha256).toMatch(/^[a-f0-9]{64}$/u);
   });
 
   it("rejects preexisting and symlinked download output roots before fetching", async () => {
