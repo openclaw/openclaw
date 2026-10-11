@@ -267,7 +267,7 @@ function rankCandidates(workspaceDir: string, nowMs: number) {
     minRecallCount: 0,
     minUniqueQueries: 0,
     nowMs,
-  });
+  }).then((ranking) => ranking.candidates);
 }
 
 async function readCandidateSnippets(workspaceDir: string, nowIso: string): Promise<string[]> {
@@ -1169,10 +1169,10 @@ describe("memory-core dreaming phases", () => {
       rankShortTermPromotionCandidates({
         workspaceDir,
         nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
-      }),
+      }).then((ranking) => ranking.candidates),
     ).resolves.toHaveLength(0);
 
-    const dailyOnly = await rankShortTermPromotionCandidates({
+    const { candidates: dailyOnly } = await rankShortTermPromotionCandidates({
       workspaceDir,
       minScore: 0,
       minUniqueQueries: 0,
@@ -1209,7 +1209,7 @@ describe("memory-core dreaming phases", () => {
       });
     }
 
-    const ranked = await rankShortTermPromotionCandidates({
+    const { candidates: ranked } = await rankShortTermPromotionCandidates({
       workspaceDir,
       minScore: 0,
       nowMs: Date.parse("2026-04-05T10:05:00.000Z"),

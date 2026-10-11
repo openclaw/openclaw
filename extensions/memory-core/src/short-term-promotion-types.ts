@@ -170,6 +170,36 @@ export type PromotionRejectionCategory =
   | "memory budget"
   | "candidate changed";
 
+/** First ranking gate that drops a store entry, in gate order. Fixed labels, like rejections. */
+export type PromotionExclusionReason =
+  | "path"
+  | "origin"
+  | "contamination"
+  | "already promoted"
+  | "no signal"
+  | Extract<
+      PromotionRejectionCategory,
+      "signal threshold" | "query threshold" | "age threshold" | "score threshold"
+    >;
+
+export type PromotionExclusion = {
+  key: string;
+  path: string;
+  snippet: string;
+  reason: PromotionExclusionReason;
+  /** The values the gate compared, such as `0 < 3`; never part of `reason`. */
+  detail?: string;
+};
+
+export type RankShortTermPromotionResult = {
+  /** Ranked candidates, sorted and cut to `limit`. */
+  candidates: PromotionCandidate[];
+  /** Store entries the ranking looked at. */
+  considered: number;
+  /** One record per entry a gate dropped, under the first gate that dropped it. */
+  exclusions: PromotionExclusion[];
+};
+
 export type ApplyShortTermPromotionsResult = {
   memoryPath: string;
   applied: number;

@@ -1,10 +1,5 @@
-export {
-  runMemoryForget,
-  runMemoryIndex,
-  runMemoryPromote,
-  runMemoryPromoteExplain,
-  runMemorySearch,
-} from "./cli-index-search.runtime.js";
+export { runMemoryForget, runMemoryIndex, runMemorySearch } from "./cli-index-search.runtime.js";
+export { runMemoryPromote, runMemoryPromoteExplain } from "./cli-promote.runtime.js";
 export {
   runMemoryRemBackfill,
   runMemoryRemHarness,

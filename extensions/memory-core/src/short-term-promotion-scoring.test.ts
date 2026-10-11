@@ -130,7 +130,7 @@ async function writeCalibrationStore(workspaceDir: string): Promise<void> {
 }
 
 function scoresForClass(
-  candidates: Awaited<ReturnType<typeof rankShortTermPromotionCandidates>>,
+  candidates: Awaited<ReturnType<typeof rankShortTermPromotionCandidates>>["candidates"],
   calibrationClass: CalibrationClass,
 ): number[] {
   return candidates
@@ -144,13 +144,15 @@ describe("short-term promotion score calibration", () => {
     const workspaceDir = await createTempWorkspace("promotion-score-distribution-");
     await writeCalibrationStore(workspaceDir);
 
-    const measured = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
-      nowMs: NOW_MS,
-    });
+    const measured = (
+      await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: NOW_MS,
+      })
+    ).candidates;
     const distribution = {
       genuine: scoresForClass(measured, "genuine"),
       filler: scoresForClass(measured, "filler"),
@@ -163,7 +165,8 @@ describe("short-term promotion score calibration", () => {
       oneoff: [0.529376, 0.569376, 0.606376],
     });
 
-    const promoted = await rankShortTermPromotionCandidates({ workspaceDir, nowMs: NOW_MS });
+    const promoted = (await rankShortTermPromotionCandidates({ workspaceDir, nowMs: NOW_MS }))
+      .candidates;
     expect(promoted.map((candidate) => candidate.key).toSorted()).toEqual([
       "genuine-a",
       "genuine-b",
@@ -215,7 +218,7 @@ describe("short-term promotion score calibration", () => {
         minRecallCount: 0,
         minUniqueQueries: 0,
         nowMs: NOW_MS,
-      }),
+      }).then((ranking) => ranking.candidates),
     ).resolves.toHaveLength(1);
     await expect(
       rankShortTermPromotionCandidates({
@@ -224,7 +227,7 @@ describe("short-term promotion score calibration", () => {
         minRecallCount: 0,
         minUniqueQueries: 0,
         nowMs: NOW_MS,
-      }),
+      }).then((ranking) => ranking.candidates),
     ).resolves.toHaveLength(0);
   });
 
@@ -247,16 +250,75 @@ describe("short-term promotion score calibration", () => {
       entries: { legacy },
     });
 
-    const ranked = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 3,
-      nowMs: NOW_MS,
-    });
+    const ranked = (
+      await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 3,
+        nowMs: NOW_MS,
+      })
+    ).candidates;
 
     expect(ranked).toHaveLength(1);
     expect(ranked[0]?.uniqueQueries).toBe(3);
+  });
+
+  it("counts every excluded entry once, under the first gate that drops it", async () => {
+    const workspaceDir = await createTempWorkspace("promotion-exclusion-tally-");
+    const entry = (key: string, overrides: Partial<ShortTermRecallEntry> = {}) => ({
+      ...createRecallEntry({
+        key,
+        signalCount: 3,
+        avgScore: 1,
+        queryHashes: THREE_QUERY_HASHES,
+        recallDays: RECALL_DAYS,
+        conceptTags: ["backup", "glacier", "s3"],
+      }),
+      ...overrides,
+    });
+    const entries = [
+      entry("passes"),
+      // Untrusted origin also fails the signal gate; only the earlier gate counts.
+      entry("origin", {
+        dailyCount: 1,
+        provenance: { originClass: "untrusted", sessionKind: "interactive", observedAt: NOW_MS },
+      }),
+      entry("already-promoted", { promotedAt: NOW_ISO }),
+      entry("signal", { dailyCount: 1, totalScore: 1 }),
+      entry("query", { userQueryHashes: ["query-a"] }),
+      entry("age", { lastRecalledAt: "2026-03-01T10:00:00.000Z" }),
+      entry("score", { totalScore: 0, maxScore: 0, conceptTags: [], recallDays: ["2026-04-03"] }),
+    ];
+    await shortTermTestState.writeRawRecallStore(workspaceDir, {
+      version: 1,
+      updatedAt: NOW_ISO,
+      entries: Object.fromEntries(entries.map((value) => [value.key, value])),
+    });
+
+    const ranking = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0.5,
+      minRecallCount: 2,
+      minUniqueQueries: 2,
+      maxAgeDays: 7,
+      nowMs: NOW_MS,
+    });
+
+    expect(ranking.candidates.map((candidate) => candidate.key)).toEqual(["passes"]);
+    expect(ranking.considered).toBe(entries.length);
+    expect(
+      Object.fromEntries(
+        ranking.exclusions.map(({ key, reason, detail }) => [key, { reason, detail }]),
+      ),
+    ).toEqual({
+      origin: { reason: "origin", detail: "untrusted" },
+      "already-promoted": { reason: "already promoted", detail: NOW_ISO },
+      signal: { reason: "signal threshold", detail: "1 < 2" },
+      query: { reason: "query threshold", detail: "1 < 2" },
+      age: { reason: "age threshold", detail: "33.0d > 7d" },
+      score: { reason: "score threshold", detail: expect.stringMatching(/ < 0\.5$/) },
+    });
   });
 
   it("fails closed for ambiguous mixed legacy query hashes", async () => {
@@ -285,7 +347,7 @@ describe("short-term promotion score calibration", () => {
         minRecallCount: 0,
         minUniqueQueries: 1,
         nowMs: NOW_MS,
-      }),
+      }).then((ranking) => ranking.candidates),
     ).resolves.toHaveLength(0);
   });
 });

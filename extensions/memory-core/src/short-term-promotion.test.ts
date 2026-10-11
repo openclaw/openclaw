@@ -47,6 +47,7 @@ import {
 } from "./short-term-promotion.js";
 import {
   configureMemoryCoreDreamingStateForTests,
+  rankAllShortTermCandidatesForTests as rankAllCandidates,
   resetMemoryCoreDreamingStateForTests,
   shortTermTestState as testing,
 } from "./test-helpers.js";
@@ -56,15 +57,11 @@ type RecallResult = RecordRecallParams["results"][number];
 type RecallResultExtras = Partial<
   Omit<RecallResult, "path" | "startLine" | "endLine" | "score" | "snippet" | "source">
 >;
-type RankAllOptions = Omit<
-  Parameters<typeof rankShortTermPromotionCandidates>[0],
-  "workspaceDir" | "minScore" | "minRecallCount" | "minUniqueQueries"
->;
 type ApplyAllOptions = Omit<
   Parameters<typeof applyShortTermPromotions>[0],
   "workspaceDir" | "candidates" | "minScore" | "minRecallCount" | "minUniqueQueries"
 >;
-type PromotionCandidate = Awaited<ReturnType<typeof rankShortTermPromotionCandidates>>[number];
+type PromotionCandidate = Parameters<typeof applyShortTermPromotions>[0]["candidates"][number];
 type PromotionCandidateFixture = Pick<
   PromotionCandidate,
   "key" | "path" | "startLine" | "endLine" | "source" | "snippet"
@@ -95,10 +92,6 @@ function recordMemoryRecalls(
   options: Omit<RecordRecallParams, "workspaceDir" | "query" | "results"> = {},
 ): Promise<void> {
   return recordShortTermRecalls({ ...options, workspaceDir, query, results });
-}
-
-function rankAllCandidates(workspaceDir: string, options: RankAllOptions = {}) {
-  return rankShortTermPromotionCandidates({ ...options, workspaceDir, ...allPromotionThresholds });
 }
 
 function applyAllCandidates(
@@ -781,7 +774,7 @@ describe("short-term promotion", () => {
       });
 
       if (index < 2) {
-        const beforeThreshold = await rankShortTermPromotionCandidates({
+        const { candidates: beforeThreshold } = await rankShortTermPromotionCandidates({
           workspaceDir,
           nowMs,
         });
@@ -793,10 +786,10 @@ describe("short-term promotion", () => {
       rankShortTermPromotionCandidates({
         workspaceDir,
         nowMs: Date.parse("2026-04-03T10:01:00.000Z"),
-      }),
+      }).then((ranking) => ranking.candidates),
     ).resolves.toHaveLength(0);
 
-    const ranked = await rankShortTermPromotionCandidates({
+    const { candidates: ranked } = await rankShortTermPromotionCandidates({
       workspaceDir,
       minScore: 0,
       minUniqueQueries: 0,
@@ -968,10 +961,10 @@ describe("short-term promotion", () => {
       rankShortTermPromotionCandidates({
         workspaceDir,
         nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
-      }),
+      }).then((ranking) => ranking.candidates),
     ).resolves.toHaveLength(0);
 
-    const ranked = await rankShortTermPromotionCandidates({
+    const { candidates: ranked } = await rankShortTermPromotionCandidates({
       workspaceDir,
       minScore: 0,
       minUniqueQueries: 0,
@@ -1370,11 +1363,13 @@ describe("short-term promotion", () => {
         { nowMs: Date.parse("2026-04-01T10:00:00.000Z") },
       );
       expect(
-        await rankShortTermPromotionCandidates({
-          workspaceDir,
-          ...options,
-          nowMs: Date.parse("2026-04-15T10:00:00.000Z"),
-        }),
+        (
+          await rankShortTermPromotionCandidates({
+            workspaceDir,
+            ...options,
+            nowMs: Date.parse("2026-04-15T10:00:00.000Z"),
+          })
+        ).candidates,
       ).toHaveLength(0);
     });
   });
@@ -3045,7 +3040,7 @@ describe("short-term promotion", () => {
           minScore: 0,
           minRecallCount: 0,
           minUniqueQueries: 0,
-        }),
+        }).then((ranking) => ranking.candidates),
       ).resolves.toHaveLength(1);
       expect(
         (await fs.readdir(workspaceDir)).filter((entry) => entry.startsWith("MEMORY.md.promotion")),

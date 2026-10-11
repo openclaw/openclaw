@@ -41,7 +41,9 @@ Long-term promotion still writes only to `MEMORY.md`.
 Deep reports summarize why ranked candidates were not promoted, using counts by
 rejection category without copying rejected snippets or source identifiers.
 These counts cover candidates that reached promotion; they do not describe
-entries excluded during ranking. A candidate that changes during the final
+entries excluded during ranking. When a workspace promotes nothing, the sweep
+logs one info line with counts for both stages, for example
+`memory-core: dreaming promoted 0 of 512 [workspace=...]: origin 293, query threshold 219.` A candidate that changes during the final
 apply check keeps a general change reason rather than an inferred cause.
 An empty sweep records completion in plugin state without creating memory or
 dreaming files, so it does not complete a new workspace's first-run setup.

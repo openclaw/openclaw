@@ -1,7 +1,7 @@
 // Memory Core tests cover project isolation across consolidation passes.
 import { describe, expect, it, vi } from "vitest";
 import { applyMemoryConsolidationPlan } from "./dreaming-consolidation.js";
-import type { PromotionCandidate } from "./short-term-promotion.js";
+import type { PromotionCandidate } from "./short-term-promotion-types.js";
 import { consolidateMemoryForTests as consolidateMemory } from "./test-helpers.js";
 
 const logger = { info: vi.fn(), warn: vi.fn() };

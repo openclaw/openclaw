@@ -126,12 +126,31 @@ function withAuthoritativeProvenance(
   return next;
 }
 
+type DailyFileProvenanceByPath = ReadonlyMap<
+  string,
+  { fileHash: string; originClass: "agent" | "untrusted"; observedAt: number }
+>;
+
+export async function readDailyFileProvenanceByPath(
+  workspaceDir: string,
+): Promise<DailyFileProvenanceByPath> {
+  const entries = await listMemoryArtifactProvenance({ workspaceDir });
+  return new Map(
+    entries.map((entry) => [entry.relativePath.replaceAll("\\", "/"), entry.provenance]),
+  );
+}
+
+/** Apply quarantines candidates from a daily file whose provenance record is untrusted. */
+export function isDailyFileQuarantined(
+  candidate: Pick<PromotionCandidate, "path">,
+  provenanceByPath: DailyFileProvenanceByPath,
+): boolean {
+  return provenanceByPath.get(candidate.path.replaceAll("\\", "/"))?.originClass === "untrusted";
+}
+
 function withDailyFileQuarantine(
   candidate: PromotionCandidate,
-  provenanceByPath: ReadonlyMap<
-    string,
-    { fileHash: string; originClass: "agent" | "untrusted"; observedAt: number }
-  >,
+  provenanceByPath: DailyFileProvenanceByPath,
 ): PromotionCandidate {
   const record = provenanceByPath.get(candidate.path.replaceAll("\\", "/"));
   if (record?.originClass !== "untrusted") {
@@ -192,13 +211,7 @@ export async function applyShortTermPromotions(
     ? [...new Set([options.agentId, ...(options.workspaceAgentIds ?? [])])]
     : [];
 
-  const dailyProvenanceEntries = await listMemoryArtifactProvenance({ workspaceDir });
-  const dailyProvenanceByPath = new Map(
-    dailyProvenanceEntries.map((entry) => [
-      entry.relativePath.replaceAll("\\", "/"),
-      entry.provenance,
-    ]),
-  );
+  const dailyProvenanceByPath = await readDailyFileProvenanceByPath(workspaceDir);
   const store = await withMemoryWorkspaceLock(workspaceDir, async () =>
     readStore(workspaceDir, nowIso),
   );

@@ -38,7 +38,7 @@ async function recordConsolidationRecall(workspaceDir: string) {
     minRecallCount: 0,
     minUniqueQueries: 0,
     nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
-  });
+  }).then((ranking) => ranking.candidates);
 }
 
 describe("short-term promotion consolidation ownership", () => {
