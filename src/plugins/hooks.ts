@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { createToolPolicyMatcher } from "../agents/tool-policy-match.js";
@@ -7,7 +7,6 @@ import {
   attachToolAllowlistIntersection,
   expandToolGroups,
   normalizeToolList,
-  normalizeToolPolicyName,
   readToolAllowlistIntersection,
 } from "../agents/tool-policy.js";
 import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
@@ -40,6 +39,7 @@ import type {
   VoidHookRunOptions,
 } from "./hook-runner-types.js";
 import { withHookTimeout } from "./hook-timeout.js";
+import { createPromptToolAuthority } from "./hook-tool-authority.js";
 import { isPluginHookReplyDispatchKind } from "./hook-types.js";
 import type {
   PluginAgentTurnPrepareResult,
@@ -66,7 +66,6 @@ import type {
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
   PluginHookToolResultPersistResult,
-  PluginHookToolAuthority,
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
   PluginHookResolveExecEnvContext,
@@ -872,28 +871,10 @@ export function createHookRunner(
     if (!sourceFingerprint) {
       return undefined;
     }
-    const activeToolNames = [
-      ...new Set(params.activeToolNames.map(normalizeToolPolicyName).filter(Boolean)),
-    ].toSorted();
-    const activeToolNameSet = new Set(activeToolNames);
-    const token = { active: true };
-    const assertActive = () => {
-      if (!token.active) {
-        throw new Error("prompt tool authority is no longer active");
-      }
-      params.assertHostActive();
-    };
-    const authority: PluginHookToolAuthority = Object.freeze({
-      fingerprint: createHash("sha256")
-        .update(sourceFingerprint)
-        .update("\0")
-        .update(activeToolNames.join("\0"))
-        .digest("hex"),
-      allows(toolName: string): boolean {
-        assertActive();
-        return activeToolNameSet.has(normalizeToolPolicyName(toolName));
-      },
-      assertActive,
+    const { authority, assertActive, close } = createPromptToolAuthority({
+      sourceFingerprint,
+      activeToolNames: params.activeToolNames,
+      assertHostActive: params.assertHostActive,
     });
     try {
       const result = await runModifyingHook(
@@ -914,7 +895,7 @@ export function createHookRunner(
         ...(result.appendContext ? { appendContext: result.appendContext } : {}),
       };
     } finally {
-      token.active = false;
+      close();
     }
   }
 
