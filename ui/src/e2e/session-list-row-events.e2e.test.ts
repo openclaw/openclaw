@@ -5,6 +5,7 @@ import {
   pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { requireRecord } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Session list row events" });
@@ -143,8 +144,9 @@ suite.define(() => {
         await page.clock.runFor(59_499);
         expect(await gateway.getRequests("sessions.list")).toEqual(before);
         for (const request of before) {
-          expect(request.params).toMatchObject({
-            rowMode: request.params.hasBoard === true ? "dashboard" : "compact",
+          const params = requireRecord(request.params);
+          expect(params).toMatchObject({
+            rowMode: params.hasBoard === true ? "dashboard" : "compact",
             source: expect.any(String),
           });
         }
