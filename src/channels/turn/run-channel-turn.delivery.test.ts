@@ -1,6 +1,7 @@
 // Preserve mock setup before modules that consume it.
 // oxfmt-ignore
 import { channelTurnMocks } from "./run-channel-turn.test-support.js";
+import { createServer } from "node:http";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -10,13 +11,26 @@ import {
   setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
+import { createBlockReplyCoalescer } from "../../auto-reply/reply/block-reply-coalescer.js";
+import { resolveEffectiveBlockStreamingConfig } from "../../auto-reply/reply/block-streaming.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
+import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
+import { createPluginRuntimeStore } from "../../plugin-sdk/runtime-store.js";
+import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
+import { PluginInstance } from "../../plugins/plugin-instance.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { createRuntimeChannel } from "../../plugins/runtime/runtime-channel.js";
+import type { PluginRuntime } from "../../plugins/runtime/types.js";
+import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
+import { reserveTestPortListener } from "../../test-utils/port-claims.js";
 import { outboundMessageIdentities } from "../message/outbound-echo-state.js";
+import type { ChannelPlugin } from "../plugins/types.plugin.js";
 import {
   readAgentRunTerminalOutcome,
   recordAgentRunTerminalOutcome,
@@ -58,17 +72,22 @@ const {
 } = channelTurnMocks;
 
 const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-channel-turn-delivery-" });
+const { mattermostPlugin } = await loadBundledPluginFacade<{ mattermostPlugin: ChannelPlugin }>({
+  pluginId: "mattermost",
+  artifactBasename: "channel-plugin-api.js",
+});
 let storePath: string;
 
 function runAssembled(
   overrides: Partial<
     Omit<
       Parameters<typeof dispatchAssembledChannelTurn>[0],
-      "cfg" | "agentId" | "storePath" | "recordInboundSession"
+      "agentId" | "storePath" | "recordInboundSession"
     >
   >,
+  dispatch = dispatchAssembledChannelTurn,
 ) {
-  return dispatchAssembledChannelTurn({
+  return dispatch({
     cfg: {},
     agentId: "main",
     storePath,
@@ -121,6 +140,252 @@ describe("channel turn delivery", () => {
     setLoggerOverride(null);
     resetLogger();
   });
+
+  it.each(["provider", "replacement", "fresh-blocks"] as const)(
+    "posts tool progress through Mattermost HTTP in the original channel owner when %s queues the reply",
+    async (sender) => {
+      const registry = createEmptyPluginRegistry();
+      const record = createPluginRecord({ id: "mattermost" });
+      registry.plugins.push(record);
+      const channel = new PluginInstance("mattermost", { record, registry });
+      const provider = new PluginInstance(sender === "replacement" ? "mattermost" : "provider");
+      const runtime = createPluginRuntimeStore<PluginRuntime>({
+        pluginId: "mattermost",
+        errorMessage: "Mattermost runtime not initialized",
+      });
+      const originalRuntime = createPluginRuntimeMock();
+      const replacementRuntime = createPluginRuntimeMock();
+      const requests: Array<{
+        method: string | undefined;
+        path: string | undefined;
+        body: unknown;
+      }> = [];
+      const channelId = "cccccccccccccccccccccccccc";
+      const postId = "pppppppppppppppppppppppppp";
+      const server = await reserveTestPortListener({
+        offsets: [0],
+        createListener: () =>
+          createServer((request, response) => {
+            const chunks: Buffer[] = [];
+            request.on("data", (chunk: Buffer) => chunks.push(chunk));
+            request.on("end", () => {
+              requests.push({
+                method: request.method,
+                path: request.url,
+                body: JSON.parse(Buffer.concat(chunks).toString()),
+              });
+              response.writeHead(201, { "content-type": "application/json" });
+              response.end(JSON.stringify({ id: postId, channel_id: channelId }));
+            });
+          }),
+      });
+      const cfg = {
+        channels: {
+          mattermost: {
+            baseUrl: `http://127.0.0.1:${server.claim.port}`,
+            botToken: "synthetic-channel-reply-owner",
+            network: { dangerouslyAllowPrivateNetwork: true },
+            streaming: {
+              mode: "off" as const,
+              block: { enabled: true, coalesce: { minChars: 1, idleMs: 300 } },
+            },
+          },
+        },
+      };
+      const onError = vi.fn();
+      channel.run(() => runtime.setRuntime(originalRuntime));
+      if (sender === "replacement") {
+        provider.run(() => runtime.setRuntime(replacementRuntime));
+      }
+      try {
+        const sendText = mattermostPlugin.outbound?.sendText;
+        if (!sendText) {
+          throw new Error("Mattermost text transport is unavailable");
+        }
+        const acceptedPostIds: string[] = [];
+        const turn = {
+          cfg,
+          agentId: "main",
+          storePath,
+          recordInboundSession: createRecordInboundSession(),
+          channel: "mattermost",
+          routeSessionKey: `agent:main:mattermost:channel:${channelId}`,
+          ctxPayload: createCtx({
+            Surface: "mattermost",
+            To: channelId,
+            OriginatingTo: channelId,
+          }),
+          delivery: {
+            deliver: async (payload) => {
+              const result = await sendText({
+                cfg,
+                to: `channel:${channelId}`,
+                text: payload.text ?? "",
+                accountId: "default",
+              });
+              acceptedPostIds.push(result.messageId);
+              return {
+                visibleReplySent: true,
+                messageIds: [result.messageId],
+                receipt: result.receipt,
+              };
+            },
+            onError,
+          },
+          dispatchReplyWithBufferedBlockDispatcher: async (params) => {
+            const dispatcher = createReplyDispatcher(params.dispatcherOptions);
+            if (sender === "fresh-blocks") {
+              const { coalescing } = resolveEffectiveBlockStreamingConfig({
+                cfg,
+                provider: "mattermost",
+                accountId: "default",
+              });
+              expect(coalescing).toMatchObject({ minChars: 1, idleMs: 300 });
+              if (!coalescing) {
+                throw new Error("Mattermost block coalescing is unavailable");
+              }
+              const blocks = createBlockReplyCoalescer({
+                config: coalescing,
+                shouldAbort: () => false,
+                onFlush: async (payload) => {
+                  dispatcher.sendBlockReply(payload);
+                },
+              });
+              try {
+                for (const paragraph of [
+                  "Checking the file.",
+                  "Found the issue.",
+                  "Applying the fix.",
+                ]) {
+                  await provider.run(async () => {
+                    blocks.enqueue({ text: paragraph });
+                    await blocks.flush({ force: false });
+                    dispatcher.sendToolResult({ text: "tool progress" });
+                    await dispatcher.waitForIdle();
+                  });
+                }
+                expect(
+                  requests.map((request) => (request.body as { message: string }).message),
+                ).toEqual([
+                  "Checking the file.",
+                  "tool progress",
+                  "Found the issue.",
+                  "tool progress",
+                  "Applying the fix.",
+                  "tool progress",
+                ]);
+                provider.run(() => dispatcher.sendFinalReply({ text: "Finished." }));
+              } finally {
+                blocks.stop();
+              }
+            } else {
+              provider.run(() => dispatcher.sendToolResult({ text: "tool progress" }));
+            }
+            dispatcher.markComplete();
+            const settledReceipt = (await dispatcher.waitForIdle()) || undefined;
+            return {
+              queuedFinal: sender === "fresh-blocks",
+              counts:
+                sender === "fresh-blocks"
+                  ? { tool: 3, block: 3, final: 1 }
+                  : { tool: 1, block: 0, final: 0 },
+              settledReceipt,
+            };
+          },
+        } satisfies Parameters<typeof dispatchAssembledChannelTurn>[0];
+        await channel.run(() =>
+          createRuntimeChannel().inbound.run({
+            channel: "mattermost",
+            raw: { id: "fresh-message", text: "question" },
+            adapter: {
+              ingest: (raw) => ({ id: raw.id, rawText: raw.text, raw }),
+              resolveTurn: () => turn,
+            },
+          }),
+        );
+        expect(onError).not.toHaveBeenCalled();
+        expect(requests).toEqual(
+          (sender === "fresh-blocks"
+            ? [
+                "Checking the file.",
+                "tool progress",
+                "Found the issue.",
+                "tool progress",
+                "Applying the fix.",
+                "tool progress",
+                "Finished.",
+              ]
+            : ["tool progress"]
+          ).map((message) => ({
+            method: "POST",
+            path: "/api/v4/posts",
+            body: { channel_id: channelId, message },
+          })),
+        );
+        expect(acceptedPostIds).toEqual(requests.map(() => postId));
+        expect(originalRuntime.channel.activity.record).toHaveBeenCalledTimes(requests.length);
+        expect(replacementRuntime.channel.activity.record).not.toHaveBeenCalled();
+      } finally {
+        await channel.dispose();
+        await provider.dispose();
+        server.listener.closeAllConnections();
+        await server.releaseListener();
+        await server.claim.release();
+      }
+    },
+  );
+
+  it.each(["direct", "retained-facade"] as const)(
+    "rejects stale delivery from %s",
+    async (entry) => {
+      const registry = createEmptyPluginRegistry();
+      const record = createPluginRecord({ id: "mattermost" });
+      registry.plugins.push(record);
+      const channel = new PluginInstance("mattermost", { record, registry });
+      const replacement = new PluginInstance("mattermost");
+      const deliver = vi.fn(async () => {});
+      let retainedDelivery:
+        | Parameters<DispatchReplyWithBufferedBlockDispatcher>[0]["dispatcherOptions"]["deliver"]
+        | undefined;
+      try {
+        await channel.run(() =>
+          runAssembled(
+            {
+              delivery: { deliver },
+              dispatchReplyWithBufferedBlockDispatcher: async (params) => {
+                retainedDelivery = params.dispatcherOptions.deliver;
+                return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+              },
+            },
+            entry === "direct"
+              ? dispatchAssembledChannelTurn
+              : createRuntimeChannel().inbound.dispatchReply,
+          ),
+        );
+        if (!retainedDelivery) {
+          throw new Error("delivery was not retained");
+        }
+        expect(channel.hasRetainedConsumers).toBe(false);
+        if (entry === "retained-facade") {
+          await expect(
+            replacement.run(() => retainedDelivery!({ text: "late tool" }, { kind: "tool" })),
+          ).rejects.toThrow("Plugin mattermost consumer is closed");
+        }
+        await channel.dispose();
+        await expect(
+          replacement.run(() => retainedDelivery!({ text: "late tool" }, { kind: "tool" })),
+        ).rejects.toThrow(
+          entry === "direct"
+            ? "Plugin mattermost was reloaded or disabled"
+            : "Plugin mattermost consumer is closed",
+        );
+        expect(deliver).not.toHaveBeenCalled();
+      } finally {
+        await channel.dispose();
+        await replacement.dispose();
+      }
+    },
+  );
 
   it("preserves prepared payload custody and literals through preparation and message hooks", async () => {
     const order: string[] = [];
