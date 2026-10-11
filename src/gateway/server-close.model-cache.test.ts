@@ -274,7 +274,8 @@ it(
       await Promise.all(builds.map(({ completion }) => completion));
       await expect(first).rejects.toBe(shutdownError);
       await expect(queued).rejects.toMatchObject({
-        message: "prepared model runtime process lifetime closed",
+        message: `prepared model runtime publication was superseded for ${agentDir}`,
+        admissionBlocked: false,
       });
       await aClose;
       const retiredWarmMessage = `Plugin ${warmId} was reloaded or disabled; use its current tools.`;
