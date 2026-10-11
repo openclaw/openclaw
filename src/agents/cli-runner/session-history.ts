@@ -479,7 +479,9 @@ function renderCliDurableContext(messages: ReturnType<typeof buildSessionContext
 
 function renderClaudeSessionGap(
   entries: SessionEntry[],
-  options: { sessionKey?: string; historyToolAvailable: boolean } | undefined,
+  options:
+    | { sessionKey?: string; historyToolAvailable: boolean; freshSession: boolean }
+    | undefined,
 ): string | undefined {
   if (!options) {
     return undefined;
@@ -491,11 +493,11 @@ function renderClaudeSessionGap(
       entry.message.role === "assistant" &&
       entry.message.provider === "claude-cli",
   );
-  if (lastClaude < 0) {
+  if (!options.freshSession && lastClaude < 0) {
     return undefined;
   }
   const gap = entries
-    .slice(lastClaude + 1)
+    .slice(options.freshSession ? 0 : lastClaude + 1)
     .filter(
       (entry): entry is SessionMessageEntry =>
         entry.type === "message" &&
@@ -521,7 +523,10 @@ function renderClaudeSessionGap(
     options.historyToolAvailable && options.sessionKey
       ? ` Before answering a question that may depend on these messages, call mcp__openclaw__sessions_history(${JSON.stringify({ sessionKey: options.sessionKey, limit: 100 })}) to read them; page older messages with offset if needed.`
       : "";
-  return `[OpenClaw: ${gap.length} messages occurred outside this Claude session from ${first.timestamp} to ${last.timestamp}, using ${modelSummary}${modelNames.length > 4 ? ` (+${modelNames.length - 4} more models)` : ""}. Their contents are not included here.${readHint}]`;
+  const description = options.freshSession
+    ? "earlier messages in this chat"
+    : "messages occurred outside this Claude session";
+  return `[OpenClaw: ${gap.length} ${description} from ${first.timestamp} to ${last.timestamp}, using ${modelSummary}${modelNames.length > 4 ? ` (+${modelNames.length - 4} more models)` : ""}. Their contents are not included here.${readHint}]`;
 }
 
 /** Reads one active branch for bounded reference notes and eligible fresh-session history. */
@@ -538,8 +543,7 @@ export async function loadCliSessionPromptContext(
     tools?: readonly { name: string }[];
   },
 ) {
-  const assertNativeResume =
-    params.nativeSessionId &&
+  const assertActive =
     params.provider === "claude-cli" &&
     params.sessionTarget &&
     params.sessionId === params.sessionTarget.sessionId &&
@@ -547,9 +551,8 @@ export async function loadCliSessionPromptContext(
     params.admittedRunContext
       ? resolveAdmittedRunActiveAssertion(params.admittedRunContext, params.abortSignal)
       : undefined;
-  // e20b56c0b26 (#140294) blocks replay of another account's transcript content.
-  // An admitted reuse of the same native handle may receive gap metadata only;
-  // unknown ownership still never authorizes durable notes or transcript reseeding.
+  // e20b56c0b26 (#140294) still blocks raw content across accounts. Metadata
+  // can point an admitted fresh session to on-demand, policy-controlled history.
   const contentBlocked =
     params.rawTranscriptReseedReason === "auth-profile" ||
     params.rawTranscriptReseedReason === "auth-epoch" ||
@@ -558,7 +561,7 @@ export async function loadCliSessionPromptContext(
     cliBackendLog.warn(
       `cli session history refused across auth boundary: reason=${params.rawTranscriptReseedReason}`,
     );
-    if (params.rawTranscriptReseedReason !== "auth-unknown" || !assertNativeResume) {
+    if (!assertActive) {
       return {
         reseedMessages: [],
         durableContext: undefined,
@@ -566,16 +569,20 @@ export async function loadCliSessionPromptContext(
       };
     }
   }
-  assertNativeResume?.();
+  assertActive?.();
   const entries = await loadCliSessionEntries(params);
-  assertNativeResume?.();
+  assertActive?.();
   const sessionGapContext = renderClaudeSessionGap(
     entries,
-    assertNativeResume
+    assertActive &&
+      ((!contentBlocked && params.nativeSessionId) ||
+        params.rawTranscriptReseedReason === "auth-unknown" ||
+        (contentBlocked && !params.nativeSessionId))
       ? {
           sessionKey: params.sessionKey,
           historyToolAvailable:
             params.tools?.some((tool) => tool.name === "sessions_history") === true,
+          freshSession: !params.nativeSessionId,
         }
       : undefined,
   );

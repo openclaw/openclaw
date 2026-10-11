@@ -37,6 +37,8 @@ Deprecated catalog models are not added at sign-in; an existing entry for one is
 
 When you switch an existing chat away from Claude CLI and back, the first resumed turn includes a short count, time range, and model summary of messages since the last saved Claude CLI reply—not their contents. The note prefixes that native user prompt; OpenClaw's transcript keeps the original user text. When `sessions_history` is available, the note includes the current chat's session key and call shape so Claude can read those messages on demand. An empty Claude reply leaves no saved reply boundary, so the note can repeat on the following turn.
 
+When an account change starts a fresh native Claude session in an existing chat, its first turn receives the same kind of note about earlier messages in the chat. This includes opaque native logins. Claude can read that history on demand through `sessions_history` when tool policy allows it; OpenClaw never automatically replays raw transcript content or durable context across the account boundary. A brand-new chat has no earlier-message note.
+
 The gateway service must have the CLI on its `PATH`. If a deployment needs a
 nonstandard executable path or arguments, register that adapter in a
 [CLI backend plugin](/plugins/cli-backend-plugins) instead of putting launch

@@ -156,13 +156,18 @@ describe("cli session history", () => {
     expect({ localMessage, importedMessage }).toEqual(before);
   });
 
-  it.each(["", `${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\n`])(
-    "dedupes switch-back context before optional drift context: %s",
-    (driftContext) => {
+  it.each(
+    ["", `${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\n`].flatMap((driftContext) =>
+      ["messages occurred outside this Claude session", "earlier messages in this chat"].map(
+        (description) => ({ driftContext, description }),
+      ),
+    ),
+  )(
+    "dedupes $description context before optional drift context: $driftContext",
+    ({ driftContext, description }) => {
       const prompt = "What token did I give the other model?";
       const localMessage = user(prompt, 1_000, { id: "local-return", senderIsOwner: true });
-      const note =
-        '[OpenClaw: 2 messages occurred outside this Claude session from 2026-10-10T22:30:29.302Z to 2026-10-10T22:30:43.592Z, using "mock/mock-model". Their contents are not included here. Before answering a question that may depend on these messages, call mcp__openclaw__sessions_history({"sessionKey":"agent:main:switch-back","limit":100}) to read them; page older messages with offset if needed.]';
+      const note = `[OpenClaw: 2 ${description} from 2026-10-10T22:30:29.302Z to 2026-10-10T22:30:43.592Z, using "mock/mock-model". Their contents are not included here. Before answering a question that may depend on these messages, call mcp__openclaw__sessions_history({"sessionKey":"agent:main:switch-back","limit":100}) to read them; page older messages with offset if needed.]`;
       const importedMessage = user(
         `${note}\n\n${driftContext}${prompt}`,
         1_001,

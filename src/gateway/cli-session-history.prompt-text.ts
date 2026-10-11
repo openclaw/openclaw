@@ -54,7 +54,7 @@ function stripLeadingSystemEventLines(text: string): string {
 // the user's text before handing it to the CLI. Never replace stored content.
 export function stripCliPromptDecorations(text: string): string {
   const withoutGapNote = text.replace(
-    /^\[OpenClaw: \d+ messages occurred outside this Claude session from [^\n]+\. Their contents are not included here\.[^\n]*\]\r?\n\r?\n/u,
+    /^\[OpenClaw: \d+ (?:messages occurred outside this Claude session|earlier messages in this chat) from [^\n]+\. Their contents are not included here\.[^\n]*\]\r?\n\r?\n/u,
     "",
   );
   return stripLeadingSystemEventLines(stripCliSessionDriftNote(withoutGapNote));
