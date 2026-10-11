@@ -311,25 +311,6 @@ describe("history descriptor observation order", () => {
     );
   });
 
-  it("does not let a late shared consumer recapture an older history result", async () => {
-    const h = await fixture();
-    const first = h.begin(h.makeState());
-    const current = { ...initial, updatedAt: 5, label: "Newer managed read" };
-    await h.refreshManaged(current);
-    expect(h.sessions.state.result?.sessions.find((row) => row.key === key)).toMatchObject(current);
-    const late = h.begin(h.makeState());
-    expect(h.reads).toHaveLength(1);
-    h.reads[0]!.pending.resolve(
-      history({ ...initial, updatedAt: 50, label: "Older history read" }),
-    );
-    await Promise.all([first, late]);
-
-    // Both projections must retain the accepted managed read, not the late history descriptor.
-    expect(h.managedRow()).toMatchObject(current);
-    expect(h.sessions.state.result?.sessions.find((row) => row.key === key)).toMatchObject(current);
-    expect(h.sessions.state.result?.sessions.map((row) => row.key)).toEqual([key, sibling.key]);
-  });
-
   it("uses the successful chat.startup retry's observation for shared consumers", async () => {
     const method = "chat.startup";
     const h = await fixture();

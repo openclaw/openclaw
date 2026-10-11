@@ -118,16 +118,19 @@ export function reconcileSessionActivityRead(
       return identity ? [[identity, row] as const] : [];
     }),
   );
+  let orderChanged = false;
   const sessions = incoming.sessions.map((row) => {
     const identity = provenance.identity(row);
     const existing = identity ? held.get(identity) : undefined;
     provenance.observeReadRow(row, revision, row.agentId);
-    return existing ? provenance.mergeRow(existing, row, row.agentId) : row;
+    const merged = existing ? provenance.mergeRow(existing, row, row.agentId) : row;
+    orderChanged ||= sessionActivityTimestamp(merged) !== sessionActivityTimestamp(row);
+    return merged;
   });
   return {
     result: {
       ...incoming,
-      sessions: sessions.toSorted(compareSessionActivity),
+      sessions: orderChanged ? sessions.toSorted(compareSessionActivity) : sessions,
     },
     requiresRefresh: false,
   };
