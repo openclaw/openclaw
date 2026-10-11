@@ -3,6 +3,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import {
   createManagerIndexFixture,
+  memoryIndexFixtureWriter,
   readPublishedSessionIndex,
 } from "./manager-index.test-support.js";
 
@@ -26,8 +27,8 @@ describe("memory search reindex backoff", () => {
         }),
       );
       await manager.sync({ reason: "baseline", force: true });
-      const fields = manager as unknown as { db: DatabaseSync; awaitManagerIdle(): Promise<void> };
-      fields.db.exec(
+      const fields = manager as unknown as { awaitManagerIdle(): Promise<void> };
+      memoryIndexFixtureWriter(manager).exec(
         "UPDATE memory_index_meta SET value = json_set(value, '$.chunkingVersion', 0) WHERE key = 'memory_index_meta_v1'",
       );
       let now = Date.now();
@@ -84,8 +85,7 @@ describe("memory search reindex backoff", () => {
         }),
       );
       await manager.sync({ reason: "baseline", force: true });
-      const fields = manager as unknown as { db: DatabaseSync };
-      fields.db.exec(
+      memoryIndexFixtureWriter(manager).exec(
         identity === "missing"
           ? "DELETE FROM memory_index_meta WHERE key = 'memory_index_meta_v1'"
           : "UPDATE memory_index_meta SET value = json_set(value, '$.chunkingVersion', 0) WHERE key = 'memory_index_meta_v1'",
