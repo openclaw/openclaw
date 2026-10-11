@@ -38,6 +38,10 @@ openclaw onboard --auth-choice ollama-cloud --ollama-cloud-api-key "<key>"
 
 Onboarding sets the default model to `ollama-cloud/minimax-m2.7`.
 
+The setup flow rejects `ollama-local`, including when it comes from
+`OLLAMA_API_KEY` or a saved profile. That placeholder only enables local Ollama;
+it is not a hosted API key.
+
 ## Defaults
 
 - Provider: `ollama-cloud`

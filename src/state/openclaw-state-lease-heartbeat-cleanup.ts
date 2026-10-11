@@ -1,5 +1,4 @@
 import type { Worker } from "node:worker_threads";
-import { createDeferredCore } from "../shared/deferred.js";
 
 export type LeaseHeartbeatCleanup = {
   readonly pending: boolean;
@@ -9,7 +8,6 @@ export type LeaseHeartbeatCleanup = {
 export function createLeaseHeartbeatCleanup(params: { cancel: () => void }) {
   let worker: Worker | undefined;
   let exitCode: number | undefined;
-  const exited = createDeferredCore<number>();
   const startupRenewals = new Set<Promise<unknown>>();
   let closed = false;
   let stopping: Promise<number> | undefined;
@@ -24,8 +22,6 @@ export function createLeaseHeartbeatCleanup(params: { cancel: () => void }) {
       stopping = Promise.resolve().then(async () => {
         if (worker && exitCode === undefined) {
           await worker.terminate();
-          // A terminate result is not a substitute for the native exit event.
-          await exited.promise;
         }
         await Promise.allSettled(startupRenewals);
         return exitCode ?? 0;
@@ -71,7 +67,6 @@ export function createLeaseHeartbeatCleanup(params: { cancel: () => void }) {
       worker = createWorker();
       worker.once("exit", (code) => {
         exitCode = code;
-        exited.resolve(code);
       });
       return worker;
     },

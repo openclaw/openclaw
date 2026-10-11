@@ -24,6 +24,7 @@ import {
 } from "../auto-reply/reply/model-runtime-normalization.js";
 import { resolveContextTokens } from "../auto-reply/reply/model-selection-context.js";
 import { refreshQueuedFollowupSession } from "../auto-reply/reply/queue.js";
+import { hasPendingFollowupQueueWork } from "../auto-reply/reply/queue/state.js";
 import { persistReplySessionEntry } from "../auto-reply/reply/session-entry-persistence.js";
 import { resolveSupportedThinkingLevel } from "../auto-reply/thinking.js";
 import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
@@ -252,6 +253,8 @@ export async function applySessionModelSelectionInternal(
     provider: request.provider,
     model: request.model,
     catalog: params.thinkingCatalog ?? params.modelCatalog,
+    thinkingPolicyRequired:
+      startingEntry.thinkingLevel !== undefined || hasPendingFollowupQueueWork([params.sessionKey]),
     rawRuntime:
       request.runtime.kind === "set"
         ? request.runtime.runtime
