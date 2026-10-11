@@ -122,46 +122,36 @@ export async function listAdoptedSessionEntries(params: {
   runtime: PluginRuntime;
   sessionEntries?: SessionCatalogEntrySnapshot;
 }): Promise<Map<string, AdoptedSessionEntry>> {
-  const candidateForEntry = ({
-    agentId,
-    entry,
-    sessionKey,
-  }: ReturnType<typeof listSessionCatalogEntries>[number]): AdoptionCandidate | undefined => {
-    const sessionKeyRest = adoptionSessionKeyRest(sessionKey);
-    const marker = readCodexSupervisionMarker(entry);
-    if (
-      !sessionKeyRest.startsWith(CODEX_SUPERVISION_SESSION_KEY_PREFIX) ||
-      !marker ||
-      entry.initializationPending === true ||
-      entry.agentHarnessId !== "codex" ||
-      entry.modelSelectionLocked !== true
-    ) {
-      return undefined;
-    }
-    const sessionId = entry.sessionId?.trim();
-    if (!sessionId) {
-      return undefined;
-    }
-    return {
-      agentId,
-      sessionKey,
-      sessionKeyRest,
-      sessionId,
-      marker,
-      identity: sessionBindingIdentity({ sessionId, sessionKey, config: params.config }),
-    };
-  };
   function* candidates() {
-    for (const entry of listSessionCatalogEntries({
+    for (const { agentId, entry, sessionKey } of listSessionCatalogEntries({
       ...(params.agentId ? { agentId: params.agentId } : {}),
       config: params.config ?? {},
       runtime: params.runtime,
       sessionEntries: params.sessionEntries,
     })) {
-      const candidate = candidateForEntry(entry);
-      if (candidate) {
-        yield candidate;
+      const sessionKeyRest = adoptionSessionKeyRest(sessionKey);
+      const marker = readCodexSupervisionMarker(entry);
+      if (
+        !sessionKeyRest.startsWith(CODEX_SUPERVISION_SESSION_KEY_PREFIX) ||
+        !marker ||
+        entry.initializationPending === true ||
+        entry.agentHarnessId !== "codex" ||
+        entry.modelSelectionLocked !== true
+      ) {
+        continue;
       }
+      const sessionId = entry.sessionId?.trim();
+      if (!sessionId) {
+        continue;
+      }
+      yield {
+        agentId,
+        sessionKey,
+        sessionKeyRest,
+        sessionId,
+        marker,
+        identity: sessionBindingIdentity({ sessionId, sessionKey, config: params.config }),
+      };
     }
   }
   const collect = async (
@@ -306,7 +296,7 @@ async function ensurePendingAdoptionBinding(params: {
   if (!ownsGeneration) {
     throw new Error(`failed to claim the OpenClaw session generation for ${params.sourceThreadId}`);
   }
-  const existing = params.bindingStore.read(params.identity);
+  const existing = await params.bindingStore.readAsync(params.identity);
   params.initialization.assertCurrent();
   if (existing) {
     if (matchesPendingAdoptionBinding(existing, params)) {
@@ -444,11 +434,11 @@ async function continueLocalCodexSessionInner(
     // under the session-store write lock so a stale Open Chat cannot revive a replacement.
     const changedError = () =>
       new CatalogParamsError("Codex OpenClaw session changed before it could be opened. Retry.");
-    const restored = await params.api.runtime.agent.session.patchSessionEntry({
+    const restored = await params.api.runtime.agent.session.prepareSessionEntryPatch({
       sessionKey: existing.key,
       readConsistency: "latest",
       preserveActivity: true,
-      update: (entry) => {
+      prepare: (entry) => {
         if (
           entry.sessionId?.trim() !== existing.sessionId ||
           entry.initializationPending === true ||

@@ -278,7 +278,7 @@ suite.define(() => {
   );
 
   it.each(["dashboards", "systems"])(
-    "scrolls navigation and the %s sidebar content together",
+    "scrolls the %s middle sidebar without moving the personal rail",
     async (route) => {
       await suite.withPage(
         {
@@ -287,9 +287,35 @@ suite.define(() => {
           viewport: { width: 1440, height: 900 },
         },
         async ({ page }) => {
-          await installSystemsGateway(page);
+          // The middle column no longer includes the navigation stack: overflow its own roster.
+          await installSystemsGateway(page, 40);
           await page.goto(suite.server.baseUrl + route);
-          const home = page.locator(".nav-item--home");
+          await page.locator('[data-navigation-view="sessions"]').click();
+          const all = page
+            .locator(".sidebar-navigation-scope")
+            .getByRole("button", { name: "All", exact: true });
+          if (route === "dashboards") {
+            // This inventory intentionally includes ownerless sessions, not only Mine.
+            await all.click();
+          }
+          await page.locator('[data-navigation-view="pages"]').click();
+          await expect.poll(() => page.locator(".systems-sidebar").count()).toBe(0);
+          await page.locator('[data-navigation-view="sessions"]').click();
+          if (route === "dashboards") {
+            await expect.poll(() => all.getAttribute("aria-pressed")).toBe("true");
+          }
+          const home = page.locator(".sidebar-rail__bottom .sidebar-footer-bar__home");
+          const scroller = page.locator(".sidebar-shell__body");
+          const railControls = page.locator(
+            ".sidebar-rail__bottom :is(.sidebar-footer-bar__home, .sidebar-issues-button, .sidebar-identity-card)",
+          );
+          const railBounds = () =>
+            railControls.evaluateAll((controls) =>
+              controls.map((control) => {
+                const { x, y, width, height } = control.getBoundingClientRect();
+                return { x, y, width, height };
+              }),
+            );
           const row = page
             .locator(route === "systems" ? ".systems-machine" : ".sidebar-recent-session")
             .first();
@@ -308,6 +334,8 @@ suite.define(() => {
           await row.hover();
           const initialHomeTop = await homeTop();
           const initialRowTop = await rowTop();
+          const initialRailBounds = await railBounds();
+          expect(initialRailBounds).toHaveLength(3);
           if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
             await page.screenshot({ path: path.join(suite.artifactDir, `${route}-top.png`) });
           }
@@ -316,22 +344,19 @@ suite.define(() => {
           if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
             await page.screenshot({ path: path.join(suite.artifactDir, `${route}-scrolled.png`) });
           }
-          await expect
-            .poll(
-              async () => (await homeTop()) - initialHomeTop - ((await rowTop()) - initialRowTop),
-            )
-            .toBeCloseTo(0, 0);
+          expect(await homeTop()).toBe(initialHomeTop);
+          expect(await railBounds()).toEqual(initialRailBounds);
+          expect(await scroller.evaluate((element) => element.scrollTop)).toBeGreaterThan(80);
 
           await page.mouse.wheel(0, -1000);
-          await expect.poll(homeTop).toBeCloseTo(initialHomeTop, 0);
+          await expect.poll(rowTop).toBeCloseTo(initialRowTop, 0);
+          await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBe(0);
           await home.hover();
           await page.mouse.wheel(0, 120);
-          await expect.poll(homeTop).toBeLessThan(initialHomeTop - 80);
-          await expect
-            .poll(
-              async () => (await homeTop()) - initialHomeTop - ((await rowTop()) - initialRowTop),
-            )
-            .toBeCloseTo(0, 0);
+          expect(await homeTop()).toBe(initialHomeTop);
+          expect(await railBounds()).toEqual(initialRailBounds);
+          expect(await scroller.evaluate((element) => element.scrollTop)).toBe(0);
+          expect(await rowTop()).toBeCloseTo(initialRowTop, 0);
         },
       );
     },
@@ -357,9 +382,12 @@ suite.define(() => {
       await page.screenshot({ path: path.join(artifacts, "machine-inventory.png") });
       expect(await inventory.getByRole("button", { name: /worker history/ }).count()).toBe(0);
       expect(await inventory.locator(".systems-group__count").allTextContents()).toEqual(["1"]);
-      await page.locator('.sidebar-nav a[href$="/dashboards"]').click();
+      await page.locator('[data-navigation-view="pages"]').click();
+      await page.locator('.sidebar-pages a[href$="/dashboards"]').click();
       await expect.poll(() => page.locator(".systems-sidebar").count()).toBe(0);
-      await page.locator('.sidebar-nav a[href$="/systems"]').click();
+      await page.locator('.sidebar-pages a[href$="/systems"]').click();
+      await page.locator('[data-navigation-view="sessions"]').click();
+      await inventory.waitFor();
       await expect
         .poll(() => page.locator(".systems-heading h1").textContent())
         .toBe("Cloud worker");

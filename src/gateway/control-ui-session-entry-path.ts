@@ -19,7 +19,8 @@ export function parseControlUiSessionReturnPath(value: string, basePath: string)
   if (
     !url ||
     `${url.pathname}${url.search}` !== value ||
-    [...url.searchParams.keys()].some((key) => key !== "dashboard") ||
+    [...url.searchParams.keys()].some((key) => key !== "dashboard" && key !== "draft") ||
+    url.searchParams.getAll("draft").length > 1 ||
     url.searchParams.getAll("dashboard").length > 1 ||
     (url.searchParams.has("dashboard") && url.searchParams.get("dashboard") !== "expanded")
   ) {

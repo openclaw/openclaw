@@ -8,7 +8,7 @@ import {
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
-import { hasSqlitePostCommitScope } from "../../infra/sqlite-post-commit.js";
+import { hasUncommittedSqliteWrites } from "../../infra/sqlite-schema-facts.js";
 import {
   iterateUnindexedActiveTranscriptNavigation,
   iterateUnindexedTranscriptNavigation,
@@ -100,7 +100,7 @@ export function readUnindexedHistoryControls(
       : snapshot.rows.filter((row) => row.event_seq <= coveredThrough);
   }
   const key = `${projection.database.path}\0${projection.resolved.sessionId}\0unindexed-controls`;
-  const cacheable = !hasSqlitePostCommitScope(projection.database.db);
+  const cacheable = !hasUncommittedSqliteWrites(projection.database.db);
   const cached = cacheable ? resetMessageWindowCache.get(key) : undefined;
   const reusable =
     cached?.database === projection.database.db &&
@@ -183,22 +183,30 @@ function readLatestActiveBoundaryMetadataByType(
   beforeRawSeq?: number,
 ) {
   const db = getActiveTranscriptKysely(projection.database);
-  const indexed = executeSqliteQueryTakeFirstSync(
-    projection.database.db,
-    db
-      .selectFrom("session_transcript_active_events as active")
-      .innerJoin("transcript_event_identities as identity", (join) =>
-        join
-          .onRef("identity.session_id", "=", "active.session_id")
-          .onRef("identity.seq", "=", "active.event_seq"),
-      )
-      .select(["active.active_position", "identity.event_type", "identity.seq"])
-      .where("active.session_id", "=", projection.resolved.sessionId)
-      .where("identity.event_type", "=", eventType)
-      .$if(beforeRawSeq !== undefined, (query) => query.where("identity.seq", "<", beforeRawSeq!))
-      .orderBy("identity.seq", "desc")
-      .limit(1),
-  );
+  const preparedReset = projection.latestIndexedReset;
+  const indexed =
+    eventType === "reset" &&
+    preparedReset !== undefined &&
+    (!preparedReset || beforeRawSeq === undefined || preparedReset.seq < beforeRawSeq)
+      ? (preparedReset ?? undefined)
+      : executeSqliteQueryTakeFirstSync(
+          projection.database.db,
+          db
+            .selectFrom("session_transcript_active_events as active")
+            .innerJoin("transcript_event_identities as identity", (join) =>
+              join
+                .onRef("identity.session_id", "=", "active.session_id")
+                .onRef("identity.seq", "=", "active.event_seq"),
+            )
+            .select(["active.active_position", "identity.event_type", "identity.seq"])
+            .where("active.session_id", "=", projection.resolved.sessionId)
+            .where("identity.event_type", "=", eventType)
+            .$if(beforeRawSeq !== undefined, (query) =>
+              query.where("identity.seq", "<", beforeRawSeq!),
+            )
+            .orderBy("identity.seq", "desc")
+            .limit(1),
+        );
   let unindexed: UnindexedActiveTranscriptNavigation | undefined;
   for (const row of readUnindexedHistoryControls(projection, beforeRawSeq)) {
     if (
@@ -390,7 +398,7 @@ export function resolveTranscriptBoundaryWindow(
   beforeRawSeq?: number,
 ): ResetMessageWindow | null {
   // Current-turn bounds and uncommitted writes need their own window.
-  if (beforeRawSeq !== undefined || hasSqlitePostCommitScope(projection.database.db)) {
+  if (beforeRawSeq !== undefined || hasUncommittedSqliteWrites(projection.database.db)) {
     return findLatestResetMessageWindow(projection, scope, beforeRawSeq);
   }
   const key = `${projection.database.path}\0${projection.resolved.sessionId}\0${scope}`;
@@ -560,7 +568,6 @@ export function* iterateVisibleMessageRange(
         ? iterateSqliteQuerySync(
             projection.database.db,
             selectMessagePayload(
-              projection.database,
               selectMessageRows(projection.database, projection.resolved.sessionId, range),
             ),
           )

@@ -255,12 +255,12 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
   }
 }
 
-/** The caller supplies current profile facts and rechecks its retained authority after callbacks. */
+/** Recheck current facts, returning the original grant's live authority for retained work. */
 export function resumeGatewayOperatorAccessGrant(
   profile: UserProfileAccessFacts,
   config: OpenClawConfig,
   grant: GatewayAccessGrantRef | null,
-): void {
+): PluginGatewayAccessAuthority | undefined {
   const policies = currentAccessPolicies();
   const requiredPlugin = resolveOperatorRolePolicyForAssignment(
     profile.profileId,
@@ -276,6 +276,7 @@ export function resumeGatewayOperatorAccessGrant(
     config,
     profile: pluginProfile(profile, profile.assignedRole),
   };
+  let resumed: PluginGatewayAccessAuthority | undefined;
   if (grant) {
     const policy = policies.find(({ pluginId }) => pluginId === grant.pluginId)?.policy;
     if (!policy?.resume) {
@@ -297,6 +298,7 @@ export function resumeGatewayOperatorAccessGrant(
     if (!authority || authority.grantId !== grant.grantId) {
       throw new GatewayOperatorAccessDeniedError();
     }
+    resumed = authority;
   }
   for (const { pluginId, policy } of policies) {
     if (pluginId === grant?.pluginId) {
@@ -313,6 +315,7 @@ export function resumeGatewayOperatorAccessGrant(
       throw new GatewayOperatorAccessDeniedError();
     }
   }
+  return resumed;
 }
 
 export function hasCurrentGatewayOperatorAccess(

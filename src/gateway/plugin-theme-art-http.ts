@@ -50,7 +50,7 @@ export async function handlePluginThemeArtHttpRequest(
     !request.value ||
     !themeId ||
     !THEME_LOCAL_ID_PATTERN.test(themeId) ||
-    (kind !== "hat" && kind !== "critter") ||
+    (kind !== "icon" && kind !== "hat" && kind !== "critter") ||
     !artId ||
     !THEME_ARTWORK_ID_PATTERN.test(artId)
   ) {

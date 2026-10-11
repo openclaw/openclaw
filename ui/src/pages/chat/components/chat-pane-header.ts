@@ -60,6 +60,7 @@ type ChatPaneHeaderProps = {
   navDrawerOpen?: boolean;
   title: string;
   session: GatewaySessionRow | undefined;
+  incognito?: boolean;
   showOwnerChip?: boolean;
   ownerViewing?: boolean;
   personActivity?: PersonActivityRouting;
@@ -86,6 +87,7 @@ type ChatPaneHeaderProps = {
   renameDisabledReason?: string;
   actionsDisabled?: boolean;
   panelActions: TemplateResult | typeof nothing;
+  detailsControl?: TemplateResult | typeof nothing;
   runAction?: TemplateResult | typeof nothing;
   panelLayoutActions: TemplateResult | typeof nothing;
   presence?: TemplateResult | typeof nothing;
@@ -129,13 +131,8 @@ export function resolveChatPaneParentSession(
   return parent ? { key: parent.key, title: resolveSessionDisplayName(parent.key, parent) } : null;
 }
 
-function renderIdentityCrumbs(
-  props: ChatPaneHeaderProps,
-  copied: boolean,
-  copyPathLabel: string,
-  copyBranchLabel: string,
-) {
-  const projectCrumb = renderProjectCrumb(props, copied, copyPathLabel, copyBranchLabel);
+function renderIdentityCrumbs(props: ChatPaneHeaderProps) {
+  const projectCrumb = renderProjectCrumb(props);
   const parentCrumb = renderParentSessionCrumb(props);
   return html`
     <div class="chat-pane__crumbs">
@@ -222,15 +219,19 @@ function renderSessionCrumb(props: ChatPaneHeaderProps) {
       </button>`;
 }
 
-function renderProjectCrumb(
-  props: ChatPaneHeaderProps,
-  copied: boolean,
-  copyPathLabel: string,
-  copyBranchLabel: string,
-): TemplateResult | null {
+function renderProjectCrumb(props: ChatPaneHeaderProps): TemplateResult | null {
   if (props.catalog || !props.workspaceLabel) {
     return null;
   }
+  const copyPathLabel =
+    props.copiedAction === "copy-path"
+      ? t("chat.sessionHeader.copied")
+      : t("chat.sessionHeader.copyPath");
+  const copyBranchLabel =
+    props.copiedAction === "copy-branch"
+      ? t("chat.sessionHeader.copied")
+      : t("chat.sessionHeader.copyBranch");
+  const copied = props.copiedAction === "copy-path" || props.copiedAction === "copy-branch";
   return html`
     <wa-dropdown
       class="chat-pane__workspace-menu"
@@ -257,21 +258,13 @@ function renderProjectCrumb(
           >${copied ? t("chat.sessionHeader.copied") : props.workspaceLabel}</span
         >
       </button>
-      ${
-        props.canReveal && props.workspaceRoot
-          ? html`<wa-dropdown-item value="reveal">${revealLabel(props.platform)}</wa-dropdown-item>`
-          : nothing
-      }
-      ${
-        props.workspaceRoot
-          ? html`<wa-dropdown-item value="copy-path">${copyPathLabel}</wa-dropdown-item>`
-          : nothing
-      }
-      ${
-        props.branch
-          ? html`<wa-dropdown-item value="copy-branch">${copyBranchLabel}</wa-dropdown-item>`
-          : nothing
-      }
+      ${[
+        [props.canReveal && props.workspaceRoot, "reveal", revealLabel(props.platform)],
+        [props.workspaceRoot, "copy-path", copyPathLabel],
+        [props.branch, "copy-branch", copyBranchLabel],
+      ].map(([visible, value, label]) =>
+        visible ? html`<wa-dropdown-item value=${value}>${label}</wa-dropdown-item>` : nothing,
+      )}
     </wa-dropdown>
   `;
 }
@@ -303,15 +296,6 @@ export function canRevealSessionWorkspace(params: {
 }
 
 export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
-  const copyPathLabel =
-    props.copiedAction === "copy-path"
-      ? t("chat.sessionHeader.copied")
-      : t("chat.sessionHeader.copyPath");
-  const copyBranchLabel =
-    props.copiedAction === "copy-branch"
-      ? t("chat.sessionHeader.copied")
-      : t("chat.sessionHeader.copyBranch");
-  const copied = props.copiedAction === "copy-path" || props.copiedAction === "copy-branch";
   const drawerLabel = props.navDrawerOpen ? t("nav.collapse") : t("nav.expand");
   const compactSessionActions = props.narrow && props.sessionMenuAction !== nothing;
   const hasSharingControl = props.sharingControl !== undefined && props.sharingControl !== nothing;
@@ -347,7 +331,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
             : nothing
         }
         ${
-          props.session?.incognito
+          (props.incognito ?? props.session?.incognito)
             ? html`<span
                 class="chat-pane__incognito"
                 role="img"
@@ -357,8 +341,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
               >`
             : nothing
         }
-        ${renderIdentityCrumbs(props, copied, copyPathLabel, copyBranchLabel)}
-        ${props.publicAccessIndicator ?? nothing}
+        ${renderIdentityCrumbs(props)} ${props.publicAccessIndicator ?? nothing}
         ${
           hasSharingControl
             ? props.sharingControl
@@ -395,6 +378,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         ${props.placementControl ?? nothing} ${props.presence ?? nothing}
       </div>
       <div class="chat-pane__header-trailing">
+        ${props.detailsControl ?? nothing}
         ${
           !props.catalog && props.branches.length > 1
             ? html`
@@ -508,17 +492,8 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
                 ],
               ] as const
             ).map(([visible, className, label, icon, onClick]) =>
-              visible
-                ? html`<openclaw-tooltip .content=${t(label)}>
-                    <button
-                      class=${`btn btn--ghost btn--icon chat-icon-btn ${className}`}
-                      type="button"
-                      aria-label=${t(label)}
-                      @click=${onClick}
-                    >
-                      ${icon}
-                    </button>
-                  </openclaw-tooltip>`
+              visible && onClick
+                ? renderChatPanePanelToggle({ className, label: t(label), icon, onToggle: onClick })
                 : nothing,
             )}
             ${props.sessionMenuAction}
@@ -534,6 +509,7 @@ export function renderChatPanePanelToggle(props: {
   icon: TemplateResult;
   className?: string;
   expanded?: boolean;
+  pressed?: boolean;
   onToggle: () => void;
 }) {
   return html`<openclaw-tooltip .content=${props.label}>
@@ -542,6 +518,7 @@ export function renderChatPanePanelToggle(props: {
       type="button"
       aria-label=${props.label}
       aria-expanded=${ifDefined(props.expanded === undefined ? undefined : String(props.expanded))}
+      aria-pressed=${ifDefined(props.pressed === undefined ? undefined : String(props.pressed))}
       @click=${props.onToggle}
     >
       ${props.icon}
@@ -577,35 +554,27 @@ export function renderChatPanePanelLayoutActions(
   }
   ${
     split || layout.expanded
-      ? html`<openclaw-tooltip .content=${focusLabel}>
-          <button
-            class="btn btn--ghost btn--icon chat-icon-btn chat-panel-focus"
-            type="button"
-            aria-pressed=${String(layout.expanded === true)}
-            aria-label=${focusLabel}
-            @click=${() =>
-              onLayoutChange(
-                setSidebarExpanded(ensureSidebarConversation(layout), layout.expanded !== true),
-                { dashboardPresentation: "personal" },
-              )}
-          >
-            ${layout.expanded ? icons.minimize : icons.maximize}
-          </button>
-        </openclaw-tooltip>`
+      ? renderChatPanePanelToggle({
+          label: focusLabel,
+          icon: layout.expanded ? icons.minimize : icons.maximize,
+          className: "chat-panel-focus",
+          pressed: layout.expanded === true,
+          onToggle: () =>
+            onLayoutChange(
+              setSidebarExpanded(ensureSidebarConversation(layout), layout.expanded !== true),
+              { dashboardPresentation: "personal" },
+            ),
+        })
       : nothing
   }
   ${
     split && side && swapLabel
-      ? html`<openclaw-tooltip .content=${swapLabel}>
-          <button
-            class="btn btn--ghost btn--icon chat-icon-btn chat-panel-swap"
-            type="button"
-            aria-label=${swapLabel}
-            @click=${() => onLayoutChange(promoteSidebarPanel(layout, side.id))}
-          >
-            ${icons.arrowLeftRight}
-          </button>
-        </openclaw-tooltip>`
+      ? renderChatPanePanelToggle({
+          label: swapLabel,
+          icon: icons.arrowLeftRight,
+          className: "chat-panel-swap",
+          onToggle: () => onLayoutChange(promoteSidebarPanel(layout, side.id)),
+        })
       : nothing
   }
   ${

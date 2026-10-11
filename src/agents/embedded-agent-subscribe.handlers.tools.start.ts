@@ -129,24 +129,28 @@ export function buildToolStartKey(runId: string, toolCallId: string): string {
   return `${runId}:${toolCallId}`;
 }
 
-export function countActiveToolExecutions(runId: string): number {
+function* iterateRunToolStarts(runId: string) {
   const prefix = `${runId}:`;
-  let count = 0;
-  for (const key of toolStartData.keys()) {
-    if (key.startsWith(prefix)) {
-      count += 1;
+  for (const entry of toolStartData) {
+    if (entry[0].startsWith(prefix)) {
+      yield entry;
     }
+  }
+}
+
+export function countActiveToolExecutions(runId: string): number {
+  const entries = iterateRunToolStarts(runId);
+  let count = 0;
+  while (!entries.next().done) {
+    count += 1;
   }
   return count;
 }
 
 /** Cleans up tool start data for a run that has been unsubscribed or aborted. */
 export function cleanupRunToolStartData(runId: string): void {
-  const prefix = `${runId}:`;
-  for (const key of toolStartData.keys()) {
-    if (key.startsWith(prefix)) {
-      toolStartData.delete(key);
-    }
+  for (const [key] of iterateRunToolStarts(runId)) {
+    toolStartData.delete(key);
   }
 }
 
@@ -179,16 +183,8 @@ export function buildCommandItemId(toolCallId: string): string {
   return `command:${toolCallId}`;
 }
 
-export function buildPatchItemId(toolCallId: string): string {
-  return `patch:${toolCallId}`;
-}
-
 export function buildCommandItemTitle(toolName: string, meta?: string): string {
   return meta ? `command ${meta}` : `${toolName} command`;
-}
-
-export function buildPatchItemTitle(meta?: string): string {
-  return meta ? `patch ${meta}` : "apply patch";
 }
 
 export function emitTrackedItemEvent(
@@ -203,30 +199,12 @@ export function emitTrackedItemEvent(
     ctx.state.itemActiveIds.delete(itemData.itemId);
     ctx.state.itemCompletedCount += 1;
   }
-  if (itemData.phase !== "update" || emitLiveUpdate) {
-    emitAgentActivityEvent({
-      runId: ctx.params.runId,
-      ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
-      stream: "item",
-      data: itemData,
-    });
-  }
   // Reply liveness and channel delivery still consume every original callback.
-  emitAgentEventCallbackBestEffort(ctx, {
-    stream: "item",
-    data: itemData,
-  });
-}
-
-function emitExecutionPhaseBestEffort(
-  ctx: ToolHandlerContext,
-  info: Parameters<NonNullable<ToolHandlerContext["params"]["onExecutionPhase"]>>[0],
-): void {
-  runBestEffortCallback({
-    label: "tool execution phase",
-    log: ctx.log,
-    callback: () => ctx.params.onExecutionPhase?.(info),
-  });
+  if (itemData.phase !== "update" || emitLiveUpdate) {
+    emitToolActivityEvent(ctx, { stream: "item", data: itemData });
+  } else {
+    emitAgentEventCallbackBestEffort(ctx, { stream: "item", data: itemData });
+  }
 }
 
 export function emitAgentEventCallbackBestEffort(
@@ -254,19 +232,13 @@ export function emitToolActivityEvent(ctx: ToolHandlerContext, event: ActivityWi
 }
 
 export function finalizeToolActivity(ctx: ToolHandlerContext): void {
-  const prefix = `${ctx.params.runId}:`;
-  const active = [...toolStartData].flatMap(([key, start]) =>
-    key.startsWith(prefix)
-      ? [
-          {
-            runId: ctx.params.runId,
-            callId: key.slice(prefix.length),
-            parentToolCallId: start.parentToolCallId,
-            activity: undefined,
-          },
-        ]
-      : [],
-  );
+  const runId = ctx.params.runId;
+  const active = [...iterateRunToolStarts(runId)].map(([key, start]) => ({
+    runId: ctx.params.runId,
+    callId: key.slice(runId.length + 1),
+    parentToolCallId: start.parentToolCallId,
+    activity: undefined,
+  }));
   // Keyed active state cannot represent overlapping duplicate starts. Keep the
   // original summaries when lifecycle accounting cannot prove a complete graph.
   if (
@@ -296,20 +268,11 @@ export function finalizeToolActivity(ctx: ToolHandlerContext): void {
 }
 
 function extendExecMeta(toolName: string, args: unknown, meta?: string): string | undefined {
-  if (!isExecToolName(toolName)) {
-    return meta;
-  }
-  if (!args || typeof args !== "object") {
+  if (!isExecToolName(toolName) || !args || typeof args !== "object") {
     return meta;
   }
   const record = args as Record<string, unknown>;
-  const flags: string[] = [];
-  if (record.pty === true) {
-    flags.push("pty");
-  }
-  if (record.elevated === true) {
-    flags.push("elevated");
-  }
+  const flags = ["pty", "elevated"].filter((flag) => record[flag] === true);
   if (flags.length === 0) {
     return meta;
   }
@@ -389,11 +352,16 @@ export function handleToolExecutionStart(
     const args = evt.args;
     const runId = ctx.params.runId;
     ctx.state.toolExecutionSinceLastBlockReply = true;
-    emitExecutionPhaseBestEffort(ctx, {
-      phase: "tool_execution_started",
-      tool: toolName,
-      toolCallId,
-      source: "embedded-agent",
+    runBestEffortCallback({
+      label: "tool execution phase",
+      log: ctx.log,
+      callback: () =>
+        ctx.params.onExecutionPhase?.({
+          phase: "tool_execution_started",
+          tool: toolName,
+          toolCallId,
+          source: "embedded-agent",
+        }),
     });
 
     const startedAt = Date.now();

@@ -442,6 +442,12 @@ export async function persistCronJobMutation(params: {
     source.assertCurrent();
     params.assertCurrent?.();
     source.assertCurrent();
+    if (
+      params.agentId !== undefined &&
+      state.deps.isAgentAvailable?.(params.agentId, undefined, { deletionBlocked: false }) === false
+    ) {
+      throw new Error(describeUnavailableCronAgent(params.agentId));
+    }
   };
   await runCronRuntimeMutation({
     context: source.context,
@@ -462,20 +468,8 @@ export async function persistCronJobMutation(params: {
           : undefined,
     }),
     assertCurrent,
-    prepare(facts) {
-      const assertAvailable = () => {
-        assertCurrent();
-        if (
-          params.agentId !== undefined &&
-          (facts.deletionBlocked ||
-            state.deps.isAgentAvailable?.(params.agentId, undefined, facts) === false)
-        ) {
-          throw new Error(describeUnavailableCronAgent(params.agentId));
-        }
-      };
-      assertAvailable();
-      return { value: { nowMs: state.deps.nowMs() }, assertCurrent: assertAvailable };
-    },
+    // Config availability may change after dispatch; deletion is checked against worker rows.
+    snapshot: { nowMs: state.deps.nowMs() },
     publish({
       store,
       names,

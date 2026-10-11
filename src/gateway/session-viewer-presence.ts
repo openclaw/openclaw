@@ -10,10 +10,6 @@ type SessionViewerPresenceDeclarationsDeps = {
   publishPresence: () => void;
 };
 
-function normalizedSessionKeys(sessionKeys: readonly string[]): string[] {
-  return [...new Set(sessionKeys.map((key) => key.trim()).filter(Boolean))].toSorted();
-}
-
 /** Owns one replace-set per websocket connection until empty declaration or disconnect. */
 export function createSessionViewerPresenceDeclarations(
   deps: SessionViewerPresenceDeclarationsDeps,
@@ -30,7 +26,7 @@ export function createSessionViewerPresenceDeclarations(
     if (!client || client.invalidated || client.socket.readyState !== WEBSOCKET_OPEN_READY_STATE) {
       return [];
     }
-    const next = normalizedSessionKeys(sessionKeys);
+    const next = [...new Set(sessionKeys.map((key) => key.trim()).filter(Boolean))].toSorted();
     const previous = declarations.get(normalizedConnId) ?? [];
     if (previous.length === next.length && previous.every((key, index) => key === next[index])) {
       return next;

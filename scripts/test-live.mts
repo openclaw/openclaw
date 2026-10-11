@@ -1,4 +1,3 @@
-// Runs the full live Vitest suite with live-test env and heartbeat output.
 import { terminateManagedChild } from "./lib/managed-child-process.mts";
 import { resolveVitestCliEntry } from "./lib/vitest-build-prerequisites.mts";
 import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";

@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { extractSqliteTableSchema } from "../../infra/sqlite-schema-sql.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { assertOpenClawAgentSchemaContains } from "../../state/openclaw-agent-db-schema-helpers.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
@@ -21,16 +22,15 @@ import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js"
 import { SessionWorkStartInvalidatedError } from "./lifecycle.js";
 import { upsertSessionEntryCore } from "./session-accessor.sqlite-entry.js";
 import { copySessionNodeArtifactsForRepair } from "./session-accessor.sqlite-node-artifacts.js";
-import {
-  replaceTranscriptEvents,
-  replaceTranscriptSuffixEventsSync,
-} from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptSuffixEventsSync } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import {
   listSessionReactions,
   SessionReactionLimitError,
   SessionReactionMessageMissingError,
   setSessionReactionAsync,
 } from "./session-reaction-store.js";
+import { setSessionReactionInDatabase } from "./session-reaction-store.kernel.js";
 
 let root: string;
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -153,17 +153,13 @@ describe("session reaction store", () => {
   );
 
   it("rolls back a reaction when the caller's authority expires at commit admission", async () => {
-    const createAdmission = admission.createSqliteWorkerOperationAdmission;
     let current = true;
-    vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (callback, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "commit") {
-            current = false;
-          }
-          return callback(request, grant);
-        }, attachment),
-    );
+    probe.admission(admission, (request, grant, callback) => {
+      if (request.stage === "commit") {
+        current = false;
+      }
+      return callback(request, grant);
+    });
     await expect(
       setSessionReactionAsync(scope, {
         ...reaction,
@@ -220,6 +216,37 @@ describe("session reaction store", () => {
     expect(listSessionReactions(scope, { sessionId: "session-b" })).toEqual({});
   });
 
+  it("returns committed reaction rows in SQLite order when timestamps tie", () => {
+    vi.spyOn(Date, "now").mockReturnValue(400);
+    const set = (params: typeof reaction) =>
+      runOpenClawAgentWriteTransaction(
+        (database) => setSessionReactionInDatabase(database, scope.sessionKey, params),
+        scope,
+      );
+    set({ ...reaction, emoji: "😀", identityId: "😀" });
+    set({ ...reaction, emoji: "\uE000", identityId: "\uE000" });
+    const result = set({
+      ...reaction,
+      emoji: "😀",
+      identityId: "\uE000",
+    });
+    const expected = [
+      { emoji: "\uE000", count: 1, identities: [{ id: "\uE000", label: "Alice" }] },
+      {
+        emoji: "😀",
+        count: 2,
+        identities: [
+          { id: "\uE000", label: "Alice" },
+          { id: "😀", label: "Alice" },
+        ],
+      },
+    ];
+    expect(result).toEqual({ reactions: expected, newestRemainingEmoji: "😀", changed: true });
+    expect(listSessionReactions(scope, { sessionId: "session-a" })[reaction.messageId]).toEqual(
+      expected,
+    );
+  });
+
   it.each([
     {
       name: "removing 🚀 after Alice 👍, Alice 🎉, Bob 👍, then 🚀",
@@ -257,6 +284,9 @@ describe("session reaction store", () => {
     const result = await setSessionReactionAsync(scope, removal);
     expect(result).toMatchObject({ changed: true, newestRemainingEmoji: scenario.expected });
     expect(result.reactions.map(({ emoji }) => emoji)).toEqual(["👍", "🎉"]);
+    expect(listSessionReactions(scope, { sessionId: "session-a" })[reaction.messageId]).toEqual(
+      result.reactions,
+    );
     expect(await setSessionReactionAsync(scope, removal)).toMatchObject({
       changed: false,
       newestRemainingEmoji: scenario.expected,

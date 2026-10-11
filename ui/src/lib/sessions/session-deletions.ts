@@ -207,8 +207,7 @@ export function createSessionDeletions(host: DeletionHost) {
           return { deleted: false };
         }
         rollback(deletion);
-        const message = formatUiError(error);
-        reportError(message);
+        reportError(formatUiError(error));
         throw error;
       }
     })();
@@ -349,11 +348,6 @@ export function createSessionDeletions(host: DeletionHost) {
             count: sessions.length,
             // totalCount/offset describe the server's pagination window. Only
             // its next response can change them; row overlays must not shift it.
-            // Completeness checks compare rows against totalCount, so carry the
-            // server's own row count for them: a row hidden here must not make a
-            // complete window look short. A projection re-decorates its own
-            // output, so an already-recorded count is never recomputed.
-            serverRowCount: result.serverRowCount ?? rows.length,
             sessions,
           };
     },

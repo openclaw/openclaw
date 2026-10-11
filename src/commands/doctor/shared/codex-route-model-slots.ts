@@ -88,10 +88,8 @@ export function collectStringModelSlot(params: {
     return;
   }
   recordCodexModelHit({
-    hits: params.hits,
-    path: params.path,
+    ...params,
     model: params.value.trim(),
-    blockedModelIdentities: params.blockedModelIdentities,
   });
 }
 
@@ -161,20 +159,10 @@ export function collectCodexRuntimeModelPolicyRefs(params: {
   }
 }
 
-export function rewriteStringModelSlot(params: {
-  hits: CodexRouteHit[];
-  container: MutableRecord | undefined;
-  key: string;
-  path: string;
-  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
-}): boolean {
-  if (typeof params.container?.[params.key] !== "string") {
-    return false;
-  }
-  return rewriteModelReferenceSlot({
-    ...params,
-    resolve: (model, path) => recordCodexModelHit({ ...params, model, path }),
-  });
+export function rewriteStringModelSlot(
+  params: Parameters<typeof rewriteModelConfigSlot>[0],
+): boolean {
+  return typeof params.container?.[params.key] === "string" && rewriteModelConfigSlot(params);
 }
 
 /** Mutates model selectors; the return value reports only primary changes for runtime-policy callers. */
@@ -232,12 +220,7 @@ export function rewriteModelConfigSlot(params: {
 }): boolean {
   return rewriteModelReferenceSlot({
     ...params,
-    resolve: (model, path) =>
-      recordCodexModelHit({
-        ...params,
-        model,
-        path,
-      }),
+    resolve: (model, path) => recordCodexModelHit({ ...params, model, path }),
   });
 }
 
@@ -252,10 +235,9 @@ export function rewriteModelsMap(params: {
   }
   for (const legacyRef of Object.keys(params.models)) {
     const canonicalModel = recordCodexModelHit({
-      hits: params.hits,
+      ...params,
       path: `${params.path}.${legacyRef}`,
       model: legacyRef,
-      blockedModelIdentities: params.blockedModelIdentities,
     });
     if (!canonicalModel) {
       continue;

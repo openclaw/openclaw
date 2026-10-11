@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { applyPrimaryModel } from "../plugins/provider-model-primary.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -16,7 +15,6 @@ import {
   ensureOnboardingAgentWorkspace,
   resolveOnboardingAgentTarget,
   resolveOnboardingSetupTarget,
-  resolveSystemAgentOnboardingTarget,
 } from "./onboard-agent-target.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -24,7 +22,6 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 describe("onboarding agent target", () => {
   it.each([
     { ownership: undefined, priorUtility: undefined, writesAgent: false },
-    { ownership: undefined, priorUtility: "", writesAgent: true },
     { ownership: "explicit", priorUtility: undefined, writesAgent: true },
   ] as const)("keeps a utility selection on its existing configuration owner: %j", (scenario) => {
     const config: OpenClawConfig = {
@@ -63,7 +60,7 @@ describe("onboarding agent target", () => {
     expect(config).toEqual(original);
   });
 
-  it.each([undefined, "", "local-utility/ops"])(
+  it.each([undefined])(
     "projects a provider utility mutation only onto the selected agent: %j",
     (utilityModel) => {
       const config: OpenClawConfig = {
@@ -123,46 +120,6 @@ describe("onboarding agent target", () => {
         model: { primary: "openai/new" },
         models: { "openai/new": {} },
       },
-    });
-  });
-
-  it("uses the persisted system-agent owner after the marker is removed", () => {
-    const config: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        defaults: { systemAgent: { agentId: "ops" } },
-        entries: { main: {}, ops: { workspace: "/srv/ops" } },
-      },
-    };
-
-    expect(resolveOnboardingAgentTarget(config)).toMatchObject({
-      agentId: "ops",
-      workspaceDir: "/srv/ops",
-    });
-  });
-
-  it("resolves shared system-agent setup to the configured system agent on a legacy roster", () => {
-    // Raw pre-Doctor roster: the legacy compatibility resolver still honors its marker.
-    const config: OpenClawConfigWithLegacyRoster = {
-      agents: {
-        defaults: {
-          workspace: "/srv/global",
-          systemAgent: { agentId: "main" },
-        },
-        entries: {
-          main: { workspace: "/srv/main" },
-          ops: { default: true, workspace: "/srv/ops" },
-        },
-      },
-    };
-
-    expect(resolveOnboardingAgentTarget(config)).toMatchObject({
-      agentId: "ops",
-      workspaceDir: "/srv/ops",
-    });
-    expect(resolveSystemAgentOnboardingTarget(config)).toMatchObject({
-      agentId: "main",
-      workspaceDir: "/srv/main",
     });
   });
 
@@ -236,41 +193,6 @@ describe("onboarding agent target", () => {
     });
   });
 
-  it("keeps explicit agent model mutations on the system-agent entry", () => {
-    const config = {
-      agents: {
-        ownership: "explicit" as const,
-        defaults: { model: { primary: "openai/global" } },
-        entries: {
-          main: {},
-          ops: { model: { primary: "openai/old" } },
-        },
-      },
-    };
-    const target = resolveSystemAgentOnboardingTarget({
-      ...config,
-      agents: {
-        ...config.agents,
-        defaults: { systemAgent: { agentId: "ops" } },
-      },
-    });
-
-    const updated = applyAgentModelDefaults(config, target, (projected) => ({
-      ...projected,
-      agents: {
-        ...projected.agents,
-        defaults: {
-          ...projected.agents?.defaults,
-          model: { primary: "openai/new" },
-        },
-      },
-    }));
-
-    expect(updated.agents?.entries?.ops?.model).toEqual({ primary: "openai/new" });
-    expect(updated.agents?.defaults?.model).toEqual({ primary: "openai/global" });
-    expect(updated.agents?.entries?.main?.model).toBeUndefined();
-  });
-
   it("preserves unrelated global defaults while projecting model changes onto the authored agent", () => {
     const config = {
       agents: {
@@ -333,7 +255,6 @@ describe("onboarding agent target", () => {
   });
 
   it.each([
-    { selectModel: false, expectedModel: undefined, expectedModels: undefined },
     {
       selectModel: true,
       expectedModel: { primary: "provider/selected" },

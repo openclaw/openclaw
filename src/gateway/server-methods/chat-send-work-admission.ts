@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import { err, ok } from "@openclaw/normalization-core/result";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import {
@@ -8,6 +7,9 @@ import {
   replyRunRegistry,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import type { SessionTranscriptTurnMutation } from "../../config/sessions/goals-operations.types.js";
+import type { QualifiedSessionEntryAccessTarget } from "../../config/sessions/session-accessor.types.js";
+import { acquireSessionInputActor } from "../../config/sessions/session-input-actor.js";
+import { withSessionTranscriptSourcePublication } from "../../config/sessions/transcript-write-context.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { retireProviderReviewAcknowledgment } from "../../sessions/provider-review.js";
@@ -25,6 +27,10 @@ import { SessionMutationAuthorizationChangedError } from "../session-mutation-au
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import { formatForLog } from "../ws-log.js";
 import { readPreRegisteredRun } from "./chat-abort-authorization.js";
+import {
+  terminalizeRestartSafeChatAdmission,
+  type RestartSafeChatTerminalState,
+} from "./chat-restart-recovery.js";
 import {
   prepareChatSendRetryComparison,
   resolveChatSendRequestConflict,
@@ -216,14 +222,8 @@ export function releaseChatSendCallerAuthority(params: {
 
 /** Observe started work before the retained read releases; consuming still rethrows its error. */
 export function observeChatSendWork<T>(work: Promise<T>): () => Promise<T> {
-  const outcome = work.then(ok<T, unknown>, err<T, unknown>);
-  return async () => {
-    const result = await outcome;
-    if (!result.ok) {
-      throw result.error;
-    }
-    return result.value;
-  };
+  void work.catch(() => {});
+  return () => work;
 }
 
 /** Interrupt the captured run, or competing admissions, without ever targeting this admission. */
@@ -261,9 +261,23 @@ export function createChatSendWorkAdmission(params: {
   releaseCallerAuthority?: () => void;
   releaseGatewayRootContinuation?: () => void;
   logGateway: Pick<GatewayRequestContext["logGateway"], "warn">;
+  terminal?: {
+    target: QualifiedSessionEntryAccessTarget;
+    storePath: string;
+    sessionBinding: { sessionId: string };
+    admittedSessionId: string;
+    runId: string;
+    lifecycleRevision: string | undefined;
+    isActive: () => boolean;
+    currentRegistration: () => { sessionId: string } | undefined;
+  };
 }) {
   let references = 1;
+  let admittedSource = params.terminal?.target.readSource;
+  let admittedLifecycleRevision = params.terminal?.lifecycleRevision;
   let finishPendingInput: (() => void | Promise<void>) | undefined;
+  let inputActor: ReturnType<typeof acquireSessionInputActor> | undefined;
+  let actorLifetimeActive = true;
   const releaseAdmission = () => {
     try {
       params.admission.release();
@@ -277,6 +291,22 @@ export function createChatSendWorkAdmission(params: {
   };
   const warnCleanupFailure = (error: unknown) => {
     params.logGateway.warn(`Failed to finish pending chat input: ${formatForLog(error)}`);
+  };
+  const finishRelease = () => {
+    if (!inputActor) {
+      actorLifetimeActive = false;
+      releaseAdmission();
+      return;
+    }
+    const close = async () => {
+      try {
+        await (await inputActor)?.actor.release();
+      } finally {
+        actorLifetimeActive = false;
+        releaseAdmission();
+      }
+    };
+    void close().catch(warnCleanupFailure);
   };
   const release = () => {
     if (references === 0) {
@@ -297,12 +327,12 @@ export function createChatSendWorkAdmission(params: {
     if (pending) {
       // The existing admission's drain joins this write before releasing the
       // session/root fence; prompt custody has already been revoked.
-      void pending.then(releaseAdmission, (error: unknown) => {
+      void pending.then(finishRelease, (error: unknown) => {
         warnCleanupFailure(error);
-        releaseAdmission();
+        finishRelease();
       });
     } else {
-      releaseAdmission();
+      finishRelease();
     }
   };
   const hold = () => {
@@ -315,15 +345,131 @@ export function createChatSendWorkAdmission(params: {
       release();
     };
   };
+  const retain = () => {
+    if (references === 0) {
+      throw new Error("cannot retain a released chat work admission");
+    }
+    references += 1;
+    return hold();
+  };
+  const retainSettlement = (assertOwnerCurrent: () => void) => {
+    const releaseSettlement = retain();
+    let active = true;
+    return {
+      assertCurrent() {
+        if (!active || references === 0) {
+          throw new Error("Chat settlement admission was released");
+        }
+        assertOwnerCurrent();
+      },
+      release() {
+        active = false;
+        releaseSettlement();
+      },
+    };
+  };
+  const retainTerminalSettlement = () => {
+    const terminal = params.terminal;
+    if (!terminal || !admittedSource) {
+      return undefined;
+    }
+    return {
+      ...retainSettlement(() => {
+        const registered = terminal.currentRegistration();
+        // Cancellation retires abortability first; retained settlement still owns cleanup.
+        if (!terminal.isActive() || (registered && registered !== terminal.sessionBinding)) {
+          throw new Error("Chat terminal settlement no longer owns its admission");
+        }
+      }),
+      expectedLifecycleRevision: admittedLifecycleRevision,
+      target: {
+        agentId: terminal.target.agentId,
+        storePath: terminal.storePath,
+        readSource: admittedSource,
+        target: {
+          canonicalKey: terminal.target.canonicalKey,
+          storeKeys: [...terminal.target.storeKeys],
+        },
+      },
+    };
+  };
   return {
+    acquireInputActor() {
+      if (!inputActor) {
+        const terminal = params.terminal;
+        if (!terminal || references === 0) {
+          throw new Error("Chat input actor has no live admission");
+        }
+        const assertCurrent = () => {
+          if (!actorLifetimeActive || !terminal.isActive()) {
+            throw new Error("Chat input actor admission ended");
+          }
+        };
+        inputActor = acquireSessionInputActor(
+          {
+            agentId: terminal.target.agentId,
+            storePath: terminal.storePath,
+            readSource: terminal.target.readSource,
+            target: {
+              canonicalKey: terminal.target.canonicalKey,
+              storeKeys: [...terminal.target.storeKeys],
+            },
+          },
+          { assertCurrent, assertReadable: assertCurrent },
+        );
+      }
+      return inputActor;
+    },
     isActive: () => references > 0,
     release: hold(),
-    retain: () => {
-      if (references === 0) {
-        throw new Error("cannot retain a released chat work admission");
+    retain,
+    async settleTerminal(
+      this: void,
+      state: RestartSafeChatTerminalState & { startedAt: number },
+    ): Promise<boolean> {
+      const terminal = params.terminal;
+      const settlement = retainTerminalSettlement();
+      if (!terminal || !settlement) {
+        return false;
       }
-      references += 1;
-      return hold();
+      try {
+        return await terminalizeRestartSafeChatAdmission({
+          ...state,
+          ...settlement,
+          admittedSessionId: terminal.admittedSessionId,
+          clientRunId: terminal.runId,
+        });
+      } finally {
+        settlement.release();
+      }
+    },
+    withInputCommitPublication<T>(this: void, run: () => Promise<T>): Promise<T> {
+      const terminal = params.terminal;
+      if (!terminal) {
+        throw new Error("Chat input publication requires its original admission target");
+      }
+      return withSessionTranscriptSourcePublication(
+        {
+          agentId: terminal.target.agentId,
+          sessionId: terminal.sessionBinding.sessionId,
+          sessionKey: terminal.target.storeKey,
+          storePath: terminal.target.storePath,
+        },
+        (source, committedEntry) => {
+          if (
+            admittedSource &&
+            (admittedSource.agentId !== source.agentId ||
+              admittedSource.path !== source.path ||
+              admittedSource.databaseIdentity !== source.databaseIdentity ||
+              admittedSource.databaseBirthtime !== source.databaseBirthtime)
+          ) {
+            throw new Error("Committed chat input changed its admitted physical source");
+          }
+          admittedSource ??= source;
+          admittedLifecycleRevision = committedEntry.lifecycleRevision;
+        },
+        run,
+      );
     },
     setPendingInputCleanup: (finish: () => void | Promise<void>) => {
       finishPendingInput = finish;

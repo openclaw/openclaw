@@ -204,7 +204,7 @@ openclaw browser extension cdp --json
 - `extension pair` remains the advanced manual flow. `--gateway-url` creates a
   direct remote-Gateway pairing URL. Non-loopback URLs must use `wss://`.
 - `extension pair --local-gateway --json` lets desktop native helpers obtain
-  the canonical local pairing through the Gateway’s `/browser/extension` wake-up
+  the existing local pairing through the Gateway’s `/browser/extension` wake-up
   route. It requires a local Gateway configuration and cannot be combined with
   `--gateway-url`. The JSON contains a credential: consume it privately, never log it.
 - `extension cdp` prints non-secret Browser Relay Authentication v2 metadata:
@@ -356,6 +356,10 @@ openclaw browser batch --actions-file - --continue
 If navigation or a closed page stops the batch, text output reports the action number and skipped count. Take a fresh snapshot before continuing with dependent actions.
 
 `--actions-file` and `--actions-file -` stdin input are capped at 1,000,000 bytes. Split larger plans into multiple `openclaw browser batch` commands.
+
+`fill --fields-file`, `batch --actions-file`, and batch stdin require valid UTF-8.
+Malformed bytes are rejected before any browser action runs. Save the input as
+UTF-8 and retry; valid Unicode values, including emoji and CJK text, are preserved.
 
 ## State and storage
 

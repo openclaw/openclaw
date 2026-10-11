@@ -137,6 +137,38 @@ it.each(
   }
 });
 
+it("sends strict=false when a Responses tool pattern uses a regex lookaround", async () => {
+  const server = await createResponsesLoopbackServer(completedResponseEvents);
+  configureAiTransportHost({ resolveOpenAIStrictToolSetting: () => true });
+  const parameters = {
+    type: "object",
+    properties: {
+      filename: { type: "string", pattern: "^(?![\\\\/])(?![A-Za-z]:)(?!.*\\.\\.).+$" },
+      folder: { type: "string" },
+      content: { type: "string" },
+    },
+    required: ["folder", "filename", "content"],
+    additionalProperties: false,
+  };
+  const context: Context = {
+    messages: [{ role: "user", content: "hello", timestamp: 1 }],
+    tools: [{ name: "create_file", description: "Create", parameters }],
+  };
+  try {
+    const stream = await createOpenAIResponsesTransportStreamFn()(responsesLoopbackModel, context, {
+      apiKey: "synthetic-key",
+      cacheRetention: "none",
+    });
+    expect((await stream.result()).stopReason).toBe("stop");
+    expect(server.requests[0]?.tools).toEqual([
+      { type: "function", name: "create_file", description: "Create", parameters, strict: false },
+    ]);
+  } finally {
+    configureAiTransportHost({});
+    await server.close();
+  }
+});
+
 it("reports one strict downgrade across Responses entrypoints without changing the wire schema", async () => {
   const server = await createResponsesLoopbackServer(completedResponseEvents);
   const diagnostics: Array<{ subsystem: string; message: string; data?: unknown }> = [];

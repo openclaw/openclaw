@@ -8,11 +8,7 @@ import * as originalCapture from "../commands/doctor-original-capture.js";
 import { preflightUpdateDoctorCli } from "../commands/doctor-update-schema-guard.js";
 import * as sqliteSnapshot from "../infra/sqlite-snapshot-source.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
-import {
-  createUpdateRun,
-  finishUpdateRun,
-  recordUpdateRunStep,
-} from "../infra/update-run-ledger.js";
+import { createUpdateRun, recordUpdateRunStep } from "../infra/update-run-ledger.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
 import { finalizeActiveDebugProxyCaptures } from "../proxy-capture/runtime-cleanup.js";
 import { initializeDebugProxyCaptureAsync } from "../proxy-capture/runtime.js";
@@ -24,8 +20,7 @@ import {
   openOpenClawAgentDatabase,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "../state/openclaw-agent-db.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
-import { withoutSessionEntrySnapshotsSchema } from "../state/openclaw-agent-session-snapshots-schema.js";
+import { OPENCLAW_AGENT_SCHEMA_V24_SQL } from "../state/openclaw-agent-schema-v24.test-support.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
@@ -85,6 +80,99 @@ describe("Doctor schema bumps under an updating parent", () => {
   });
 
   it.each([
+    "orphan",
+    "other foreign key",
+    "orphan and other foreign key",
+    "orphan with other foreign key",
+  ] as const)(
+    "repairs only orphan windows before backing up a shared-state upgrade (%s)",
+    async (damage) => {
+      vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "0");
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const shared = openOpenClawStateDatabase({ env: state.env }).path;
+        const agent = openOpenClawAgentDatabase({ agentId: "main", env: state.env }).path;
+        await closeOpenClawAgentDatabasesAsync();
+        await closeOpenClawStateDatabaseAsync();
+        setSchemaVersion(shared, 19);
+        {
+          using db = new DatabaseSync(shared);
+          db.exec("ALTER TABLE cron_run_receipts DROP COLUMN delivery_attempt_state");
+        }
+        const readRows = (db: DatabaseSync) => ({
+          nodes: db.prepare("SELECT * FROM session_nodes ORDER BY session_key").all(),
+          windows: db.prepare("SELECT * FROM session_windows ORDER BY session_id").all(),
+          events: db.prepare("SELECT * FROM transcript_events ORDER BY session_id, seq").all(),
+        });
+        let original: ReturnType<typeof readRows>;
+        {
+          using db = new DatabaseSync(agent);
+          db.exec(`PRAGMA foreign_keys = OFF;
+            INSERT INTO session_nodes(session_key, current_session_id, entry_json, updated_at)
+            VALUES ('agent:main:retained', 'retained', '{"sessionId":"retained","updatedAt":1}', 1);
+            INSERT INTO session_windows(session_id, session_key, created_at, updated_at)
+            VALUES ('retained', 'agent:main:retained', 1, 1);
+            INSERT INTO transcript_events(session_id, seq, event_json, created_at)
+            VALUES ('retained', 0, '{"type":"message","message":{"role":"user","content":"keep"}}', 1);`);
+          if (damage.includes("orphan")) {
+            db.exec(`INSERT INTO session_windows(session_id, session_key, created_at, updated_at)
+              VALUES ('orphan', 'agent:main:missing', 1, 1)`);
+          }
+          if (damage.includes("other")) {
+            db.prepare(
+              "UPDATE session_windows SET primary_conversation_id = 'missing' WHERE session_id = ?",
+            ).run(damage === "orphan with other foreign key" ? "orphan" : "retained");
+          }
+          original = readRows(db);
+        }
+        const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        const doctor = runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
+        if (damage === "orphan") {
+          await doctor;
+          expect(readDatabase(shared).version).toBe(20);
+          const migrationBackup = fs
+            .readdirSync(path.dirname(shared))
+            .find(
+              (name) =>
+                name.startsWith("openclaw.sqlite.pre-startup-migration-") && name.endsWith(".bak"),
+            );
+          expect(migrationBackup).toBeDefined();
+          expect(readDatabase(path.join(path.dirname(shared), migrationBackup!)).version).toBe(19);
+          expect(mocks.runContributions).toHaveBeenCalledOnce();
+          expect(runtime.log).toHaveBeenCalledWith(
+            expect.stringContaining("Removed 1 orphan session window(s)"),
+          );
+        } else {
+          await expect(doctor).rejects.toThrow(
+            /foreign_key_check.*Stop the Gateway.*doctor --fix.*restart/s,
+          );
+          expect(readDatabase(shared).version).toBe(19);
+          expect(mocks.runContributions).not.toHaveBeenCalled();
+        }
+        using db = new DatabaseSync(agent, { readOnly: true });
+        expect(readRows(db)).toEqual(
+          damage === "orphan"
+            ? {
+                ...original,
+                windows: original.windows.filter((row) => row.session_id !== "orphan"),
+              }
+            : original,
+        );
+        const backups = fs
+          .readdirSync(path.dirname(agent))
+          .filter((name) => name.startsWith("openclaw-session-window-recovery-"));
+        expect(backups).toHaveLength(damage.includes("orphan") ? 1 : 0);
+        if (backups[0]) {
+          using saved = new DatabaseSync(
+            path.join(path.dirname(agent), backups[0], "database.sqlite"),
+            { readOnly: true },
+          );
+          expect(readRows(saved)).toEqual(original);
+        }
+      });
+    },
+  );
+
+  it.each([
     { kind: "state", updaterVersion: "2026.9.2", missingMetadata: true },
     { kind: "agent", updaterVersion: "2026.9.2", missingMetadata: false },
     { kind: "agent", updaterVersion: "2026.9.2-rebuild.1", missingMetadata: false },
@@ -138,57 +226,25 @@ describe("Doctor schema bumps under an updating parent", () => {
   );
 
   it.each([
-    {
-      ledger: "running",
-      update: "1",
-      driver: "2026.9.2",
-      bump: true,
-      deferred: true,
-      probeCapture: true,
-    },
-    { ledger: "running", update: "1", driver: "2026.9.2-rebuild.1", bump: true, deferred: true },
-    { ledger: "missing", update: "1", driver: "2026.9.1", bump: true },
-    { ledger: "finished", update: "1", driver: "2026.9.2", bump: true, deferred: true },
-    { ledger: "running", update: "1", driver: "2026.9.3-beta.1", bump: true, probeCapture: true },
-    { ledger: "running", update: "1", driver: "2026.9.1", bump: true },
-    { ledger: "running", update: "1", driver: "unknown", bump: true },
-    { ledger: "running", update: "1", driver: "2026.9.2", bump: false },
-    { ledger: "running", update: undefined, driver: "2026.9.2", bump: true, deferred: true },
+    { driver: "2026.9.2", deferred: true },
+    { driver: "2026.9.3-beta.1", deferred: false },
   ])(
-    "completes real migration when permitted: %j",
-    async ({ ledger, update, driver, bump, deferred, probeCapture }) => {
-      vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", update);
+    "admits debug capture only after schema publication for $driver",
+    async ({ driver, deferred }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const captureSessionId = `doctor-readiness-${driver}`;
-        if (probeCapture) {
-          vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "1");
-          vi.stubEnv("OPENCLAW_DEBUG_PROXY_SESSION_ID", captureSessionId);
-          vi.stubEnv("OPENCLAW_DEBUG_PROXY_URL", undefined);
-          vi.stubEnv("OPENCLAW_DEBUG_PROXY_REQUIRE", "1");
-        }
+        vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "1");
+        vi.stubEnv("OPENCLAW_DEBUG_PROXY_SESSION_ID", captureSessionId);
+        vi.stubEnv("OPENCLAW_DEBUG_PROXY_URL", undefined);
+        vi.stubEnv("OPENCLAW_DEBUG_PROXY_REQUIRE", "1");
         const shared = openOpenClawStateDatabase({ env: state.env }).path;
         const run = createUpdateRun({ trigger: "cli", before: { version: driver } });
-        if (ledger === "finished") {
-          finishUpdateRun(run.runId, { status: "succeeded" });
-        }
         await closeOpenClawStateDatabaseAsync();
-        if (ledger === "missing") {
-          const db = new DatabaseSync(shared);
-          try {
-            db.exec("DROP TABLE update_runs");
-          } finally {
-            db.close();
-          }
-        }
-        if (bump) {
-          setSchemaVersion(shared, OPENCLAW_STATE_SCHEMA_VERSION - 1);
-        }
+        setSchemaVersion(shared, OPENCLAW_STATE_SCHEMA_VERSION - 1);
         mocks.runContributions.mockImplementation(async () => {
           const result = repairOpenClawStateDatabaseSchema({ env: state.env });
           expect(result.warnings).toEqual([]);
-          if (probeCapture) {
-            await initializeDebugProxyCaptureAsync("before-readiness");
-          }
+          await initializeDebugProxyCaptureAsync("before-readiness");
         });
         const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
         try {
@@ -197,9 +253,7 @@ describe("Doctor schema bumps under an updating parent", () => {
             nonInteractive: true,
           });
         } finally {
-          if (probeCapture) {
-            await finalizeActiveDebugProxyCaptures();
-          }
+          await finalizeActiveDebugProxyCaptures();
           await closeOpenClawStateDatabaseAsync();
         }
         expect(readDatabase(shared).version).toBe(
@@ -213,11 +267,9 @@ describe("Doctor schema bumps under an updating parent", () => {
             ),
           );
         }
-        if (probeCapture) {
-          expect(readDatabase(shared).captureSessions).toEqual(
-            deferred ? [] : [{ id: captureSessionId, mode: "cli" }],
-          );
-        }
+        expect(readDatabase(shared).captureSessions).toEqual(
+          deferred ? [] : [{ id: captureSessionId, mode: "cli" }],
+        );
         expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
       });
     },
@@ -288,14 +340,14 @@ describe("Doctor schema bumps under an updating parent", () => {
         }
         await closeOpenClawAgentDatabasesAsync();
         await closeOpenClawStateDatabaseAsync();
-        // Real v23 storage, not a v24 image with only its metadata downgraded.
+        // Frozen v24 storage preserves the exact input to the candidate schema migration.
         fs.unlinkSync(agent);
         const seed = new DatabaseSync(agent);
         try {
-          seed.exec(withoutSessionEntrySnapshotsSchema(OPENCLAW_AGENT_SCHEMA_SQL));
-          seed.exec(`PRAGMA user_version = 23;
+          seed.exec(OPENCLAW_AGENT_SCHEMA_V24_SQL);
+          seed.exec(`PRAGMA user_version = 24;
             INSERT INTO schema_meta(meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
-            VALUES ('primary', 'agent', 23, 'main', '2026.9.4', 1, 1)`);
+            VALUES ('primary', 'agent', 24, 'main', '2026.9.9', 1, 1)`);
           seed.exec(
             "INSERT INTO cache_entries(scope,key,value_json,expires_at,updated_at) VALUES('test','retained','{\"keep\":true}',NULL,1)",
           );
@@ -317,7 +369,7 @@ describe("Doctor schema bumps under an updating parent", () => {
               agentId: "main",
               path: agent,
               env: state.env,
-              schemaVersion: 23,
+              schemaVersion: 24,
             });
           }
           await closeOpenClawStateDatabaseAsync();

@@ -34,6 +34,7 @@ import * as stateOwners from "./gateway-state-owner.js";
 import { acquireGatewayStateOwner, tryAcquireGatewayStateOwner } from "./gateway-state-owner.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { corruptSqliteIndexKey } from "./sqlite-index-corruption.test-support.js";
+import * as snapshotSource from "./sqlite-snapshot-source.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import * as bootReader from "./update-managed-service-handoff-boot.js";
 
@@ -559,8 +560,18 @@ describe("Gateway owner lease", () => {
     });
   });
 
-  it("records the Gateway owner before listening and releases its identity with the lock", async () => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-gateway-owner-publication-") };
+  it("admits existing state without copying it and records the owner before listening", async () => {
+    let env: NodeJS.ProcessEnv;
+    {
+      await using owner = fixture();
+      env = owner.env;
+      seedOwner(env, { pid: 2_147_483_647 });
+    }
+    await closeOpenClawStateDatabaseAsync();
+    const snapshot = vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocationSync");
+    snapshot.mockImplementation(() => {
+      throw new Error("Gateway custody must not copy shared state for lease inspection");
+    });
     const lock = await acquireGatewayLock({
       env,
       allowInTests: true,
@@ -570,6 +581,7 @@ describe("Gateway owner lease", () => {
     if (!lock) {
       throw new Error("Expected gateway lock");
     }
+    snapshot.mockRestore();
     try {
       expect(readGatewayOwnerLease({ env })).toMatchObject({
         pid: process.pid,

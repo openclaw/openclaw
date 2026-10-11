@@ -13,6 +13,7 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import {
   normalizeThinkLevel,
   THINKING_LEVELS_HELP,
@@ -116,6 +117,10 @@ async function runModelRun(params: {
   });
   const hasExplicitProviderModelOverride = Boolean(explicitModelOverride);
   const imageFiles = await readModelRunImageFiles(params.files);
+  const inputs =
+    imageFiles.length > 0
+      ? { inputs: imageFiles.map((image) => ({ path: image.path, mimeType: image.mimeType })) }
+      : {};
   const messageContent =
     imageFiles.length > 0
       ? [
@@ -184,14 +189,28 @@ async function runModelRun(params: {
               },
             });
             const text = collectTextContentBlocks(result.content).join("").trim();
+            const detail = result.errorMessage?.trim();
+            const target = `for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}"${detail ? `: ${detail}` : ""}.`;
             if (!text) {
-              const providerErrorMessage = (result as { errorMessage?: unknown }).errorMessage;
-              const detail =
-                typeof providerErrorMessage === "string" && providerErrorMessage.trim()
-                  ? `: ${providerErrorMessage.trim()}`
+              // Keep AI runtime imports out of command registration and help loading.
+              const { hasOnlyAssistantReasoningContent, isReasoningOnlyLengthAssistantTurn } =
+                await import("@openclaw/ai/internal/shared");
+              // Failed or aborted streams can keep partial reasoning; report those as provider failures.
+              const completedWithoutError =
+                (result.stopReason === "stop" || result.stopReason === "length") && !detail;
+              if (completedWithoutError && hasOnlyAssistantReasoningContent(result)) {
+                const limitHint = isReasoningOnlyLengthAssistantTurn(result)
+                  ? " It stopped at the output token limit while reasoning; a lower --thinking level may leave room for text."
                   : "";
+                throw new Error(
+                  `Model returned reasoning but no text output ${target}${limitHint}`,
+                );
+              }
+              throw new Error(`No text output returned ${target}`);
+            }
+            if (result.stopReason === "error" || result.stopReason === "aborted") {
               throw new Error(
-                `No text output returned for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}"${detail}.`,
+                `Model run ${result.stopReason === "aborted" ? "aborted" : "failed"} ${target}`,
               );
             }
             return {
@@ -201,14 +220,7 @@ async function runModelRun(params: {
               provider: prepared.selection.provider,
               model: prepared.selection.modelId,
               attempts: [],
-              ...(imageFiles.length > 0
-                ? {
-                    inputs: imageFiles.map((image) => ({
-                      path: image.path,
-                      mimeType: image.mimeType,
-                    })),
-                  }
-                : {}),
+              ...inputs,
               outputs: [
                 {
                   text,
@@ -237,16 +249,9 @@ async function runModelRun(params: {
   const sessionId = `model-run-${randomUUID()}`;
   const sessionKey = buildExplicitSessionIdSessionKey({ agentId, sessionId });
   const response: {
-    result?: {
-      payloads?: Array<{ text?: string; mediaUrl?: string | null; mediaUrls?: string[] }>;
-      meta?: {
-        agentMeta?: {
-          provider?: string;
-          model?: string;
-          fallbackAttempts?: Array<Record<string, unknown>>;
-        };
-      };
-    };
+    status?: string;
+    summary?: string;
+    result?: EmbeddedAgentRunResult;
   } = await callGateway({
     method: "agent",
     params: {
@@ -277,6 +282,13 @@ async function runModelRun(params: {
     mode: hasModelOverride ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
     ...(hasModelOverride ? { scopes: [ADMIN_SCOPE] } : {}),
   });
+  if (response.status && response.status !== "ok" && response.status !== "completed") {
+    throw new Error(
+      response.result?.meta?.error?.message ||
+        response.summary ||
+        `Gateway model run ${response.status}.`,
+    );
+  }
   return {
     ok: true,
     capability: "model.run",
@@ -289,14 +301,7 @@ async function runModelRun(params: {
       mediaUrl: payload.mediaUrl,
       mediaUrls: payload.mediaUrls,
     })),
-    ...(imageFiles.length > 0
-      ? {
-          inputs: imageFiles.map((image) => ({
-            path: image.path,
-            mimeType: image.mimeType,
-          })),
-        }
-      : {}),
+    ...inputs,
   } satisfies CapabilityEnvelope;
 }
 

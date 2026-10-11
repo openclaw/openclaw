@@ -227,7 +227,6 @@ describe("wrapStreamFnPromoteStandaloneTextToolCalls", () => {
       type: "toolCall",
       name: "exec",
       arguments: { command: "cat /proc/mounts 2>/dev/null | head -20" },
-      partialArgs: '{"command":"cat /proc/mounts 2>/dev/null | head -20"}',
     });
     expect(String(expectDefined(content[1], "content[1] test invariant").id)).toMatch(
       /^call_[a-f0-9]{24}$/,

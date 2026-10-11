@@ -501,12 +501,10 @@ function runAgentHarnessSecretInput(
     throw new Error(`session already has a pending agent input request: ${sessionKey}`);
   }
   return new Promise((resolve) => {
-    let settled = false;
     const finish = (text?: string): boolean => {
-      if (settled || pendingAgentQuestions.get(sessionKey) !== state) {
+      if (pendingAgentQuestions.get(sessionKey) !== state) {
         return false;
       }
-      settled = true;
       pendingAgentQuestions.delete(sessionKey);
       clearTimeout(timeout);
       params.signal?.removeEventListener("abort", onAbort);

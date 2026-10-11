@@ -20,7 +20,10 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import { enablePluginWithCapabilityConsent } from "./enable.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
-import { applyProviderAuthConfigPatch } from "./provider-auth-choice-helpers.js";
+import {
+  applyProviderAuthConfigPatch,
+  restoreAgentsDefaultsModel,
+} from "./provider-auth-choice-helpers.js";
 import { resolveManifestProviderAuthChoice } from "./provider-auth-choices.js";
 import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
 import { runProviderPluginAuthMethodUnpersisted } from "./provider-auth-method.js";
@@ -84,25 +87,9 @@ function restoreConfiguredPrimaryModel(
   nextConfig: OpenClawConfig,
   originalConfig: OpenClawConfig,
 ): OpenClawConfig {
-  const originalModel = originalConfig.agents?.defaults?.model;
-  const nextAgents = nextConfig.agents;
-  const nextDefaults = nextAgents?.defaults;
-  if (!nextDefaults) {
-    return nextConfig;
-  }
-  const defaults = { ...nextDefaults };
-  if (originalModel === undefined) {
-    delete defaults.model;
-  } else {
-    defaults.model = originalModel;
-  }
-  return {
-    ...nextConfig,
-    agents: {
-      ...nextAgents,
-      defaults,
-    },
-  };
+  return nextConfig.agents?.defaults
+    ? restoreAgentsDefaultsModel(nextConfig, originalConfig.agents?.defaults?.model)
+    : nextConfig;
 }
 
 function resolveConfiguredDefaultModelPrimary(cfg: OpenClawConfig): string | undefined {
@@ -118,6 +105,18 @@ function resolveConfiguredDefaultModelPrimary(cfg: OpenClawConfig): string | und
 
 function withProviderPluginId(provider: ProviderPlugin, pluginId: string): ProviderPlugin {
   return provider.pluginId === pluginId ? provider : { ...provider, pluginId };
+}
+
+function assertUtilityModelSeparation(
+  config: OpenClawConfig,
+  modelTarget: "utility" | undefined,
+): void {
+  if (modelTarget === "utility") {
+    const error = resolveUtilityModelSeparationError(config);
+    if (error) {
+      throw new Error(error);
+    }
+  }
 }
 export function applyProviderPluginAuthMethodResultConfig(params: {
   config: OpenClawConfig;
@@ -279,12 +278,10 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
         env: params.env,
         includeUntrustedWorkspacePlugins: false,
       });
-      if ((manifestAuthChoice ?? installCatalogEntry)?.modelTarget === "utility") {
-        const error = resolveUtilityModelSeparationError(params.config);
-        if (error) {
-          throw new Error(error);
-        }
-      }
+      assertUtilityModelSeparation(
+        params.config,
+        (manifestAuthChoice ?? installCatalogEntry)?.modelTarget,
+      );
       const resolveChoice = (providers: ProviderPlugin[], config: OpenClawConfig) =>
         resolveProviderPluginChoice({
           providers,
@@ -409,12 +406,7 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
           ? null
           : preparedWithoutAuthProfiles({ config: nextConfig, retrySelection: true });
       }
-      if (resolved.wizard?.modelTarget === "utility") {
-        const error = resolveUtilityModelSeparationError(params.config);
-        if (error) {
-          throw new Error(error);
-        }
-      }
+      assertUtilityModelSeparation(params.config, resolved.wizard?.modelTarget);
       if (nextConfig === params.config && enabledConfig !== params.config) {
         nextConfig = enabledConfig;
       }
@@ -442,12 +434,7 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
       ...(params.signal ? { signal: params.signal } : {}),
       ...(params.isRemote !== undefined ? { isRemote: params.isRemote } : {}),
       beforePersistentEffect: async () => {
-        if (resolved.wizard?.modelTarget === "utility") {
-          const error = resolveUtilityModelSeparationError(params.config);
-          if (error) {
-            throw new Error(error);
-          }
-        }
+        assertUtilityModelSeparation(params.config, resolved.wizard?.modelTarget);
         await params.beforePersistentEffect?.();
       },
       secretInputMode: params.opts?.secretInputMode,

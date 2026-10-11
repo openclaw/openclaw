@@ -556,10 +556,7 @@ export async function acquireGatewayLock(
             }
             await assertHistoricalGatewayOwnerStopped(paths, opts, projection);
             await owner.run(() =>
-              assertGatewayOwnerLeaseStopped(
-                env,
-                role === "sqlite-maintenance" ? owner : undefined,
-              ),
+              assertGatewayOwnerLeaseStopped(env, owner, role === "sqlite-maintenance"),
             );
             if (previousOwner) {
               // Policy reads borrow the newly acquired custody before releasing the old root.

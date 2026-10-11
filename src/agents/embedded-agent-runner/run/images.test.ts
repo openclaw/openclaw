@@ -4,7 +4,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { createNoisyPngBuffer } from "../../../../test/helpers/image-fixtures.js";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { buildInboundMediaNoteProjection } from "../../../auto-reply/media-note.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
 import {
@@ -26,6 +28,7 @@ import {
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const TINY_GIF_BUFFER = Buffer.from([
   71, 73, 70, 56, 57, 97, 1, 0, 1, 0, 128, 0, 0, 0, 0, 0, 255, 255, 255, 33, 249, 4, 1, 0, 0, 0, 0,
   44, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 68, 1, 0, 59,
@@ -526,6 +529,24 @@ describe("detectAndLoadPromptImages", () => {
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
+  });
+
+  it("drops a header-valid truncated image and keeps a complete one", async () => {
+    const workspaceDir = tempDirs.make("openclaw-truncated-image-");
+    const png = createNoisyPngBuffer(64, 64);
+    const truncatedPath = path.join(workspaceDir, "truncated.png");
+    const validPath = path.join(workspaceDir, "valid.png");
+    await fs.writeFile(truncatedPath, png.subarray(0, Math.floor(png.length / 2)));
+    await fs.writeFile(validPath, png);
+
+    const result = await detectAndLoadPromptImages({
+      prompt: `Inspect ${truncatedPath} and ${validPath}`,
+      workspaceDir,
+      model: { input: ["text", "image"] },
+      workspaceOnly: true,
+    });
+
+    expect(result.images.map((image) => image.data)).toEqual([png.toString("base64")]);
   });
 });
 

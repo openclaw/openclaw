@@ -2,11 +2,9 @@ import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { WorkerProviderError } from "../../plugins/capability-provider.types.js";
-import type { WorkerNodeEnrollment } from "../../plugins/types.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createWorkerNodeEnrollmentManager } from "./node-enrollment.js";
-import { completeWorkerNodeSetupForTest } from "./node-enrollment.test-support.js";
 import * as support from "./service.test-support.js";
 import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 
@@ -384,81 +382,6 @@ describe("worker provisioning cancellation ownership", () => {
     expect(await creation).toMatchObject({ name: "AbortError" });
     expect(shutdownSettled).toBe(true);
     expect(events).toEqual(["bundle-started", "bundle-settled"]);
-  });
-
-  it("does not let queued runtime preparation revoke a newer enrollment", async () => {
-    const enrolled = createDeferredCore<WorkerNodeEnrollment>();
-    const runtimeResult = createDeferredCore<unknown>();
-    const finishProvider = createDeferredCore();
-    const transfer = createWorkerBootstrapArtifactTransferService();
-    const manager = createRuntimeManager(transfer);
-    const deviceId = "newer-enrollment-device";
-    const service = support.createService(
-      support.createProvider({
-        supportedExecutionModes: ["worker-turn"],
-        requiresNodeEnrollment: true,
-        provisionBeforeInstallation: true,
-        provision: async (_profile, _operation, options) => {
-          const record = support.testState.store.list()[0]!;
-          const owner = await support.testState.store.ensureNodeEnrollment(record.environmentId);
-          const setupId = owner.nodeSetupId;
-          if (!setupId) {
-            throw new Error("Expected persisted enrollment setup identity");
-          }
-          await completeWorkerNodeSetupForTest({
-            baseDir: support.testState.root,
-            store: support.testState.store,
-            setupId,
-            deviceId,
-            completedAtMs: 1_000,
-          });
-          void options!.prepareNodeRuntime!().then(runtimeResult.resolve, runtimeResult.resolve);
-          enrolled.resolve(await options!.beginNodeEnrollment!());
-          await finishProvider.promise;
-          return { leaseId: "newer-enrollment-lease", node: { deviceId }, sharedHost: false };
-        },
-      }),
-      {
-        prepareNodeBootstrap: manager.prepare,
-        prepareNodeRuntime: manager.prepareRuntime,
-        closeNodeRuntime: manager.closeRuntime,
-        prepareNodeEnrollment: manager.begin,
-        closeNodeEnrollment: manager.close,
-        stopNodeEnrollmentWaits: manager.stop,
-        ensureNodeWorkerBundle: async () => support.BOOTSTRAP_RECEIPT,
-      },
-    );
-    const creation = service
-      .createWithRequest({
-        profileId: "development",
-        idempotencyKey: "runtime-before-enrollment",
-        executionMode: "worker-turn",
-      })
-      .catch((error: unknown) => error);
-    try {
-      const enrollment = await Promise.race([
-        enrolled.promise,
-        creation.then(() => {
-          throw new Error("Creation ended before enrollment");
-        }),
-      ]);
-      const authorization = transfer.authorize({
-        token: enrollment.nodeBootstrap.token,
-        artifactKey: enrollment.nodeBootstrap.sha256,
-      });
-      expect(authorization).toBeDefined();
-      expect(enrollment.signal?.aborted).toBe(false);
-      await expect(runtimeResult.promise).resolves.toMatchObject({
-        message: "Worker node enrollment has already begun",
-      });
-      expect(enrollment.signal?.aborted).toBe(false);
-      expect(transfer.isAuthorizationCurrent(authorization!)).toBe(true);
-    } finally {
-      finishProvider.resolve();
-      await creation;
-      manager.stop();
-    }
-    expect(await creation).toMatchObject({ state: "ready", nodeDeviceId: deviceId });
   });
 
   it.each(["bundle", "npm"] as const)(

@@ -345,41 +345,40 @@ it("joins private maintenance timer cancellation before retiring its native hand
   ).toEqual({ value_json: "true" });
 });
 
-it.for(["parent", "independent"] as const)(
-  "keeps periodic maintenance after a %s caller adopts its cached handle",
-  async (adopter, { signal }) => {
-    const databasePath = path.join(tempDirs.make("state-wal-adopted-owner-"), "openclaw.sqlite");
-    const parent = createOpenClawDatabaseMaintenanceScope();
-    const child = parent.run(() => createOpenClawDatabaseMaintenanceScope());
-    const { database, periodic } = child.run(() => openWithPeriodicMaintenance(databasePath));
-    const prepare = vi.spyOn(database.db, "prepare");
-    const execute = vi.spyOn(database.db, "exec");
-    const observed = observeCheckpoints(database.path);
-    let periodicWork: Promise<unknown> | undefined;
-    try {
-      const adopt = () => openOpenClawStateDatabase({ path: databasePath });
-      expect(adopter === "parent" ? parent.run(adopt) : adopt()).toBe(database);
-      await child.close();
-      expect(database.db.isOpen).toBe(true);
-      prepare.mockClear();
-      execute.mockClear();
-      periodicWork = Promise.resolve(periodic());
-      await observed.wait(signal);
-      await periodicWork;
-      expect(database.walMaintenance.health).toMatchObject({ state: "complete", warning: false });
-      expect(prepare).not.toHaveBeenCalled();
-      expect(execute).not.toHaveBeenCalled();
-    } finally {
-      await periodicWork;
-      observed.stop();
-      prepare.mockRestore();
-      execute.mockRestore();
-      await child.close();
-      await parent.close();
-      await closeOpenClawStateDatabaseByPathAsync(database.path);
-    }
-  },
-);
+it("keeps periodic maintenance after a parent caller adopts its cached handle", async ({
+  signal,
+}) => {
+  const databasePath = path.join(tempDirs.make("state-wal-adopted-owner-"), "openclaw.sqlite");
+  const parent = createOpenClawDatabaseMaintenanceScope();
+  const child = parent.run(() => createOpenClawDatabaseMaintenanceScope());
+  const { database, periodic } = child.run(() => openWithPeriodicMaintenance(databasePath));
+  const prepare = vi.spyOn(database.db, "prepare");
+  const execute = vi.spyOn(database.db, "exec");
+  const observed = observeCheckpoints(database.path);
+  let periodicWork: Promise<unknown> | undefined;
+  try {
+    const adopt = () => openOpenClawStateDatabase({ path: databasePath });
+    expect(parent.run(adopt)).toBe(database);
+    await child.close();
+    expect(database.db.isOpen).toBe(true);
+    prepare.mockClear();
+    execute.mockClear();
+    periodicWork = Promise.resolve(periodic());
+    await observed.wait(signal);
+    await periodicWork;
+    expect(database.walMaintenance.health).toMatchObject({ state: "complete", warning: false });
+    expect(prepare).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  } finally {
+    await periodicWork;
+    observed.stop();
+    prepare.mockRestore();
+    execute.mockRestore();
+    await child.close();
+    await parent.close();
+    await closeOpenClawStateDatabaseByPathAsync(database.path);
+  }
+});
 
 it("refuses independent adoption after its cached handle starts closing", async () => {
   const databasePath = path.join(tempDirs.make("state-wal-closing-owner-"), "openclaw.sqlite");
@@ -540,49 +539,43 @@ it.runIf(process.platform !== "win32")(
   },
 );
 
-it.each(["synchronous", "asynchronous"] as const)(
-  "cancels queued periodic maintenance during %s close without replaying it",
-  async (mode) => {
-    const { database, periodic } = openWithPeriodicMaintenance(
-      path.join(tempDirs.make("state-wal-close-"), "openclaw.sqlite"),
-    );
-    database.db
-      .prepare(
-        "INSERT INTO diagnostic_events(scope,event_key,payload_json,created_at) VALUES(?,?,?,?)",
-      )
-      .run("maintenance-close", "preserved", "{}", 1);
-    const { observations, stop } = observeCheckpoints(database.path);
-    const periodicWork: Promise<unknown>[] = [];
+it("cancels queued periodic maintenance during synchronous close without replaying it", async () => {
+  const { database, periodic } = openWithPeriodicMaintenance(
+    path.join(tempDirs.make("state-wal-close-"), "openclaw.sqlite"),
+  );
+  database.db
+    .prepare(
+      "INSERT INTO diagnostic_events(scope,event_key,payload_json,created_at) VALUES(?,?,?,?)",
+    )
+    .run("maintenance-close", "preserved", "{}", 1);
+  const { observations, stop } = observeCheckpoints(database.path);
+  const periodicWork: Promise<unknown>[] = [];
+  try {
+    periodicWork.push(Promise.resolve(periodic()));
+    periodicWork.push(Promise.resolve(periodic()));
+    expect(observations).toEqual([]);
+    const closed = closeOpenClawStateDatabaseByPath(database.path);
+    expect(closed).toBe(true);
+    expect(database.db.isOpen).toBe(false);
+    expect(observations).toEqual(["complete"]);
+    periodicWork.push(Promise.resolve(periodic()));
+    await Promise.all(periodicWork);
+    expect(observations).toEqual(["complete"]);
+    const reopened = openOpenClawStateDatabase({ path: database.path });
+    expect(
+      reopened.db
+        .prepare("SELECT event_key FROM diagnostic_events WHERE scope=?")
+        .all("maintenance-close"),
+    ).toEqual([{ event_key: "preserved" }]);
+  } finally {
+    stop();
     try {
-      periodicWork.push(Promise.resolve(periodic()));
-      periodicWork.push(Promise.resolve(periodic()));
-      expect(observations).toEqual([]);
-      const closed =
-        mode === "synchronous"
-          ? closeOpenClawStateDatabaseByPath(database.path)
-          : await closeOpenClawStateDatabaseByPathAsync(database.path);
-      expect(closed).toBe(true);
-      expect(database.db.isOpen).toBe(false);
-      expect(observations).toEqual(["complete"]);
-      periodicWork.push(Promise.resolve(periodic()));
-      await Promise.all(periodicWork);
-      expect(observations).toEqual(["complete"]);
-      const reopened = openOpenClawStateDatabase({ path: database.path });
-      expect(
-        reopened.db
-          .prepare("SELECT event_key FROM diagnostic_events WHERE scope=?")
-          .all("maintenance-close"),
-      ).toEqual([{ event_key: "preserved" }]);
+      await closeOpenClawStateDatabaseByPathAsync(database.path);
     } finally {
-      stop();
-      try {
-        await closeOpenClawStateDatabaseByPathAsync(database.path);
-      } finally {
-        await Promise.all(periodicWork);
-      }
+      await Promise.all(periodicWork);
     }
-  },
-);
+  }
+});
 
 it("leaves raw access sole custody only after the orderly close joins worker retirement", async () => {
   const root = tempDirs.make("state-wal-worker-retirement-");

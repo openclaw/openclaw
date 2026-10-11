@@ -3,7 +3,7 @@ summary: "Generated inventory of OpenClaw plugins shipped in core, published ext
 read_when:
   - You are deciding whether a plugin ships in the core npm package or installs separately
   - You are updating bundled plugin package metadata or release automation
-  - You need the canonical internal vs external plugin list
+  - You need the current internal vs external plugin list
 title: "Plugin inventory"
 ---
 

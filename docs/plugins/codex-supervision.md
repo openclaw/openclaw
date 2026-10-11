@@ -19,7 +19,7 @@ Supported actions depend on the source host and its capabilities:
   its bounded persisted user and assistant history. The first message starts a
   native snapshot fork, then starts the full Codex harness thread with exactly
   the model and provider that Codex App Server selected for that fork. Later
-  turns restore the canonical native thread's persisted pair while the
+  turns restore the primary native thread's persisted pair while the
   supervised binding prevents OpenClaw from substituting another runtime,
   model, or fallback. A separate native Codex control can still change that
   persisted pair. An already-created branch opens its existing Chat.
@@ -93,7 +93,7 @@ automatically in the default hybrid reload mode; see
 With no explicit `appServer` connection settings, supervision uses managed
 stdio connections for the available local Codex stores. The catalog combines
 the process user's `CODEX_HOME` with existing `codex-home` stores under configured
-OpenClaw agent directories, deduplicates canonical paths, and assigns each store
+OpenClaw agent directories, deduplicates resolved filesystem paths, and assigns each store
 an opaque local host id. Each store gets its own App Server connection. Its path
 is never exposed in the catalog. List, read, continue, archive, adopt, and
 terminal resume keep the selected source while retaining the explicit OpenClaw
@@ -112,7 +112,7 @@ agent runs retain their own credential-import and authentication requirements.
 
 A Gateway-local Chat adopted from the **Codex** sidebar group is not an ordinary harness session.
 Its private supervision binding uses the supervision connection for source
-reads, canonical branch creation, history injection, and every later turn. With
+reads, primary branch creation, history injection, and every later turn. With
 the default local connection, that preserves the native user Codex home, auth,
 and provider configuration without changing the default for other sessions.
 Watched adopted Chats also participate in [session state awareness](/concepts/session-state).
@@ -124,8 +124,11 @@ treats a thread that its supervision App Server reports as `notLoaded` as
 **Stored / activity unknown**, not as idle.
 
 Apply the same opt-in on every headless node host whose sessions should appear.
-The native OpenClaw macOS app reads the same local setting when it advertises
-its Codex catalog to the paired Gateway. That paired native Mac catalog supports
+The native OpenClaw macOS app uses the local `sessionCatalog.enabled` setting
+when it advertises its Codex catalog to the paired Gateway; enabling agent-facing
+`supervision` tools is not required. An explicit `sessionCatalog.enabled: false`
+keeps the catalog disabled, including the macOS first-run default before opt-in.
+That paired native Mac catalog supports
 only the default or explicit `appServer.transport: "stdio"` with an unset or
 explicit `appServer.homeScope: "user"`. `command`, `args`, and `clearEnv` are
 honored for that stdio process. If the Mac config selects `"unix"`,
@@ -306,7 +309,7 @@ entry, mirrors bounded user and assistant history through the source's last
 terminal persisted turn (completed, interrupted, or failed), records a pending
 harness branch, and forwards your message to the Chat. The generic model picker
 stays locked.
-Branch preparation does not resume the source or start the canonical harness
+Branch preparation does not resume the source or start the primary harness
 thread; the forwarded message starts that work. Continuing the same source
 opens its existing Chat instead of creating another branch.
 
@@ -321,11 +324,11 @@ real approval, elicitation, event, and delivery handlers. It uses an ephemeral
 native fork on the supervision connection to pin the source snapshot without
 supplying a model or provider override. Codex App Server selects both from its
 current native configuration and returns the actual selection. OpenClaw confirms
-the check's subscription is released before creating the canonical branch. The
+the check's subscription is released before creating the primary branch. The
 check never becomes stored history or an archive artifact. On that same
-connection, OpenClaw starts the canonical `appServer`-source full harness thread
+connection, OpenClaw starts the primary `appServer`-source full harness thread
 under its cwd and runtime policy with exactly that returned pair, injects the
-bounded visible history, and commits the branch binding. The canonical thread
+bounded visible history, and commits the branch binding. The primary thread
 has the full OpenClaw harness tool surface. This is a visible-history branch, not
 a full native rollout clone: source reasoning, tool calls, and tool results are
 omitted. This and every later turn stays on the supervised Codex connection
@@ -334,9 +337,9 @@ rather than another OpenClaw model runtime or the ordinary agent-home harness.
 The returned selection is not proof of the source's historical model. If the
 current native configuration differs from the model recorded for the source's
 last turn, Codex emits its normal model-difference warning. OpenClaw uses the
-returned pair for the canonical thread start. Codex persists that canonical
+returned pair for the primary thread start. Codex persists that primary
 thread's native model and provider, and later resumes preserve them because
-OpenClaw omits model and provider overrides. If the canonical thread is changed
+OpenClaw omits model and provider overrides. If the primary thread is changed
 through a separate native Codex control, OpenClaw accepts Codex's persisted
 selection. OpenClaw never substitutes its outer model or fallback chain.
 
@@ -351,12 +354,11 @@ ordinary session when you want a different model or fresh thread.
 
 **Fork from here** keeps the source connection and model-locked harness without
 changing the original source or parent Chat. Original imported messages and
-canonical conversation messages use different native flows. See
+OpenClaw conversation messages use different native flows. See
 [Fork a message in a supervised Chat](/plugins/codex-supervision#fork-a-message-in-a-supervised-chat).
 
 Keep supervision enabled for this Chat. If supervision is disabled or its
-stored connection binding becomes unavailable or inconsistent, the turn fails
-closed instead of moving to an ordinary agent-home session.
+stored connection binding becomes unavailable or inconsistent, the turn stops instead of moving to an ordinary agent-home session.
 
 A new adoption snapshots the native title as a trimmed display name, capped at
 500 UTF-16 code units without splitting surrogate pairs. Native titles can be
@@ -370,7 +372,7 @@ or local label.
 Disabling or uninstalling the `codex` plugin does not release that ownership or
 make the Chat eligible for another model. The locked Chat remains preserved but
 unavailable. Reinstall or re-enable the same plugin, confirm runtime application,
-then resume it. This deliberate fail-closed behavior prevents retention cleanup or a
+then resume it. Keeping the Chat unavailable prevents retention cleanup or a
 temporary plugin outage from silently orphaning the native binding.
 
 The `codex_threads` agent tool follows the same boundary. It cannot attach a
@@ -383,12 +385,12 @@ archive of an unrelated unowned thread require
 `allowWriteControls`. Neither option bypasses the locked binding.
 
 OpenClaw does not subscribe to or answer approval requests while merely listing
-the source thread or displaying the pending Chat. Starting a distinct canonical
+the source thread or displaying the pending Chat. Starting a distinct primary
 harness thread on the first turn lets another Codex process keep owning the
 source without creating competing rollout writers.
 
 The original CLI, VS Code, Atlas, or ChatGPT source remains visible to native
-clients and the OpenClaw catalog. The canonical branch is stored as a native
+clients and the OpenClaw catalog. The primary branch is stored as a native
 Codex thread, but its source kind is `appServer`. Codex Desktop or another
 native client may filter that source kind, so the branch itself is not guaranteed
 to appear in every native history view.
@@ -409,25 +411,25 @@ Forking an original imported user message keeps the original-source flow: the
 source must still be readable, and the child's first turn materializes its
 bounded imported history.
 
-Forking a user message created in the canonical OpenClaw conversation instead
+Forking a user message created in the OpenClaw conversation instead
 creates a native child immediately, cut before that native turn. Codex retains
 its raw history, including the originally injected prefix, without another
 history import. The local Chat copies only the verified display prefix before
 the selected message and keeps the original source link. Activity monitoring
 starts after the retained native prefix, so inherited messages do not appear as
-new human input. This canonical cut does not require the original imported
+new human input. This native-history cut does not require the original imported
 source to remain available.
 
-New canonical user turns record native prompt provenance on the existing Chat
+New OpenClaw user turns record native prompt provenance on the existing Chat
 message after Codex accepts the prompt. This preserves the message ID, text,
-timestamp, sender metadata, and position. Older canonical turns that lack this
+timestamp, sender metadata, and position. Older OpenClaw turns that lack this
 provenance remain unverifiable: matching text or an adjacent assistant reply
 cannot establish the missing native boundary. A later verified turn does not
 repair an earlier unverifiable prefix. Start a fresh Chat from the original
 source, or fork an original imported message while that source remains
-available, then create new canonical turns. OpenClaw does not backfill old rows.
+available, then create new OpenClaw turns. OpenClaw does not backfill old rows.
 
-Canonical message forks use the shipping Codex App Server's developer-message
+OpenClaw message forks use the shipping Codex App Server's developer-message
 API. OpenClaw keeps the complete current generic instructions in native thread
 configuration and appends one developer message that replaces earlier
 OpenClaw-supplied generic policy, including removed sections or an explicit
@@ -441,7 +443,7 @@ even if the user turn is rejected or never starts. **Fork from here** excludes
 the selected native user turn. It does not erase configuration updates recorded
 before that turn. The refresh creates no user message or extra model turn.
 
-Canonical message forks require Codex 0.153.0 or newer and native model metadata.
+OpenClaw message forks require Codex 0.153.0 or newer and native model metadata.
 They use the source thread's current model selection when loaded in the selected
 App Server, or its latest persisted selection when unloaded. If Codex cannot
 report that selection, update Codex or fork an original imported message instead.
@@ -463,7 +465,7 @@ that is unavailable to a nonowner or a closed run remains unavailable, while the
 native descendant retains its catalog and history across turns and restarts.
 
 A creator-required sandbox needs a host-provisioned environment and is therefore
-not eligible for this direct canonical fork. Codex workspace-write alone does
+not eligible for this direct OpenClaw fork. Codex workspace-write alone does
 not satisfy that isolation requirement.
 
 Later turns require native unload evidence before applying current harness
@@ -494,7 +496,7 @@ through native collaboration.
 Archive is unavailable when the fresh read reports the session active or in an
 error state, when it belongs to a paired node, or while a newly created
 supervised Chat still has a pending branch from that source. Send the Chat's
-first message to materialize its canonical branch before archiving the source.
+first message to materialize its primary branch before archiving the source.
 Archive is also blocked when OpenClaw knows that an active binding owns the
 exact target thread or any spawned descendant, including archived descendants.
 OpenClaw checks both descendant collections for active work and follows the
@@ -542,7 +544,7 @@ capabilities. Older nodes remain available for browsing; the existing Chat is
 preserved. Legacy CLI bindings that resume the node's native user home retain
 their existing behavior.
 
-New paired-node Chats pin the selected canonical Codex home as well as the node
+New paired-node Chats pin the selected resolved Codex home as well as the node
 and thread. Changing a node's catalog source cannot redirect an existing Chat,
 even when the replacement home contains a copied thread with the same ID.
 Restore the original source to continue that Chat, or select the replacement
@@ -577,7 +579,7 @@ require owner/admin authority and are blocked while OpenClaw sandboxing is activ
 
 Avoid running the same thread in another Codex client while using this Chat.
 The node prevents overlapping OpenClaw resume turns for the same thread and
-canonical store within its own process, but
+resolved store within its own process, but
 `notLoaded` does not prove that another native client is idle and there is no
 cross-process runner lease. Paired-node **Archive** remains unavailable,
 regardless of continuation or terminal capabilities.
@@ -604,7 +606,7 @@ native-execution owner/admin check.
 autonomous agent and standalone MCP tools. Both default to `false`. With
 supervision enabled, `codex_threads` removes transcript previews and turns from
 list and metadata-only read results unless raw transcripts are allowed. A
-turn-inclusive read fails closed. Every fork, rename, archive, and unarchive
+turn-inclusive read is rejected. Every fork, rename, archive, and unarchive
 requires write controls. These options do not gate authenticated Control UI
 transcript viewing and do not bypass binding, host, status, or confirmation checks.
 
@@ -638,7 +640,7 @@ do not resume or start an idle source thread.
 
 `openclaw doctor --fix` moves a retired `codex-supervisor` entry, its endpoint
 and permission fields, and plugin allow/deny policy references into the official
-`codex` plugin without overwriting explicit canonical settings. The standalone
+`codex` plugin without overwriting explicit current settings. The standalone
 compatibility MCP adapter continues to load the same five tools from that
 plugin. Legacy policy environment variables apply only inside that trusted
 adapter.

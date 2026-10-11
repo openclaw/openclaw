@@ -1,3 +1,6 @@
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import nodePath from "node:path";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -302,6 +305,161 @@ describe("Mattermost send authority lifecycle", () => {
         } finally {
           release.resolve();
         }
+      },
+    );
+  });
+});
+
+describe("Mattermost media limits at the upload boundary", () => {
+  it("rejects oversized source bytes without uploading or falling back to a text post", async () => {
+    const directory = await realpath(await mkdtemp(nodePath.join(os.tmpdir(), "mattermost-cap-")));
+    const file = nodePath.join(directory, "attachment.txt");
+    const writes: string[] = [];
+    setMattermostRuntime(createPluginRuntimeMock());
+    try {
+      await withServer(
+        (request, response) => {
+          request.resume();
+          request.on("end", () => {
+            writes.push(request.url ?? "");
+            response.writeHead(201, { "content-type": "application/json" });
+            response.end(
+              JSON.stringify(
+                request.url === "/api/v4/files"
+                  ? { file_infos: [{ id: "file-cap" }] }
+                  : { id: "post-cap", channel_id: "aaaaaaaaaaaaaaaaaaaaaaaaaa" },
+              ),
+            );
+          });
+        },
+        async (baseUrl) => {
+          const opts = {
+            cfg: {
+              channels: {
+                mattermost: {
+                  baseUrl,
+                  botToken: "fixture",
+                  mediaMaxMb: 10,
+                  network: { dangerouslyAllowPrivateNetwork: true },
+                  accounts: { Limited: { mediaMaxMb: 1 / 1024 } },
+                },
+              },
+            },
+            accountId: "limited",
+            mediaUrl: file,
+            mediaLocalRoots: [directory],
+          };
+          await writeFile(file, "x".repeat(1536));
+          await expect(
+            sendMessageMattermost("channel:aaaaaaaaaaaaaaaaaaaaaaaaaa", "caption", opts),
+          ).rejects.toThrow(/exceeds.*limit/i);
+          expect(writes).toEqual([]);
+          await writeFile(file, "x".repeat(512));
+          const result = await sendMessageMattermost(
+            "channel:aaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "caption",
+            opts,
+          );
+          expect(result.messageId).toBe("post-cap");
+          expect(writes).toEqual(["/api/v4/files", "/api/v4/posts"]);
+        },
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+const USER_ID = "abcdefghijklmnopqrstuvwxyz";
+const BOT_ID = "bcdefghijklmnopqrstuvwxyza";
+const LOOPBACK_CHANNEL_ID = "cdefghijklmnopqrstuvwxyzab";
+
+describe("Mattermost send target policy over real HTTP", () => {
+  it("resolves cold and warm bare users with the selected account policy", async () => {
+    setMattermostRuntime(createPluginRuntimeMock());
+    const requests: Array<{ path: string; body: unknown; authorization?: string }> = [];
+    await withServer(
+      (request, response) => {
+        const chunks: Buffer[] = [];
+        request.on("data", (chunk: Buffer) => chunks.push(chunk));
+        request.on("end", () => {
+          const raw = Buffer.concat(chunks).toString();
+          const body = raw
+            ? (JSON.parse(raw) as { channel_id?: string; message?: string })
+            : undefined;
+          const requestPath = request.url ?? "";
+          requests.push({ path: requestPath, body, authorization: request.headers.authorization });
+          response.setHeader("content-type", "application/json");
+          if (requestPath === `/api/v4/users/${USER_ID}`) {
+            response.end(JSON.stringify({ id: USER_ID }));
+          } else if (requestPath === "/api/v4/users/me") {
+            response.end(JSON.stringify({ id: BOT_ID }));
+          } else if (requestPath === "/api/v4/channels/direct") {
+            response.end(JSON.stringify({ id: LOOPBACK_CHANNEL_ID, type: "D" }));
+          } else if (requestPath === "/api/v4/posts" && body?.channel_id === LOOPBACK_CHANNEL_ID) {
+            response.end(JSON.stringify({ id: "post-1", message: body.message }));
+          } else {
+            response.writeHead(400);
+            response.end(JSON.stringify({ message: "Unknown channel" }));
+          }
+        });
+      },
+      async (baseUrl) => {
+        const cfg = {
+          channels: {
+            mattermost: {
+              accounts: {
+                selected: {
+                  baseUrl,
+                  botToken: "synthetic-selected",
+                  network: { dangerouslyAllowPrivateNetwork: true },
+                },
+                restricted: { baseUrl, botToken: "synthetic-selected" },
+              },
+            },
+          },
+        };
+        for (const target of [
+          USER_ID,
+          USER_ID,
+          `user:${USER_ID}`,
+          `channel:${LOOPBACK_CHANNEL_ID}`,
+        ]) {
+          const result = await sendMessageMattermost(target, "target proof", {
+            cfg,
+            accountId: "selected",
+          });
+          expect(result).toMatchObject({ messageId: "post-1", channelId: LOOPBACK_CHANNEL_ID });
+        }
+        expect(requests.map(({ path }) => path)).toEqual([
+          `/api/v4/users/${USER_ID}`,
+          "/api/v4/users/me",
+          "/api/v4/channels/direct",
+          "/api/v4/posts",
+          "/api/v4/posts",
+          "/api/v4/posts",
+          "/api/v4/posts",
+        ]);
+        expect(requests.find(({ path }) => path === "/api/v4/channels/direct")?.body).toEqual([
+          BOT_ID,
+          USER_ID,
+        ]);
+        expect(
+          requests.every(({ authorization }) => authorization === "Bearer synthetic-selected"),
+        ).toBe(true);
+
+        const count = requests.length;
+        for (const target of [
+          USER_ID,
+          "defghijklmnopqrstuvwxyzabc",
+          `user:${USER_ID}`,
+          `channel:${LOOPBACK_CHANNEL_ID}`,
+        ]) {
+          await expect(
+            sendMessageMattermost(target, "blocked", { cfg, accountId: "restricted" }),
+          ).rejects.toThrow();
+        }
+        expect(requests).toHaveLength(count);
       },
     );
   });

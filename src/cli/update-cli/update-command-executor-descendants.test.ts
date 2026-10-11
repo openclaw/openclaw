@@ -38,35 +38,37 @@ describe("candidate executor delegation", () => {
       const expectedReleases = new Set([root, candidateRoot]);
       const released = new Set<string>();
       const leaseOwner = await import("../../infra/update-managed-service-handoff-lease.js");
-      const createStore = leaseOwner.createManagedHandoffLeaseStore;
-      vi.spyOn(leaseOwner, "createManagedHandoffLeaseStore").mockImplementation((...args) => {
-        const store = createStore(...args);
-        const observeRelease = (leases: ManagedHandoffLease[], runRelease: () => boolean) => {
-          for (const lease of leases) {
-            if (expectedReleases.has(lease.key)) {
-              assert(descendant !== undefined && candidatePid !== undefined);
-              expect(pidAlive.isPidDefinitelyDead(descendant)).toBe(true);
-              expect(isChildProcessTreeAlive({ pid: candidatePid })).toBe(false);
-              expect(store.current(lease)).toBe(true);
-            }
-          }
-          const confirmed = runRelease();
-          if (confirmed) {
+      const prepareStore = leaseOwner.prepareManagedHandoffLeaseStore;
+      vi.spyOn(leaseOwner, "prepareManagedHandoffLeaseStore").mockImplementation(
+        async (...args) => {
+          const store = await prepareStore(...args);
+          const observeRelease = (leases: ManagedHandoffLease[], runRelease: () => boolean) => {
             for (const lease of leases) {
               if (expectedReleases.has(lease.key)) {
-                released.add(lease.key);
+                assert(descendant !== undefined && candidatePid !== undefined);
+                expect(pidAlive.isPidDefinitelyDead(descendant)).toBe(true);
+                expect(isChildProcessTreeAlive({ pid: candidatePid })).toBe(false);
+                expect(store.current(lease)).toBe(true);
               }
             }
-          }
-          return confirmed;
-        };
-        return {
-          ...store,
-          release: (lease) => observeRelease([lease], () => store.release(lease)),
-          releaseAll: (leases) => observeRelease(leases, () => store.releaseAll(leases)),
-        };
-      });
-      const store = createStore();
+            const confirmed = runRelease();
+            if (confirmed) {
+              for (const lease of leases) {
+                if (expectedReleases.has(lease.key)) {
+                  released.add(lease.key);
+                }
+              }
+            }
+            return confirmed;
+          };
+          return {
+            ...store,
+            release: (lease) => observeRelease([lease], () => store.release(lease)),
+            releaseAll: (leases) => observeRelease(leases, () => store.releaseAll(leases)),
+          };
+        },
+      );
+      const store = await prepareStore();
       try {
         await withUpdateCommandExecutor(randomUUID(), async (executor) => {
           const fence = await executor.enter(root);

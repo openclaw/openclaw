@@ -43,6 +43,34 @@ import type {
 
 const USAGE_COST_DIRECT_REFRESH_RETRY_MS = 25;
 
+type SessionUsageDiagnosticParams = {
+  sessionId?: string;
+  sessionFile?: string;
+  config?: OpenClawConfig;
+  agentId: string;
+  incognito?: UsageCostIncognitoBinding;
+};
+
+function withSessionUsageDiagnosticSource<Params extends SessionUsageDiagnosticParams, Result>(
+  params: Params,
+  read: (scoped: Params, sessionFile: string) => Promise<Result>,
+): Promise<Result | null> {
+  return withUsageCostIncognitoScope(
+    captureUsageCostIncognitoBinding(params),
+    async (incognito) => {
+      const scoped = { ...params, incognito };
+      const source = await resolveUsageSessionSource(scoped);
+      if (
+        !source ||
+        (!parseSqliteSessionFileMarker(source.sessionFile) && !fs.existsSync(source.sessionFile))
+      ) {
+        return null;
+      }
+      return read(scoped, source.sessionFile);
+    },
+  );
+}
+
 export async function discoverAllSessions(params: {
   agentId: string;
   incognito?: UsageCostIncognitoBinding;
@@ -177,26 +205,10 @@ export async function loadSessionCostSummary(params: {
   });
 }
 
-export async function loadSessionUsageTimeSeries(params: {
-  sessionId?: string;
-  sessionFile?: string;
-  config?: OpenClawConfig;
-  agentId: string;
-  incognito?: UsageCostIncognitoBinding;
-  maxPoints?: number;
-}): Promise<SessionUsageTimeSeries | null> {
-  const binding = captureUsageCostIncognitoBinding(params);
-  return withUsageCostIncognitoScope(binding, async (incognito) => {
-    const scoped = { ...params, incognito };
-    const source = await resolveUsageSessionSource(scoped);
-    if (!source) {
-      return null;
-    }
-    const { sessionFile } = source;
-    if (!parseSqliteSessionFileMarker(sessionFile) && !fs.existsSync(sessionFile)) {
-      return null;
-    }
-
+export async function loadSessionUsageTimeSeries(
+  params: SessionUsageDiagnosticParams & { maxPoints?: number },
+): Promise<SessionUsageTimeSeries | null> {
+  return withSessionUsageDiagnosticSource(params, async (scoped, sessionFile) => {
     if (scoped.maxPoints !== undefined && scoped.maxPoints !== null) {
       if (!Number.isFinite(scoped.maxPoints) || scoped.maxPoints <= 0) {
         return { sessionId: scoped.sessionId, points: [] };
@@ -213,16 +225,9 @@ export async function loadSessionUsageTimeSeries(params: {
       if (!entry?.usage || !timestamp) {
         continue;
       }
-      const { input, output, cacheRead, cacheWrite, totalTokens } = computeUsageTokenTotals(
-        entry.usage,
-      );
       points.push({
         timestamp,
-        input,
-        output,
-        cacheRead,
-        cacheWrite,
-        totalTokens,
+        ...computeUsageTokenTotals(entry.usage),
         cost: entry.costTotal ?? 0,
       });
     }
@@ -234,9 +239,8 @@ export async function loadSessionUsageTimeSeries(params: {
       const step = Math.ceil(points.length / maxPoints);
       const downsampled: typeof points = [];
       let bucket: (typeof points)[number] | undefined;
-      let bucketSize = 0;
-      for (const point of points) {
-        if (!bucket || bucketSize === step) {
+      for (const [index, point] of points.entries()) {
+        if (!bucket || index % step === 0) {
           bucket = {
             timestamp: point.timestamp,
             input: 0,
@@ -247,7 +251,6 @@ export async function loadSessionUsageTimeSeries(params: {
             cost: 0,
           };
           downsampled.push(bucket);
-          bucketSize = 0;
         }
         bucket.timestamp = point.timestamp;
         bucket.input += point.input;
@@ -256,7 +259,6 @@ export async function loadSessionUsageTimeSeries(params: {
         bucket.cacheWrite += point.cacheWrite;
         bucket.totalTokens += point.totalTokens;
         bucket.cost += point.cost;
-        bucketSize += 1;
       }
       points = downsampled;
     }
@@ -275,26 +277,10 @@ export async function loadSessionUsageTimeSeries(params: {
   });
 }
 
-export async function loadSessionLogs(params: {
-  sessionId?: string;
-  sessionFile?: string;
-  config?: OpenClawConfig;
-  agentId: string;
-  incognito?: UsageCostIncognitoBinding;
-  limit?: number;
-}): Promise<SessionLogEntry[] | null> {
-  const binding = captureUsageCostIncognitoBinding(params);
-  return withUsageCostIncognitoScope(binding, async (incognito) => {
-    const scoped = { ...params, incognito };
-    const source = await resolveUsageSessionSource(scoped);
-    if (!source) {
-      return null;
-    }
-    const { sessionFile } = source;
-    if (!parseSqliteSessionFileMarker(sessionFile) && !fs.existsSync(sessionFile)) {
-      return null;
-    }
-
+export async function loadSessionLogs(
+  params: SessionUsageDiagnosticParams & { limit?: number },
+): Promise<SessionLogEntry[] | null> {
+  return withSessionUsageDiagnosticSource(params, async (scoped, sessionFile) => {
     const logs: SessionLogEntry[] = [];
     if (scoped.limit !== undefined && scoped.limit !== null) {
       if (!Number.isFinite(scoped.limit) || scoped.limit <= 0) {

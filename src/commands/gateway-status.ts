@@ -92,18 +92,14 @@ export async function gatewayStatusCommand(
 
   const controller = new AbortController();
   let abortSignal: "SIGINT" | "SIGTERM" | undefined;
-  const onSigInt = () => {
+  const onSignal = (signal: "SIGINT" | "SIGTERM") => {
     if (!abortSignal) {
-      abortSignal = "SIGINT";
+      abortSignal = signal;
       controller.abort();
     }
   };
-  const onSigTerm = () => {
-    if (!abortSignal) {
-      abortSignal = "SIGTERM";
-      controller.abort();
-    }
-  };
+  const onSigInt = () => onSignal("SIGINT");
+  const onSigTerm = () => onSignal("SIGTERM");
   process.on("SIGINT", onSigInt);
   process.on("SIGTERM", onSigTerm);
   const probePass = await (async () => {

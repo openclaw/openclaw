@@ -70,31 +70,21 @@ export async function listRepositoryArtifacts(
   }
   const entries = new Map<string, SessionFileBrowserEntry>();
   const query = request.search?.trim().toLowerCase();
+  const prefix = folder ? `${folder}/` : "";
   for (const [filePath, entry] of changed) {
-    if (query) {
-      if (filePath.toLowerCase().includes(query)) {
-        entries.set(filePath, {
-          path: filePath,
-          name: path.posix.basename(filePath),
-          kind: "file",
-          size: entry.size,
-          sessionKind: "modified",
-        });
-      }
-      continue;
-    }
-    const prefix = folder ? `${folder}/` : "";
-    if (!filePath.startsWith(prefix)) {
+    if (query ? !filePath.toLowerCase().includes(query) : !filePath.startsWith(prefix)) {
       continue;
     }
     const remainder = filePath.slice(prefix.length);
-    const name = remainder.split("/")[0]!;
-    entries.set(`${prefix}${name}`, {
-      path: `${prefix}${name}`,
+    const name = query ? path.posix.basename(filePath) : remainder.split("/")[0]!;
+    const selectedPath = query ? filePath : `${prefix}${name}`;
+    const directory = !query && remainder.includes("/");
+    entries.set(selectedPath, {
+      path: selectedPath,
       name,
-      kind: remainder.includes("/") ? "directory" : "file",
+      kind: directory ? "directory" : "file",
       sessionKind: "modified",
-      ...(remainder.includes("/") ? {} : { size: entry.size }),
+      ...(directory ? {} : { size: entry.size }),
     });
   }
   const limit = query ? 500 : 250;

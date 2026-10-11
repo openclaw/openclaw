@@ -36,7 +36,7 @@ function visibleSessionKeys(sidebar: SidebarLifecycleState): string[] {
 describe("AppSidebar session ownership", () => {
   registerSessionOwnershipAvatarTests();
 
-  it("keeps an owner filter through transient or narrowed owner facets", async () => {
+  it("keeps an owner through unresolved facets and clears it from a complete All facet", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const harness = createSessionsHarness("main", ["agent:main:main", "agent:main:ada"]);
     const result = harness.sessions.state.result;
@@ -91,6 +91,7 @@ describe("AppSidebar session ownership", () => {
     await sidebar.updateComplete;
     await sidebar.updateComplete;
     expect(sidebar.sessionOwnerFilterId).toBeNull();
+    expect(sidebar.querySelector('[data-session-key="agent:main:ada"]')).not.toBeNull();
   });
 
   it("shows the authenticated user first in the owner filter", async () => {

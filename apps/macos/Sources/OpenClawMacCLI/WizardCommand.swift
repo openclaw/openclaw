@@ -54,8 +54,7 @@ enum WizardCliError: Error, CustomStringConvertible {
         switch self {
         case let .invalidUrl(raw): "Invalid URL: \(raw)"
         case .missingRemoteUrl: "gateway.remote.url is missing"
-        case let .gatewayError(msg): msg
-        case let .decodeError(msg): msg
+        case let .gatewayError(msg), let .decodeError(msg): msg
         case .cancelled: "Wizard cancelled"
         }
     }
@@ -390,22 +389,19 @@ private func promptAnswer(for step: WizardStep) throws -> Any {
     printWizardStepHeader(step)
 
     switch type {
-    case "note", "progress":
-        _ = try readLineWithPrompt("Continue? (enter)")
-        return NSNull()
     case "action":
         _ = try readLineWithPrompt("Run? (enter)")
         return true
     case "text":
         let initial = anyCodableString(step.initialvalue)
         let prompt = step.placeholder ?? "Value"
+        let value: String
         if step.sensitive == true {
             let sensitivePrompt = initial.isEmpty ? prompt : "\(prompt) (leave blank to keep existing)"
-            let value = try readSensitiveLineWithPrompt(sensitivePrompt)
-            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? initial : trimmed
+            value = try readSensitiveLineWithPrompt(sensitivePrompt)
+        } else {
+            value = try readLineWithPrompt("\(prompt)\(initial.isEmpty ? "" : " [\(initial)]")")
         }
-        let value = try readLineWithPrompt("\(prompt)\(initial.isEmpty ? "" : " [\(initial)]")")
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? initial : trimmed
     case "confirm":

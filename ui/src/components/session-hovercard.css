@@ -125,11 +125,7 @@
   order: -1;
 }
 
-.session-hovercard__attribution-avatars .viewer-facepile {
-  margin-left: var(--session-hovercard-face-gap);
-  transition: margin-left 120ms ease;
-}
-
+.session-hovercard__attribution-avatars .viewer-facepile,
 .session-hovercard__attribution-avatars
   .viewer-facepile
   > openclaw-tooltip:not(:first-child)

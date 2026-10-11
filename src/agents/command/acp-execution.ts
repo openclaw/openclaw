@@ -277,6 +277,7 @@ export async function runAcpAgentCommand(params: {
       : undefined;
     params.trackInternalModelRunTarget(internalTarget);
     const transcriptResult = await attemptExecutionRuntime.persistAcpTurnTranscript({
+      assistantIdempotencyKey: params.runId,
       body: params.body,
       transcriptBody: params.transcriptBody,
       inputProvenance: params.opts.inputProvenance,
@@ -305,6 +306,7 @@ export async function runAcpAgentCommand(params: {
       threadId: params.opts.threadId,
       sessionCwd: resolveAcpSessionCwd(params.acpResolution.meta) ?? params.workspaceDir,
       config: params.cfg,
+      runId: params.runId,
     });
     if (!internalTarget) {
       sessionEntry = transcriptResult.sessionEntry;

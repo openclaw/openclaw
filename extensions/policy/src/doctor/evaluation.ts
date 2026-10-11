@@ -41,13 +41,7 @@ import {
   modelProviderFindings,
   networkFindings,
 } from "./scopes/model-network.js";
-import {
-  toolOwnerFindings,
-  toolPostureFindings,
-  toolRiskFindings,
-  toolSensitivityFindings,
-  toolUnknownRiskFindings,
-} from "./tool-findings.js";
+import { toolMetadataFindings, toolPostureFindings } from "./tool-findings.js";
 import type { PolicyEvaluation } from "./types.js";
 
 const policyEvaluationCache = new WeakMap<HealthCheckContext, Promise<PolicyEvaluation>>();
@@ -222,16 +216,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     ...metadataRequirementFindings,
     ...(unmigratedToolsFinding === undefined ? [] : [unmigratedToolsFinding]),
   ];
-  if (requiredMetadata.has("risk")) {
-    policyFindings.push(...toolRiskFindings(policyFile.ocDocName, evidence));
-    policyFindings.push(...toolUnknownRiskFindings(policyFile.ocDocName, evidence));
-  }
-  if (requiredMetadata.has("sensitivity")) {
-    policyFindings.push(...toolSensitivityFindings(policyFile.ocDocName, evidence));
-  }
-  if (requiredMetadata.has("owner")) {
-    policyFindings.push(...toolOwnerFindings(policyFile.ocDocName, evidence));
-  }
+  policyFindings.push(...toolMetadataFindings(policyFile.ocDocName, evidence, requiredMetadata));
   const attestationFindings = policyAttestationFindings(
     policyFile.displayName,
     policyHash,
@@ -352,7 +337,7 @@ function policyAttestationFindings(
   ];
 }
 
-function toAttestedFinding(finding: HealthFinding): Record<string, unknown> {
+export function toAttestedFinding(finding: HealthFinding) {
   return {
     checkId: finding.checkId,
     severity: finding.severity,

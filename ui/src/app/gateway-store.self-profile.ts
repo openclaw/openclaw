@@ -21,12 +21,13 @@ export function createGatewaySelfProfile(options: {
   const loadSelfProfile = (): Promise<UserProfile | null> => {
     const requestClient = options.getSnapshot().client;
     const hello = options.getSnapshot().hello;
-    if (
-      !requestClient ||
-      !hello ||
-      options.getSnapshot().phase !== "connected" ||
-      !hasOperatorSelfReadAccess(hello.auth ?? null)
-    ) {
+    if (!requestClient || !hello || options.getSnapshot().phase !== "connected") {
+      return Promise.resolve(null);
+    }
+    if (!hasOperatorSelfReadAccess(hello.auth ?? null)) {
+      if (!options.getSnapshot().selfUser) {
+        options.publish(null);
+      }
       return Promise.resolve(null);
     }
     if (selfProfileRequest) {

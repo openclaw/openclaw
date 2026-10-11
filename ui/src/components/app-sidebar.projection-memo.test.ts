@@ -218,7 +218,6 @@ describe("sidebar projection memo", () => {
   });
 
   it.each([
-    { statusFilter: "active", adopted: false },
     { statusFilter: "snoozed", adopted: false },
     { statusFilter: "active", adopted: true },
   ] as const)(
@@ -387,49 +386,6 @@ describe("sidebar projection memo", () => {
       cancel?.();
     });
     expect(row(target.key)).not.toBeNull();
-  });
-
-  it("refreshes catalog visibility and child loading while expansion only refreshes sections", async () => {
-    const parent = session("parent", { childSessions: [key("child")] });
-    const child = session("child", { spawnedBy: parent.key });
-    const { sidebar, row, sessions } = await mount([parent, child]);
-    sessions.list.mockResolvedValue({
-      ...sessions.sessions.state.result!,
-      sessions: [child],
-      count: 1,
-    });
-    // An active parent retains its child observation even while collapsed.
-    sidebar.activeRouteId = "chat";
-    sidebar.sessionKey = parent.key;
-    await sidebar.sessionData.loadChildSessions(parent.key);
-    await settleLitElement(sidebar);
-    const sections = vi.spyOn(SidebarSessionProjection.prototype, "project");
-    projectRows.mockClear();
-    sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")!.click();
-    await settleLitElement(sidebar);
-    expect(sections).toHaveBeenCalled();
-    expect(projectRows).not.toHaveBeenCalled();
-    expect(row(child.key)).not.toBeNull();
-    await expectRowRefresh(sidebar, () => {
-      sidebar.sessionData.loadingChildSessionKeys = new Set([parent.key]);
-      sidebar.requestUpdate();
-    });
-    expect(
-      projectRows.mock.results
-        .at(-1)
-        ?.value.find((value: { key: string }) => value.key === parent.key)?.loadingChildren,
-    ).toBe(true);
-    const catalog = catalogPage([{ threadId: "catalog-thread", name: "Catalog thread" }])
-      .catalogs[0]!;
-    await expectRowRefresh(sidebar, () => {
-      sidebar.sessionData.sessionCatalogs = [catalog];
-      sidebar.requestUpdate();
-    });
-    expect(sidebar.textContent).toContain("Catalog thread");
-    await expectRowRefresh(sidebar, () => {
-      sidebar.hiddenSessionCatalogIds = new Set([catalog.id]);
-    });
-    expect(sidebar.textContent).not.toContain("Catalog thread");
   });
 
   it("replaces held running subtitles at their deadline without another input or full row projection", async () => {

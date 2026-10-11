@@ -159,23 +159,20 @@ export function matchStandingIntentsInDatabase(
     .where("intent.creator_sender", "is not", null)
     .where("intent.expires_at", ">", nowMs)
     .whereRef("intent.fire_count", "<", "intent.max_fires");
-  candidatesQuery =
-    channelScopes.length > 0
-      ? candidatesQuery.where((expression) =>
-          expression.or([
-            expression("intent.channel_scope", "is", null),
-            ...channelScopes.map((scope) => expression("intent.channel_scope", "=", scope)),
-          ]),
-        )
-      : candidatesQuery.where("intent.channel_scope", "is", null);
-  candidatesQuery = storedSenderScope
-    ? candidatesQuery.where((expression) =>
-        expression.or([
-          expression("intent.sender_scope", "is", null),
-          expression("intent.sender_scope", "=", storedSenderScope),
-        ]),
-      )
-    : candidatesQuery.where("intent.sender_scope", "is", null);
+  for (const [column, scopes] of [
+    ["intent.channel_scope", channelScopes],
+    ["intent.sender_scope", storedSenderScope ? [storedSenderScope] : []],
+  ] as const) {
+    candidatesQuery =
+      scopes.length > 0
+        ? candidatesQuery.where((expression) =>
+            expression.or([
+              expression(column, "is", null),
+              ...scopes.map((scope) => expression(column, "=", scope)),
+            ]),
+          )
+        : candidatesQuery.where(column, "is", null);
+  }
   const fired: StandingIntent[] = [];
   let scannedCandidates = 0;
   let cursor: { createdAt: number; id: string } | undefined;
@@ -228,12 +225,12 @@ export function matchStandingIntentsInDatabase(
         continue;
       }
       const nextFireCount = current.fire_count + 1;
-      const firedIntent = rowToIntent({
-        ...current,
+      const firedState = {
         fire_count: nextFireCount,
         last_fired_at: nowMs,
         status: nextFireCount >= current.max_fires ? "done" : "fired",
-      });
+      } satisfies Pick<StandingIntentRow, "fire_count" | "last_fired_at" | "status">;
+      const firedIntent = rowToIntent({ ...current, ...firedState });
       if (!standingIntentsFitContext([...fired, firedIntent])) {
         continue;
       }
@@ -241,11 +238,7 @@ export function matchStandingIntentsInDatabase(
         db,
         kysely
           .updateTable("standing_intents")
-          .set({
-            fire_count: nextFireCount,
-            last_fired_at: nowMs,
-            status: nextFireCount >= current.max_fires ? "done" : "fired",
-          })
+          .set(firedState)
           .where("id", "=", current.id)
           .where("status", "=", "armed"),
       );

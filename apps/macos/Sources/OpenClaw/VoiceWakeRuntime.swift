@@ -43,7 +43,10 @@ actor VoiceWakeRuntime {
     private var captureStartedAt: Date?
     private var captureTask: Task<Void, Never>?
     private var capturedTranscript: String = ""
-    private var isCapturing: Bool = false
+    private var isCapturing: Bool {
+        self.captureStartedAt != nil
+    }
+
     private var heardBeyondTrigger: Bool = false
     private var committedTranscript: String = ""
     private var volatileTranscript: String = ""
@@ -381,7 +384,6 @@ actor VoiceWakeRuntime {
     private func stop(dismissOverlay: Bool = true) {
         SimpleTaskSupport.stop(task: &self.scheduledRestartTask)
         SimpleTaskSupport.stop(task: &self.captureTask)
-        self.isCapturing = false
         self.capturedTranscript = ""
         self.captureStartedAt = nil
         self.lastTranscript = nil
@@ -678,7 +680,6 @@ actor VoiceWakeRuntime {
             await self.resumeAfterPushToTalk(lease: lease)
             return
         }
-        self.isCapturing = true
         DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "beginCapture")
         self.capturedTranscript = command
         self.committedTranscript = ""
@@ -724,14 +725,9 @@ actor VoiceWakeRuntime {
 
         while self.isCapturing {
             let now = Date()
-            if now >= hardStop {
-                // Hard-stop after a maximum duration so we never leave the recognizer pinned open.
-                await self.finalizeCapture(config: config)
-                return
-            }
-
             let silenceThreshold = self.heardBeyondTrigger ? self.silenceWindow : self.triggerOnlySilenceWindow
-            if let last = self.lastHeard, now.timeIntervalSince(last) >= silenceThreshold {
+            let silent = self.lastHeard.map { now.timeIntervalSince($0) >= silenceThreshold } ?? false
+            if now >= hardStop || silent {
                 await self.finalizeCapture(config: config)
                 return
             }
@@ -742,7 +738,7 @@ actor VoiceWakeRuntime {
 
     private func finalizeCapture(config: RuntimeConfig) async {
         guard self.isCapturing else { return }
-        self.isCapturing = false
+        self.captureStartedAt = nil
         // Disarm trigger matching immediately (before halting recognition) to avoid double-trigger
         // races from late callbacks that arrive after isCapturing is cleared.
         self.cooldownUntil = Date().addingTimeInterval(self.debounceAfterSend)
@@ -755,7 +751,6 @@ actor VoiceWakeRuntime {
         // Stop further recognition events so we don't retrigger immediately with buffered audio.
         self.haltRecognitionPipeline()
         self.capturedTranscript = ""
-        self.captureStartedAt = nil
         self.lastHeard = nil
         self.heardBeyondTrigger = false
         let triggerWord = self.activeTriggerWord

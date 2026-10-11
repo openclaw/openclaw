@@ -27,6 +27,12 @@ export async function admitCompletionFixtureDatabase(): Promise<void> {
   await loadPendingSessionDeliveries(captureOpenClawStateWorkerContext());
 }
 
+export function readCompletionSystemEvents(database: OpenClawStateDatabase) {
+  return database.db
+    .prepare("SELECT id FROM delivery_queue_entries WHERE entry_kind = 'systemEvent'")
+    .all();
+}
+
 export function seedSubagentCompletionDelivery(params: {
   subagent: SubagentRunRecord;
   databaseOptions?: OpenClawStateDatabaseOptions;
@@ -166,14 +172,17 @@ export async function observeRequesterOutcomePublication(
   originalStateDir: string,
 ) {
   const completionStore = await import("./subagent-completion-admission.store.js");
-  const settle = completionStore.settleRequesterCompletionBatch;
+  const settle = completionStore.mutateRequesterCompletionBatch;
   const reconciledBatches: string[][] = [];
   let retainedBeforePublication = false;
   const observed = vi
-    .spyOn(completionStore, "settleRequesterCompletionBatch")
+    .spyOn(completionStore, "mutateRequesterCompletionBatch")
     .mockImplementation((params) => {
+      if (params.operation.kind !== "settle") {
+        return settle(params);
+      }
       if (params.committed) {
-        reconciledBatches.push(params.entries.map(({ subagent }) => subagent.runId));
+        reconciledBatches.push(params.entries.map((subagent) => subagent.runId));
       }
       return settle({
         ...params,

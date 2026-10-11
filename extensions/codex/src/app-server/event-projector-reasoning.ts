@@ -188,13 +188,11 @@ function normalizePlanStepStatus(status: string | undefined): AgentPlanStepStatu
 }
 
 function readReasoningSections(value: unknown): Map<number, string> {
-  const sections = new Map<number, string>();
-  if (Array.isArray(value)) {
-    value.forEach((text, index) => {
-      if (typeof text === "string") {
-        sections.set(index, text);
-      }
-    });
-  }
-  return sections;
+  return new Map(
+    Array.isArray(value)
+      ? value.flatMap<[number, string]>((text, index) =>
+          typeof text === "string" ? [[index, text]] : [],
+        )
+      : [],
+  );
 }

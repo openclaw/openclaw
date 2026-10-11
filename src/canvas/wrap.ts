@@ -31,7 +31,7 @@ const WIDGET_BASE_STYLES = `:root{color-scheme:light dark;
 --accent:#ff5c5c;--accent-fill:#d13c3c;--accent-fg:#ffffff;
 --ok:#22c55e;--warn:#f59e0b;--danger:#ef4444;--info:#3b82f6}}
 *{box-sizing:border-box}@supports not selector(::-webkit-scrollbar-thumb){*{scrollbar-color:var(--scrollbar-thumb) transparent;scrollbar-width:thin}}html,body{margin:0}::-webkit-scrollbar{width:var(--scrollbar-size);height:var(--scrollbar-size);background:var(--surface)}::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:transparent}::-webkit-scrollbar-button{display:none}::-webkit-scrollbar-thumb{background:var(--scrollbar-thumb);background-clip:content-box;border:var(--scrollbar-thumb-inset) solid transparent;border-radius:var(--radius-full)}::-webkit-scrollbar-thumb:hover{background:var(--scrollbar-thumb-hover);background-clip:content-box}.openclaw-chat-host,.openclaw-chat-host body{scrollbar-width:none}.openclaw-chat-host::-webkit-scrollbar,.openclaw-chat-host body::-webkit-scrollbar{display:none}
-body{font:14px/1.5 var(--font-body);color:var(--text)}
+body{display:flow-root;font:14px/1.5 var(--font-body);color:var(--text)}
 h1,h2,h3{margin:0 0 8px;color:var(--text-strong);font-weight:600}
 h1{font-size:18px}h2{font-size:16px}h3{font-size:14px}
 p{margin:0 0 8px}
@@ -164,15 +164,18 @@ export function buildWidgetDocument(
     "<script>(()=>{if(!window.parent||window.parent===window)return;" +
     "const post=window.parent.postMessage.bind(window.parent);const listen=window.addEventListener.bind(window);" +
     "const stringify=String;const slice=Function.prototype.call.bind(String.prototype.slice);" +
+    "const charCodeAt=Function.prototype.call.bind(String.prototype.charCodeAt);" +
+    "const clip=(text,max)=>{const last=charCodeAt(text,max-1);const next=charCodeAt(text,max);" +
+    "return slice(text,0,last>=0xd800&&last<=0xdbff&&next>=0xdc00&&next<=0xdfff?max-1:max);};" +
     "const replace=Function.prototype.call.bind(String.prototype.replace);const integer=Number.isInteger;" +
     "const seen=new Set();const has=seen.has.bind(seen);const add=seen.add.bind(seen);let count=0;" +
     "const report=(event,rejection)=>{try{if(count>=3)return;" +
     'if(!rejection&&typeof event.message!=="string"&&!event.error)return;' +
     "const reason=rejection?event.reason:undefined;" +
-    "const message=slice(stringify(rejection?(reason?.message??reason):(event.error?.message??event.message)),0,500);" +
+    "const message=clip(stringify(rejection?(reason?.message??reason):(event.error?.message??event.message)),500);" +
     "if(has(message))return;" +
     'const data={type:"openclaw:widget-runtime-error",message};' +
-    'if(typeof event.filename==="string"){const source=slice(replace(replace(event.filename,/[?#].*$/,""),/^.*[\\\\/]/,""),0,200);if(source)data.source=source;}' +
+    'if(typeof event.filename==="string"){const source=clip(replace(replace(event.filename,/[?#].*$/,""),/^.*[\\\\/]/,""),200);if(source)data.source=source;}' +
     "if(integer(event.lineno))data.line=event.lineno;if(integer(event.colno))data.column=event.colno;" +
     'add(message);count++;post(data,"*");}catch{}};' +
     'listen("error",event=>report(event,false),true);listen("unhandledrejection",event=>report(event,true),true);})();</script>';

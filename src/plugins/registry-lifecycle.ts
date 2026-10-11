@@ -41,7 +41,7 @@ type PluginRegistryLifecycleStore = {
   retiredRegistries: WeakSet<PluginRegistry>;
   activatedRegistries: WeakSet<PluginRegistry>;
   registryEpochs: WeakMap<PluginRegistry, PluginRegistryLifecycleState>;
-  preparation?: AsyncLocalStorage<{ registry: PluginRegistry; active: boolean }>;
+  preparation?: AsyncLocalStorage<{ registry: PluginRegistry | undefined; active: boolean }>;
   loaderCaches?: WeakMap<PluginRegistry, Set<PluginLoaderCacheState<PluginRegistry>>>;
   registryLoads?: WeakMap<PluginCache, PluginLoaderCacheState<PluginRegistry>>;
   registryResourceOwners?: WeakMap<PluginRegistry, PluginRegistry>;
@@ -428,7 +428,10 @@ export function withPluginRegistryPreparationScope<T>(
   if (retiredRegistries.has(registry)) {
     throw new Error("Cannot prepare a retired plugin registry");
   }
-  const scope = { registry, active: true };
+  const scope: { registry: PluginRegistry | undefined; active: boolean } = {
+    registry,
+    active: true,
+  };
   return preparation.run(scope, () => {
     let pending = false;
     try {
@@ -437,12 +440,14 @@ export function withPluginRegistryPreparationScope<T>(
         pending = true;
         return Promise.resolve(result).finally(() => {
           scope.active = false;
+          scope.registry = undefined;
         }) as T; // SAFETY: Preserves the callback's resolved value and async shape.
       }
       return result;
     } finally {
       if (!pending) {
         scope.active = false;
+        scope.registry = undefined;
       }
     }
   });

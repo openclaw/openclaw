@@ -81,18 +81,18 @@ function createAgentRuntime(
   const getSessionEntry = vi.fn(
     (params: { sessionKey: string }) => sessionStore[params.sessionKey],
   );
-  const patchSessionEntry = vi.fn(
+  const prepareSessionEntryPatch = vi.fn(
     async (params: {
       sessionKey: string;
       fallbackEntry?: TestSessionEntry;
       replaceEntry?: boolean;
-      update: (entry: TestSessionEntry) => Partial<TestSessionEntry> | null;
+      prepare: (entry: TestSessionEntry) => Partial<TestSessionEntry> | null;
     }) => {
       const existing = sessionStore[params.sessionKey] ?? params.fallbackEntry;
       if (!existing) {
         return null;
       }
-      const patch = params.update({ ...existing });
+      const patch = params.prepare({ ...existing });
       if (!patch) {
         return existing;
       }
@@ -158,7 +158,7 @@ function createAgentRuntime(
       saveSessionStore,
       updateSessionStore,
       getSessionEntry,
-      patchSessionEntry,
+      prepareSessionEntryPatch,
       upsertSessionEntry,
       runWithWorkAdmission,
       resolveSessionFilePath,
@@ -171,7 +171,7 @@ function createAgentRuntime(
     runWithWorkAdmission,
     saveSessionStore,
     updateSessionStore,
-    patchSessionEntry,
+    prepareSessionEntryPatch,
     sessionStore,
     resolveAgentDir,
     resolveAgentWorkspaceDir,
@@ -620,9 +620,8 @@ describe("generateVoiceResponse", () => {
   });
 
   it("pins the voice session to responseModel before running the embedded agent", async () => {
-    const { runtime, runEmbeddedAgent, patchSessionEntry, sessionStore } = createAgentRuntime([
-      { text: '{"spoken":"Pinned model works."}' },
-    ]);
+    const { runtime, runEmbeddedAgent, prepareSessionEntryPatch, sessionStore } =
+      createAgentRuntime([{ text: '{"spoken":"Pinned model works."}' }]);
     sessionStore["agent:main:voice:15550001111"] = {
       sessionId: "existing-session",
       updatedAt: 100,
@@ -657,16 +656,18 @@ describe("generateVoiceResponse", () => {
     expect(pinnedSessionEntry?.modelProvider).toBeUndefined();
     expect(pinnedSessionEntry?.contextTokens).toBeUndefined();
     expect(pinnedSessionEntry?.authProfileOverride).toBeUndefined();
-    const patchSessionEntryCall = expectDefined(
-      patchSessionEntry.mock.calls.at(0),
+    const prepareSessionEntryPatchCall = expectDefined(
+      prepareSessionEntryPatch.mock.calls.at(0),
       "session entry patch",
     );
-    expect(patchSessionEntryCall[0]).toMatchObject({
+    expect(prepareSessionEntryPatchCall[0]).toMatchObject({
       storePath: "/tmp/openclaw/main/sessions.json",
       sessionKey: "agent:main:voice:15550001111",
       replaceEntry: true,
     });
-    expect((patchSessionEntryCall[0] as { update?: unknown }).update).toBeTypeOf("function");
+    expect((prepareSessionEntryPatchCall[0] as { prepare?: unknown }).prepare).toBeTypeOf(
+      "function",
+    );
     const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
     expect(args.provider).toBe("openai");
     expect(args.model).toBe("gpt-4.1-nano");
@@ -674,7 +675,8 @@ describe("generateVoiceResponse", () => {
   });
 
   it("rejects responseModel for a model-locked session without running the embedded agent", async () => {
-    const { runtime, runEmbeddedAgent, patchSessionEntry, sessionStore } = createAgentRuntime([]);
+    const { runtime, runEmbeddedAgent, prepareSessionEntryPatch, sessionStore } =
+      createAgentRuntime([]);
     sessionStore["agent:main:voice:15550001111"] = {
       sessionId: "locked-session",
       updatedAt: 100,
@@ -705,7 +707,7 @@ describe("generateVoiceResponse", () => {
       error: "Model selection is locked for this session.",
     });
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
-    expect(patchSessionEntry).not.toHaveBeenCalled();
+    expect(prepareSessionEntryPatch).not.toHaveBeenCalled();
     expect(sessionStore["agent:main:voice:15550001111"]).toMatchObject({
       model: "gpt-5.5",
       modelProvider: "openai",

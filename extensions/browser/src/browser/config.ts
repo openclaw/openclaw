@@ -20,7 +20,6 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
-  DEFAULT_BROWSER_CONTROL_PORT,
   deriveDefaultBrowserCdpPortRange,
   deriveDefaultBrowserControlPort,
 } from "../config/port-defaults.js";
@@ -257,7 +256,7 @@ export function resolveBrowserConfig(
   rootConfig?: OpenClawConfig,
 ): ResolvedBrowserConfig {
   const gatewayPort = resolveGatewayPort(rootConfig);
-  const controlPort = deriveDefaultBrowserControlPort(gatewayPort ?? DEFAULT_BROWSER_CONTROL_PORT);
+  const controlPort = deriveDefaultBrowserControlPort(gatewayPort);
 
   const derivedCdpRange = deriveDefaultBrowserCdpPortRange(controlPort);
 

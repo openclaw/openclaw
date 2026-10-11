@@ -32,7 +32,9 @@ The OpenClaw agent that owns a session is separate from the external harness
 selected by ACP. For example, a session owned by `work` can run the `claude`
 harness. Owner-aware manager calls carry `agentId`; `agent` remains the harness
 name. Configured bindings use their OpenClaw agent owner and their configured
-ACP harness independently. Free ACP spawns keep their existing harness namespace.
+ACP harness independently. `sessions_spawn` uses the requester as owner for raw
+harnesses and the configured agent as owner for ACP aliases. `/acp spawn`
+retains its existing harness namespace.
 
 Bare keys such as `global` require an explicit owner when ownership is explicit.
 ACP keeps arbitrary logical keys such as `shared-project` unchanged; ACPX scopes
@@ -59,7 +61,7 @@ sessions must be upgraded before those sessions can run.
 | `/acp reset-options` | Remove session runtime option overrides.                  | `/acp reset-options`                                          |
 | `/acp sessions`      | List recent ACP sessions from store.                      | `/acp sessions`                                               |
 | `/acp doctor`        | Backend health, capabilities, actionable fixes.           | `/acp doctor`                                                 |
-| `/acp install`       | Print deterministic install and enable steps.             | `/acp install`                                                |
+| `/acp install`       | Print the install and enable steps.                       | `/acp install`                                                |
 
 Runtime controls (`spawn`, `cancel`, `steer`, `close`, `status`, `set-mode`,
 `set`, `cwd`, `permissions`, `timeout`, `model`, and `reset-options`) require
@@ -85,15 +87,15 @@ does not accept a target token.
 
 `/acp` has convenience commands and a generic setter. Equivalent operations:
 
-| Command                      | Maps to                              | Notes                                                                                                                                                                                                      |
-| ---------------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/acp model <id>`            | runtime config key `model`           | For Codex ACP, OpenClaw normalizes `openai/<model>` to the adapter model id and maps slash reasoning suffixes such as `openai/gpt-5.4/high` to `reasoning_effort`.                                         |
-| `/acp set thinking <level>`  | canonical option `thinking`          | OpenClaw sends the backend-advertised equivalent when present, preferring `thinking`, then `effort`, `reasoning_effort`, or `thought_level`. For Codex ACP, the adapter maps values to `reasoning_effort`. |
-| `/acp permissions <profile>` | canonical option `permissionProfile` | OpenClaw sends the backend-advertised equivalent when present, such as `approval_policy`, `permission_profile`, `permissions`, or `permission_mode`.                                                       |
-| `/acp timeout <seconds>`     | canonical option `timeoutSeconds`    | OpenClaw sends the backend-advertised equivalent when present, such as `timeout` or `timeout_seconds`.                                                                                                     |
-| `/acp cwd <path>`            | runtime cwd override                 | Applied on the next runtime operation, which closes the previous handle before replacing it.                                                                                                               |
-| `/acp set <key> <value>`     | generic                              | `key=cwd` uses the cwd override path.                                                                                                                                                                      |
-| `/acp reset-options`         | clears all runtime overrides         | Closes a retained runtime without starting a new backend.                                                                                                                                                  |
+| Command                      | Maps to                             | Notes                                                                                                                                                                                                      |
+| ---------------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/acp model <id>`            | runtime config key `model`          | For Codex ACP, OpenClaw normalizes `openai/<model>` to the adapter model id and maps slash reasoning suffixes such as `openai/gpt-5.4/high` to `reasoning_effort`.                                         |
+| `/acp set thinking <level>`  | OpenClaw option `thinking`          | OpenClaw sends the backend-advertised equivalent when present, preferring `thinking`, then `effort`, `reasoning_effort`, or `thought_level`. For Codex ACP, the adapter maps values to `reasoning_effort`. |
+| `/acp permissions <profile>` | OpenClaw option `permissionProfile` | OpenClaw sends the backend-advertised equivalent when present, such as `approval_policy`, `permission_profile`, `permissions`, or `permission_mode`.                                                       |
+| `/acp timeout <seconds>`     | OpenClaw option `timeoutSeconds`    | OpenClaw sends the backend-advertised equivalent when present, such as `timeout` or `timeout_seconds`.                                                                                                     |
+| `/acp cwd <path>`            | runtime cwd override                | Applied on the next runtime operation, which closes the previous handle before replacing it.                                                                                                               |
+| `/acp set <key> <value>`     | generic                             | `key=cwd` uses the cwd override path.                                                                                                                                                                      |
+| `/acp reset-options`         | clears all runtime overrides        | Closes a retained runtime without starting a new backend.                                                                                                                                                  |
 
 When a backend returns its accepted controls, OpenClaw keeps an already-selected
 thinking level in sync with that response. A model switch may lower the level or

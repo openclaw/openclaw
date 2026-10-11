@@ -5,8 +5,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { i18n } from "../../i18n/index.ts";
 import type { PluginDiscoveryEntry } from "../../lib/plugins/index.ts";
-import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { ModelSetupIconLoader } from "../model-setup/model-setup-icon-loader.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createModelSetupIconLoader } from "../model-setup/model-setup-icon-loader.tsx";
 import type { ModelSetupPageState } from "../model-setup/state.ts";
 import {
   createClient,
@@ -20,6 +20,7 @@ import {
   createResult,
   mountPage,
   resetPluginsPageTestState,
+  settlePlugins,
 } from "./plugins-page.test-support.ts";
 
 function stubUrls(value: () => string = () => "blob:icon") {
@@ -68,7 +69,7 @@ function mountIcons(
 }
 
 const iconUrl = "https://cdn.example.com/lifecycle.png";
-let activeLoader: ModelSetupIconLoader | undefined;
+let activeLoader: ReturnType<typeof createModelSetupIconLoader> | undefined;
 afterEach(() => {
   activeLoader?.reset();
   activeLoader = undefined;
@@ -107,18 +108,18 @@ it("loads artwork for rendered category cards and expands without per-card metad
   const { page } = await mountIcons(gateway, createResult(), "/plugins");
   const cards = () => page.querySelectorAll(".plugin-catalog-card");
   const images = () => page.querySelectorAll(".plugin-catalog-card img");
-  await waitForFast(() => expect(cards().length).toBeGreaterThan(0));
+  await waitForSolid(() => expect(cards().length).toBeGreaterThan(0));
   const visible = cards().length;
   expect(visible).toBeLessThan(items.length);
-  await waitForFast(() => expect(fetchMock).toHaveBeenCalledTimes(visible));
-  await waitForFast(() => expect(images()).toHaveLength(visible));
+  await waitForSolid(() => expect(fetchMock).toHaveBeenCalledTimes(visible));
+  await waitForSolid(() => expect(images()).toHaveLength(visible));
   page
     .querySelector<HTMLButtonElement>(
       '[data-catalog-section="web"] .plugin-catalog-section__view-all',
     )!
     .click();
-  await waitForFast(() => expect(cards()).toHaveLength(items.length));
-  await waitForFast(() => expect(images()).toHaveLength(items.length));
+  await waitForSolid(() => expect(cards()).toHaveLength(items.length));
+  await waitForSolid(() => expect(images()).toHaveLength(items.length));
   expect(request.mock.calls.map(([method]) => method)).not.toContain("plugins.catalog.get");
 });
 
@@ -149,63 +150,24 @@ it("uses late publisher enrichment after package 404 without retrying the packag
     throw new Error(`Unexpected method: ${method}`);
   });
   const { page } = await mountIcons(gateway, result, "/settings/plugins/workboard");
-  await waitForFast(() => expect(fetchMock).toHaveBeenCalledOnce());
-  await waitForFast(() =>
+  await waitForSolid(() => expect(fetchMock).toHaveBeenCalledOnce());
+  await waitForSolid(() =>
     expect(
       page.querySelector(".plugin-catalog-detail__hero .plugins-tile.skeleton"),
     ).not.toBeNull(),
   );
   catalog.resolve(detail);
-  await waitForFast(() =>
+  await waitForSolid(() =>
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       "/__openclaw__/plugin-icon/workboard",
       `/__openclaw__/catalog-icon/${encodeURIComponent(authorUrl)}`,
     ]),
   );
-  await waitForFast(() =>
+  await waitForSolid(() =>
     expect(page.querySelector(".plugin-catalog-detail__hero img")?.getAttribute("src")).toBe(
       "blob:author",
     ),
   );
-});
-
-it("fetches proxied icons with auth fallback and revokes their blob URLs", async () => {
-  const { revoke } = stubUrls();
-  const fetchMock = vi
-    .fn()
-    .mockResolvedValueOnce(new Response(null, { status: 401 }))
-    .mockResolvedValueOnce(
-      iconResponse(
-        new Uint8Array([
-          0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0x49, 0x48, 0x44, 0x52, 0, 0,
-          0, 2, 0, 0, 0, 1,
-        ]),
-      ),
-    );
-  vi.stubGlobal("fetch", fetchMock);
-  const { gateway } = iconGateway();
-  gateway.connection.token = "first";
-  gateway.connection.password = "second";
-  const { page } = await mountIcons(
-    gateway,
-    createResult(createPlugin({ id: "remote-icon", name: "FireCrawl", hasIcon: true })),
-  );
-  await waitForFast(() =>
-    expect(
-      page.querySelector('[data-plugin-id="remote-icon"] img.plugins-icon')?.getAttribute("src"),
-    ).toBe("blob:icon"),
-  );
-  expect(
-    fetchMock.mock.calls.map(([, init]) => new Headers(init?.headers).get("Authorization")),
-  ).toEqual(["Bearer first", "Bearer second"]);
-  page.applyMutationResult({
-    ok: true,
-    plugin: createPlugin({ id: "other-plugin", name: "Other Plugin" }),
-    restartRequired: false,
-  });
-  expect(revoke).not.toHaveBeenCalled();
-  page.remove();
-  expect(revoke).toHaveBeenCalledWith("blob:icon");
 });
 
 it("keeps the monogram fallback when a proxied SVG exceeds the safe icon subset", async () => {
@@ -224,7 +186,7 @@ it("keeps the monogram fallback when a proxied SVG exceeds the safe icon subset"
     gateway,
     createResult(createPlugin({ id: "unsafe-icon", name: "Unsafe Icon", hasIcon: true })),
   );
-  await waitForFast(() =>
+  await waitForSolid(() =>
     expect(
       page.querySelector('[data-plugin-id="unsafe-icon"] .plugins-tile--fallback')?.textContent,
     ).toContain("UI"),
@@ -259,7 +221,7 @@ function setupIcons() {
   vi.stubGlobal("fetch", fetchMock);
   let sequence = 0;
   const { revoke } = stubUrls(() => `blob:icon-${++sequence}`);
-  const loader = new ModelSetupIconLoader(
+  const loader = createModelSetupIconLoader(
     () => context,
     () => pageState,
     published,
@@ -314,14 +276,16 @@ it("times out and retries a missed icon only after removal and re-add", async ()
   eligible(true);
   loader.reconcile();
   expect(fetchMock).toHaveBeenCalledTimes(2);
-  await waitForFast(() => expect(published).toHaveBeenLastCalledWith({ [iconUrl]: "blob:icon-1" }));
+  await waitForSolid(() =>
+    expect(published).toHaveBeenLastCalledWith({ [iconUrl]: "blob:icon-1" }),
+  );
 });
 
 it("revokes before invalidation publication and publishes both empty resets", async () => {
   const { loader, fetchMock, published, revoke } = setupIcons();
   fetchMock.mockResolvedValueOnce(iconResponse());
   loader.reconcile();
-  await waitForFast(() => expect(published).toHaveBeenCalledOnce());
+  await waitForSolid(() => expect(published).toHaveBeenCalledOnce());
   loader.invalidate(iconUrl);
   expect(revoke).toHaveBeenCalledWith("blob:icon-1");
   expect(revoke.mock.invocationCallOrder[0]).toBeLessThan(
@@ -332,4 +296,103 @@ it("revokes before invalidation publication and publishes both empty resets", as
   loader.reset();
   loader.reset();
   expect(published.mock.calls).toEqual([[{ [iconUrl]: "blob:icon-1" }], [{}], [{}], [{}]]);
+});
+
+it("keeps a pending detail icon on its skeleton until the image loads", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal(
+    "URL",
+    class extends URL {
+      static override createObjectURL = vi.fn(() => "blob:loaded-icon");
+      static override revokeObjectURL = vi.fn();
+    },
+  );
+  const response = deferred<Response>();
+  const fetchMock = vi.fn(() => response.promise);
+  vi.stubGlobal("fetch", fetchMock);
+  const plugin = createPlugin({ hasIcon: true });
+  const result = createResult(plugin);
+  const { client } = createClient(async (method) =>
+    method === "plugins.inspect" ? createInspectResult() : result,
+  );
+  const harness = createGateway(client);
+  harness.gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
+  const { page } = await mountPage(
+    createContext(harness.gateway),
+    createPluginsRouteData(
+      harness.gateway,
+      result,
+      createPluginsRouteLocation("/settings/plugins/workboard"),
+    ),
+  );
+  await vi.advanceTimersByTimeAsync(0);
+  const icon = () => page.querySelector(".plugin-catalog-detail__hero .plugins-tile");
+  expect(fetchMock).toHaveBeenCalledOnce();
+  expect(icon()?.classList.contains("skeleton")).toBe(true);
+  expect(icon()?.classList.contains("plugins-tile--fallback")).toBe(false);
+  response.resolve(
+    new Response("image", {
+      headers: { "content-type": "image/png" },
+    }),
+  );
+  await vi.advanceTimersByTimeAsync(0);
+  const image = icon()?.querySelector("img");
+  expect(image?.getAttribute("src")).toBe("blob:loaded-icon");
+  expect(icon()?.classList.contains("skeleton")).toBe(true);
+  image?.dispatchEvent(new Event("load"));
+  await settlePlugins();
+  expect(icon()?.classList.contains("skeleton")).toBe(false);
+});
+
+it("reuses installed artwork across navigation and retires it on a new plugin generation", async () => {
+  vi.useFakeTimers();
+  const revokeObjectURL = vi.fn();
+  let sequence = 0;
+  vi.stubGlobal(
+    "URL",
+    class extends URL {
+      static override createObjectURL = vi.fn(() => `blob:icon-${++sequence}`);
+      static override revokeObjectURL = revokeObjectURL;
+    },
+  );
+  const fetchMock = vi.fn(
+    async () =>
+      new Response("image", {
+        headers: { "content-type": "image/png" },
+      }),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+  const result = { ...createResult(createPlugin({ hasIcon: true })), generation: 1 };
+  const { client } = createClient(async (method) =>
+    method === "plugins.inspect" ? createInspectResult() : result,
+  );
+  const harness = createGateway(client);
+  harness.gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
+  const { page } = await mountPage(
+    createContext(harness.gateway),
+    createPluginsRouteData(harness.gateway, result),
+  );
+  await vi.advanceTimersByTimeAsync(0);
+  expect(page.querySelector("img.plugins-icon")?.getAttribute("src")).toBe("blob:icon-1");
+  const detailRoute = createPluginsRouteLocation("/settings/plugins/workboard");
+  page.routeData = createPluginsRouteData(harness.gateway, result, detailRoute);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(revokeObjectURL).not.toHaveBeenCalled();
+  expect(fetchMock).toHaveBeenCalledOnce();
+  expect(page.querySelector(".plugin-catalog-detail__hero img")?.getAttribute("src")).toBe(
+    "blob:icon-1",
+  );
+  page.routeData = createPluginsRouteData(
+    harness.gateway,
+    { ...result, generation: 2 },
+    detailRoute,
+  );
+  await vi.advanceTimersByTimeAsync(0);
+  expect(revokeObjectURL).toHaveBeenCalledWith("blob:icon-1");
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(page.querySelector(".plugin-catalog-detail__hero img")?.getAttribute("src")).toBe(
+    "blob:icon-2",
+  );
+  page.remove();
+  expect(revokeObjectURL).toHaveBeenCalledWith("blob:icon-2");
 });

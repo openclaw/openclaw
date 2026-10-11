@@ -46,12 +46,11 @@ final class VoiceSessionCoordinator {
     {
         let token = UUID()
         self.logger.info("coordinator start token=\(token.uuidString) source=\(source.rawValue) len=\(text.count)")
-        let session = Session(
+        self.session = Session(
             token: token,
             text: text,
             sendChime: .none,
             voiceWakeTrigger: voiceWakeTrigger)
-        self.session = session
         self.overlay.startSession(
             token: token,
             source: source,
@@ -100,14 +99,13 @@ final class VoiceSessionCoordinator {
         guard let session, session.token == token else { return }
         let text = session.text.trimmingCharacters(in: .whitespacesAndNewlines)
         let voiceWakeTrigger = session.voiceWakeTrigger
-        let sendChime = session.sendChime
         guard !text.isEmpty else {
             self.logger.info("coordinator sendNow \(reason) empty -> dismiss")
             self.overlay.dismiss(token: token, reason: .empty, outcome: .empty)
             self.session = nil
             return
         }
-        self.overlay.beginSendUI(token: token, sendChime: sendChime)
+        self.overlay.beginSendUI(token: token, sendChime: session.sendChime)
         Task.detached { [forward] in
             _ = await forward(text, voiceWakeTrigger)
         }

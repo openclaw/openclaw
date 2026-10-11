@@ -35,21 +35,11 @@ type DiscordVoiceAgentTurnResult = Awaited<
 function summarizeAgentTurnPayloads(
   payloads: NonNullable<DiscordVoiceAgentTurnResult["payloads"]>,
 ): string {
-  let nonEmptyTextPayloads = 0;
-  let errorPayloads = 0;
-  let mediaPayloads = 0;
-
-  for (const payload of payloads) {
-    if (payload.text.trim()) {
-      nonEmptyTextPayloads += 1;
-    }
-    if (payload.isError === true) {
-      errorPayloads += 1;
-    }
-    if (payload.mediaUrl != null || payload.mediaUrls?.length) {
-      mediaPayloads += 1;
-    }
-  }
+  const nonEmptyTextPayloads = payloads.filter((payload) => payload.text.trim()).length;
+  const errorPayloads = payloads.filter((payload) => payload.isError === true).length;
+  const mediaPayloads = payloads.filter(
+    (payload) => payload.mediaUrl != null || payload.mediaUrls?.length,
+  ).length;
 
   return `payloadCount=${payloads.length} textPayloads=${payloads.length} nonEmptyTextPayloads=${nonEmptyTextPayloads} reasoningPayloads=0 errorPayloads=${errorPayloads} mediaPayloads=${mediaPayloads}`;
 }

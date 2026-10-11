@@ -65,12 +65,10 @@ import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtim
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
-import { iMessageApprovalControlBindings } from "../approval-control-binding-window.js";
 import type { IMessageApprovalGatewayRuntime } from "../approval-gateway-types.js";
 import { maybeResolveIMessageApprovalPollVote } from "../approval-polls.js";
 import { pollPendingIMessageApprovalReactions } from "../approval-reaction-poller.js";
 import { maybeResolveIMessageApprovalReaction } from "../approval-reactions.js";
-import { buildIMessageApprovalConversationKeyForInbound } from "../approval-target-keys.js";
 import { resolveIMessageDirectChatService } from "../chat-context.js";
 import { resolveIMessageStartupRowidWatermark } from "../chat-db.js";
 import { markIMessageChatRead, sendIMessageTyping } from "../chat.js";
@@ -1130,29 +1128,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
     });
   };
 
-  const resolveApprovalControlConversation = (message: IMessagePayload) => {
-    const sender = normalizeIMessageHandle((message.sender ?? "").trim());
-    const destination = normalizeIMessageHandle((message.destination_caller_id ?? "").trim());
-    const receivedSenderIsLocalFallback =
-      message.is_from_me !== true && Boolean(sender) && sender === destination;
-    const actorHandle =
-      (receivedSenderIsLocalFallback ? "" : sender) ||
-      (message.is_from_me === true ? destination : "");
-    return actorHandle
-      ? buildIMessageApprovalConversationKeyForInbound({
-          chatGuid: message.chat_guid,
-          chatIdentifier: message.chat_identifier,
-          chatId: message.chat_id,
-          isGroup: message.is_group,
-          actorHandle,
-        })
-      : null;
-  };
-
   const ingress = createIMessageDurableIngress({
     accountId: accountInfo.accountId,
     runtime,
-    dispatchPriority: async (message, lifecycle, receivedAt, provenance) => {
+    dispatchPriority: async (message, _lifecycle, receivedAt, provenance) => {
       const bodyText = (message.text ?? "").trim();
       const isApprovalCommand = /^\/approve(?:@[^\s]+)?(?:\s|$)/i.test(bodyText);
       const isCandidate =
@@ -1175,27 +1154,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
         await handleMessageNow(repairedMessage);
         return { kind: "completed" };
       }
-      const conversation = resolveApprovalControlConversation(repairedMessage);
-      while (true) {
-        if (await maybeHandleApprovalControl(repairedMessage)) {
-          return { kind: "completed" };
-        }
-        if (!conversation) {
-          return undefined;
-        }
-        const waited = await iMessageApprovalControlBindings.wait({
-          accountId: accountInfo.accountId,
-          conversation,
-          abortSignal: lifecycle.abortSignal,
-        });
-        if (!waited) {
-          // The binding may have completed between the ownership check and
-          // window lookup. Close that check-then-wait race before queueing.
-          return (await maybeHandleApprovalControl(repairedMessage))
-            ? { kind: "completed" }
-            : undefined;
-        }
-      }
+      return (await maybeHandleApprovalControl(repairedMessage))
+        ? { kind: "completed" }
+        : undefined;
     },
     dispatch: async (message, ingressLifecycle, receivedAt, provenance) => {
       // Recovery rows get the wider age fence; explicit catchup uses its own age window.

@@ -479,25 +479,22 @@ extension OnboardingAISetupModel {
         // Released Gateways do not send prepareOptions. Preserve their two
         // existing rows until the connected Gateway advertises provider-owned choices.
         let legacyOptions = [
+            ("ollama", "Ollama", "Download a tools-capable model from your Ollama server"),
+            (
+                "llama-cpp",
+                "Local model (llama.cpp)",
+                "Download an approximately 5.0 GB local model; requires 16 GB RAM"),
+        ].map { id, label, hint in
             PrepareOption(
-                id: "ollama",
-                label: "Ollama",
-                hint: "Download a tools-capable model from your Ollama server",
+                id: id,
+                label: label,
+                hint: hint,
                 actionLabel: nil,
-                brandId: "ollama",
+                brandId: id,
                 icon: nil,
                 website: nil,
-                modelTarget: nil),
-            PrepareOption(
-                id: "llama-cpp",
-                label: "Local model (llama.cpp)",
-                hint: "Download an approximately 5.0 GB local model; requires 16 GB RAM",
-                actionLabel: nil,
-                brandId: "llama-cpp",
-                icon: nil,
-                website: nil,
-                modelTarget: nil),
-        ]
+                modelTarget: nil)
+        }
         return (advertisedOptions ?? legacyOptions).filter { choice in
             let providerKind = self.providerAutoSetupKind(choiceID: choice.id)
             return !candidates.contains(where: {

@@ -12,8 +12,7 @@ const THREAD_SUFFIX_REGEX = /^(.*)(?::(?:thread|topic):\d+)$/i;
 const SESSION_HISTORY_PRELUDE = Symbol.for("openclaw.sessionHistoryPrelude");
 
 function stripThreadSuffix(value: string): string {
-  const match = value.match(THREAD_SUFFIX_REGEX);
-  return match?.[1] ?? value;
+  return value.match(THREAD_SUFFIX_REGEX)?.[1] ?? value;
 }
 
 /**
@@ -170,22 +169,18 @@ export function getHistoryLimitFromSessionKey(
     : undefined;
 
   if (kind === "direct") {
-    if (userId) {
-      // An explicit account `dms` map replaces the root map under the account
-      // merge contract, so pick the owning map before indexing. Falling back per
-      // entry would leak root per-peer overrides into that account.
-      const dms = accountConfig?.dms ?? providerConfig.dms;
-      const perDmLimit = dms?.[userId]?.historyLimit;
-      if (perDmLimit !== undefined) {
-        return perDmLimit;
-      }
-    }
-    return accountConfig?.dmHistoryLimit ?? providerConfig.dmHistoryLimit;
+    // An explicit account `dms` map replaces the root map under the account
+    // merge contract, so pick the owning map before indexing. Falling back per
+    // entry would leak root per-peer overrides into that account.
+    const perDmLimit = userId
+      ? (accountConfig?.dms ?? providerConfig.dms)?.[userId]?.historyLimit
+      : undefined;
+    return perDmLimit !== undefined
+      ? perDmLimit
+      : (accountConfig?.dmHistoryLimit ?? providerConfig.dmHistoryLimit);
   }
 
-  if (kind === "channel" || kind === "group") {
-    return accountConfig?.historyLimit ?? providerConfig.historyLimit;
-  }
-
-  return undefined;
+  return kind === "channel" || kind === "group"
+    ? (accountConfig?.historyLimit ?? providerConfig.historyLimit)
+    : undefined;
 }

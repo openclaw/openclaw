@@ -340,6 +340,34 @@ export async function installPackageDir<
     restore: MovePathPublicationReceipt | null;
   } = { backup: null, install: null, restore: null };
   const sourceHardlinks = params.sourceHardlinks === "package-manager" ? "allow" : "reject";
+  const assertInstallBase = () =>
+    assertInstallBaseStable({ installBaseDir, expectedRealPath: installBaseRealPath });
+  const publish = async (from: string, to: string, kind: "backup" | "install") => {
+    await assertInstallBase();
+    // Displacement and publication require the same final ownership check.
+    if (params.authorizeMutation) {
+      await params.authorizeMutation();
+    }
+    await movePathWithCopyFallback({
+      assertBeforeMutation: assertPersistentApply,
+      onDestinationPublished: (receipt) => {
+        published[kind] = receipt;
+      },
+      from,
+      sourceHardlinks,
+      to,
+    });
+  };
+  const discardBackup = async (assertOwner: () => void) => {
+    if (published.backup) {
+      await removeInstallTree({
+        directory: published.backup.path,
+        identity: published.backup,
+        assertOwner,
+        bestEffort: true,
+      });
+    }
+  };
   let quarantine:
     | { directory: string; identity: Awaited<ReturnType<typeof readDirectoryIdentity>> }
     | undefined;
@@ -460,6 +488,21 @@ export async function installPackageDir<
       throw new Error(`${String(error)}; ${recovery}`, { cause: error });
     }
   };
+  const validate = async (
+    run: () => Promise<InstallPackageDirSuccess | TAfterInstallFailure>,
+    label: string,
+  ) => {
+    try {
+      const result = await run();
+      if (!result.ok) {
+        const failed = await fail(result.error);
+        return { ...result, error: failed.error };
+      }
+      return null;
+    } catch (error) {
+      return await fail(`${label} validation failed: ${String(error)}`, error);
+    }
+  };
 
   try {
     await assertCanonicalPathWithinBase({
@@ -549,14 +592,9 @@ export async function installPackageDir<
   }
 
   if (params.afterInstall) {
-    try {
-      const postInstallResult = await params.afterInstall(stageDir);
-      if (!postInstallResult.ok) {
-        const failed = await fail(postInstallResult.error);
-        return { ...postInstallResult, error: failed.error };
-      }
-    } catch (err) {
-      return await fail(`post-install validation failed: ${String(err)}`, err);
+    const failure = await validate(() => params.afterInstall!(stageDir!), "post-install");
+    if (failure) {
+      return failure;
     }
   }
 
@@ -573,23 +611,7 @@ export async function installPackageDir<
         candidatePath: backupPath,
         boundaryLabel: "install directory",
       });
-      await assertInstallBaseStable({
-        installBaseDir,
-        expectedRealPath: installBaseRealPath,
-      });
-      // Displacing the current install uses the same final ownership check as publication.
-      if (params.authorizeMutation) {
-        await params.authorizeMutation();
-      }
-      await movePathWithCopyFallback({
-        assertBeforeMutation: assertPersistentApply,
-        onDestinationPublished: (receipt) => {
-          published.backup = receipt;
-        },
-        from: canonicalTargetDir,
-        sourceHardlinks,
-        to: backupPath,
-      });
+      await publish(canonicalTargetDir, backupPath, "backup");
     } catch (err) {
       return await fail(`${params.copyErrorPrefix}: ${String(err)}`, err);
     }
@@ -598,34 +620,14 @@ export async function installPackageDir<
   if (published.backup && params.afterBackup) {
     // Validate the moved original, not its former path: new path-based writes now
     // reach the replacement, while a refusal can still restore the original tree.
-    try {
-      const backupResult = await params.afterBackup(published.backup.path);
-      if (!backupResult.ok) {
-        const failed = await fail(backupResult.error);
-        return { ...backupResult, error: failed.error };
-      }
-    } catch (err) {
-      return await fail(`backup validation failed: ${String(err)}`, err);
+    const failure = await validate(() => params.afterBackup!(published.backup!.path), "backup");
+    if (failure) {
+      return failure;
     }
   }
 
   try {
-    await assertInstallBaseStable({
-      installBaseDir,
-      expectedRealPath: installBaseRealPath,
-    });
-    if (params.authorizeMutation) {
-      await params.authorizeMutation();
-    }
-    await movePathWithCopyFallback({
-      assertBeforeMutation: assertPersistentApply,
-      onDestinationPublished: (receipt) => {
-        published.install = receipt;
-      },
-      from: stageDir,
-      sourceHardlinks,
-      to: canonicalTargetDir,
-    });
+    await publish(stageDir, canonicalTargetDir, "install");
     stageDir = null;
   } catch (err) {
     return await fail(`${params.copyErrorPrefix}: ${String(err)}`, err);
@@ -633,10 +635,7 @@ export async function installPackageDir<
 
   if (published.backup) {
     try {
-      await assertInstallBaseStable({
-        installBaseDir,
-        expectedRealPath: installBaseRealPath,
-      });
+      await assertInstallBase();
     } catch (err) {
       if (isInstallBaseChangedError(err)) {
         params.logger?.warn?.(INSTALL_BASE_CHANGED_BACKUP_WARNING);
@@ -644,15 +643,8 @@ export async function installPackageDir<
       published.backup = null;
     }
   }
-  if (published.backup && !deferCommit) {
-    await removeInstallTree({
-      directory: published.backup.path,
-      identity: published.backup,
-      assertOwner: assertPersistentApply,
-      bestEffort: true,
-    });
-  }
   if (!deferCommit) {
+    await discardBackup(assertPersistentApply);
     return { ok: true };
   }
   let settlement: Promise<void> | undefined;
@@ -682,14 +674,7 @@ export async function installPackageDir<
               throw new Error("cannot commit an install after rollback has started");
             }
             assertOwned();
-            if (published.backup) {
-              await removeInstallTree({
-                directory: published.backup.path,
-                identity: published.backup,
-                assertOwner: assertRollbackOwned,
-                bestEffort: true,
-              });
-            }
+            await discardBackup(assertRollbackOwned);
           }),
         rollback: () => settle(rollback),
       } satisfies PackageDirInstallTransaction,

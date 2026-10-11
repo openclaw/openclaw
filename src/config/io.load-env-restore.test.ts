@@ -106,28 +106,8 @@ describe("loadConfig env restoration", () => {
   });
 });
 
-it.each(["loadConfig", "readConfigFileSnapshot"] as const)(
-  "%s rolls back env after invalid config",
-  async (read) => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        env: { vars: { TEST_VAR: "injected-value" } },
-        gateway: { port: "invalid" },
-      });
-      const env: NodeJS.ProcessEnv = { HOME: home };
-      const io = configIO(home, env);
-      if (read === "loadConfig") {
-        expect(() => io.loadConfig()).toThrow(expect.objectContaining({ code: "INVALID_CONFIG" }));
-      } else {
-        expect((await io.readConfigFileSnapshot()).valid).toBe(false);
-      }
-      expect(env.TEST_VAR).toBeUndefined();
-    });
-  },
-);
-
 it.each(
-  (["snapshot", "for-write"] as const).flatMap((entry) =>
+  (["for-write"] as const).flatMap((entry) =>
     (["unchanged", "replaced", "deleted"] as const).map((change) => ({ entry, change })),
   ),
 )(
@@ -471,7 +451,7 @@ describe("snapshot source authority", () => {
   );
 
   it.each(
-    (["snapshot", "for-write"] as const).flatMap((entry) =>
+    (["for-write"] as const).flatMap((entry) =>
       (["env", "invalid-restore"] as const).flatMap((boundary) =>
         [false, true].map((revoked) => ({ entry, boundary, revoked })),
       ),

@@ -111,16 +111,13 @@ describe("Heartbeat cron and exec event ownership", () => {
     expect(replySpy).not.toHaveBeenCalled();
   }
 
-  it.each(["outside active hours", "with heartbeat noise", "without delivery"])(
+  it.each(["outside active hours", "without delivery"])(
     "builds the cron reminder prompt %s",
     async (scenario) => {
       const internal = scenario === "without delivery";
       const outsideHours = scenario === "outside active hours";
       await withHeartbeat(
         async (f) => {
-          if (scenario === "with heartbeat noise") {
-            f.enqueue("HEARTBEAT_OK");
-          }
           f.enqueue(reminder, outsideHours ? "cron:nightly-report" : undefined);
           f.replySpy.mockResolvedValue({
             text: internal
@@ -247,6 +244,12 @@ describe("Heartbeat cron and exec event ownership", () => {
             throw new Error("expected exec completion event");
           }
           expect(consumeSelectedSystemEventEntries(f.sessionKey, [completion])).toHaveLength(1);
+          f.replySpy.mockImplementation(async (ctx, options) => {
+            expect(ctx.InternalTurnSource).toBe("heartbeat");
+            expect(ctx.Body).not.toContain("deploy succeeded");
+            expect(await formatQueuedEvents(f.cfg, ctx, options)).toContain("Node connected");
+            return { text: "HEARTBEAT_OK" };
+          });
         } else {
           f.enqueue("Exec finished (gateway id=abc12345, code 0)\ndeploy succeeded");
           f.replySpy.mockResolvedValue({ text: "Deploy succeeded" });
@@ -254,8 +257,8 @@ describe("Heartbeat cron and exec event ownership", () => {
         f.enqueue("Node connected");
         const result = await f.run({ reason: "exec-event" });
         if (acknowledged) {
-          expect(result).toEqual({ status: "skipped", reason: "no-pending-event" });
-          expect(f.replySpy).not.toHaveBeenCalled();
+          expect(result.status).toBe("ran");
+          expect(f.replySpy).toHaveBeenCalledOnce();
           expect(f.sendTelegram).not.toHaveBeenCalled();
         } else {
           expect(result.status).toBe("ran");
@@ -264,29 +267,8 @@ describe("Heartbeat cron and exec event ownership", () => {
           expect(ctx.Body).toContain("deploy succeeded");
           expect(ctx.Body).not.toContain("Node connected");
         }
-        expect(peekSystemEvents(f.sessionKey)).toEqual(["Node connected"]);
+        expect(peekSystemEvents(f.sessionKey)).toEqual(acknowledged ? [] : ["Node connected"]);
       });
-    },
-  );
-  it.each([false, true])(
-    "inspects base-session hook exec completions only outside isolation=%s",
-    async (isolatedSession) => {
-      await withHeartbeat(
-        async (f) => {
-          f.enqueue("exec finished: webhook-triggered backup completed");
-          f.replySpy.mockResolvedValue({ text: "Handled internally" });
-          expect((await f.run({ reason: "hook:wake" })).status).toBe("ran");
-          const ctx = getFirstReplyContext(f.replySpy);
-          expect(ctx.InternalTurnSource).toBe(isolatedSession ? "heartbeat" : "exec");
-          if (isolatedSession) {
-            expect(ctx.SessionKey).toContain(":heartbeat");
-          } else {
-            expect(ctx.Body).toContain("Handle the result internally");
-          }
-          expect(f.sendTelegram).not.toHaveBeenCalled();
-        },
-        { target: "none", isolatedSession },
-      );
     },
   );
   it.each([true, false])(

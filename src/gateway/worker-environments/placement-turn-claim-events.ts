@@ -8,6 +8,7 @@ import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
+import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
   captureAgentRunDelegatedSourceAssertion,
   claimAgentRunApprovalAuthority,
@@ -66,7 +67,9 @@ export type WorkerTurnExecutionIdentity = Readonly<{
   assertPresenceSourceCurrent?: () => void;
   receiptAuthority: () => void;
   sessionKey: string;
-  sessionTarget: Readonly<BoundAgentRunSessionTarget>;
+  sessionTarget: Readonly<
+    BoundAgentRunSessionTarget & ReturnType<typeof captureSessionTranscriptTargetBinding>
+  >;
   turnClaim: WorkerSessionTurnClaim;
 }>;
 
@@ -163,7 +166,7 @@ export async function bindWorkerTurnOwner(
   }>
 > {
   let claim = structuredClone(requestedClaim);
-  const sessionTarget = Object.freeze({ ...requestedSource });
+  const sessionTarget = Object.freeze(captureSessionTranscriptTargetBinding(requestedSource));
   const preparedPromptCacheContext = promptCacheContext
     ? Object.freeze({ ...promptCacheContext })
     : undefined;
@@ -191,7 +194,6 @@ export async function bindWorkerTurnOwner(
         throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
       }
     };
-    assertPreparedCurrent();
     assertRunActive();
     operatorAuthority?.assertCurrent();
     assertPreparedCurrent();
@@ -226,15 +228,8 @@ export async function bindWorkerTurnOwner(
     delegatedSource.assertBinding();
   };
   const assertActive = composeSessionSourceAssertion(
-    [
-      delegatedSource.assertCurrent,
-      assertRunActive,
-      operatorAuthority?.assertCurrent,
-      delegatedSource.assertCurrent,
-    ],
+    [delegatedSource.assertCurrent, assertRunActive, operatorAuthority?.assertCurrent],
     (assertSources) => {
-      // A closed claim must not consult its retired source. Callbacks can also revoke it.
-      assertOwnerCurrent();
       assertSources();
       assertOwnerCurrent();
     },
@@ -350,7 +345,6 @@ export function captureWorkerTurnClaimCurrentness(
     owners?.get(claim.sessionId) === bound &&
     bound.runtime.claimAuthority.isCurrent();
   return () =>
-    isBoundCurrent() &&
     validateAgentRunDelegatedAuthority(delegatedAuthority, bound.runtime.delegatedAuthority) &&
     isBoundCurrent();
 }

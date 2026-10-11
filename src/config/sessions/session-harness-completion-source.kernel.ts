@@ -1,5 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { normalizeInputProvenance } from "../../sessions/input-provenance.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly-open.js";
 import type { HarnessCompletionRecovery } from "./restart-recovery-types.js";
@@ -82,15 +82,19 @@ export function readAdmittedHarnessCompletionInput(params: {
 export function readHarnessCompletionSourceInDatabase(
   database: OpenClawAgentReadOnlyDatabase,
   claim: HarnessCompletionRecovery,
+  mode: "admission" | "committed" = "admission",
 ): HarnessCompletionSourceSnapshot {
-  return runSqliteDeferredTransactionSync(database.db, () => {
+  return runSqliteReadSnapshotSync(database.db, () => {
     const entry = readExactSessionEntryRow(
       database,
       claim.requesterSessionKey,
       "full",
       "canonical",
     )?.entry;
-    if (!entry || entry.restartRecoveryDeliveryRunId === claim.sourceRunId) {
+    if (
+      !entry ||
+      (mode === "admission" && entry.restartRecoveryDeliveryRunId === claim.sourceRunId)
+    ) {
       return { entry, validInput: true };
     }
     const resolved = {

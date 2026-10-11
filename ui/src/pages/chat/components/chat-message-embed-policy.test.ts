@@ -55,33 +55,31 @@ describe("assistant message embed policy", () => {
         return card!;
       };
       const play = async (card: HTMLElementTagNameMap["openclaw-youtube-video"]) => {
-        const button = card.shadowRoot?.querySelector<HTMLButtonElement>(
+        const button = card.querySelector<HTMLButtonElement>(
           'button[aria-label="Play Synthetic video"]',
         );
         expect(button).not.toBeNull();
         button!.click();
         await card.updateComplete;
-        const frame = card.shadowRoot?.querySelector("iframe");
+        const frame = card.querySelector("iframe");
         expect(frame).toBeInstanceOf(HTMLIFrameElement);
         return frame!;
       };
 
       const first = await show();
-      expect(first.shadowRoot?.querySelector("iframe")).toBeNull();
+      expect(first.querySelector("iframe")).toBeNull();
       const firstFrame = await play(first);
       await show("strict");
       expect(firstFrame.isConnected).toBe(false);
-      expect(first.shadowRoot?.querySelector("button")).toBeNull();
-      expect(first.shadowRoot?.querySelector("a")?.href).toBe(
-        "https://www.youtube.com/watch?v=AbCdEfGhI_1",
-      );
+      expect(first.querySelector("button")).toBeNull();
+      expect(first.querySelector("a")?.href).toBe("https://www.youtube.com/watch?v=AbCdEfGhI_1");
 
       const reenabled = await show();
-      expect(reenabled.shadowRoot?.querySelector("iframe")).toBeNull();
+      expect(reenabled.querySelector("iframe")).toBeNull();
       const reenabledFrame = await play(reenabled);
       const otherSession = await show("scripts", "agent:main:second");
       expect(reenabledFrame.isConnected).toBe(false);
-      expect(otherSession.shadowRoot?.querySelector("iframe")).toBeNull();
+      expect(otherSession.querySelector("iframe")).toBeNull();
 
       const sessionFrame = await play(otherSession);
       const otherSource = await show(
@@ -90,8 +88,8 @@ describe("assistant message embed policy", () => {
         "https://youtu.be/JkLmNoPqR_2",
       );
       expect(sessionFrame.isConnected).toBe(false);
-      expect(otherSource.shadowRoot?.querySelector("iframe")).toBeNull();
-      expect(otherSource.shadowRoot?.querySelector("a")?.href).toBe(
+      expect(otherSource.querySelector("iframe")).toBeNull();
+      expect(otherSource.querySelector("a")?.href).toBe(
         "https://www.youtube.com/watch?v=JkLmNoPqR_2",
       );
     },

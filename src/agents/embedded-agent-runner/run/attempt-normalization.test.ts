@@ -230,6 +230,7 @@ describe("fixed-store session bootstrap", () => {
       };
       const callerError = new Error("reset owner closed while waiting for commit");
       let closed = false;
+      let commitGuardAccepted = false;
       const assertActive = () => {
         if (closed) {
           throw callerError;
@@ -238,7 +239,8 @@ describe("fixed-store session bootstrap", () => {
       sessionAccessorMocks.patchSessionEntryCore.mockImplementationOnce(
         async (_scope, _update, options) => {
           closed = closeBeforeCommit;
-          options?.assertCommitAllowed?.();
+          options?.workerGuard?.source?.();
+          commitGuardAccepted = true;
           return null;
         },
       );
@@ -252,8 +254,12 @@ describe("fixed-store session bootstrap", () => {
       expect(sessionAccessorMocks.patchSessionEntryCore).toHaveBeenCalledWith(
         sessionTarget,
         expect.any(Function),
-        expect.objectContaining({ skipMaintenance: true, assertCommitAllowed: assertActive }),
+        expect.objectContaining({
+          skipMaintenance: true,
+          workerGuard: expect.objectContaining({ source: assertActive }),
+        }),
       );
+      expect(commitGuardAccepted).toBe(!closeBeforeCommit);
     },
   );
 

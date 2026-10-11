@@ -4,6 +4,7 @@ import { bindSqliteWorkerBackend as bindBackend } from "./memory-entry-origins.w
 
 export type MemoryForgetFault = {
   trigger?: { event: string; message: string; action: "ABORT" | "FAIL" };
+  originTrigger?: { name: string; createSql: string };
   reportPath?: string;
   failResult?: "forget.mark" | "forget.purge";
 };
@@ -17,6 +18,9 @@ export function bindSqliteWorkerBackend(
   const prepare = db.prepare.bind(db);
   const restoreStatements: Array<() => void> = [];
   const counts = { sourceDeletes: 0, tombstoneInserts: 0 };
+  if (input.originTrigger) {
+    db.exec(input.originTrigger.createSql);
+  }
   if (input.trigger) {
     const { event, message, action } = input.trigger;
     db.exec(
@@ -72,6 +76,9 @@ export function bindSqliteWorkerBackend(
       try {
         if (db.isOpen && input.trigger) {
           db.exec("DROP TRIGGER temp.forget_fixture_failure");
+        }
+        if (db.isOpen && input.originTrigger) {
+          db.exec(`DROP TRIGGER ${input.originTrigger.name}`);
         }
       } catch (error) {
         failures.push(error);

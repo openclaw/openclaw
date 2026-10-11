@@ -67,17 +67,6 @@ function assertPreparedDispatchLifecycle<TDispatchResult>(
   }
 }
 
-function emit(
-  params: Pick<RunChannelTurnParams<unknown>, "log" | "channel" | "accountId">,
-  event: Omit<ChannelTurnLogEvent, "channel">,
-) {
-  params.log?.({
-    channel: params.channel,
-    accountId: params.accountId,
-    ...event,
-  });
-}
-
 function resolveDroppedHistorySender(input: NormalizedTurnInput, preflight: PreflightFacts) {
   return (
     preflight.message?.senderLabel ??
@@ -156,11 +145,18 @@ export async function runChannelTurn<
 >(
   params: RunChannelTurnParams<TRaw, TDispatchResult, ChannelTurnDeliveryAdapter>,
 ): Promise<ChannelTurnResult<TDispatchResult>> {
-  emit(params, { stage: "ingest", event: "start" });
+  const emit = (event: Omit<ChannelTurnLogEvent, "channel">) => {
+    params.log?.({
+      channel: params.channel,
+      accountId: params.accountId,
+      ...event,
+    });
+  };
+  emit({ stage: "ingest", event: "start" });
   const input = await params.adapter.ingest(params.raw);
   if (!input) {
     const admission: ChannelTurnAdmission = { kind: "drop", reason: "ingest-null" };
-    emit(params, {
+    emit({
       stage: "ingest",
       event: "drop",
       admission: admission.kind,
@@ -168,7 +164,7 @@ export async function runChannelTurn<
     });
     return { admission, dispatched: false };
   }
-  emit(params, { stage: "ingest", event: "done", messageId: input.id });
+  emit({ stage: "ingest", event: "done", messageId: input.id });
 
   const eventClass = (await params.adapter.classify?.(input)) ?? DEFAULT_EVENT_CLASS;
   if (!eventClass.canStartAgentTurn) {
@@ -176,7 +172,7 @@ export async function runChannelTurn<
       kind: "handled",
       reason: `event:${eventClass.kind}`,
     };
-    emit(params, {
+    emit({
       stage: "classify",
       event: "handled",
       messageId: input.id,
@@ -198,7 +194,7 @@ export async function runChannelTurn<
       preflight,
       admission: preflightAdmission,
     });
-    emit(params, {
+    emit({
       stage: "preflight",
       event: preflightAdmission.kind === "handled" ? "handled" : "drop",
       messageId: input.id,
@@ -211,7 +207,7 @@ export async function runChannelTurn<
   const unresolved = await params.adapter.resolveTurn(input, eventClass, preflight);
   const isRoutedTurn = "route" in unresolved && !("runDispatch" in unresolved);
   const resolved = assembleResolvedChannelTurn(unresolved);
-  emit(params, {
+  emit({
     accountId: resolved.accountId ?? params.accountId,
     stage: "assemble",
     event: "done",
@@ -222,7 +218,7 @@ export async function runChannelTurn<
 
   const admission = resolved.admission ?? preflightAdmission ?? ({ kind: "dispatch" } as const);
   const emitFinalize = (event: { event: "done" | "error"; error?: unknown }) =>
-    emit(params, {
+    emit({
       accountId: resolved.accountId ?? params.accountId,
       stage: "finalize",
       messageId: input.id,

@@ -72,53 +72,29 @@ function isLightBackground(): boolean {
 
 const lightMode = isLightBackground();
 
-const darkPalette = {
-  text: "#E8E3D5",
-  dim: "#7B7F87",
-  accent: "#F6C453",
-  accentSoft: "#F2A65A",
-  border: "#3C414B",
-  userBg: "#2B2F36",
-  userText: "#F3EEE0",
-  systemText: "#9BA3B2",
-  toolPendingBg: "#1F2A2F",
-  toolSuccessBg: "#1E2D23",
-  toolErrorBg: "#2F1F1F",
-  toolTitle: "#F6C453",
-  toolOutput: "#E1DACB",
-  quote: "#8CC8FF",
-  quoteBorder: "#3B4D6B",
-  code: "#F0C987",
-  codeBorder: "#343A45",
-  link: "#7DD3A5",
-  error: "#F97066",
-  success: "#7DD3A5",
-} as const;
-
-const lightPalette = {
-  text: "#1E1E1E",
-  dim: "#5B6472",
-  accent: "#B45309",
-  accentSoft: "#C2410C",
-  border: "#5B6472",
-  userBg: "#F3F0E8",
-  userText: "#1E1E1E",
-  systemText: "#4B5563",
-  toolPendingBg: "#EFF6FF",
-  toolSuccessBg: "#ECFDF5",
-  toolErrorBg: "#FEF2F2",
-  toolTitle: "#B45309",
-  toolOutput: "#374151",
-  quote: "#1D4ED8",
-  quoteBorder: "#2563EB",
-  code: "#92400E",
-  codeBorder: "#92400E",
-  link: "#047857",
-  error: "#DC2626",
-  success: "#047857",
-} as const;
-
-const palette = lightMode ? lightPalette : darkPalette;
+const color = (dark: string, light: string) => (lightMode ? light : dark);
+const palette = {
+  text: color("#E8E3D5", "#1E1E1E"),
+  dim: color("#7B7F87", "#5B6472"),
+  accent: color("#F6C453", "#B45309"),
+  accentSoft: color("#F2A65A", "#C2410C"),
+  border: color("#3C414B", "#5B6472"),
+  userBg: color("#2B2F36", "#F3F0E8"),
+  userText: color("#F3EEE0", "#1E1E1E"),
+  systemText: color("#9BA3B2", "#4B5563"),
+  toolPendingBg: color("#1F2A2F", "#EFF6FF"),
+  toolSuccessBg: color("#1E2D23", "#ECFDF5"),
+  toolErrorBg: color("#2F1F1F", "#FEF2F2"),
+  toolTitle: color("#F6C453", "#B45309"),
+  toolOutput: color("#E1DACB", "#374151"),
+  quote: color("#8CC8FF", "#1D4ED8"),
+  quoteBorder: color("#3B4D6B", "#2563EB"),
+  code: color("#F0C987", "#92400E"),
+  codeBorder: color("#343A45", "#92400E"),
+  link: color("#7DD3A5", "#047857"),
+  error: color("#F97066", "#DC2626"),
+  success: color("#7DD3A5", "#047857"),
+};
 
 const fg = (hex: string) => (text: string) => chalk.hex(hex)(text);
 const bg = (hex: string) => (text: string) => chalk.bgHex(hex)(text);

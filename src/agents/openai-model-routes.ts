@@ -140,6 +140,7 @@ export function resolveOpenAIModelRoutes(params: {
   modelId?: string;
   api?: string | null;
   baseUrl?: unknown;
+  observedRoutes?: readonly ProviderModelRouteSource[];
   config?: OpenClawConfig;
   agentId?: string;
   primaryModel?: ProviderModelRef;
@@ -165,6 +166,7 @@ export function resolveOpenAIModelRoutes(params: {
     modelId: params.modelId,
     api: params.api as ModelApi | null | undefined,
     baseUrl: params.baseUrl,
+    observedRoutes: params.observedRoutes,
     routeIntent: params.routeIntent,
     pinnedAuthRequirement: params.pinnedAuthRequirement,
   });

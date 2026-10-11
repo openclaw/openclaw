@@ -84,6 +84,7 @@ type CopilotApiModelEntry = {
   policy?: {
     state?: string;
   };
+  supported_endpoints?: string[];
   capabilities?: {
     type?: string;
     limits?: {
@@ -181,14 +182,30 @@ type CopilotCatalogModel = Omit<ModelDefinitionConfig, "input"> & {
   input: ProviderRuntimeModel["input"];
 };
 
-function resolveCopilotApiForVendor(
-  vendor: string | undefined,
+const COPILOT_LISTED_ENDPOINT_APIS = [
+  ["/v1/messages", "anthropic-messages"],
+  ["/responses", "openai-responses"],
+  ["/chat/completions", "openai-completions"],
+] as const;
+
+// Keep the family transport when the account lists its endpoint; otherwise use
+// an endpoint the account does list (e.g. Chat Completions-only models).
+function resolveCopilotListedApi(
+  entry: CopilotApiModelEntry,
   modelId: string,
 ): "anthropic-messages" | "openai-completions" | "openai-responses" {
-  if (vendor && vendor.toLowerCase() === "anthropic") {
-    return "anthropic-messages";
+  const preferred =
+    entry.vendor?.toLowerCase() === "anthropic"
+      ? "anthropic-messages"
+      : resolveCopilotTransportApi(modelId);
+  const endpoints = entry.supported_endpoints;
+  if (!Array.isArray(endpoints)) {
+    return preferred;
   }
-  return resolveCopilotTransportApi(modelId);
+  const listed = COPILOT_LISTED_ENDPOINT_APIS.filter(([endpoint]) =>
+    endpoints.includes(endpoint),
+  ).map(([, api]) => api);
+  return listed.includes(preferred) ? preferred : (listed[0] ?? preferred);
 }
 
 function mergeCopilotCompat(
@@ -240,9 +257,23 @@ function mapCopilotApiModelToDefinition(
     asPositiveSafeInteger(limits?.max_context_window_tokens) ?? DEFAULT_CONTEXT_WINDOW;
   const contextTokens = asPositiveSafeInteger(limits?.max_prompt_tokens);
   const maxTokens = asPositiveSafeInteger(limits?.max_output_tokens) ?? DEFAULT_MAX_TOKENS;
-  const compat = mergeCopilotCompat(resolveCopilotModelCompat(id), supports?.reasoning_effort);
-  const api = resolveCopilotApiForVendor(entry.vendor, id);
-  const thinkingLevelMap = resolveCopilotThinkingLevelMap(id, compat, api);
+  const api = resolveCopilotListedApi(entry, id);
+  const compat = mergeCopilotCompat(resolveCopilotModelCompat(id, api), supports?.reasoning_effort);
+  // Copilot lists effort levels instead of Anthropic's capability tree. Only
+  // adaptive-thinking Claude models offer xhigh, so a listed Claude id that
+  // OpenClaw does not know yet still gets adaptive thinking, not manual budgets.
+  const efforts = compat?.supportedReasoningEfforts;
+  const params =
+    api === "anthropic-messages" && efforts?.includes("xhigh")
+      ? {
+          claudeCapabilities: {
+            adaptiveThinking: true,
+            xhighEffort: true,
+            maxEffort: efforts.includes("max"),
+          },
+        }
+      : undefined;
+  const thinkingLevelMap = resolveCopilotThinkingLevelMap(id, compat, api, params);
 
   const definition: CopilotCatalogModel = {
     id,
@@ -256,6 +287,7 @@ function mapCopilotApiModelToDefinition(
     maxTokens,
     ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
     ...(compat ? { compat } : {}),
+    ...(params ? { params } : {}),
   };
   copilotModelSelectionMetadata.set(definition, {
     category: normalizeOptionalLowercaseString(entry.model_picker_category),

@@ -221,6 +221,39 @@ async function reclaimInstances(
   }
 }
 
+/** Only exact process-owned roots are excluded; a partially retained root may still need cleanup. */
+export async function hasPluginNativeCaptureCleanupCandidates(stateDir: string): Promise<boolean> {
+  for (const [root, prefix] of [
+    [resolvePluginSourceCapturesDirectory(stateDir), undefined],
+    [tmpdir(), resolvePluginSourceCaptureFallbackPrefix(stateDir)],
+  ] as const) {
+    let entries: fs.Dirent[];
+    try {
+      entries = await fsPromises.readdir(root, { withFileTypes: true });
+    } catch (error) {
+      if (!hasErrnoCode(error, "ENOENT")) {
+        throw error;
+      }
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || (prefix && !entry.name.startsWith(prefix))) {
+        continue;
+      }
+      try {
+        if (!ownedRoots.has(await fsPromises.realpath(path.join(root, entry.name)))) {
+          return true;
+        }
+      } catch (error) {
+        if (!hasErrnoCode(error, "ENOENT")) {
+          throw error;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 /** The caller holds plugin lifecycle or offline maintenance custody and fresh index references. */
 export async function prunePluginNativeCaptureDirectories(
   stateDir: string,

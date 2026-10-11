@@ -118,14 +118,6 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
     // replacement or a forced reload must not let an older request win.
     const loadingState = { ...current, loading: true, error: undefined };
     const ownsLoadingState = () => this.sessionSharingStates.get(cacheKey) === loadingState;
-    const clearOwnedLoadingState = () => {
-      if (!ownsLoadingState()) {
-        return;
-      }
-      const next = new Map(this.sessionSharingStates);
-      next.delete(cacheKey);
-      this.sessionSharingStates = next;
-    };
     this.setSessionSharingState(cacheKey, loadingState);
     let next: ChatSessionSharingState;
     try {
@@ -140,8 +132,10 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
       next = { loading: false, error: formatUiError(error) };
     }
     if (!this.ownsSessionSharing(scope, currentRow) || !ownsLoadingState()) {
-      if (this.isConnectionScopeCurrent(scope)) {
-        clearOwnedLoadingState();
+      if (this.isConnectionScopeCurrent(scope) && ownsLoadingState()) {
+        const sharingStates = new Map(this.sessionSharingStates);
+        sharingStates.delete(cacheKey);
+        this.sessionSharingStates = sharingStates;
       }
       return;
     }
@@ -290,69 +284,47 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
     }
   }
 
-  protected async setSessionVisibility(
+  protected setSessionVisibility(
     row: GatewaySessionRow,
     visibility: SessionVisibility,
   ): Promise<void> {
-    const scope = this.captureConnectionScope();
-    const currentRow = scope ? this.currentSessionSharingRow(scope, row) : null;
-    if (!scope || !currentRow || visibility === currentRow.visibility) {
-      return;
-    }
-    const agentId = this.sessionSharingAgentId(currentRow.key);
-    const cacheKey = this.sessionSharingCacheKey(currentRow.key);
-    const params = {
-      sessionKey: currentRow.key,
-      visibility,
-      ...(agentId ? { agentId } : {}),
-    };
-    if (
-      !readSessionMethodAccess(scope.context.gateway.snapshot, {
-        method: "session.visibility.set",
-        requiredScope: "operator.write",
-      }).allowed
-    ) {
-      return;
-    }
-    try {
-      await scope.client.request("session.visibility.set", params);
-      if (!this.ownsSessionSharing(scope, currentRow)) {
-        return;
-      }
-      const outcome = await scope.sessions.reconcileMutation(agentId);
-      const refreshedRow = this.currentSessionSharingRow(scope, currentRow);
-      if (!this.ownsHeaderOutcomeScope(scope) || !refreshedRow) {
-        return;
-      }
-      if (outcome.status === "failed") {
-        this.failSharing(scope, cacheKey, currentRow.key, outcome.error);
-        return;
-      }
-      await this.loadSessionSharing(refreshedRow, true);
-    } catch (error) {
-      if (!this.ownsSessionSharing(scope, currentRow)) {
-        return;
-      }
-      this.failSharing(scope, cacheKey, currentRow.key, error);
-    }
+    return this.mutateSessionSharing(row, { visibility });
   }
 
-  protected async setSessionMember(
+  protected setSessionMember(
     row: GatewaySessionRow,
     identityId: string,
     member: boolean,
   ): Promise<void> {
+    return this.mutateSessionSharing(row, { identityId, member });
+  }
+
+  private async mutateSessionSharing(
+    row: GatewaySessionRow,
+    change: { visibility: SessionVisibility } | { identityId: string; member: boolean },
+  ): Promise<void> {
     const scope = this.captureConnectionScope();
     const currentRow = scope ? this.currentSessionSharingRow(scope, row) : null;
-    if (!scope || !currentRow) {
+    if (
+      !scope ||
+      !currentRow ||
+      ("visibility" in change && change.visibility === currentRow.visibility)
+    ) {
       return;
     }
     const agentId = this.sessionSharingAgentId(currentRow.key);
     const cacheKey = this.sessionSharingCacheKey(currentRow.key);
-    const method = member ? "session.members.add" : "session.members.remove";
+    const method =
+      "visibility" in change
+        ? "session.visibility.set"
+        : change.member
+          ? "session.members.add"
+          : "session.members.remove";
     const params = {
       sessionKey: currentRow.key,
-      identityId,
+      ...("visibility" in change
+        ? { visibility: change.visibility }
+        : { identityId: change.identityId }),
       ...(agentId ? { agentId } : {}),
     };
     if (
@@ -368,13 +340,24 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
       if (!this.ownsSessionSharing(scope, currentRow)) {
         return;
       }
-      await this.loadSessionSharing(currentRow, true);
-      if (!this.ownsSessionSharing(scope, currentRow)) {
-        return;
+      const visibilityChanged = "visibility" in change;
+      if (!visibilityChanged) {
+        await this.loadSessionSharing(currentRow, true);
+        if (!this.ownsSessionSharing(scope, currentRow)) {
+          return;
+        }
       }
       const outcome = await scope.sessions.reconcileMutation(agentId);
-      if (outcome.status === "failed" && this.ownsSessionSharing(scope, currentRow)) {
+      const refreshedRow = this.currentSessionSharingRow(scope, currentRow);
+      if (!this.ownsHeaderOutcomeScope(scope) || !refreshedRow) {
+        return;
+      }
+      if (outcome.status === "failed") {
         this.failSharing(scope, cacheKey, currentRow.key, outcome.error);
+        return;
+      }
+      if (visibilityChanged) {
+        await this.loadSessionSharing(refreshedRow, true);
       }
     } catch (error) {
       if (!this.ownsSessionSharing(scope, currentRow)) {

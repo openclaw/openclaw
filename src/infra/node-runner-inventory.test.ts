@@ -5,6 +5,7 @@ import {
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
   parseNodeRunnerInventoryDeclaration,
+  resolveNodeWorkerExecutionIssue,
   type NodeWorkerCapacitySnapshot,
 } from "./node-runner-inventory.js";
 
@@ -20,6 +21,7 @@ const workerHost = {
   statusWait: 1,
   preparedWorkspace: 1,
   capturedExecPolicy: true,
+  promptContext: 1,
 };
 const declaration = (host: unknown) => ({
   protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
@@ -45,6 +47,8 @@ it("copies current hosting declarations and omits absent optional capabilities",
 
 it.each([
   { ...workerHost, statusWait: 2 },
+  { ...workerHost, promptContext: 2 },
+  { ...workerHost, promptContext: true },
   { ...workerHost, capturedExecPolicy: false },
   { ...workerHost, bundleRetention: undefined },
   { ...workerHost, unexpected: true },
@@ -79,6 +83,22 @@ it("retains the private node diagnostic under a typed update code", () => {
     code: "node_runner_update_required",
   });
   expect(error.message).toContain("private-node-id");
+});
+
+it("keeps old inventories observable but requires prompt context for execution", () => {
+  for (const promptContext of [undefined, 1]) {
+    const parsed = parseNodeRunnerInventoryDeclaration(
+      declaration({ ...workerHost, promptContext }),
+    );
+    expect(parsed).not.toBeNull();
+    if (!parsed || !("workerHost" in parsed)) {
+      throw new Error("expected worker host inventory");
+    }
+    expect(resolveNodeWorkerExecutionIssue(parsed.workerHost)).toBe(
+      promptContext === 1 ? undefined : NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
+    );
+  }
+  expect(resolveNodeWorkerExecutionIssue({ enabled: false })).toBeUndefined();
 });
 
 describe("idle worker capacity negotiation", () => {

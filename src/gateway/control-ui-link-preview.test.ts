@@ -21,11 +21,20 @@ function requestUrl(input: Parameters<typeof fetch>[0]): string {
 function html(text: string) {
   return new Response(text, { headers: { "content-type": "text/html; charset=utf-8" } });
 }
-function load(path: string, enabled = () => true) {
-  return loadControlUiLinkPreview(new URL(path, "https://public.example"), enabled);
+const principal = {};
+function load(path: string, enabled = () => true, scope = principal, revision = 0) {
+  return loadControlUiLinkPreview(
+    parseControlUiLinkPreviewUrl(new URL(path, "https://public.example").href)!,
+    enabled,
+    {
+      principal: scope,
+      revision,
+    },
+  );
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   encode.mockReset();
@@ -279,6 +288,87 @@ describe("public link previews", () => {
     expect(await second).toEqual({});
     expect(await load("/shared")).toEqual({});
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not share cached or in-flight previews across principals or revisions", async () => {
+    const gate = createDeferred<Response>();
+    const requested = createDeferred();
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) => {
+      if (requestUrl(input).endsWith("/favicon.ico")) {
+        return new Response(null, { status: 404 });
+      }
+      if (fetch.mock.calls.length === 1) {
+        requested.resolve();
+        return gate.promise;
+      }
+      return html("<head><title>Current</title></head>");
+    });
+    vi.stubGlobal("fetch", fetch);
+    const first = load("/scoped");
+    await requested.promise;
+    const second = load("/scoped", () => true, {});
+    gate.resolve(html("<head><title>Original</title></head>"));
+    expect(await second).toEqual({ title: "Current" });
+    expect(await first).toEqual({ title: "Original" });
+    expect(await load("/scoped")).toEqual({ title: "Original" });
+    expect(await load("/scoped", () => true, principal, 1)).toEqual({ title: "Current" });
+    expect(fetch).toHaveBeenCalledTimes(6);
+  });
+
+  it("fetches a shared social image and favicon only once while sizing each output", async () => {
+    encode.mockResolvedValue({ data: PNG });
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockImplementation(async (input) =>
+        requestUrl(input).endsWith("/shared-image")
+          ? html(
+              '<head><meta property="og:image" content="/image.png"><link rel="icon" href="/image.png"></head>',
+            )
+          : new Response(PNG),
+      );
+    vi.stubGlobal("fetch", fetch);
+    expect(await load("/shared-image")).toEqual({ imageDataUrl: pngUrl, faviconDataUrl: pngUrl });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(
+      encode.mock.calls.map(([, options]) => options.resize.maxSide).toSorted((a, b) => a - b),
+    ).toEqual([64, 640]);
+  });
+
+  it("bounds queue wait by the preview deadline and never fetches an expired queued URL", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), ms);
+      return controller.signal;
+    });
+    const gate = createDeferred();
+    const started = createDeferred();
+    let active = 0;
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async () => {
+      if (++active === 4) {
+        started.resolve();
+      }
+      await gate.promise;
+      return new Response(null, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetch);
+    const pending = Array.from({ length: 4 }, (_, i) => load(`/busy-${i}`));
+    await started.promise;
+    let result: unknown;
+    const queued = load("/expired-in-queue").then((preview) => {
+      result = preview;
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(result).toEqual({});
+      expect(fetch).toHaveBeenCalledTimes(4);
+    } finally {
+      gate.resolve();
+      await Promise.all([...pending, queued]);
+    }
+    expect(fetch.mock.calls.some(([url]) => requestUrl(url).includes("expired-in-queue"))).toBe(
+      false,
+    );
   });
 
   it("does no work while disabled, including cached previews; disabling during HTML stops images", async () => {

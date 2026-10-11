@@ -474,6 +474,7 @@ export function prepareOpenClawAgentDatabaseWorkerLease(
   receipt: OpenClawAgentDatabaseWorkerLeaseReceipt;
   provenance: string | null;
   validation?: OpenClawAgentDatabaseValidation;
+  deferUnverifiedIntegrity?: boolean;
   claim(onVerification?: OpenClawAgentIntegrityVerificationReceiver): string;
 } {
   const database = {

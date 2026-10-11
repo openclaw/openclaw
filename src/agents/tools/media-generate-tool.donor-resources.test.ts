@@ -253,6 +253,7 @@ module.exports = { id: '${id}', register(api) {
               withRefreshStatus: (value) => value,
               readFullModelCatalog: () => catalog.modelCatalog,
               refreshExpiredModelCatalog: () => {},
+              recheckNativeLogin: () => {},
               readPublishedModels: () => undefined,
               loadFullModelCatalog: async () => catalog.modelCatalog,
               loadNativeModelCatalog: async () => catalog.modelCatalog,

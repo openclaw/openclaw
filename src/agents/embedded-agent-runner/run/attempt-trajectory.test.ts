@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   closeAdmittedRunDelegatedAuthority,
   prepareSystemAgentRunAdmission,
+  resolveAdmittedRunActiveAssertion,
 } from "../../admitted-run-context.js";
 
 const admissions: ReturnType<typeof prepareSystemAgentRunAdmission>[] = [];
@@ -71,45 +72,65 @@ describe("prepareEmbeddedAttemptTrajectory", () => {
     vi.clearAllMocks();
   });
 
-  it("creates the recorder and seeds session and trace metadata", async () => {
-    const recorder = { recordEvent: vi.fn() };
-    hoisted.createTrajectoryRuntimeRecorder.mockReturnValue(recorder);
+  it.each([false, true])(
+    "creates trajectory metadata with retained target: %s",
+    async (retained) => {
+      const recorder = { recordEvent: vi.fn() };
+      hoisted.createTrajectoryRuntimeRecorder.mockReturnValue(recorder);
 
-    const result = await prepareEmbeddedAttemptTrajectory((await createInput()) as never);
+      const input = await createInput();
+      const result = await prepareEmbeddedAttemptTrajectory({
+        ...input,
+        ...(retained
+          ? {
+              transcriptOwner: {
+                sessionTarget: input.attempt.sessionTarget,
+                assertCommitAllowed: resolveAdmittedRunActiveAssertion(
+                  input.attempt.admittedRunContext,
+                ),
+              },
+            }
+          : {}),
+      } as never);
 
-    expect(result).toBe(recorder);
-    expect(hoisted.resolveAttemptTrajectorySessionFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "main",
-        sessionFile: "/tmp/session.jsonl",
-        sessionId: "session-1",
-      }),
-    );
-    expect(hoisted.createTrajectoryRuntimeRecorder).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "run-1",
-        sessionFile: "/tmp/trajectory.jsonl",
-        sessionId: "session-1",
-        sessionTarget: expect.objectContaining({
-          agentId: "main",
+      expect(result).toBe(recorder);
+      if (retained) {
+        expect(hoisted.resolveAttemptTrajectorySessionFile).not.toHaveBeenCalled();
+      } else {
+        expect(hoisted.resolveAttemptTrajectorySessionFile).toHaveBeenCalledWith(
+          expect.objectContaining({
+            agentId: "main",
+            sessionFile: "/tmp/session.jsonl",
+            sessionId: "session-1",
+          }),
+        );
+      }
+      expect(hoisted.createTrajectoryRuntimeRecorder).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: "run-1",
+          sessionFile: retained ? input.attempt.sessionKey : "/tmp/trajectory.jsonl",
           sessionId: "session-1",
-          sessionKey: "agent:main:session-1",
-          storePath: "/tmp/openclaw-agent.sqlite",
+          sessionTarget: expect.objectContaining({
+            agentId: "main",
+            sessionId: "session-1",
+            sessionKey: "agent:main:session-1",
+            storePath: "/tmp/openclaw-agent.sqlite",
+          }),
         }),
-      }),
-    );
-    expect(recorder.recordEvent).toHaveBeenNthCalledWith(
-      1,
-      "session.started",
-      expect.objectContaining({ toolCount: 7, clientToolCount: 2 }),
-    );
-    expect(recorder.recordEvent).toHaveBeenNthCalledWith(2, "trace.metadata", {
-      trace: "metadata",
-    });
-    expect(hoisted.buildTrajectoryRunMetadata).toHaveBeenCalledWith(
-      expect.objectContaining({ fastMode: true, provider: "provider-1" }),
-    );
-  });
+      );
+      expect(recorder.recordEvent).toHaveBeenNthCalledWith(
+        1,
+        "session.started",
+        expect.objectContaining({ toolCount: 7, clientToolCount: 2 }),
+      );
+      expect(recorder.recordEvent).toHaveBeenNthCalledWith(2, "trace.metadata", {
+        trace: "metadata",
+      });
+      expect(hoisted.buildTrajectoryRunMetadata).toHaveBeenCalledWith(
+        expect.objectContaining({ fastMode: true, provider: "provider-1" }),
+      );
+    },
+  );
 
   it.each(["revoke", "abort"])(
     "does not record prepared metadata after %s during sink preparation",
@@ -125,9 +146,17 @@ describe("prepareEmbeddedAttemptTrajectory", () => {
         }
         return recorder;
       });
-      await expect(prepareEmbeddedAttemptTrajectory(input as never)).rejects.toThrow(
-        "admitted run authority is no longer active",
-      );
+      await expect(
+        prepareEmbeddedAttemptTrajectory({
+          ...input,
+          transcriptOwner: {
+            sessionTarget: input.attempt.sessionTarget,
+            assertCommitAllowed: resolveAdmittedRunActiveAssertion(
+              input.attempt.admittedRunContext,
+            ),
+          },
+        } as never),
+      ).rejects.toThrow("admitted run authority is no longer active");
       expect(recorder.recordEvent).not.toHaveBeenCalled();
     },
   );

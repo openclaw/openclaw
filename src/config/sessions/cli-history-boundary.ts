@@ -10,7 +10,15 @@ export type CliHistoryWriter = {
   assertReadable: () => void;
 };
 
+export type CliHistoryWriterFacts = Pick<
+  CliHistoryWriter,
+  "runId" | "authFingerprint" | "lifecycleRevision"
+>;
+
 const cliHistoryWriter = new AsyncLocalStorage<CliHistoryWriter>();
+
+/** The transcript tip moved between CLI history planning and the writer's commit. */
+export const CLI_HISTORY_CHANGED_BEFORE_PREPARATION = "CLI history changed before preparation";
 
 export function runWithCliHistoryWriter<T>(writer: CliHistoryWriter | undefined, run: () => T): T {
   return writer ? cliHistoryWriter.run(writer, run) : cliHistoryWriter.exit(run);

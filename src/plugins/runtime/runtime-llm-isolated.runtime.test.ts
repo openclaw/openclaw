@@ -132,6 +132,7 @@ describe("runtime.llm.complete isolated agent runtime", () => {
     stop();
 
     expectSingleCallFirstArg(hoisted.runIsolatedCompletion, {
+      purpose: "plugin-completion",
       config: expect.any(Object),
       provider: "openai",
       model: "gpt-5.5",

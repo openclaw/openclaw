@@ -2,6 +2,7 @@ import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
+import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
@@ -12,6 +13,7 @@ import type {
 } from "../../state/worker-operation-registry.js";
 import { createWorkerEnvironmentCommitAdmission } from "./store-commit-authority.js";
 import { reconcileAttachedSessionOwners } from "./store-mutations.js";
+import { createWorkerEnvironmentReceipt } from "./store-receipt.js";
 import { readWorkerEnvironmentFacts } from "./store-row-codec.js";
 import { readTotalChanges } from "./store-write.js";
 import { createWorkerEnvironmentStoreKernel } from "./store.kernel.js";
@@ -24,6 +26,7 @@ import { pruneObservedTerminalWorkerEnvironments } from "./terminal-environment-
 type Method = keyof WorkerEnvironmentMutationMethods | "initialize";
 type Input<Name extends Method> = {
   nowMs?: number;
+  publicationIncarnation: string;
 } & (Name extends keyof WorkerEnvironmentMutationMethods
   ? { input: WorkerEnvironmentMutationInput<Name> }
   : unknown);
@@ -43,21 +46,27 @@ function mutation<Name extends Method, Result>(
     return runOpenClawStateWriteTransaction(
       (transactionDatabase) => {
         const { db } = transactionDatabase;
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
         const now = () => input.nowMs ?? Date.now();
         const store = createWorkerEnvironmentStoreKernel(transactionDatabase, now);
         const changesBefore = readTotalChanges(db);
         const touched = new Set<string>();
         const result = execute(input, { db, store, now, touch: (id) => touched.add(id.trim()) });
+        const facts = readWorkerEnvironmentFacts(db, [...touched]);
         const receipt = {
           result,
           changed: readTotalChanges(db) !== changesBefore,
-          facts: readWorkerEnvironmentFacts(db, [...touched]),
+          publication: createWorkerEnvironmentReceipt(
+            {
+              identity: requireOpenClawStateDatabaseIdentity({ db }).key,
+              incarnation: input.publicationIncarnation,
+            },
+            facts,
+          ),
         };
         deferSqliteWorkerCommitReceipt(db, receipt);
         requestSqliteWorkerOperationAdmission({
           stage: "commit",
-          facts: createWorkerEnvironmentCommitAdmission(receipt.facts),
+          facts: createWorkerEnvironmentCommitAdmission(facts),
         });
         return receipt;
       },

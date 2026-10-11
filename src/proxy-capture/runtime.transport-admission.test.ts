@@ -11,6 +11,7 @@ import type { OpenClawStateWorkerLease } from "../state/openclaw-state-worker-st
 import { resolveDebugProxySettings, type DebugProxySettings } from "./env.js";
 import { withDeferredDebugProxyCapture } from "./runtime-deferral.js";
 import {
+  captureWsEventAsync,
   finalizeDebugProxyCapture,
   finalizeDebugProxyCaptureAsync,
   initializeDebugProxyCapture,
@@ -135,6 +136,30 @@ function stubGuardedCaptureEnv(sessionId: string) {
     vi.stubEnv(key, undefined);
   }
 }
+
+it("returns owner admission failure as an observed rejecting Promise", async () => {
+  stubGuardedCaptureEnv("owner-admission");
+  const admissionFailure = new Error("synthetic capture admission rejected");
+  control.scope = createOpenClawDatabaseMaintenanceScope();
+  vi.spyOn(control.scope, "assertAdmission").mockImplementation(() => {
+    throw admissionFailure;
+  });
+  try {
+    const result = captureWsEventAsync({
+      url: "wss://synthetic.invalid/capture",
+      direction: "outbound",
+      kind: "ws-frame",
+      flowId: "fixture",
+      payload: "fixture",
+    });
+    expect(result).toBeInstanceOf(Promise);
+    await expect(result).rejects.toBe(admissionFailure);
+  } finally {
+    const scope = control.scope;
+    control.scope = undefined;
+    await scope.close();
+  }
+});
 
 it.each(["fresh", "cached-worker", "saved-fetch"] as const)(
   "defers %s capture writes until the live update owner releases them",

@@ -201,17 +201,6 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       : this.context.agents.ensureList().then(() => undefined);
   }
 
-  private selectAgent(agentId: string) {
-    this.context.agentSelection.set(agentId);
-    this.resetMutationState();
-    this.resetBackfillState();
-  }
-
-  private setReplaceExisting(enabled: boolean) {
-    this.replaceExisting = enabled;
-    this.resetMutationState();
-  }
-
   private toggleCollection(providerId: string, itemIds: readonly string[], selected: boolean) {
     const next = new Set(this.selectedByProvider[providerId] ?? []);
     for (const itemId of itemIds) {
@@ -322,19 +311,20 @@ export class MemoryImportPage extends OpenClawLightDomElement {
     this.backfillTo = "";
     this.backfillBusy = null;
     this.backfillError = null;
-    this.backfillPreview = null;
-    this.backfillProgress = null;
-    this.backfillRollbackResult = null;
+    this.clearBackfillResults();
     this.backfillRollbackPending = false;
   }
 
-  private backfillRequest(agentId: string) {
-    return {
-      agentId,
-      ...(this.backfillFrom ? { from: this.backfillFrom } : {}),
-      ...(this.backfillTo ? { to: this.backfillTo } : {}),
-      limitDays: SESSION_BACKFILL_BATCH_DAYS,
-    };
+  private clearBackfillResults() {
+    this.backfillPreview = null;
+    this.backfillProgress = null;
+    this.backfillRollbackResult = null;
+  }
+
+  private setBackfillDate(field: "backfillFrom" | "backfillTo", value: string) {
+    this[field] = value;
+    this.clearBackfillResults();
+    this.backfillError = null;
   }
 
   private async runBackfill(operation: "preview" | "apply" | "rollback") {
@@ -359,10 +349,15 @@ export class MemoryImportPage extends OpenClawLightDomElement {
     this.backfillBusy = operation;
     this.backfillError = null;
     if (operation !== "rollback") {
-      this.backfillPreview = null;
-      this.backfillProgress = null;
-      this.backfillRollbackResult = null;
+      this.clearBackfillResults();
     }
+    const requestBackfill = (method: "preview" | "apply") =>
+      client.request<SessionBackfillGatewayResult>(`memory.sessionBackfill.${method}`, {
+        agentId,
+        ...(this.backfillFrom ? { from: this.backfillFrom } : {}),
+        ...(this.backfillTo ? { to: this.backfillTo } : {}),
+        limitDays: SESSION_BACKFILL_BATCH_DAYS,
+      });
     try {
       if (operation === "rollback") {
         const result = await client.request<SessionBackfillRollbackResult>(
@@ -376,10 +371,7 @@ export class MemoryImportPage extends OpenClawLightDomElement {
           this.backfillRollbackPending = false;
         }
       } else if (operation === "preview") {
-        const result = await client.request<SessionBackfillGatewayResult>(
-          "memory.sessionBackfill.preview",
-          this.backfillRequest(agentId),
-        );
+        const result = await requestBackfill("preview");
         if (isCurrent()) {
           this.backfillPreview = result;
         }
@@ -393,10 +385,7 @@ export class MemoryImportPage extends OpenClawLightDomElement {
         this.backfillProgress = progress;
         const processedDays = new Set<string>();
         while (true) {
-          const chunk = await client.request<SessionBackfillGatewayResult>(
-            "memory.sessionBackfill.apply",
-            this.backfillRequest(agentId),
-          );
+          const chunk = await requestBackfill("apply");
           if (!isCurrent()) {
             return;
           }
@@ -465,8 +454,15 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       backfillProgress: this.backfillProgress,
       backfillRollbackResult: this.backfillRollbackResult,
       backfillRollbackPending: this.backfillRollbackPending,
-      onSelectAgent: (nextAgentId) => this.selectAgent(nextAgentId),
-      onReplaceExisting: (enabled) => this.setReplaceExisting(enabled),
+      onSelectAgent: (nextAgentId) => {
+        this.context.agentSelection.set(nextAgentId);
+        this.resetMutationState();
+        this.resetBackfillState();
+      },
+      onReplaceExisting: (enabled) => {
+        this.replaceExisting = enabled;
+        this.resetMutationState();
+      },
       onRefresh: () => void this.refresh(),
       onToggleCollection: (providerId, itemIds, selected) =>
         this.toggleCollection(providerId, itemIds, selected),
@@ -478,20 +474,8 @@ export class MemoryImportPage extends OpenClawLightDomElement {
           this.applyError = null;
         }
       },
-      onBackfillFromChange: (value) => {
-        this.backfillFrom = value;
-        this.backfillPreview = null;
-        this.backfillProgress = null;
-        this.backfillRollbackResult = null;
-        this.backfillError = null;
-      },
-      onBackfillToChange: (value) => {
-        this.backfillTo = value;
-        this.backfillPreview = null;
-        this.backfillProgress = null;
-        this.backfillRollbackResult = null;
-        this.backfillError = null;
-      },
+      onBackfillFromChange: (value) => this.setBackfillDate("backfillFrom", value),
+      onBackfillToChange: (value) => this.setBackfillDate("backfillTo", value),
       onBackfillPreview: () => void this.runBackfill("preview"),
       onBackfillApply: () => void this.runBackfill("apply"),
       onBackfillRollbackRequest: () => {

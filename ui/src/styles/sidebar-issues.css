@@ -302,10 +302,7 @@ footer.sidebar-issues-panel__mentions-note {
 }
 
 .sidebar-issues-panel__summary:hover,
-.sidebar-issues-panel__details[open] > .sidebar-issues-panel__summary {
-  background: var(--bg-hover);
-}
-
+.sidebar-issues-panel__details[open] > .sidebar-issues-panel__summary,
 .sidebar-issues-panel__details[open] {
   background: var(--bg-hover);
 }

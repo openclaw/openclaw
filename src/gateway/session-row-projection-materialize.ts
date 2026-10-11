@@ -2,7 +2,6 @@ import { performance } from "node:perf_hooks";
 import { listAgentIds, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
-import { readPreparedSessionEntryChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import { readCommittedSessionEntryCache } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { readExactSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
 import { resolveSessionKeyBySessionId } from "../config/sessions/session-accessor.sqlite-entry.js";
@@ -14,8 +13,6 @@ import {
 } from "../config/sessions/session-incognito-binding.js";
 import { listSessionMembers } from "../config/sessions/session-sharing-store.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
-import type { SessionRowChange } from "../sessions/session-row-changes.js";
-import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
@@ -40,158 +37,6 @@ import { materializeSessionRow, readSessionRowInputs } from "./session-utils-row
 import { createGatewaySessionEntryReader } from "./session-utils-store-lineage.js";
 import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils-store-lookup.js";
 
-/** Apply committed metadata before observers without reacquiring it from SQLite. */
-export function createSessionRowPublication(owner: {
-  store: (path: string) => records.SessionRowStore | undefined;
-  runAsOwner: <T>(run: () => T) => T;
-  registryFactsReady: () => boolean;
-  acquireEntry: (row: records.Row, entry: records.Row["storedEntry"]) => records.Row | undefined;
-  markRelated: (row: records.Row, includeChildren: boolean) => void;
-  invalidatePlacement: (sessionId: string) => void;
-  invalidateFacts: (row: records.Row, domain: true | "category") => boolean;
-  enqueue: (row: records.Row | undefined) => void;
-  defer: (row: records.Row) => void;
-  deferArchive: (row: records.Row) => void;
-  remove: (id: string) => void;
-}) {
-  function acquirePublishedEntry(row: records.Row, entry: NonNullable<records.Row["storedEntry"]>) {
-    owner.markRelated(row, records.changesSessionRowDependents(row.storedEntry, entry));
-    owner.runAsOwner(() => {
-      if (entry.archivedAt !== undefined && !owner.registryFactsReady()) {
-        // Retain committed metadata while the independent lineage owner recovers.
-        const previous = row.storedEntry ?? row.entry;
-        const changedIdentity =
-          previous &&
-          (previous.sessionId !== entry.sessionId ||
-            previous.lifecycleRevision !== entry.lifecycleRevision);
-        owner.deferArchive({
-          ...(changedIdentity ? records.renewGeneration(row) : row),
-          publishedSource: row.publishedSource,
-          storedEntry: entry,
-          sharingEntry: entry,
-        });
-        return;
-      }
-      owner.enqueue(owner.acquireEntry(row, entry));
-    });
-  }
-  return function publish(
-    row: records.Row,
-    change: Extract<SessionRowChange, { sessionKey: string }>,
-    prepared = readPreparedSessionEntryChange(change, row.key),
-  ) {
-    const source = prepared?.source;
-    const previousSource = row.publishedSource;
-    if (
-      source &&
-      previousSource?.incarnation === source.incarnation &&
-      previousSource.revision !== undefined &&
-      source.revision !== undefined &&
-      previousSource.revision > source.revision
-    ) {
-      return;
-    }
-    const store = owner.store(row.storeTarget.storePath);
-    if (
-      prepared &&
-      (!source ||
-        store?.identity !== source.identity ||
-        store.birthtime !== source.birthtime ||
-        store.filename !== source.filename)
-    ) {
-      return;
-    }
-    const facts = change.facts;
-    const sharingUnchanged =
-      !change.factsInvalidated &&
-      (facts?.kind === "unchanged" ||
-        (!change.storePath && !facts && change.scope !== "session-entry"));
-    if (facts?.kind === "removed") {
-      owner.remove(records.identity(row));
-      return;
-    }
-    if (prepared && !prepared.entry && !prepared.sharing) {
-      return;
-    }
-    records.invalidateDatabaseFacts(row);
-    if (
-      !prepared &&
-      !change.factsInvalidated &&
-      facts?.kind === "owner" &&
-      row.sharingEntry?.sessionId === facts.sessionId &&
-      (row.sharingEntry.lifecycleRevision ?? null) === facts.lifecycleRevision
-    ) {
-      const { owner: _previousOwner, ...entry } = row.sharingEntry;
-      const next = freezeJsonSnapshot({
-        ...entry,
-        ...(facts.owner ? { owner: structuredClone(facts.owner) } : {}),
-      });
-      if (row.sharingEntry === row.storedEntry) {
-        acquirePublishedEntry(row, next);
-      } else {
-        owner.defer({ ...row, sharingEntry: next });
-      }
-      return;
-    }
-    if (!prepared && !sharingUnchanged) {
-      row.publishedSource = undefined;
-    }
-    if (
-      !prepared?.entry &&
-      change.factsInvalidated &&
-      owner.invalidateFacts(row, change.factsInvalidated)
-    ) {
-      // Category uncertainty cannot retire an otherwise current row identity.
-      owner.defer(row);
-      return;
-    }
-    if (row.entry && change.scope !== "session-entry") {
-      owner.invalidatePlacement(row.entry.sessionId);
-    }
-    if (prepared?.entry) {
-      acquirePublishedEntry(
-        {
-          ...row,
-          publishedSource: prepared.source,
-          unresolvedDatabaseFacts: undefined,
-        },
-        prepared.entry,
-      );
-      return;
-    }
-    if (prepared?.sharing) {
-      const sharing = prepared.sharing;
-      const next =
-        row.entry?.sessionId !== sharing.sessionId ||
-        row.entry.lifecycleRevision !== sharing.lifecycleRevision
-          ? records.renewGeneration(row)
-          : { ...row };
-      next.publishedSource = prepared.source;
-      next.sharingEntry = sharing;
-      if (sharing.archivedAt !== undefined && !owner.registryFactsReady()) {
-        owner.deferArchive(next);
-      } else {
-        owner.defer(next);
-      }
-      return;
-    }
-    if (
-      !sharingUnchanged &&
-      (!facts ||
-        facts.kind === "entry" ||
-        change.factsInvalidated ||
-        (facts.kind === "owner" &&
-          (row.sharingEntry?.sessionId !== facts.sessionId ||
-            (row.sharingEntry.lifecycleRevision ?? null) !== facts.lifecycleRevision)) ||
-        ((facts.kind === "member" || facts.kind === "category") &&
-          row.sharingEntry?.sessionId !== facts.sessionId))
-    ) {
-      row.sharingEntry = undefined;
-    }
-    owner.defer(row);
-  };
-}
-
 /** Bind live projection state to the same prepared or resident source-read boundary. */
 export function createSessionRowModelFactsReader(params: {
   lookup: (query: records.Lookup) => records.Row | undefined;
@@ -209,6 +54,9 @@ export function createSessionRowModelFactsReader(params: {
     }
     if (records.ready(row) && !params.dirty.has(records.identity(row))) {
       return row.materialized.source;
+    }
+    if (row.preparedRuntimeOwnership === undefined) {
+      throw new Error("Native session ownership must be prepared before reading search facts");
     }
     const state = params.state();
     return readSessionRowModelFacts({
@@ -288,7 +136,6 @@ export function createSessionRowMaterializer(owner: {
   rows: ReadonlyMap<string, records.Row>;
   dirty: Set<string>;
   prepare: () => records.Inputs["cfg"];
-  revision: () => number;
   acquireEntry: (row: records.Row, entry: records.Row["storedEntry"]) => records.Row | undefined;
   materialize: (
     row: records.Row,
@@ -314,12 +161,14 @@ export function createSessionRowMaterializer(owner: {
         if (offset > 0 && performance.now() - started >= 12) {
           break;
         }
-        const current = owner.rows.get(id),
-          revision = owner.revision();
+        const current = owner.rows.get(id);
         const databaseFacts = accepted
           ? current?.pendingDatabaseFacts
           : current?.retainedDatabaseFacts;
-        if (!databaseFacts) {
+        if (!records.isPreparedSessionRowDatabaseFacts(databaseFacts)) {
+          continue;
+        }
+        if (!accepted && !records.canRetainSessionRowRuntimeOwnership(databaseFacts)) {
           continue;
         }
         if (!accepted && current?.unresolvedDatabaseFacts === "category") {
@@ -332,11 +181,7 @@ export function createSessionRowMaterializer(owner: {
           owner.forgetBackfill(id);
           continue;
         }
-        if (
-          row &&
-          owner.materialize(row, configuredAgentIds, readRow, databaseFacts) &&
-          owner.revision() === revision
-        ) {
+        if (row && owner.materialize(row, configuredAgentIds, readRow, databaseFacts)) {
           row.pendingDatabaseFacts = undefined;
           row.retainedDatabaseFacts = databaseFacts;
           owner.dirty.delete(id);
@@ -345,9 +190,6 @@ export function createSessionRowMaterializer(owner: {
           if (accepted && records.ready(row) && row.entry.archivedAt !== undefined) {
             owner.retainArchived(row);
           }
-        }
-        if (owner.revision() !== revision) {
-          break;
         }
       }
     });
@@ -371,7 +213,6 @@ export function createSessionRowMaterializer(owner: {
         return;
       }
       const cfg = owner.prepare();
-      const revision = owner.revision();
       withAgentRosterFactsBatch(cfg, () => {
         for (const id of ids) {
           const current = owner.rows.get(id);
@@ -388,11 +229,10 @@ export function createSessionRowMaterializer(owner: {
                 : current,
               databaseFacts?.entry,
             );
-          if (owner.revision() !== revision) {
-            break;
-          }
           if (row && databaseFacts) {
             row.preparedAcpMeta = databaseFacts.acpMeta;
+            row.preparedRuntimeOwnership = databaseFacts.runtimeOwnership;
+            row.runtimeOwnershipDependencies = databaseFacts.runtimeOwnershipDependencies;
           }
           if (row && isColdArchivedSessionRow(row) && !options.archived) {
             owner.dirty.delete(id);
@@ -435,6 +275,9 @@ export function readResidentSessionRow(
     throw new Error("Incognito session descriptions require awaited row preparation");
   }
   const databaseFacts = params.databaseFacts ?? prepared?.databaseFacts;
+  if (!databaseFacts && !isIncognitoSessionKey(row.key)) {
+    throw new Error("Durable session rows require prepared database facts");
+  }
   const source =
     isIncognitoSessionKey(row.key) && !prepared
       ? resolveGatewaySessionStoreTargetWithStore({
@@ -450,6 +293,9 @@ export function readResidentSessionRow(
     ...row,
     cfg,
     preparedAcpMeta: databaseFacts ? databaseFacts.acpMeta : row.preparedAcpMeta,
+    preparedRuntimeOwnership: databaseFacts
+      ? databaseFacts.runtimeOwnership
+      : row.preparedRuntimeOwnership,
     preparedModelMetadata: readPreparedGatewayModelMetadata(cfg),
     preparedRepositoryWorkspace: databaseFacts
       ? databaseFacts.repositoryWorkspace
@@ -572,7 +418,7 @@ function readIncognitoSessionRow(params: {
   agentId: string;
   storePath?: string;
 }) {
-  const { cfg, key, agentId, storePath } = params;
+  const { key, agentId, storePath } = params;
   const binding = captureIncognitoSessionBinding({ agentId, sessionKey: key, storePath });
   if (binding) {
     const { actor } = binding;
@@ -582,9 +428,7 @@ function readIncognitoSessionRow(params: {
     }
     const snapshot = actor.sessions.captureSnapshot(key);
     return records.createIncognitoSessionRow({
-      cfg,
-      key,
-      agentId,
+      ...params,
       storePath: actor.path,
       entry,
       source: {
@@ -607,9 +451,7 @@ function readIncognitoSessionRow(params: {
     return undefined;
   }
   return records.createIncognitoSessionRow({
-    cfg,
-    key,
-    agentId,
+    ...params,
     storePath: ephemeralPath,
     entry: storedEntry,
     source: row.privateSource,
@@ -656,18 +498,16 @@ export function findSessionRowById(
   }
   // Select each key's physical winner before matching its ID. A shadowed row
   // must not resurrect an old run mapping that the combined store would hide.
-  const selected = candidates.length
-    ? [...new Set(candidates.map((row) => row.key))].flatMap((key) => {
-        const paths = owner.scope.select(query).paths;
-        const row = records.first(
-          owner
-            .matching({ ...query, key })
-            .filter((candidate) => paths.has(candidate.storeTarget.storePath)),
-          paths.keys(),
-        );
-        return row?.entry?.sessionId === query.sessionId ? [row] : [];
-      })
-    : [];
+  const selected = [...new Set(candidates.map((row) => row.key))].flatMap((key) => {
+    const paths = owner.scope.select(query).paths;
+    const row = records.first(
+      owner
+        .matching({ ...query, key })
+        .filter((candidate) => paths.has(candidate.storeTarget.storePath)),
+      paths.keys(),
+    );
+    return row?.entry?.sessionId === query.sessionId ? [row] : [];
+  });
   // Process-held private stores keep their existing exact native reader;
   // private rows never enter the resident index or a new cache.
   const binding = captureIncognitoSessionBinding();

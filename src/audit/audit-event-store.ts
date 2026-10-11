@@ -637,8 +637,14 @@ export function recordAuditEventInDatabase(
       if (!Number.isSafeInteger(insertedSequence) || insertedSequence < 1) {
         throw new Error("audit event sequence is outside the supported integer range");
       }
-      pruneAuditEventsAfterInsert(db, Date.now());
-      const row = queries.read(insertedSequence);
+      const now = Date.now();
+      pruneAuditEventsAfterInsert(db, now);
+      // Current events cannot be removed by retention: sequence allocation puts
+      // them after every existing row. An expired replay may be pruned immediately.
+      const row =
+        values.occurred_at < now - AUDIT_EVENT_RETENTION_MS
+          ? queries.read(insertedSequence)
+          : { ...values, sequence: insertedSequence };
       recordConfirmedTerminalMessageExecutionBinding(db, {
         eventId: row?.event_id,
         token: executionToken,

@@ -6,6 +6,10 @@ export async function fetchPagedSessionRows(params: {
   list: (offset: number) => Promise<SessionsListResult | null>;
   initialResult?: SessionsListResult | null;
   resultKind?: "page" | "window";
+  /** Pagination receipt captured with the displayed managed-window result. */
+  windowPagination?: () =>
+    | (Pick<SessionsListResult, "totalCount" | "hasMore" | "nextOffset"> & { count: number })
+    | undefined;
   isCurrent?: () => boolean;
   mapPageRows?: (rows: GatewaySessionRow[]) => GatewaySessionRow[];
   missingResultError: string;
@@ -17,15 +21,10 @@ export async function fetchPagedSessionRows(params: {
   }
   const rowsByKey = new Map<string, GatewaySessionRow>();
   let expectedTotal: number | undefined;
-  // Rows a UI overlay (an optimistic deletion) removed after the server counted
-  // them. They are members of the server window that no page will ever return,
-  // so they count toward completeness; otherwise a stable, complete window
-  // re-reads itself and then reports that it kept changing.
-  let hiddenRows = 0;
+  let receivedCount = 0;
   for (let pass = 0; pass < MAX_SESSION_LIST_PASSES; pass += 1) {
     // Include prefetched rows in first-pass progress so a moving row triggers a retry.
     const rowsBeforePass = rowsByKey.size;
-    hiddenRows = 0;
     const seenOffsets = new Set<number>();
     let offset = 0;
     let prefetched = pass === 0 ? params.initialResult : undefined;
@@ -39,30 +38,35 @@ export async function fetchPagedSessionRows(params: {
       if (!result) {
         throw new Error(params.missingResultError);
       }
+      const pagination = params.resultKind === "window" ? params.windowPagination?.() : undefined;
+      const totalCount = pagination?.totalCount ?? result.totalCount;
       if (params.resultKind === "window") {
         // Managed pagination already owns accumulated membership. A replacement
         // must retire old rows instead of completing against a cross-pass union.
         rowsByKey.clear();
-        hiddenRows = 0;
-        expectedTotal = result.totalCount;
+        expectedTotal = totalCount;
       }
       // Optional later-page counts must never erase a known larger roster.
-      if (typeof result.totalCount === "number") {
-        expectedTotal = Math.max(expectedTotal ?? 0, result.totalCount);
+      if (typeof totalCount === "number") {
+        expectedTotal = Math.max(expectedTotal ?? 0, totalCount);
       }
-      hiddenRows += Math.max(0, (result.serverRowCount ?? 0) - result.sessions.length);
       const rows = params.mapPageRows?.(result.sessions) ?? result.sessions;
       for (const row of rows) {
         rowsByKey.set(row.key, row);
       }
+      receivedCount = pagination?.count ?? rowsByKey.size;
       const hasMore =
+        pagination?.hasMore ??
         result.hasMore ??
         (typeof result.totalCount === "number" &&
-          offset + result.sessions.length + hiddenRows < result.totalCount);
+          offset + result.sessions.length < result.totalCount);
       if (!hasMore) {
         break;
       }
-      const nextOffset = result.nextOffset ?? (result.offset ?? offset) + result.sessions.length;
+      const nextOffset =
+        pagination?.nextOffset ??
+        result.nextOffset ??
+        (result.offset ?? offset) + result.sessions.length;
       if (nextOffset <= offset) {
         if (params.stalledPaginationError) {
           throw new Error(params.stalledPaginationError);
@@ -74,7 +78,7 @@ export async function fetchPagedSessionRows(params: {
     if (
       (params.resultKind !== "window" && rowsByKey.size === rowsBeforePass) ||
       expectedTotal === undefined ||
-      rowsByKey.size + hiddenRows >= expectedTotal
+      receivedCount >= expectedTotal
     ) {
       break;
     }
@@ -83,7 +87,7 @@ export async function fetchPagedSessionRows(params: {
   if (
     params.incompletePaginationError &&
     expectedTotal !== undefined &&
-    rowsByKey.size + hiddenRows < expectedTotal
+    receivedCount < expectedTotal
   ) {
     throw new Error(params.incompletePaginationError);
   }

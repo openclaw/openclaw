@@ -1,5 +1,4 @@
 import { html, nothing } from "lit";
-import { repeat } from "lit/directives/repeat.js";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractChatSourcePreviews } from "../../../lib/chat/source-previews.ts";
 import {
@@ -9,6 +8,7 @@ import {
 } from "../chat-agent-run-grouping.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import { rawMessageTimestamp } from "../chat-thread-items.ts";
+import { atomicKeyedRepeat } from "./atomic-keyed-repeat.ts";
 import {
   renderActivityGroup,
   renderMessageGroup,
@@ -86,12 +86,14 @@ export function renderAgentRunFrame(frame: AgentRunFrameRenderItem, opts: AgentR
   );
   const workPreviews = renderWorkGroupBrowserTabPreviews(
     frame.parts.flatMap((part) =>
-      part.kind === "work-group" && !opts.isWorkExpanded(part.key) ? [part] : [],
+      !opts.streamOptions.bubbleMode && part.kind === "work-group" && !opts.isWorkExpanded(part.key)
+        ? [part]
+        : [],
     ),
     opts.renderGroupOptions(shell),
   );
   const frameContent = [
-    repeat(
+    atomicKeyedRepeat(
       bodyParts,
       (part) => part.kind + ":" + part.key,
       (part) => {
@@ -107,6 +109,7 @@ export function renderAgentRunFrame(frame: AgentRunFrameRenderItem, opts: AgentR
           return html`
             ${renderWorkGroupSummary(part, {
               expanded,
+              bubbleMode: opts.streamOptions.bubbleMode,
               onToggle: () => opts.onToggleWork(part.key, expanded),
               presentation: "continuation",
               browserTabPreviews: workPreviews.get(part.key),

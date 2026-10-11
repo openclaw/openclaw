@@ -5,6 +5,7 @@ import {
   THEME_LOCAL_ID_MAX_LENGTH,
   THEME_ARTWORK_ID_PATTERN,
   THEME_NAME_MAX_LENGTH,
+  THEME_BRAND_NAME_MAX_LENGTH,
   THEME_DESCRIPTION_MAX_LENGTH,
   THEME_TOKEN_MAX_LENGTH,
   THEME_WORKING_PHRASES_MAX,
@@ -41,6 +42,18 @@ export const ThemeDefinitionSchema = closedObject({
   name: Type.String({ minLength: 1, maxLength: THEME_NAME_MAX_LENGTH }),
   description: Type.String({ minLength: 1, maxLength: THEME_DESCRIPTION_MAX_LENGTH }),
   mascot: Type.Optional(Type.Union([Type.Literal("claw"), Type.Literal("none")])),
+  brandName: Type.Optional(Type.String({ minLength: 1, maxLength: THEME_BRAND_NAME_MAX_LENGTH })),
+  brandIcon: Type.Optional(ThemeArtworkId),
+  workingIndicator: Type.Optional(
+    Type.Union([
+      Type.Literal("claw"),
+      Type.Literal("dots"),
+      Type.Literal("brand"),
+      Type.Literal("none"),
+    ]),
+  ),
+  lobsterdex: Type.Optional(Type.Boolean()),
+  communityLinks: Type.Optional(Type.Boolean()),
   workingPhrases: Type.Optional(
     Type.Array(Type.String({ minLength: 1, maxLength: THEME_WORKING_PHRASE_MAX_LENGTH }), {
       maxItems: THEME_WORKING_PHRASES_MAX,

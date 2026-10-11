@@ -101,24 +101,21 @@ export function renderChatPanePlacement(props: {
         ${
           hasFacts
             ? html`<dl class="chat-pane__placement-facts">
-                ${
-                  providerId
-                    ? html`<dt>${t("sessionsView.placementFactService")}</dt>
-                        <dd>${providerId}</dd>`
-                    : nothing
-                }
-                ${
-                  profileId
-                    ? html`<dt>${t("sessionsView.placementFactProfile")}</dt>
-                        <dd>${profileId}</dd>`
-                    : nothing
-                }
-                ${
-                  environmentId
-                    ? html`<dt>${t("sessionsView.placementFactMachine")}</dt>
-                        <dd>…${environmentId.slice(-6)}</dd>`
-                    : nothing
-                }
+                ${(
+                  [
+                    ["sessionsView.placementFactService", providerId],
+                    ["sessionsView.placementFactProfile", profileId],
+                    [
+                      "sessionsView.placementFactMachine",
+                      environmentId && `…${environmentId.slice(-6)}`,
+                    ],
+                  ] as const
+                ).map(([labelKey, value]) =>
+                  value
+                    ? html`<dt>${t(labelKey)}</dt>
+                        <dd>${value}</dd>`
+                    : nothing,
+                )}
                 ${
                   placement?.state === "active" && placement.inference === "worker"
                     ? html`<dt>${t("sessionsView.placementFactInference")}</dt>

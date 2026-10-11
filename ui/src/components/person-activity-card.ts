@@ -1,13 +1,12 @@
-import { html, nothing } from "lit";
+import { html, nothing, render } from "lit";
 import { Directive, directive } from "lit/directive.js";
 import { keyed } from "lit/directives/keyed.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { i18n, t } from "../i18n/index.ts";
-import { gatewayClientKind } from "../lib/gateway-client-kind.ts";
 import { renderHoverMarquee } from "../lib/hover-marquee.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
-import { describePlatform } from "../lib/platform-label.ts";
+import { presenceConnectionDescriptions } from "../lib/presence-connections.ts";
 import {
   presenceMatchesProfile,
   presenceViewerActivity,
@@ -45,11 +44,7 @@ type PersonCardInput = {
 /** Loaded, caller-visible roster facts, paired with their owning list scope. */
 function loadedPresenceSessions(input: PersonCardInput): Map<string, ScopedSession> {
   const sessions = new Map<string, ScopedSession>();
-  const data = input.sessionData;
-  if (!data) {
-    return sessions;
-  }
-  for (const row of data.sessionsResult?.sessions ?? []) {
+  for (const row of input.sessionData?.sessionsResult?.sessions ?? []) {
     const agentId = parseAgentSessionKey(row.key)?.agentId ?? row.agentId ?? input.watchAgentId;
     const key = sessionIdentity(row.key, agentId, input);
     if (!sessions.has(key)) {
@@ -89,35 +84,6 @@ function elapsed(
       .singleUnit=${display === "single-unit"}
     ></openclaw-elapsed-time
   ></time>`;
-}
-
-function connections(user: PresenceViewer): string[] {
-  // Tabs with the same reported facts are one description, never a device count.
-  return [
-    ...new Set(
-      (user.entries ?? [])
-        .map((entry) => {
-          const family = entry.deviceFamily?.trim();
-          const platform = describePlatform(entry.platform ?? "", family);
-          const familyPlatform = family === "Mac" ? "macOS" : family === "iPad" ? "iPadOS" : family;
-          const kind = gatewayClientKind({ id: entry.clientId, mode: entry.mode });
-          const app = kind ? t(`presence.card.${kind}`) : undefined;
-          return [
-            ...new Set(
-              [
-                family,
-                platform.label === familyPlatform ? undefined : platform.label,
-                platform.architecture,
-                app,
-              ]
-                .map((value) => value?.trim())
-                .filter(Boolean),
-            ),
-          ].join(" · ");
-        })
-        .filter(Boolean),
-    ),
-  ].toSorted();
 }
 
 function renderSessions(
@@ -206,7 +172,7 @@ class PersonActivityCard extends Directive {
     const onlineSince = onlineTimes.length ? Math.min(...onlineTimes) : undefined;
     const lastActivityAt = presenceViewerLastActivity(user);
     const activity = presenceViewerActivity(user);
-    const where = connections(user);
+    const where = presenceConnectionDescriptions(entries);
     const zones = [
       ...new Set(
         entries.flatMap((entry) => (entry.timeZone?.trim() ? [entry.timeZone.trim()] : [])),
@@ -321,4 +287,16 @@ class PersonActivityCard extends Directive {
   }
 }
 
-export const renderPersonActivityCard = directive(PersonActivityCard);
+const renderPersonActivityCard = directive(PersonActivityCard);
+
+/** The card owner keeps its Lit children separate from either host renderer. */
+export function updatePersonActivityCard(container: HTMLElement, input?: PersonCardInput | string) {
+  render(
+    typeof input === "string"
+      ? html`<div class="person-reference__status" role="status">${input}</div>`
+      : input
+        ? renderPersonActivityCard(input)
+        : nothing,
+    container,
+  );
+}

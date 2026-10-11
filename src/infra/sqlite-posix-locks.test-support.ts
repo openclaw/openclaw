@@ -10,8 +10,16 @@ type PosixLock = {
 // Query from another process: a raw close in the owner releases its POSIX locks.
 // Unlike /proc/locks' chunked global listing, F_GETLK queries the specific file.
 export function readMainDatabasePosixLocks(pathname: string): PosixLock[] {
-  if (process.platform !== "linux") {
-    throw new Error("POSIX lock probe requires the Linux struct flock layout");
+  return readPosixLocks(pathname, 1073741826, 510);
+}
+
+export function readSqliteShmPosixLocks(pathname: string): PosixLock[] {
+  return readPosixLocks(pathname, 128, 1);
+}
+
+function readPosixLocks(pathname: string, start: number, length: number): PosixLock[] {
+  if (process.platform !== "linux" && process.platform !== "darwin") {
+    throw new Error("POSIX lock probe requires Linux or macOS");
   }
   const result = spawnSync(
     "python3",
@@ -19,11 +27,16 @@ export function readMainDatabasePosixLocks(pathname: string): PosixLock[] {
       "-c",
       `
 import fcntl, json, os, struct, sys
-layout = struct.Struct("hhqqi4x")
-request = layout.pack(fcntl.F_WRLCK, os.SEEK_SET, 1073741826, 510, 0)
+darwin = sys.platform == "darwin"
+layout = struct.Struct("qqihh" if darwin else "hhqqi4x")
+start, length = int(sys.argv[2]), int(sys.argv[3])
+request = layout.pack(start, length, 0, fcntl.F_WRLCK, os.SEEK_SET) if darwin else layout.pack(fcntl.F_WRLCK, os.SEEK_SET, start, length, 0)
 with open(sys.argv[1], "rb") as database:
     result = layout.unpack(fcntl.fcntl(database.fileno(), fcntl.F_GETLK, request))
-lock_type, _, start, length, pid = result
+if darwin:
+    start, length, pid, lock_type, _ = result
+else:
+    lock_type, _, start, length, pid = result
 locks = [] if lock_type == fcntl.F_UNLCK else [{
     "length": length,
     "pid": pid,
@@ -33,6 +46,8 @@ locks = [] if lock_type == fcntl.F_UNLCK else [{
 print(json.dumps(locks))
 `,
       pathname,
+      String(start),
+      String(length),
     ],
     { encoding: "utf8" },
   );

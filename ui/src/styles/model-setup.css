@@ -536,10 +536,7 @@
   }
 
   .model-setup__loading-icon,
-  .model-setup__loading-action {
-    align-self: flex-start;
-  }
-
+  .model-setup__loading-action,
   .model-setup__row > .btn {
     align-self: flex-start;
   }

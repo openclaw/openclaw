@@ -126,7 +126,7 @@ export function projectCodexDynamicTools<T extends CodexToolDescriptor>(
       continue;
     }
     const descriptor = readCodexDynamicToolDescriptor(tool, toolIndex);
-    if (!descriptor.ok) {
+    if ("diagnostic" in descriptor) {
       quarantinedTools.push(descriptor.diagnostic);
       continue;
     }
@@ -157,16 +157,8 @@ export function projectCodexDynamicTools<T extends CodexToolDescriptor>(
 }
 
 type CodexDynamicToolDescriptorRead =
-  | {
-      ok: true;
-      name: string;
-      description: string;
-      parameters: unknown;
-    }
-  | {
-      ok: false;
-      diagnostic: CodexDynamicToolSchemaQuarantine;
-    };
+  | Pick<CodexToolDescriptor, "name" | "description" | "parameters">
+  | { diagnostic: CodexDynamicToolSchemaQuarantine };
 
 function readCodexDynamicToolDescriptor(
   tool: CodexToolDescriptor,
@@ -174,7 +166,6 @@ function readCodexDynamicToolDescriptor(
 ): CodexDynamicToolDescriptorRead {
   const fallbackName = `tool[${toolIndex}]`;
   const invalid = (name: string, violation: string): CodexDynamicToolDescriptorRead => ({
-    ok: false,
     diagnostic: { tool: name, violations: [`${name}.${violation}`] },
   });
   let name: string;
@@ -215,5 +206,5 @@ function readCodexDynamicToolDescriptor(
   } catch {
     return invalid(name, "inputSchema is unreadable");
   }
-  return { ok: true, name, description, parameters };
+  return { name, description, parameters };
 }

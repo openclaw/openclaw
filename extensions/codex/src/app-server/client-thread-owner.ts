@@ -49,11 +49,7 @@ export type CodexAppServerLiveThreadOwnership = {
   ephemeralPolicy?: CodexEphemeralThreadPolicy;
   serviceTier?: CodexServiceTier | null;
   /** Releases this active claim or the exact idle record it published. */
-  release: (
-    threadId: string,
-    assertCurrent?: () => void,
-    withCurrent?: (write: () => void) => Promise<void>,
-  ) => Promise<void>;
+  release: RetainedLiveThread["release"];
   /** Forgets this local owner after native shutdown, without unsubscribing a successor. */
   forget: () => void;
 };

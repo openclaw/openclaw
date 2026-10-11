@@ -31,6 +31,7 @@ import {
 } from "./crabbox-worker-provider.test-support.js";
 import {
   CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS,
+  CRABBOX_WARMUP_TIMEOUT_MS,
   CRABBOX_LIFECYCLE_TIMEOUT_MS,
   CRABBOX_MACHINE_CATALOG_TIMEOUT_MS,
   CRABBOX_STOP_TIMEOUT_MS,
@@ -1086,7 +1087,7 @@ describe("Crabbox worker provider", () => {
     const profile = { ...PROFILE, provider: "machine0" };
     let elapsedMs = 0;
     const inspectTimeouts: number[] = [];
-    const now = vi.spyOn(Date, "now").mockImplementation(() => elapsedMs);
+    const now = vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
     const provider = providerWithRunner(async (argv, options) => {
       if (argv[1] === "warmup") {
         elapsedMs = 50 * 60_000;
@@ -1125,7 +1126,7 @@ describe("Crabbox worker provider", () => {
       const budget = { nodeBootstrapTimeoutMs: 105 * 60_000 };
       let elapsedMs = 0;
       const commandTimeouts: number[] = [];
-      const now = vi.spyOn(Date, "now").mockImplementation(() => elapsedMs);
+      const now = vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
       const provider = providerWithRunner(async (argv, options) => {
         if (argv[1] === "inspect" || argv[1] === "status") {
           return commandResult({ stdout: inspectJson() });
@@ -1347,7 +1348,7 @@ describe("Crabbox worker provider", () => {
   it("expires readiness at its own deadline before setup starts", async () => {
     const calls: string[] = [];
     let elapsed = 0;
-    const now = vi.spyOn(Date, "now").mockImplementation(() => elapsed);
+    const now = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
     const provider = providerWithRunner(
       async (argv) => {
         calls.push(argv[1]!);
@@ -1703,6 +1704,40 @@ describe("Crabbox worker provider", () => {
     expect(message).toContain("😀 terminal failure");
     expect(message.length).toBeLessThanOrEqual(INSPECT_FAILURE_PREFIX.length + 512);
     expect(message).not.toMatch(/[\uD800-\uDFFF]/u);
+  });
+
+  it("keeps the provision deadline monotonic when the wall clock rewinds", async () => {
+    let monotonicMs = 0;
+    let wallClockReads = 0;
+    const performanceNowSpy = vi.spyOn(performance, "now").mockImplementation(() => monotonicMs);
+    const dateNowSpy = vi.spyOn(Date, "now").mockImplementation(() => {
+      wallClockReads += 1;
+      return wallClockReads === 1 ? 0 : -90_000;
+    });
+    const inspectTimeouts: number[] = [];
+    const provider = providerWithRunner(async (argv, options) => {
+      if (argv[1] === "warmup") {
+        monotonicMs = CRABBOX_WARMUP_TIMEOUT_MS + 60_000;
+        return commandResult();
+      }
+      if (argv[1] === "inspect" || argv[1] === "status") {
+        inspectTimeouts.push(options.timeoutMs);
+        return commandResult({ stdout: inspectJson({ ready: true }) });
+      }
+      return commandResult();
+    });
+    try {
+      await expect(provider.provision(PROFILE, OPERATION_ID)).resolves.toMatchObject({
+        leaseId: LEASE_ID,
+      });
+      expect(inspectTimeouts.length).toBeGreaterThan(0);
+      for (const timeoutMs of inspectTimeouts) {
+        expect(timeoutMs).toBe(CRABBOX_LIFECYCLE_TIMEOUT_MS - 60_000);
+      }
+    } finally {
+      performanceNowSpy.mockRestore();
+      dateNowSpy.mockRestore();
+    }
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

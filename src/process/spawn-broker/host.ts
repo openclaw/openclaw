@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { serialize } from "node:v8";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { formatChildRuntimeSpawnWarning } from "../../infra/child-runtime-viability.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -15,7 +16,7 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { SpawnInitiation } from "../spawn-initiation.js";
-import { GRACEFUL_CANCEL_TIMEOUT_MS } from "../supervisor/cancellation-policy.js";
+import { waitForBrokerChildCompletion } from "./child-completion.js";
 import { BrokerChild } from "./child.js";
 import { terminateBrokerProcessGroup, terminateLostBrokerChild } from "./cleanup.js";
 import type { BrokerExecaOptions, BrokerExecaResult } from "./execa-protocol.js";
@@ -383,15 +384,14 @@ export class SpawnBrokerHost {
     if (serialize(bootstrap).byteLength > MAX_BOOTSTRAP_BYTES) {
       throw new SpawnBrokerError("Spawn broker bootstrap exceeds its IPC bound");
     }
+    // Native resource modules and bidirectional V8 frames require the parent's exact runtime.
     const child = spawn(process.execPath, resolveRuntimeWorkerArgv(this.workerUrl), {
       stdio: ["inherit", "ignore", "ignore", "ipc"],
       detached: true,
       serialization: "advanced",
     });
     this.process = child;
-    this.brokerClosed = new Promise<void>((resolve) => {
-      child.once("close", () => resolve());
-    });
+    this.brokerClosed = waitForBrokerChildCompletion(child);
     const receiver = createBrokerReceiver();
     const brokerExited = createDeferredCore();
     let ended = false;
@@ -400,7 +400,6 @@ export class SpawnBrokerHost {
     const checkStartup = () => {
       if (!ended && !ready && spawnBrokerStartupNowMs() >= this.startupDeadline) {
         fail(new Error("readiness deadline exceeded after 15000ms"));
-        child.kill("SIGKILL");
       }
     };
     // Native attachments report readiness off-main; a delayed parent callback is not failure.
@@ -418,10 +417,17 @@ export class SpawnBrokerHost {
       receiver.clear();
       this.available = false;
       this.sendMessage = undefined;
+      // Every failure retires the transport, including send/receive failures while
+      // IPC is still connected. The broker ignores supervisor signals until this
+      // handoff and must settle admitted launches and native writes before exit.
+      if (child.connected) {
+        child.disconnect();
+      }
       const error = new SpawnBrokerError(
-        this.hasBeenReady
-          ? "Spawn broker exited; command outcome is unavailable"
-          : `Spawn broker failed before readiness: ${cause?.message ?? "channel lost"}`,
+        formatChildRuntimeSpawnWarning(cause) ??
+          (this.hasBeenReady
+            ? "Spawn broker exited; command outcome is unavailable"
+            : `Spawn broker failed before readiness: ${cause?.message ?? "channel lost"}`),
         { cause },
       );
       const previousReadiness = this.readiness;
@@ -430,12 +436,22 @@ export class SpawnBrokerHost {
       previousReadiness.reject(error);
       for (const request of this.requests.values()) {
         if (request.pid && !request.childClosed) {
-          const cleanup = terminateLostBrokerChild(
-            request.pid,
-            request.detached,
-            this.closing ? brokerExited.promise : undefined,
-          );
-          this.retainCleanup(cleanup);
+          const pid = request.pid;
+          if (this.closing) {
+            let cleanup: ReturnType<typeof terminateLostBrokerChild> | undefined;
+            this.retainCleanup({
+              force: () => cleanup?.force(),
+              settled: brokerExited.promise.then(async () => {
+                if (child.exitCode === 0 && child.signalCode === null) {
+                  return;
+                }
+                cleanup = terminateLostBrokerChild(pid, request.detached);
+                await cleanup.settled;
+              }),
+            });
+          } else {
+            this.retainCleanup(terminateLostBrokerChild(pid, request.detached));
+          }
         }
         request.result?.reject(error);
         request.child.fail(error);
@@ -443,8 +459,17 @@ export class SpawnBrokerHost {
       this.requests.clear();
       this.refreshNativeReference();
       if (child.pid && process.platform !== "win32") {
-        // Individual detached-tree escalation is armed before the broker group can die.
-        this.retainCleanup(terminateBrokerProcessGroup(child.pid));
+        const pgid = child.pid;
+        let cleanup: ReturnType<typeof terminateBrokerProcessGroup> | undefined;
+        // Channel loss begins broker-owned native settlement. Group escalation
+        // may reclaim leftovers only after the broker has finished its isolate.
+        this.retainCleanup({
+          force: () => cleanup?.force(),
+          settled: brokerExited.promise.then(async () => {
+            cleanup = terminateBrokerProcessGroup(pgid);
+            await cleanup.settled;
+          }),
+        });
       }
       if (this.resourceClaims || this.closing || !this.hasBeenReady) {
         this.readiness.reject(error);
@@ -476,17 +501,16 @@ export class SpawnBrokerHost {
     this.markNativeReady = markReady;
     child.once("error", fail);
     child.once("exit", (code, signal) => {
+      const error = new Error(`exited with code=${code ?? "null"} signal=${signal ?? "none"}`);
+      if (this.closing && (code !== 0 || signal !== null)) {
+        this.cleanupErrors.push(
+          new SpawnBrokerError("Spawn broker shutdown failed", { cause: error }),
+        );
+      }
       brokerExited.resolve();
-      fail(new Error(`exited with code=${code ?? "null"} signal=${signal ?? "none"}`));
+      fail(error);
     });
     child.once("disconnect", () => fail(new Error("IPC channel disconnected")));
-    const abortTransport = (error: Error) => {
-      fail(error);
-      if (!this.resourceClaims && child.connected) {
-        child.disconnect();
-      }
-      child.kill("SIGTERM");
-    };
     child.on("message", (raw: unknown, handle: unknown) => {
       if (ended || this.closing) {
         if (handle instanceof Socket) {
@@ -499,7 +523,7 @@ export class SpawnBrokerHost {
       try {
         decoded = receiver.receive(raw);
       } catch (error) {
-        abortTransport(error instanceof Error ? error : new Error(String(error)));
+        fail(toErrorObject(error, "Spawn broker receive failed"));
         return;
       }
       if (decoded === undefined) {
@@ -508,7 +532,11 @@ export class SpawnBrokerHost {
       // SAFETY: The version-matched broker is the sole sender on this private IPC channel.
       const message = decoded as BrokerResponse | BrokerResourceResponse;
       if (message.type === "ready") {
-        markReady(message.pid, generation);
+        try {
+          markReady(message.pid, generation);
+        } catch (error) {
+          fail(toErrorObject(error, "Spawn broker readiness failed"));
+        }
         return;
       }
       if (
@@ -522,7 +550,11 @@ export class SpawnBrokerHost {
         message.type === "resource-close-error" ||
         message.type === "resource-failed"
       ) {
-        this.resourceClaims?.receive(message);
+        try {
+          this.resourceClaims?.receive(message);
+        } catch (error) {
+          fail(toErrorObject(error, "Spawn broker native resource receive failed"));
+        }
         return;
       }
       const request = this.requests.get(message.id);
@@ -533,9 +565,7 @@ export class SpawnBrokerHost {
         if (message.type === "pipe") {
           void this.transmit({ type: "pipe-received", id: message.id, fd: message.fd }).catch(fail);
         } else if (message.type === "prepared") {
-          void this.transmit({ type: "launch", id: message.id, allowed: false }).catch(
-            abortTransport,
-          );
+          void this.transmit({ type: "launch", id: message.id, allowed: false }).catch(fail);
         }
         return;
       }
@@ -594,7 +624,7 @@ export class SpawnBrokerHost {
           if (handle instanceof Socket) {
             handle.destroy();
           }
-          abortTransport(toErrorObject(error, "Spawn broker pipe setup failed"));
+          fail(toErrorObject(error, "Spawn broker pipe setup failed"));
           return;
         }
         // The receipt follows Node's internal handle ACK on this same IPC channel.
@@ -627,11 +657,11 @@ export class SpawnBrokerHost {
     try {
       child.send(bootstrap, (error) => {
         if (error) {
-          abortTransport(error);
+          fail(error);
         }
       });
     } catch (error) {
-      abortTransport(toErrorObject(error, "Spawn broker bootstrap delivery failed"));
+      fail(toErrorObject(error, "Spawn broker bootstrap delivery failed"));
     }
     if (!ended) {
       this.sendMessage = createBrokerSender((message, handle, callback) =>
@@ -672,18 +702,18 @@ export class SpawnBrokerHost {
             : new Promise<void>((resolve) => {
                 child.once("exit", () => resolve());
               });
-        const timer = setTimeout(() => child.kill("SIGKILL"), GRACEFUL_CANCEL_TIMEOUT_MS + 2000);
-        try {
-          if (this.resourceClaims) {
-            // Keep IPC readable until EOF: explicit disconnect can suppress Node's close event.
-            void this.transmit({ type: "shutdown" }).catch(() => child.kill("SIGTERM"));
-          } else if (child.connected) {
-            child.disconnect();
-          }
-          await exited;
-        } finally {
-          clearTimeout(timer);
+        // A deadline cannot certify native settlement. Keep the broker and its
+        // transport until admitted work, resources, and output really close.
+        if (this.resourceClaims) {
+          void this.transmit({ type: "shutdown" }).catch(() => {
+            if (child.connected) {
+              child.disconnect();
+            }
+          });
+        } else if (child.connected) {
+          child.disconnect();
         }
+        await exited;
       }
       try {
         await this.waitForCleanup();

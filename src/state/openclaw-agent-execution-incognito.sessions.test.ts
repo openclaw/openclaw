@@ -6,11 +6,13 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createSubagentControllerRead } from "../agents/subagents/registry/subagent-controller-read.js";
 import { loadCombinedSessionStoreForGatewayCoreAsync } from "../config/sessions/combined-store-gateway-read.js";
 import { createSessionEntryWithTranscript } from "../config/sessions/session-accessor.entry-mutation.js";
-import { resolveSessionEntryCandidateTargetForRuntime } from "../config/sessions/session-accessor.entry.js";
+import {
+  readResolvedSessionEntryInWorker,
+  resolveSessionEntryCandidateTargetForRuntime,
+} from "../config/sessions/session-accessor.entry.js";
 import { loadSessionEntryForAdmission } from "../config/sessions/session-accessor.sqlite-entry-admission.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { SessionCanonicalKeyMigrationRequiredError } from "../config/sessions/session-canonical-key-error.js";
-import { prepareSessionDeliveryGeneration } from "../config/sessions/session-delivery-generation.js";
 import {
   captureNativeSessionEntryCurrentRead,
   captureSessionEntryCurrentRead,
@@ -21,8 +23,6 @@ import type { IncognitoSessionAuthority } from "../config/sessions/session-incog
 import { readPlacementSessionIdentityEvidence } from "../config/sessions/session-placement-evidence.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { createBoardWidgetApprovalResolver } from "../gateway/board-widget-approval.js";
-import { createPresenceRecipientProjection } from "../gateway/presence-projection.js";
-import type { GatewayClient } from "../gateway/server-methods/types.js";
 import { prepareGatewaySessionLifecycleTargets } from "../gateway/session-lifecycle-preparation.js";
 import { prepareSessionMutationFacts } from "../gateway/session-sharing-preparation.js";
 import { createCompletionGrantLineageAdmission } from "../gateway/tool-resolution-completion.js";
@@ -36,9 +36,12 @@ import { readAgentDatabaseDeletionSnapshot } from "./agent-deletion-journal.read
 import { getOpenClawAgentDatabaseIfOpen } from "./openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
+import { registerIncognitoSessionMutationTests } from "./openclaw-agent-execution-incognito.mutations.test-support.js";
+import { useIncognitoActorProbe } from "./openclaw-agent-execution-incognito.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
 
+const probe = useIncognitoActorProbe();
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const references = new Set<IncognitoAgentDatabaseExecution>();
 const authority: IncognitoSessionAuthority = { assertCurrent() {} };
@@ -175,23 +178,21 @@ it("reads existing actor sessions without creating missing stores or crossing na
   expect(fs.readdirSync(foreignEnv.OPENCLAW_STATE_DIR, { recursive: true })).toEqual([]);
 });
 
-it("withholds staged sharing from grants and publishes detached facts before its caller resumes", async () => {
+it("grants only its transaction preimage and publishes detached facts before its caller resumes", async () => {
   const sessionKey = key("publication");
   const stages: string[] = [];
   const source: IncognitoSessionAuthority = {
     assertCurrent() {},
     authorize(stage, facts) {
       stages.push(stage);
-      expect(() => actor.sessions.readSharing(sessionKey)).toThrow("pending or unavailable");
-      expect(() => actor.sessions.captureCurrent(sessionKey)).toThrow("pending or unavailable");
+      expect(actor.sessions.readSharing(sessionKey)).toBeUndefined();
+      actor.sessions.captureCurrent(sessionKey).assertCurrent();
       expect(() => actor.sessions.read(authority, { sessionKey })).toThrow(
         "Incognito authority callbacks cannot call their actor",
       );
-      expect(() =>
-        actor.run(authority, (scope) =>
-          scope.execute({ type: "database.incognito.memory", input: undefined }),
-        ),
-      ).toThrow("Incognito authority callbacks cannot call their actor");
+      expect(() => actor.sessions.withSharedState(async () => undefined)).toThrow(
+        "Incognito authority callbacks cannot call their actor",
+      );
       expect(facts.sharing?.entry?.sessionId).toBe(stage === "commit" ? "publication" : undefined);
     },
   };
@@ -212,7 +213,7 @@ it("withholds staged sharing from grants and publishes detached facts before its
   created.claim.assertCurrent();
 });
 
-it("authorizes controller policy from transaction facts while its actor projection is pending", async () => {
+it("authorizes controller policy from its transaction preimage inside synchronous grants", async () => {
   const sessionKey = "agent:main:subagent:incognito-controller";
   await actor.sessions.create(authority, {
     sessionKey,
@@ -236,7 +237,7 @@ it("authorizes controller policy from transaction facts while its actor projecti
         assertCurrent: controller.assertCurrent,
         authorize(stage, facts) {
           stages.push(stage);
-          expect(() => controller.read()).toThrow("pending or unavailable");
+          expect(controller.read().controlScope).toBe("children");
           expect(controller.read([facts]).controlScope).toBe("children");
           expect(() =>
             controller.read([
@@ -326,13 +327,7 @@ it("serializes reads, creation, publication, and queued revocation in the actor 
   const borrower = await capture();
   assert(borrower);
   const sessionKey = key("fifo");
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const held = actor.run(authority, async (scope) => {
-    entered.resolve();
-    await release.promise;
-    await scope.execute({ type: "database.incognito.memory", input: undefined });
-  });
+  const { entered, release, held } = probe.hold(actor, authority);
   await entered.promise;
   let allowed = true;
   const source: IncognitoSessionAuthority = {
@@ -558,67 +553,6 @@ it("preserves the original 24-hour deadline and refuses claims after actor repla
   ).toBeUndefined();
 });
 
-it("composes sharing, delivery and presence from current actor facts without host SQL", async () => {
-  const sessionKey = key("authority-composition");
-  const initial = entry("authority-composition");
-  await actor.sessions.create(authority, { sessionKey, entry: initial });
-  const signal = new AbortController();
-  await withIncognitoSessionActor(
-    actor,
-    async () => {
-      const sql = observeMainThreadSql();
-      const facts = await prepareSessionMutationFacts({ cfg: {}, agentId: "main", sessionKey });
-      const delivery = await prepareSessionDeliveryGeneration({
-        agentId: "main",
-        storePath: actor.path,
-        sessionKey,
-        sessionId: initial.sessionId,
-        lifecycleRevision: initial.lifecycleRevision,
-      });
-      try {
-        const person = { text: "actor watcher", ts: 1, watchedSessions: [sessionKey] };
-        const project = createPresenceRecipientProjection({ cfg: {}, presence: [person] });
-        const client: GatewayClient = {
-          connect: {
-            minProtocol: 1,
-            maxProtocol: 1,
-            role: "operator",
-            scopes: ["operator.admin"],
-            client: {
-              id: "openclaw-control-ui",
-              version: "test",
-              platform: "test",
-              mode: "webchat",
-            },
-          },
-        };
-        expect(facts.storageTarget.storePath).toBe(actor.path);
-        expect(facts.readCurrent({}).target.entry.sessionId).toBe(initial.sessionId);
-        expect(project(client)).toEqual([person]);
-        delivery.assertCurrent();
-        await actor.sessions.sideData(authority, {
-          type: "session.sharing.add",
-          input: { sessionKey, params: { identityId: "viewer", addedBy: "owner" } },
-        });
-        expect(facts.readCurrent({}).membership.has("viewer")).toBe(true);
-        delivery.assertCurrent();
-        signal.abort(new Error("authority revoked"));
-        expect(() => facts.readCurrent({})).toThrow("Session access facts are unavailable");
-        expect(() => delivery.assertCurrent()).toThrow(
-          "Session delivery generation is unavailable",
-        );
-        expect(() => project(client)).toThrow("authority revoked");
-        sql.expectIdle();
-      } finally {
-        delivery.release();
-        facts.release();
-        sql.restore();
-      }
-    },
-    signal.signal,
-  );
-});
-
 it("retains actor identity before sharing waits for storage readiness", async () => {
   const sessionKey = key("authority-storage-wait");
   const initial = entry("authority-storage-wait");
@@ -736,6 +670,7 @@ it("composes entry reads, currency, candidates and admission without caller-thre
     const sql = observeMainThreadSql();
     try {
       const scope = { agentId: "main", sessionKey };
+      expect(await readResolvedSessionEntryInWorker({ ...scope, cfg: {} })).toMatchObject(initial);
       await withSessionEntryReadOnlyInWorker(
         { ...scope, sessionKey: `  ${sessionKey.toUpperCase()}  ` },
         authority.assertCurrent,
@@ -1011,3 +946,5 @@ it.each(["default", "explicit", "durable-only"] as const)(
     }
   },
 );
+
+registerIncognitoSessionMutationTests(() => ({ actor, env, authority, key, entry }));

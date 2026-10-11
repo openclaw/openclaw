@@ -477,6 +477,59 @@ describe("legacy provider catalog retention", () => {
     expect(result.authoritative).toBe(false);
   });
 
+  it.each(["failed refresh", "changed auth", "restrictive success"] as const)(
+    "publishes accepted membership across %s",
+    async (scenario) => {
+      const second = { provider: "custom", id: "other", name: "Other" };
+      const previous: ModelCatalogSnapshot = {
+        entries: [learned, second],
+        routeVariants: [learned, second],
+        providerOutcomes: [
+          { provider: "custom", status: "ready", listedModelIds: ["learned", "other"] },
+        ],
+      };
+      mocks.runPreparedModelCatalogWorker.mockResolvedValue(previous);
+      const owner = await publishPreparedModelRuntimeSnapshot(
+        fixture.agentInput("pro", { agents: { entries: { pro: {} } } }),
+        { catalogMode: "static", provenance: "standalone" },
+      );
+      await owner.loadFullModelCatalog!({ refresh: true });
+      const next: ModelCatalogSnapshot = {
+        entries: scenario === "restrictive success" ? [second] : [],
+        routeVariants: scenario === "restrictive success" ? [second] : [],
+        providerOutcomes: [
+          scenario === "restrictive success"
+            ? { provider: "custom", status: "ready", listedModelIds: ["other"] }
+            : { provider: "custom", status: "unavailable" },
+        ],
+      };
+      if (scenario === "changed auth") {
+        setPreparedModelFullCatalogAuth(next, {
+          providerAuthLabels: new Map(),
+          authStore: { version: 1, profiles: {} },
+          authModes: { custom: "api_key" },
+          credentials: { custom: { type: "api_key", key: "replacement-key" } },
+        });
+      }
+      mocks.runPreparedModelCatalogWorker.mockResolvedValue(next);
+      const result = await owner.loadFullModelCatalog!({ refresh: true });
+      expect(result.providerOutcomes?.[0]?.listedModelIds).toEqual(
+        scenario === "failed refresh"
+          ? ["learned", "other"]
+          : scenario === "restrictive success"
+            ? ["other"]
+            : undefined,
+      );
+      expect(result.entries.map(({ id }) => id).toSorted()).toEqual(
+        scenario === "failed refresh"
+          ? ["learned", "other"]
+          : scenario === "restrictive success"
+            ? ["other"]
+            : [],
+      );
+    },
+  );
+
   it("does not treat native-first configured rows as a completed provider acquisition", async () => {
     const configured = {
       id: "configured",
@@ -540,6 +593,157 @@ describe("legacy provider catalog retention", () => {
     const result = await owner.loadFullModelCatalog!({ refresh: true });
     expect(result.entries).toContainEqual(expect.objectContaining(starter));
     expect(result.authoritative).toBe(false);
+  });
+
+  describe("failed provider discovery retry", () => {
+    const unavailable: ModelCatalogSnapshot = {
+      entries: [],
+      routeVariants: [],
+      staticEntries: [starter],
+      providerOutcomes: [{ provider: "custom", status: "unavailable" }],
+    };
+    const ready: ModelCatalogSnapshot = {
+      entries: [learned],
+      routeVariants: [learned],
+      providerOutcomes: [{ provider: "custom", status: "ready" }],
+    };
+    const worker = mocks.runPreparedModelCatalogWorker;
+    const publishFailedOwner = async () => {
+      worker.mockResolvedValue(unavailable);
+      const config: OpenClawConfig = { agents: { entries: { pro: {} } } };
+      const owner = await publishPreparedModelRuntimeSnapshot(fixture.agentInput("pro", config), {
+        catalogMode: "static",
+        provenance: "standalone",
+      });
+      const failed = await owner.loadFullModelCatalog!({ refresh: true });
+      expect(failed.entries.map(({ id }) => id)).toEqual(["starter"]);
+      return { owner, calls: worker.mock.calls.length };
+    };
+
+    it("retries with backoff without a read or explicit refresh", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      try {
+        const { owner, calls } = await publishFailedOwner();
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(worker).toHaveBeenCalledTimes(calls + 1);
+        worker.mockResolvedValue(ready);
+        await vi.advanceTimersByTimeAsync(59_000);
+        expect(worker).toHaveBeenCalledTimes(calls + 1);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(worker).toHaveBeenCalledTimes(calls + 2);
+        await vi.waitFor(() =>
+          expect(owner.readFullModelCatalog!()?.entries.map(({ id }) => id)).toEqual(["learned"]),
+        );
+        // A recovered provider returns to its ordinary renewal contract.
+        await vi.advanceTimersByTimeAsync(30 * 60_000);
+        expect(worker).toHaveBeenCalledTimes(calls + 2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("measures a new failure episode from its own failure", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      try {
+        const { owner, calls } = await publishFailedOwner();
+        await vi.advanceTimersByTimeAsync(10_000);
+        worker.mockResolvedValue(ready);
+        await owner.loadFullModelCatalog!({ refresh: true, providerIds: ["custom"] });
+        await vi.advanceTimersByTimeAsync(10_000);
+        worker.mockResolvedValue(unavailable);
+        await owner.loadFullModelCatalog!({ refresh: true, providerIds: ["custom"] });
+        await vi.advanceTimersByTimeAsync(29_000);
+        expect(worker).toHaveBeenCalledTimes(calls + 2);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(worker).toHaveBeenCalledTimes(calls + 3);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("refreshes native Claude inventory with the canonical Anthropic scope", async () => {
+    const native = { provider: "claude-cli", id: "claude-new", name: "Native" };
+    mocks.runPreparedModelCatalogWorker.mockImplementation(async (providers) => {
+      const discovered: ModelCatalogSnapshot = {
+        entries: providers?.includes("claude-cli") ? [native] : [],
+        routeVariants: [],
+        providerOutcomes: providers?.includes("claude-cli")
+          ? [{ provider: "claude-cli", status: "ready", listedModelIds: [native.id] }]
+          : [],
+      };
+      setPreparedModelFullCatalogAuth(discovered, {
+        providerAuthLabels: new Map(),
+        authStore: { version: 1, profiles: {} },
+        authModes: {},
+        credentials: {},
+      });
+      return discovered;
+    });
+    mocks.configuredAgentIds = ["pro"];
+    const config: OpenClawConfig = { agents: { entries: { pro: {} } } };
+    const owner = await publishPreparedModelRuntimeSnapshot(fixture.agentInput("pro", config), {
+      catalogMode: "static",
+    });
+    const catalog = await owner.loadFullModelCatalog!({
+      refresh: true,
+      providerIds: ["anthropic"],
+    });
+    expect(catalog.entries).toContainEqual(
+      expect.objectContaining({ ...native, provider: "anthropic" }),
+    );
+    expect(catalog.providerOutcomes).toContainEqual({
+      provider: "claude-cli",
+      status: "ready",
+      listedModelIds: [native.id],
+    });
+  });
+
+  it("reacquires discovered providers that a config rebuild cannot retain", async () => {
+    // Claude CLI shape: only discovery observes the native sign-in, so a rebuild's agent facts
+    // cannot prove the same account and the retained inventory drops the provider.
+    const plain = { provider: "plain", id: "plain-model", name: "Plain" };
+    const nativeCli = { provider: "native-cli", id: "cli-model", name: "CLI" };
+    const worker = mocks.runPreparedModelCatalogWorker;
+    worker.mockImplementation(async () => {
+      const discovered: ModelCatalogSnapshot = {
+        entries: [{ ...plain }, { ...nativeCli }],
+        routeVariants: [],
+        providerOutcomes: [
+          { provider: "plain", status: "ready" },
+          { provider: "native-cli", status: "ready" },
+        ],
+      };
+      setPreparedModelFullCatalogAuth(discovered, {
+        providerAuthLabels: new Map(),
+        authStore: { version: 1, profiles: {} },
+        authModes: { "native-cli": "api_key" },
+        credentials: { "native-cli": { type: "api_key", key: "native-sign-in-marker" } },
+      });
+      return discovered;
+    });
+    mocks.configuredAgentIds = ["pro"];
+    const config: OpenClawConfig = { agents: { entries: { pro: {} } } };
+    const options = { gatewayLifecycle: true, catalogMode: "static" as const };
+    await refreshPreparedModelRuntimeSnapshots(config, options);
+    const original = await prepareModelRuntimeSnapshot(fixture.agentInput("pro", config));
+    const initial = await original.loadFullModelCatalog!({ refresh: true, wait: true });
+    expect(initial.entries).toContainEqual(expect.objectContaining(nativeCli));
+
+    const toggled: OpenClawConfig = {
+      ...config,
+      plugins: { entries: { unrelated: { config: { flag: true } } } },
+    };
+    worker.mockClear();
+    await refreshPreparedModelRuntimeSnapshots(toggled, options);
+    const rebuilt = await prepareModelRuntimeSnapshot(fixture.agentInput("pro", toggled));
+    expect(rebuilt).not.toBe(original);
+    const reacquired = await rebuilt.loadFullModelCatalog!({ changedOnly: true });
+    expect(reacquired.entries.map(({ provider, id }) => `${provider}/${id}`)).toEqual(
+      expect.arrayContaining(["plain/plain-model", "native-cli/cli-model"]),
+    );
+    expect(worker).toHaveBeenCalledOnce();
+    expect(worker.mock.calls[0]?.[0]).toContain("native-cli");
   });
 });
 

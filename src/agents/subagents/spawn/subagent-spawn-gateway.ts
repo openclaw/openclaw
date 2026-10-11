@@ -42,7 +42,6 @@ const SUBAGENT_AGENT_RECONCILE_INTERVAL_MS = 800;
 const SUBAGENT_AGENT_RECONCILE_TIMEOUT_MS = 6_400;
 
 type SubagentGatewayResponse = Awaited<ReturnType<typeof callGateway>>;
-type SubagentGatewayDispatchMode = "in_process" | "out_of_process";
 
 /** Captures the request's Gateway binding and operator owner before spawn preparation awaits. */
 export function captureSubagentSpawnGatewayContext() {
@@ -58,7 +57,7 @@ export function captureSubagentSpawnGatewayContext() {
   return { gatewayContextResolver, operatorAuthority };
 }
 
-async function callSubagentGatewayWithDispatchMode(
+async function dispatchSubagentGateway(
   params: Parameters<typeof callGateway>[0],
   authorization?: SubagentLaunchAuthorization,
   options?: {
@@ -66,7 +65,7 @@ async function callSubagentGatewayWithDispatchMode(
     gatewayContextResolver?: GatewayContextResolver;
     preparedLaunch?: PreparedSessionRun;
   },
-): Promise<{ response: SubagentGatewayResponse; dispatchMode: SubagentGatewayDispatchMode }> {
+): Promise<{ response: SubagentGatewayResponse; registrationRequired: boolean }> {
   const { sessionSpawnContext, parentExecutionIdentityToken } =
     readSubagentGatewayExecutionIdentity(params) ?? {};
   // Subagent lifecycle requires methods spanning multiple scope tiers
@@ -182,7 +181,7 @@ async function callSubagentGatewayWithDispatchMode(
           return await dispatch(identity);
         })
       : await dispatch();
-    return { response, dispatchMode: "in_process" };
+    return { response, registrationRequired: true };
   }
   const dispatchAgentRequest = (timeoutMs?: number | null) => {
     request.assertDispatchCurrent?.();
@@ -218,7 +217,7 @@ async function callSubagentGatewayWithDispatchMode(
     request.method === "agent"
       ? await reconcileSubagentAgentDispatch(dispatchAgentRequest, request.timeoutMs)
       : await dispatchAgentRequest(request.timeoutMs);
-  return { response, dispatchMode: "out_of_process" };
+  return { response, registrationRequired: false };
 }
 
 async function reconcileSubagentAgentDispatch(
@@ -266,7 +265,7 @@ export async function callSubagentGateway(
   params: Parameters<typeof callGateway>[0],
   authorization?: SubagentLaunchAuthorization,
 ): Promise<SubagentGatewayResponse> {
-  return (await callSubagentGatewayWithDispatchMode(params, authorization)).response;
+  return (await dispatchSubagentGateway(params, authorization)).response;
 }
 
 export async function callNativeSubagentGateway(
@@ -274,21 +273,14 @@ export async function callNativeSubagentGateway(
   authorization?: SubagentLaunchAuthorization,
   gatewayContextResolver?: GatewayContextResolver,
   preparedLaunch?: PreparedSessionRun,
-): Promise<{
-  response: SubagentGatewayResponse;
-  registrationRequired: boolean;
-}> {
-  const result = await callSubagentGatewayWithDispatchMode(params, authorization, {
+) {
+  // The trusted marker exists only on direct dispatch. A WebSocket fallback keeps the
+  // ordinary Gateway CLI policy: tracking is best-effort and never rejects an accepted run.
+  return await dispatchSubagentGateway(params, authorization, {
     agentRunTracking: "native_subagent",
     gatewayContextResolver,
     preparedLaunch,
   });
-  return {
-    response: result.response,
-    // The trusted marker exists only on direct dispatch. A WebSocket fallback keeps the
-    // ordinary Gateway CLI policy: tracking is best-effort and never rejects an accepted run.
-    registrationRequired: result.dispatchMode === "in_process",
-  };
 }
 
 export function readGatewayRunId(

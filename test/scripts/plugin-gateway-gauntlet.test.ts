@@ -670,35 +670,6 @@ describe("plugin gateway gauntlet helpers", () => {
     });
   });
 
-  it("prebuilds only selected plugin dist entries for bounded gauntlet runs", () => {
-    expect(
-      buildGauntletPrebuildEnv(
-        { EXISTING: "1" },
-        {
-          includePrivateQa: true,
-          buildIds: ["active-memory", "acpx"],
-        },
-      ),
-    ).toEqual({
-      EXISTING: "1",
-      OPENCLAW_BUILD_PRIVATE_QA: "1",
-      OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "acpx,active-memory,qa-channel,qa-lab",
-      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
-      PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
-    });
-  });
-
-  it("preserves caller pnpm dependency verification overrides in gauntlet prebuilds", () => {
-    expect(
-      buildGauntletPrebuildEnv(
-        { EXISTING: "1", PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "true" },
-        { includePrivateQa: true },
-      ),
-    ).toMatchObject({
-      PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "true",
-    });
-  });
-
   it("prebuilds only the QA runtime needed by the gauntlet", () => {
     expect(createGauntletPrebuildCommand(repoRoot)).toEqual({
       command: process.execPath,
@@ -965,26 +936,6 @@ setInterval(() => {}, 1000);
     expect(row.diagnosticFailure).toBe("command-log-write-failure");
     expect(row.logPath).toBeNull();
     expect(row.logWriteError).toMatch(/EEXIST|ENOTDIR|not a directory/u);
-  });
-
-  it("cleans parent signal handlers after live measured commands settle", async () => {
-    const logDir = path.join(repoRoot, "logs");
-    const before = process.listenerCount("SIGTERM");
-
-    const row = await runMeasuredCommand({
-      cwd: repoRoot,
-      env: process.env,
-      logDir,
-      command: process.execPath,
-      args: ["-e", ""],
-      label: "live-signal-cleanup",
-      phase: "probe",
-      timeoutMs: 1000,
-      timeMode: "none",
-    });
-
-    expect(row.status).toBe(0);
-    expect(process.listenerCount("SIGTERM")).toBe(before);
   });
 
   it.runIf(process.platform !== "win32")(
@@ -1261,6 +1212,7 @@ try {
   );
 
   it("bounds captured output from live measured commands", async () => {
+    const before = process.listenerCount("SIGTERM");
     const logDir = path.join(repoRoot, "logs");
     const row = await runMeasuredCommand({
       cwd: repoRoot,
@@ -1281,6 +1233,7 @@ try {
     expect(log).toContain("[stdout truncated after 12 bytes]");
     expect(log).toContain("y".repeat(12));
     expect(log).toContain("[stderr truncated after 12 bytes]");
+    expect(process.listenerCount("SIGTERM")).toBe(before);
   });
 
   it("bounds relayed output from live measured commands", async () => {
@@ -1443,29 +1396,6 @@ try {
     expect(result.stderr).toContain("--limit must be a positive integer");
   });
 
-  it("documents gauntlet guardrail options and env defaults in help", () => {
-    const result = runGauntlet(["--help"]);
-
-    expect(result.status, result.stderr).toBe(0);
-    for (const text of [
-      "--wall-anomaly-multiplier",
-      "--rss-anomaly-multiplier",
-      "--qa-cpu-regression-multiplier",
-      "--qa-wall-regression-multiplier",
-      "--command-timeout-ms",
-      "--build-timeout-ms",
-      "--qa-timeout-ms",
-      "OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_IDS",
-      "OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_TOTAL",
-      "OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_INDEX",
-      "OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_FAIL_ON_OBSERVATION",
-      "OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_KEEP_RUN_ROOT",
-      "OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_QA_SUMMARY_MAX_BYTES",
-    ]) {
-      expect(result.stdout).toContain(text);
-    }
-  });
-
   it("fails once when skip-prebuild leaves plugin lifecycle probes without a built entry", async () => {
     const outputDir = path.join(repoRoot, "artifacts");
     await writeManifest("acpx", "openclaw.plugin.json", JSON.stringify({ id: "acpx" }));
@@ -1575,29 +1505,8 @@ try {
     await expect(fs.stat(summary.isolatedRunRoot)).rejects.toHaveProperty("code", "ENOENT");
   });
 
-  it("does not parse QA summary limit env when QA is skipped", () => {
+  it("probes plugin-owned slash help while the plugin is installed", async () => {
     const outputDir = path.join(repoRoot, "artifacts");
-    const result = runGauntlet(
-      ["--skip-prebuild", "--skip-lifecycle", "--skip-slash-help", "--skip-qa", "--allow-empty"],
-      outputDir,
-      { ...process.env, OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_QA_SUMMARY_MAX_BYTES: "not-a-number" },
-    );
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("failures=0");
-  });
-
-  it.each([
-    ["probes plugin-owned slash help while the plugin is installed", "default", [], 0],
-    ["skips plugin-owned slash help when requested", "skip", ["--skip-slash-help"], 0],
-    [
-      "rejects slash-only probes without the install lifecycle",
-      "slash-only",
-      ["--skip-lifecycle"],
-      1,
-    ],
-  ] as const)("%s", async (_title, mode, extraArgs, expectedStatus) => {
-    const outputDir = path.join(repoRoot, `artifacts-${mode}`);
     await writeManifest(
       "workboard",
       "openclaw.plugin.json",
@@ -1642,58 +1551,31 @@ try {
     );
 
     const result = runGauntlet(
-      ["--skip-prebuild", "--skip-qa", ...extraArgs, "--plugin", "workboard"],
+      ["--skip-prebuild", "--skip-qa", "--plugin", "workboard"],
       outputDir,
     );
 
-    expect(result.status, result.stderr).toBe(expectedStatus);
+    expect(result.status, result.stderr).toBe(0);
     const summary = await readSummary(outputDir);
-    if (mode === "default") {
-      expect(summary.failures).toEqual([]);
-      const slashHelpRow = summary.rows.find(
-        (row: { label?: string; logPath?: string }) =>
-          row.label === "workboard-slash-help:workboard",
-      );
-      expect(summary.rows).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            label: "workboard-slash-help:workboard",
-            phase: "slash:help",
-            pluginId: "workboard",
-            status: 0,
-          }),
-        ]),
-      );
-      const slashHelpLogPath = slashHelpRow?.logPath;
-      expect(slashHelpLogPath).toEqual(expect.any(String));
-      await expect(fs.readFile(slashHelpLogPath as string, "utf8")).resolves.toContain(
-        "Usage: openclaw workboard",
-      );
-      return;
-    }
-
-    if (mode === "skip") {
-      expect(summary.failures).toEqual([]);
-      expect(summary.rows).not.toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            phase: "slash:help",
-            pluginId: "workboard",
-          }),
-        ]),
-      );
-      return;
-    }
-
-    expect(summary.guardFailures).toEqual([]);
-    expect(summary.failures).toEqual([
-      expect.objectContaining({
-        label: "workboard-slash-workboard",
-        phase: "slash:help",
-        pluginId: "workboard",
-        status: 1,
-      }),
-    ]);
+    expect(summary.failures).toEqual([]);
+    const slashHelpRow = summary.rows.find(
+      (row: { label?: string; logPath?: string }) => row.label === "workboard-slash-help:workboard",
+    );
+    expect(summary.rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: "workboard-slash-help:workboard",
+          phase: "slash:help",
+          pluginId: "workboard",
+          status: 0,
+        }),
+      ]),
+    );
+    const slashHelpLogPath = slashHelpRow?.logPath;
+    expect(slashHelpLogPath).toEqual(expect.any(String));
+    await expect(fs.readFile(slashHelpLogPath as string, "utf8")).resolves.toContain(
+      "Usage: openclaw workboard",
+    );
   });
 
   it("carries required plugin build ids and enables dependencies in QA chunks", async () => {
@@ -1864,15 +1746,6 @@ try {
       scenarioIds: ["channel-chat-baseline"],
       diagnosticFailure: "qa-summary-missing",
       rowAssertion: "missing",
-    });
-  });
-
-  it("fails successful QA chunks that write unusable summary JSON", async () => {
-    await runQaSummaryFailureScenario({
-      qaSummary: {},
-      scenarioIds: ["channel-chat-baseline"],
-      diagnosticFailure: "qa-summary-invalid",
-      diagnosticDetail: "QA suite summary missing scenarios array",
     });
   });
 

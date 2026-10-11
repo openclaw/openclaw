@@ -11,7 +11,7 @@ import {
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ReplyPayload } from "../types.js";
-import { defineAuthorizedTextCommand } from "./command-gates.js";
+import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
 import {
   loadModelsProviderData,
   type ModelsCommandSessionEntry,
@@ -45,21 +45,19 @@ function parseListArgs(tokens: string[]): Extract<ParsedModelsCommand, { action:
   let all = false;
   for (const [index, token] of tokens.entries()) {
     const lower = token.toLowerCase();
-    if (lower.startsWith("limit=") || lower.startsWith("size=")) {
-      const value = parseStrictPositiveInteger(lower.slice(lower.indexOf("=") + 1));
-      if (value !== undefined) {
+    if (index > 0 && (lower === "all" || lower === "--all")) {
+      all = true;
+      continue;
+    }
+    const isPageSize = lower.startsWith("limit=") || lower.startsWith("size=");
+    const value = parseStrictPositiveInteger(
+      isPageSize || lower.startsWith("page=") ? lower.slice(lower.indexOf("=") + 1) : lower,
+    );
+    if (value !== undefined) {
+      if (isPageSize) {
         pageSize = Math.min(PAGE_SIZE_MAX, value);
-      }
-    } else if (index > 0) {
-      if (lower === "all" || lower === "--all") {
-        all = true;
-      } else {
-        const value = parseStrictPositiveInteger(
-          lower.startsWith("page=") ? lower.slice("page=".length) : lower,
-        );
-        if (value !== undefined) {
-          page = value;
-        }
+      } else if (index > 0) {
+        page = value;
       }
     }
   }
@@ -143,21 +141,6 @@ export function formatModelsAvailableHeader(params: {
   return [`Models (${providerLabel}) — ${count} available`, params.availability?.notice]
     .filter(Boolean)
     .join("\n\n");
-}
-
-function buildModelsMenuText(params: {
-  providers: string[];
-  byProvider: ReadonlyMap<string, ReadonlySet<string>>;
-}): string {
-  return [
-    "Providers:",
-    ...params.providers.map(
-      (provider) => `- ${provider} (${params.byProvider.get(provider)?.size ?? 0})`,
-    ),
-    "",
-    "Use: /models <provider>",
-    "Switch: /model <provider/model>",
-  ].join("\n");
 }
 
 type ModelsCommandReplyParams = {
@@ -255,7 +238,15 @@ function buildModelsCommandReply(
       };
     }
     return {
-      text: withAvailability(buildModelsMenuText({ providers, byProvider })),
+      text: withAvailability(
+        [
+          "Providers:",
+          ...providers.map((provider) => `- ${provider} (${byProvider.get(provider)?.size ?? 0})`),
+          "",
+          "Use: /models <provider>",
+          "Switch: /model <provider/model>",
+        ].join("\n"),
+      ),
     };
   };
 
@@ -378,7 +369,7 @@ export const handleModelsCommand: CommandHandler = defineAuthorizedTextCommand(
   async (params, commandBodyNormalized) => {
     const parsed = parseModelsArgs(commandBodyNormalized.replace(/^\/models\b/i, "").trim());
     if (parsed.action === "add") {
-      return { shouldContinue: false, reply: { text: MODELS_ADD_DEPRECATED_TEXT } };
+      return commandReply(MODELS_ADD_DEPRECATED_TEXT);
     }
 
     const modelsAgentId = params.sessionKey
@@ -406,9 +397,6 @@ export const handleModelsCommand: CommandHandler = defineAuthorizedTextCommand(
         (modelsAgentId === currentAgentId ? params.workspaceDir : undefined),
       sessionEntry: targetSessionEntry,
     });
-    if (!reply) {
-      return null;
-    }
-    return { reply, shouldContinue: false };
+    return reply ? commandReply(reply) : null;
   },
 );

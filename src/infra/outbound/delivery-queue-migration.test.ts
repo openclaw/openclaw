@@ -7,8 +7,11 @@ import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { getDeliveryQueueEntryStatus, loadDeliveryQueueEntry } from "../delivery-queue-sqlite.js";
-import { seedDeliveryQueueEntry } from "../delivery-queue-sqlite.test-support.js";
+import {
+  getDeliveryQueueEntryStatus,
+  loadDeliveryQueueEntry,
+  seedDeliveryQueueEntry,
+} from "../delivery-queue-sqlite.test-support.js";
 import { deliverOutboundPayloadsInternal } from "./deliver.js";
 import {
   LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
@@ -44,11 +47,7 @@ const channelMocks = vi.hoisted(() => ({
   resolveOutboundChannelMessageAdapter: vi.fn(),
 }));
 const completionMocks = vi.hoisted(() => ({
-  failDurableDelivery: vi.fn(),
-}));
-const namespaceMocks = vi.hoisted(() => ({
-  replacePendingDeliveryQueueEntry: vi.fn(),
-  throwOnReplaceCall: 0,
+  settleUnknownDelivery: vi.fn(),
 }));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
@@ -59,23 +58,12 @@ vi.mock("./channel-resolution.js", () => ({
 }));
 vi.mock("./delivery-completion.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("./delivery-completion.js")>();
-  return { ...original, failDurableDelivery: completionMocks.failDurableDelivery };
-});
-vi.mock("../delivery-queue-sqlite-namespace.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../delivery-queue-sqlite-namespace.js")>();
-  namespaceMocks.replacePendingDeliveryQueueEntry.mockImplementation((params) => {
-    if (
-      namespaceMocks.throwOnReplaceCall > 0 &&
-      namespaceMocks.replacePendingDeliveryQueueEntry.mock.calls.length ===
-        namespaceMocks.throwOnReplaceCall
-    ) {
-      throw new Error("transient lease renewal failure");
-    }
-    return original.replacePendingDeliveryQueueEntry(params);
-  });
   return {
     ...original,
-    replacePendingDeliveryQueueEntry: namespaceMocks.replacePendingDeliveryQueueEntry,
+    settleDurableDelivery: (...args: Parameters<typeof original.settleDurableDelivery>) =>
+      "platformSendStarted" in args[1] && args[1].platformSendStarted
+        ? completionMocks.settleUnknownDelivery(...args)
+        : original.settleDurableDelivery(...args),
   };
 });
 
@@ -133,9 +121,7 @@ describe("outbound prepared queue migration", () => {
     hookMocks.runMessageSent.mockClear();
     channelMocks.resolveOutboundChannelMessageAdapter.mockReset();
     channelMocks.resolveOutboundChannelMessageAdapter.mockReturnValue(undefined);
-    completionMocks.failDurableDelivery.mockClear();
-    namespaceMocks.replacePendingDeliveryQueueEntry.mockClear();
-    namespaceMocks.throwOnReplaceCall = 0;
+    completionMocks.settleUnknownDelivery.mockClear();
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -265,42 +251,6 @@ describe("outbound prepared queue migration", () => {
     });
   });
 
-  it("fences modifier preparation when lease renewal throws", async () => {
-    vi.useFakeTimers();
-    try {
-      const id = "legacy-renewal-failure";
-      seedDeliveryQueueEntry({
-        queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
-        entry: legacyEntry(id, "must not replay"),
-        stateDir: tmpDir(),
-      });
-      let releaseHook: ((value: { content: string }) => void) | undefined;
-      hookMocks.runMessageSending.mockImplementationOnce(
-        async () =>
-          await new Promise<{ content: string }>((resolve) => {
-            releaseHook = resolve;
-          }),
-      );
-      namespaceMocks.throwOnReplaceCall = 2;
-
-      const migration = migrate();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(hookMocks.runMessageSending).toHaveBeenCalledOnce();
-      await vi.advanceTimersByTimeAsync(30_000);
-      releaseHook?.({ content: "must not replay-prepared" });
-
-      await expect(migration).resolves.toEqual({ moved: 0, skipped: 1, remaining: 0 });
-      expect(
-        getDeliveryQueueEntryStatus(OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME, id, tmpDir()),
-      ).toBe("failed");
-      expect(
-        readQueueEntryJson(OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME, id, tmpDir()),
-      ).not.toContain("must not replay");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("dead-letters interrupted modifier preparation without invoking hooks again", async () => {
     const id = "interrupted-legacy-preparation";
     const interrupted = {
@@ -322,8 +272,9 @@ describe("outbound prepared queue migration", () => {
     await expect(migrate()).resolves.toEqual({ moved: 0, skipped: 1, remaining: 0 });
 
     expect(hookMocks.runMessageSending).not.toHaveBeenCalled();
-    expect(completionMocks.failDurableDelivery).toHaveBeenCalledWith(
+    expect(completionMocks.settleUnknownDelivery).toHaveBeenCalledWith(
       interrupted.deliveryCompletion,
+      { platformSendStarted: true },
       tmpDir(),
     );
     expect(getDeliveryQueueEntryStatus(OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME, id, tmpDir())).toBe(
@@ -367,7 +318,7 @@ describe("outbound prepared queue migration", () => {
     await expect(migrate()).resolves.toEqual({ moved: 0, skipped: 1, remaining: 1 });
 
     expect(hookMocks.runMessageSending).not.toHaveBeenCalled();
-    expect(completionMocks.failDurableDelivery).not.toHaveBeenCalled();
+    expect(completionMocks.settleUnknownDelivery).not.toHaveBeenCalled();
     expect(getDeliveryQueueEntryStatus(OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME, id, tmpDir())).toBe(
       "pending",
     );

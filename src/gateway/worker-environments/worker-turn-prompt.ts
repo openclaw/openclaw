@@ -18,7 +18,7 @@ import {
   bootstrapHarnessContextEngine,
 } from "../../agents/harness/context-engine-lifecycle.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
-import { prepareAgentPromptProjects } from "../../agents/runtime-prompt.js";
+import { prepareAgentPromptProjects } from "../../agents/prompt-projects.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import type { SessionManager } from "../../agents/sessions/session-manager.js";

@@ -68,7 +68,7 @@ type ZalouserSendMediaContext = ChannelMessageSendTextContext & {
 
 export function resolveZalouserQrProfile(accountId?: string | null): string {
   const normalized = normalizeAccountId(accountId);
-  if (!normalized || normalized === DEFAULT_ACCOUNT_ID) {
+  if (normalized === DEFAULT_ACCOUNT_ID) {
     return process.env.ZALOUSER_PROFILE?.trim() || process.env.ZCA_PROFILE?.trim() || "default";
   }
   return normalized;

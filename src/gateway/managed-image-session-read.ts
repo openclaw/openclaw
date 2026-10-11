@@ -1,16 +1,116 @@
 import path from "node:path";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { resolveStateDir } from "../config/paths.js";
+import { loadExactSessionEntryReadOnlyResult } from "../config/sessions/session-accessor.sqlite-entry-availability.js";
+import { resolveSessionEntry } from "../config/sessions/session-accessor.sqlite-exact-read.js";
 import type { SessionExactEntriesWorkerResult } from "../config/sessions/session-entry-read.types.js";
+import {
+  captureIncognitoSessionSource,
+  withIncognitoSessionEntry,
+} from "../config/sessions/session-incognito-binding.js";
 import { captureSessionStoreReadCandidate } from "../config/sessions/session-store-read-candidates.js";
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
 import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
+import {
+  resolveExistingAgentSessionStoreTargetsReadOnlyResult,
+  type SessionStoreTargetsReadCache,
+} from "../config/sessions/targets-read-availability.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
+import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import { SessionMetadataUnavailableError } from "../state/session-metadata-unavailable-error.js";
 import type { SessionTranscriptReadScope } from "./session-transcript-readers.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
+import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
+
+export type SessionStoreAvailabilityRead = ReturnType<
+  typeof resolveExistingAgentSessionStoreTargetsReadOnlyResult
+>;
+
+/** Native cleanup selection remains available until production incognito acquisition cuts over. */
+export function resolveNativeManagedImageSessionRead(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  agentId?: string;
+  ownerAgentId: string;
+  env: NodeJS.ProcessEnv;
+  stateDir?: string;
+  storeAvailabilityCache?: Map<string, SessionStoreAvailabilityRead>;
+  storeTargetsReadCache?: SessionStoreTargetsReadCache;
+}): { kind: "ready"; scope: SessionTranscriptReadScope } | { kind: "missing" | "unavailable" } {
+  const {
+    cfg,
+    sessionKey,
+    agentId,
+    ownerAgentId,
+    env,
+    stateDir,
+    storeAvailabilityCache,
+    storeTargetsReadCache,
+  } = params;
+  const discovery =
+    storeAvailabilityCache?.get(ownerAgentId) ??
+    resolveExistingAgentSessionStoreTargetsReadOnlyResult(cfg, ownerAgentId, {
+      cache: storeTargetsReadCache,
+      ...(stateDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } } : {}),
+    });
+  storeAvailabilityCache?.set(ownerAgentId, discovery);
+  if (!discovery.available) {
+    return { kind: "unavailable" };
+  }
+  const usesRuntimeState = !stateDir || path.resolve(stateDir) === path.resolve(resolveStateDir());
+  type SessionEntry = ReturnType<typeof loadGatewaySessionEntryReadOnly>["entry"];
+  let matched: { entry: NonNullable<SessionEntry>; storePath: string } | undefined;
+  for (const target of discovery.targets) {
+    const readTarget = {
+      agentId: ownerAgentId,
+      clone: false,
+      env,
+      sessionKey,
+      storePath: target.storePath,
+    };
+    let targetEntry: SessionEntry;
+    try {
+      const exact = loadExactSessionEntryReadOnlyResult(readTarget);
+      if (!exact.found) {
+        return { kind: "unavailable" };
+      }
+      targetEntry = exact.value?.entry;
+      if (!targetEntry) {
+        targetEntry = resolveSessionEntry(readTarget, { readOnly: true }).existing;
+      }
+    } catch {
+      return { kind: "unavailable" };
+    }
+    if (targetEntry) {
+      if (matched) {
+        return { kind: "unavailable" };
+      }
+      matched = { entry: targetEntry, storePath: target.storePath };
+    }
+  }
+  let entry: SessionEntry = matched?.entry;
+  let storePath = matched?.storePath ?? discovery.targets[0]?.storePath ?? "";
+  if (!entry && usesRuntimeState) {
+    const loaded = loadGatewaySessionEntryReadOnly(sessionKey, { agentId: ownerAgentId });
+    const exact = loadExactSessionEntryReadOnlyResult({
+      agentId: ownerAgentId,
+      clone: false,
+      sessionKey,
+      storePath: loaded.storePath,
+    });
+    if (!exact.found) {
+      return { kind: "unavailable" };
+    }
+    entry = exact.value?.entry ?? loaded.entry;
+    storePath = loaded.storePath;
+  }
+  const sessionId = entry?.sessionId;
+  return sessionId
+    ? { kind: "ready", scope: { agentId, sessionEntry: entry, sessionId, sessionKey, storePath } }
+    : { kind: "missing" };
+}
 
 /** Serving keeps discovery and physical readers alive through response publication. */
 export async function withManagedImageSessionRead<T>(
@@ -25,6 +125,32 @@ export async function withManagedImageSessionRead<T>(
 ): Promise<T | null> {
   const { cfg, sessionKey, agentId, stateDir } = params;
   params.assertCurrent();
+  const incognitoScope = {
+    agentId,
+    sessionKey: normalizeSessionKeyPreservingOpaquePeerIds(sessionKey),
+    storePath: cfg.session?.store,
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+  };
+  const binding = captureIncognitoSessionSource(incognitoScope);
+  if (binding) {
+    return withIncognitoSessionEntry(
+      binding,
+      incognitoScope.sessionKey,
+      params.assertCurrent,
+      async (entry, assertCurrent) =>
+        entry && !("kind" in binding)
+          ? consume(
+              {
+                ...incognitoScope,
+                storePath: binding.actor.path,
+                sessionEntry: entry,
+                sessionId: entry.sessionId,
+              },
+              assertCurrent,
+            )
+          : null,
+    );
+  }
   const { candidates, ...prepared } = prepareSessionStoreTargetInventory(cfg, [agentId], {
     ...process.env,
     OPENCLAW_STATE_DIR: stateDir,

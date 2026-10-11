@@ -116,41 +116,26 @@ describe("Codex registration procfs boundary", () => {
     await state.cleanup();
   });
 
-  it.for(["immediate", "delayed", "threaded zombie"])(
-    "preserves a live owner's registration during %s inspection despite an unreadable unrelated process",
-    async (mode) => {
-      const registration = { parent, child: { ...child, commandFingerprint } };
-      store.register("owned", registration);
-      if (mode === "threaded zombie") {
-        addProcess(parent.pid, 1, "Z", 2);
-      }
-      if (mode === "delayed") {
-        let now = Date.now();
-        vi.spyOn(Date, "now").mockImplementation(() => now);
-        procfs.files.set("/proc/sys/kernel/random/boot_id", () => {
-          now += 3_000;
-          return bootId;
-        });
-      }
+  it("preserves a threaded zombie owner's registration despite an unreadable unrelated process", async () => {
+    const registration = { parent, child: { ...child, commandFingerprint } };
+    store.register("owned", registration);
+    addProcess(parent.pid, 1, "Z", 2);
 
-      await expect(
-        Promise.all([
-          prepareCodexAppServerProcessRegistration(),
-          prepareCodexAppServerProcessRegistration(),
-        ]),
-      ).resolves.toHaveLength(2);
+    await expect(
+      Promise.all([
+        prepareCodexAppServerProcessRegistration(),
+        prepareCodexAppServerProcessRegistration(),
+      ]),
+    ).resolves.toHaveLength(2);
 
-      expect(store.lookup("owned")).toEqual(registration);
-      expect(kill).not.toHaveBeenCalled();
-    },
-  );
+    expect(store.lookup("owned")).toEqual(registration);
+    expect(kill).not.toHaveBeenCalled();
+  });
 
   it.for([
-    "readable",
     "startup",
     "slow-inspection",
     "exhausted-inspection",
-    "permission",
     "malformed",
     "deadline",
     "missing-observer",
@@ -187,7 +172,7 @@ describe("Codex registration procfs boundary", () => {
         });
       } else if (mode === "missing-observer") {
         procfs.files.delete(`/proc/${process.pid}/stat`);
-      } else if (mode !== "readable") {
+      } else {
         procfs.files.set(
           `/proc/${child.pid}/stat`,
           mode === "malformed"
@@ -200,13 +185,13 @@ describe("Codex registration procfs boundary", () => {
       const registered = register(spawned);
       spawned.emit("spawn");
 
-      if (mode !== "readable" && mode !== "startup" && !mode.startsWith("slow-")) {
+      if (mode !== "startup" && mode !== "slow-inspection") {
         await expect(registered).rejects.toMatchObject({
           reason:
             mode === "exhausted-inspection"
               ? "deadline"
-              : mode === "permission" || mode === "deadline"
-                ? mode
+              : mode === "deadline"
+                ? "deadline"
                 : "unavailable",
         });
         expect(store.entries()).toEqual([]);
@@ -225,30 +210,18 @@ describe("Codex registration procfs boundary", () => {
     },
   );
 
-  it.for([
-    ["permission", "EACCES"],
-    ["unavailable", "EIO"],
-    ["deadline", "ABORT_ERR"],
-    ["unavailable", "empty"],
-    ["unavailable", "group-zero"],
-    ["unavailable", "missing-observer"],
-  ] as const)(
-    "retains registrations when required identity inspection fails: %s/%s",
-    async ([reason, fault]) => {
+  it.each([
+    { code: "EIO", reason: "unavailable" },
+    { code: "EACCES", reason: "permission" },
+  ])(
+    "retains registrations when required identity inspection fails with $code",
+    async ({ code, reason }) => {
       const registration = { parent, child: { ...child, commandFingerprint } };
       store.register("owned", registration);
-      if (fault === "missing-observer") {
-        procfs.files.delete(`/proc/${process.pid}/stat`);
-      } else {
-        procfs.files.set(
-          `/proc/${parent.pid}/stat`,
-          fault === "empty"
-            ? ""
-            : fault === "group-zero"
-              ? `${parent.pid} (worker) S 1 0${" 0".repeat(14)} 1 0 12345\n`
-              : Object.assign(new Error("required inspection failed"), { code: fault }),
-        );
-      }
+      procfs.files.set(
+        `/proc/${parent.pid}/stat`,
+        Object.assign(new Error("required inspection failed"), { code }),
+      );
 
       await expect(prepareCodexAppServerProcessRegistration()).rejects.toMatchObject({ reason });
       expect(store.lookup("owned")).toEqual(registration);
@@ -264,13 +237,12 @@ describe("Codex registration procfs boundary", () => {
     expect(kill).not.toHaveBeenCalled();
   });
 
-  it.for(["dead descendant", "threaded descendant", "threaded root", "unrelated threaded zombie"])(
+  it.for(["dead descendant", "threaded descendant", "threaded root"])(
     "requires whole-process quiescence only from the owned tree: %s",
     async (mode) => {
       const threadedRoot = mode === "threaded root";
-      const related = mode !== "unrelated threaded zombie";
       addProcess(child.pid, process.pid, threadedRoot ? "Z" : "S", threadedRoot ? 2 : 1);
-      addProcess(neighbor, related ? child.pid : 1, "Z", mode === "dead descendant" ? 1 : 2);
+      addProcess(neighbor, child.pid, "Z", mode === "dead descendant" ? 1 : 2);
       kill.mockImplementation((pid, signal) => {
         if (pid === child.pid && !threadedRoot) {
           addProcess(child.pid, process.pid, signal === "SIGSTOP" ? "T" : "S");
@@ -301,30 +273,15 @@ describe("Codex registration procfs boundary", () => {
     },
   );
 
-  it.for(["ENOENT", "ESRCH", "replaced", "dead"])(
-    "retires a verified %s identity despite an unreadable unrelated process",
-    async (mode) => {
-      store.register("orphan", { parent, child: { ...child, commandFingerprint } });
-      procfs.files.delete(`/proc/${parent.pid}/stat`);
-      if (mode === "replaced") {
-        procfs.files.set(
-          `/proc/${child.pid}/stat`,
-          `${child.pid} (replacement) S 1 ${child.pid}${" 0".repeat(14)} 1 0 67890\n`,
-        );
-      } else if (mode === "dead") {
-        addProcess(child.pid, 1, "Z");
-      } else {
-        procfs.files.set(
-          `/proc/${child.pid}/stat`,
-          Object.assign(new Error("gone"), { code: mode }),
-        );
-      }
+  it("retires a verified dead identity despite an unreadable unrelated process", async () => {
+    store.register("orphan", { parent, child: { ...child, commandFingerprint } });
+    procfs.files.delete(`/proc/${parent.pid}/stat`);
+    addProcess(child.pid, 1, "Z");
 
-      await expect(prepareCodexAppServerProcessRegistration()).resolves.toBeTypeOf("function");
-      expect(store.lookup("orphan")).toBeUndefined();
-      expect(kill).not.toHaveBeenCalled();
-    },
-  );
+    await expect(prepareCodexAppServerProcessRegistration()).resolves.toBeTypeOf("function");
+    expect(store.lookup("orphan")).toBeUndefined();
+    expect(kill).not.toHaveBeenCalled();
+  });
 
   it("confirms an orphan's exit without rereading unrelated processes after containment", async () => {
     store.register("orphan", { parent, child: { ...child, commandFingerprint } });

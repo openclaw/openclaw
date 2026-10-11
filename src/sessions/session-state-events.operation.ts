@@ -1,8 +1,15 @@
 import { assertSessionEntriesCurrentAdmission } from "../config/sessions/session-entry-current-admission.js";
 import type { SessionEntriesCurrentCheck } from "../config/sessions/session-entry-current.types.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+
+export type SessionWatchOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
+  now?: number;
+  assertCurrent?: () => void;
+  sessionEntriesCurrent?: SessionEntriesCurrentCheck;
+};
 
 export function runSessionWatchOperation<T>(
   context: OpenClawStateWorkerContext,

@@ -1,4 +1,5 @@
-import { expect } from "vitest";
+import { expect, type Mock } from "vitest";
+import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { deliverQueuedSessionDelivery } from "./server-restart-sentinel.js";
@@ -169,3 +170,59 @@ export function expectRestartSentinelTranscriptBroadcast(
     { prepareSessionProjection: expect.any(Function) },
   );
 }
+
+type SessionEventHandoff = typeof import("../auto-reply/reply/session-event-handoff.js");
+type ResolveSessionTarget =
+  typeof import("./session-utils-store-worker.js").resolveGatewaySessionStoreTargetInWorker;
+
+export function configureRestartSessionEventMocks(
+  mocks: {
+    loadSessionEntry: (
+      key: string,
+      options?: Parameters<typeof import("./session-utils.js").loadSessionEntry>[1],
+    ) => RestartSentinelSessionFixture;
+    resolveSessionTarget: Mock<ResolveSessionTarget>;
+    captureSessionEventTarget: Mock<SessionEventHandoff["captureSessionEventTargetForHost"]>;
+    enqueueSessionEvent: Mock<SessionEventHandoff["enqueueSessionEventForHost"]>;
+  },
+  sessionId?: string,
+) {
+  mocks.resolveSessionTarget
+    .mockReset()
+    .mockImplementation(async ({ key, agentId, env, assertActive }) => {
+      assertActive?.();
+      const loaded = mocks.loadSessionEntry(key, { agentId, env });
+      return {
+        ...loaded,
+        agentId: loaded.agentId ?? agentId ?? "main",
+        store: loaded.entry
+          ? { ...loaded.store, [loaded.canonicalKey]: loaded.entry }
+          : loaded.store,
+      };
+    });
+  mocks.captureSessionEventTarget.mockReset().mockImplementation(async (agentId, sessionKey) => ({
+    agentId,
+    sessionKey,
+    sessionId: sessionId ?? sessionKey,
+    generation: "restart-event-test",
+  }));
+  mocks.enqueueSessionEvent.mockReset().mockImplementation((_text, options) => ({
+    id: "restart-event",
+    accepted: Promise.resolve({ ok: true }),
+    cancel: () => true,
+    settled: Promise.resolve().then(async () => {
+      await options.onAdopted?.();
+      return { status: "completed", executionStarted: true, delivered: false };
+    }),
+  }));
+}
+
+export function createRestartSentinelFixture(payload: RestartSentinelPayload, revision = 123) {
+  return { version: 1 as const, revision, payload };
+}
+
+export type RestartSentinelInProcessDispatchMock = (
+  method: string,
+  params: Record<string, unknown>,
+  options?: Record<string, unknown>,
+) => Promise<Record<string, unknown>>;

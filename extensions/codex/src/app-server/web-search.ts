@@ -55,16 +55,17 @@ export function resolveCodexWebSearchPlan(params: {
   nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
   webSearchAllowed?: boolean;
 }): CodexWebSearchPlan {
+  const managedPlan = (suppressManagedWebSearch: boolean): CodexWebSearchPlan => ({
+    kind: suppressManagedWebSearch ? "disabled" : "managed",
+    suppressManagedWebSearch,
+    threadConfig: CODEX_NATIVE_WEB_SEARCH_DISABLED_CONFIG,
+  });
   if (
     params.disableTools === true ||
     params.webSearchAllowed === false ||
     params.config?.tools?.web?.search?.enabled === false
   ) {
-    return {
-      kind: "disabled",
-      suppressManagedWebSearch: true,
-      threadConfig: CODEX_NATIVE_WEB_SEARCH_DISABLED_CONFIG,
-    };
+    return managedPlan(true);
   }
   const nativeConfig = params.config?.tools?.web?.search?.openaiCodex;
   const managedSearchExplicit =
@@ -81,11 +82,7 @@ export function resolveCodexWebSearchPlan(params: {
     const suppressManagedWebSearch =
       !managedSearchExplicit &&
       normalizeUniqueTrimmedStringList(nativeConfig?.allowedDomains).length > 0;
-    return {
-      kind: suppressManagedWebSearch ? "disabled" : "managed",
-      suppressManagedWebSearch,
-      threadConfig: CODEX_NATIVE_WEB_SEARCH_DISABLED_CONFIG,
-    };
+    return managedPlan(suppressManagedWebSearch);
   }
   return {
     kind: "native-hosted",

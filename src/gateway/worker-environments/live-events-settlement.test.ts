@@ -9,10 +9,8 @@ import { onAgentRuntimeEvent } from "../../infra/agent-events.js";
 import { getAgentRunContext, getAgentRunContextOwnership } from "../../infra/agent-run-registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import {
-  runOpenClawAgentWorkerWrite,
-  SQLITE_SESSION_WRITER_QUEUES,
-} from "../../state/openclaw-agent-write-admission.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
+import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import * as trajectoryStore from "../../trajectory/runtime-store.sqlite.js";
 import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 import { dispatchWorkerRequest } from "../server/ws-connection/worker-connection-dispatch.js";

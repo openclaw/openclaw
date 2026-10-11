@@ -130,7 +130,11 @@ function createGatewayDrainReporter(
     drainTimeoutMs === undefined ? "without a timeout" : `with timeout ${drainTimeoutMs}ms`;
   let lastPendingWarningAt: number | undefined;
   return (snapshot: GatewayActiveWorkSnapshot) => {
-    recordCounts(formatGatewayDrainCounts(snapshot) || "no active work");
+    recordCounts(
+      `${formatGatewayDrainCounts(snapshot) || "no active work"}; pending owners: ${
+        snapshot.blockers.map(({ message }) => message).join("; ") || "none"
+      }`,
+    );
     const now = Date.now();
     if (lastPendingWarningAt === undefined) {
       lastPendingWarningAt = now;

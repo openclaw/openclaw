@@ -1,31 +1,31 @@
 {
-  "tag": "openclaw-v1.4.3-20261005-667c4ab22c-webkit-f1e1ca1156",
-  "commit": "667c4ab22cbf6b101b3376c550b81cabc8c00518",
-  "revision": "1.4.3-canary.1+667c4ab22",
+  "tag": "openclaw-v1.4.3-20261010-65d94e7156-webkit-01f208ae7a",
+  "commit": "65d94e7156da4b6aca649dac5f19b8294b757570",
+  "revision": "1.4.3-canary.1+65d94e715",
   "artifacts": {
     "darwin-arm64": {
       "asset": "bun-darwin-aarch64.zip",
-      "sha256": "e8d99f92aad560bc406e2d01eca0568d5931a71af13a883369e567ea9f64696d",
+      "sha256": "e4121d0f93d85ee334dbbedb7048519f004e4695d3f1b03f8a4d7ec9d9a6f65e",
       "executable": "bun-darwin-aarch64/bun",
-      "executableSha256": "1d34700d85cbf75166df4ce7525a3ee1a98b5b2cb74b2c96b44b958e3702cb6f"
+      "executableSha256": "d3a86d4a963aca55fe2e935fcf1cd2b97c7b292aaa0295781fb31ba817501707"
     },
     "darwin-x64": {
       "asset": "bun-darwin-x64.zip",
-      "sha256": "6e84bdd9ea747539beff0440b30e757731bcaaeb626e7b3c345e2f748bf99405",
+      "sha256": "beba947e4acb6cd2173bb8e96de2d38465593e871c2abb89818268e54820dc16",
       "executable": "bun-darwin-x64/bun",
-      "executableSha256": "00cfaa54e77feee6582f012e2c899d8c44bc01da06978945988da65fa47bc525"
+      "executableSha256": "fa24864048f6a04d005b7968b101beabc5e5d05b59fd58a0b3d4810ada8addb9"
     },
     "linux-x64": {
       "asset": "bun-linux-x64.zip",
-      "sha256": "846c1d1dd0e9b4a4443481fdf5b8f2c1943955e5437e75faa300b91bf0e59e1a",
+      "sha256": "1df6cecad4216403753003dab58e1c7f620c944d5ebb97dba1bcaec3edf548c3",
       "executable": "bun-linux-x64/bun",
-      "executableSha256": "76ede220307e41e36c6f4981abf203536de469d2a6628a7ce503616fd477c467"
+      "executableSha256": "a74610af94648d54fa2312f319258a8821b509948d9dd9d6eb5f577e78a470e4"
     },
     "linux-arm64": {
       "asset": "bun-linux-aarch64.zip",
-      "sha256": "161e958a106a09ca2e980ca0e9692779b32b8ab655acdabda1653ce19970f7e6",
+      "sha256": "98f6e71aef33a14435e9036cfacf8724ea1646bbd998e1f9459c0287fc2f9c4e",
       "executable": "bun-linux-aarch64/bun",
-      "executableSha256": "d143f680bd6ad4b5a5342e2a6f93465c5eb9306975a8bb1ebc326859c15d9c19"
+      "executableSha256": "e151eab0eeda9fa0ad70b16bcb3a550a74c2ed390159c22e4fab946d6b64d189"
     }
   }
 }

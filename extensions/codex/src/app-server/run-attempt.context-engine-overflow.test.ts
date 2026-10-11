@@ -22,6 +22,7 @@ import {
   getRequestInputText,
   getRequestInputTextAt,
   makeThreadBootstrapBinding,
+  requestMethodsExcludingSkillDiscovery,
   requireRecord,
   runCodexAppServerAttempt,
   writeCodexAppServerBinding,
@@ -237,7 +238,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
                   });
                 }),
               ]);
-              expect(harness.requests.map((request) => request.method)).toEqual([
+              expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
                 "config/read",
                 "configRequirements/read",
                 "thread/read",
@@ -392,65 +393,6 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
     }
   });
 
-  it("returns a replay-safe recovery result when the executable owner changes during overflow retry", async () => {
-    const { sessionFile, workspaceDir, params } = createOverflowFixture();
-    await writeCodexAppServerBinding(sessionFile, bootstrapBinding(workspaceDir));
-    const contextEngine = createProjectedContextEngine();
-    const successorStart = vi.fn(() => threadStartResult("thread-fresh"));
-    const harness = createStartedThreadHarness(
-      async (method, requestParams) => {
-        if (method === "thread/resume") {
-          return threadStartResult("thread-old");
-        }
-        if (method === "turn/start") {
-          const request = requireRecord(requestParams, `${method} params`);
-          if (request.threadId === "thread-old") {
-            // Selection changes after the original turn writes; the successor is rejected locally.
-            harness.client.setThreadSessionRequestGuard(async () => {
-              throw Object.assign(
-                new Error("managed executable selection changed during startup"),
-                {
-                  code: "CODEX_APP_SERVER_START_SELECTION_CHANGED",
-                },
-              );
-            });
-            throw new Error("Codex ran out of room in the model's context window");
-          }
-        }
-        if (method === "thread/start") {
-          return successorStart();
-        }
-        return undefined;
-      },
-      { persistedThreads: ["thread-old"] },
-    );
-    params.contextEngine = contextEngine;
-
-    const result = await runCodexAppServerAttempt(params);
-
-    expect(readAttemptTerminal(result).promptError).toContain("codex app-server client is closed");
-    expect(result.codexAppServerFailure).toEqual({
-      kind: "client_closed_before_turn_completed",
-      transport: "stdio",
-      threadId: "thread-old",
-      replaySafe: true,
-    });
-    expect(harness.requests.map((request) => request.method)).toEqual([
-      "config/read",
-      "configRequirements/read",
-      "thread/read",
-      "thread/resume",
-      "thread/inject_items",
-      "turn/start",
-      "config/read",
-      "configRequirements/read",
-      "thread/start",
-      "thread/unsubscribe",
-    ]);
-    expect(successorStart).not.toHaveBeenCalled();
-    expect(await readCodexAppServerBinding(sessionFile)).toBeUndefined();
-  });
-
   it("preserves a newer context-engine binding when a stale resumed thread overflows", async () => {
     const { sessionFile, workspaceDir, params } = createOverflowFixture();
     await writeCodexAppServerBinding(sessionFile, bootstrapBinding(workspaceDir));
@@ -486,7 +428,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
     );
 
     expect(compact).not.toHaveBeenCalled();
-    expect(harness.requests.map((request) => request.method)).toEqual([
+    expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
       "config/read",
       "configRequirements/read",
       "thread/read",
@@ -526,7 +468,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
 
     expect(compact).not.toHaveBeenCalled();
     expect(assemble).toHaveBeenCalledTimes(1);
-    expect(harness.requests.map((request) => request.method)).toEqual([
+    expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
       "config/read",
       "configRequirements/read",
       "thread/start",
@@ -566,7 +508,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
 
     expect(compact).not.toHaveBeenCalled();
     expect(assemble).toHaveBeenCalledTimes(1);
-    expect(harness.requests.map((request) => request.method)).toEqual([
+    expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
       "config/read",
       "configRequirements/read",
       "thread/start",

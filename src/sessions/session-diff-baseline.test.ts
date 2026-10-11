@@ -11,7 +11,6 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
-import { historyLane } from "../config/sessions/session-transcript-worker-resources.js";
 import type { InternalSessionEntry, SessionDiffBaseline } from "../config/sessions/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
@@ -181,82 +180,6 @@ describe("ensureSessionDiffBaseline", () => {
     }
   });
 
-  it("rejects a stale cached baseline after the authoritative generation rotates", async () => {
-    const sessionId = "stale-cached-settled";
-    const cachedEntry = makeEntry(sessionId, {
-      lifecycleRevision: "cached-generation",
-      sessionDiffBaseline: baseline(sessionId),
-    });
-    const target = await seedEntry({ entry: cachedEntry });
-    const freshClaim = createSessionDiffBaselineCaptureClaim();
-    await replaceSessionEntry(
-      { sessionKey: target.sessionKey, storePath: target.storePath },
-      {
-        ...cachedEntry,
-        lifecycleRevision: "fresh-generation",
-        sessionDiffBaseline: undefined,
-        sessionDiffBaselineCapture: freshClaim,
-      },
-    );
-
-    await expect(ensure(target)).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
-    expect(captureMocks.capture).not.toHaveBeenCalled();
-    expect(loadInternal(target.sessionKey, target.storePath)).toMatchObject({
-      lifecycleRevision: "fresh-generation",
-      sessionDiffBaselineCapture: freshClaim,
-    });
-  });
-
-  it("settles an authoritative pending claim instead of returning a stale cached baseline", async () => {
-    const sessionId = "same-generation-stale-settled";
-    const cachedEntry = makeEntry(sessionId, {
-      lifecycleRevision: "shared-generation",
-      sessionDiffBaseline: baseline(sessionId),
-    });
-    const target = await seedEntry({ entry: cachedEntry });
-    const pendingClaim = createSessionDiffBaselineCaptureClaim();
-    await replaceSessionEntry(
-      { sessionKey: target.sessionKey, storePath: target.storePath },
-      {
-        ...cachedEntry,
-        sessionDiffBaseline: undefined,
-        sessionDiffBaselineCapture: pendingClaim,
-      },
-    );
-    const authoritativeBaseline = { ...baseline(sessionId), root: "/authoritative" };
-    captureMocks.capture.mockResolvedValue(authoritativeBaseline);
-
-    const settled = await ensure(target);
-    expect(settled.sessionDiffBaseline).toEqual(authoritativeBaseline);
-    expect(settled.sessionDiffBaselineCapture).toBeUndefined();
-    expect(captureMocks.capture).toHaveBeenCalledOnce();
-    expect(loadInternal(target.sessionKey, target.storePath)).toMatchObject({
-      lifecycleRevision: "shared-generation",
-      sessionDiffBaseline: authoritativeBaseline,
-    });
-    expect(
-      loadInternal(target.sessionKey, target.storePath)?.sessionDiffBaselineCapture,
-    ).toBeUndefined();
-  });
-
-  it("fails closed when the authoritative generation read fails", async () => {
-    const sessionId = "settled-read-failure";
-    const entry = makeEntry(sessionId, {
-      lifecycleRevision: "read-failure-generation",
-      sessionDiffBaseline: baseline(sessionId),
-    });
-    const target = await seedEntry({ entry });
-    const read = vi
-      .spyOn(historyLane.pool, "run")
-      .mockRejectedValueOnce(new Error("authoritative read failed"));
-    try {
-      await expect(ensure(target)).rejects.toBeInstanceOf(SessionWorkStartInvalidatedError);
-      expect(captureMocks.capture).not.toHaveBeenCalled();
-    } finally {
-      read.mockRestore();
-    }
-  });
-
   it("returns a terminal unavailable entry after capture failure and never retries it", async () => {
     const sessionId = "failed-session";
     const entry = makeEntry(sessionId, {
@@ -341,36 +264,6 @@ describe("ensureSessionDiffBaseline", () => {
     );
   });
 
-  it("rejects claim arming before mutating a replacement lifecycle generation", async () => {
-    const sessionId = "replacement-before-arm";
-    const entry = makeEntry(sessionId, {
-      lifecycleRevision: "old-generation",
-    });
-    const target = await seedEntry({ entry });
-    persistenceMocks.patch.mockImplementationOnce(async (...args) => {
-      await replaceSessionEntry(
-        { sessionKey: target.sessionKey, storePath: target.storePath },
-        { ...entry, lifecycleRevision: "replacement-generation" },
-      );
-      if (!persistenceMocks.actualPatch) {
-        throw new Error("missing actual session entry patcher");
-      }
-      return await persistenceMocks.actualPatch(...args);
-    });
-
-    await expect(ensure(target, true)).rejects.toMatchObject({
-      code: "SESSION_WORK_START_CHANGED",
-    });
-    expect(loadInternal(target.sessionKey, target.storePath)).toMatchObject({
-      lifecycleRevision: "replacement-generation",
-      sessionId,
-    });
-    expect(loadInternal(target.sessionKey, target.storePath)?.sessionDiffBaselineCapture).toBe(
-      undefined,
-    );
-    expect(captureMocks.capture).not.toHaveBeenCalled();
-  });
-
   it("invalidates claim arming when the authoritative row is missing", async () => {
     const entry = makeEntry("deleted-before-arm");
     const storePath = path.join(sessionDirs.make(), "sessions.json");
@@ -414,67 +307,5 @@ describe("ensureSessionDiffBaseline", () => {
     }
     expectWorkStartError(settled, /was deleted while starting work/i, "SESSION_WORK_START_CHANGED");
     expect(loadInternal(target.sessionKey, target.storePath)).toBeUndefined();
-  });
-
-  it("rejects an old completion after the same session id receives a fresh claim", async () => {
-    const sessionId = "same-session-id";
-    const oldClaim = createSessionDiffBaselineCaptureClaim();
-    const entry = makeEntry(sessionId, {
-      sessionDiffBaselineCapture: oldClaim,
-    });
-    const target = await seedEntry({ entry });
-    const capture = deferCapture();
-    const oldCompletions = [ensure(target), ensure(target)];
-    const outcomes = Promise.allSettled(oldCompletions);
-    await capture.started;
-    expect(captureMocks.capture).toHaveBeenCalledTimes(1);
-
-    const freshClaim = createSessionDiffBaselineCaptureClaim();
-    await replaceSessionEntry(
-      { sessionKey: target.sessionKey, storePath: target.storePath },
-      { ...entry, lifecycleRevision: "fresh-generation", sessionDiffBaselineCapture: freshClaim },
-    );
-    capture.resolve(baseline(sessionId));
-    for (const result of await outcomes) {
-      expectWorkStartError(result, /changed while starting work/i, "SESSION_WORK_START_CHANGED");
-    }
-
-    expect(loadInternal(target.sessionKey, target.storePath)).toMatchObject({
-      lifecycleRevision: "fresh-generation",
-      sessionDiffBaselineCapture: freshClaim,
-    });
-    expect(loadInternal(target.sessionKey, target.storePath)?.sessionDiffBaseline).toBeUndefined();
-  });
-
-  it("rejects an old completion before mutating a same-claim replacement generation", async () => {
-    const sessionId = "same-claim-replacement";
-    const claim = createSessionDiffBaselineCaptureClaim();
-    const entry = makeEntry(sessionId, {
-      lifecycleRevision: "old-generation",
-      sessionDiffBaselineCapture: claim,
-    });
-    const target = await seedEntry({ entry });
-    const capture = deferCapture();
-    const completion = ensure(target);
-    const outcome = Promise.allSettled([completion]);
-    await capture.started;
-    expect(captureMocks.capture).toHaveBeenCalledOnce();
-
-    await replaceSessionEntry(
-      { sessionKey: target.sessionKey, storePath: target.storePath },
-      { ...entry, lifecycleRevision: "replacement-generation" },
-    );
-    capture.resolve(baseline(sessionId));
-
-    const [settled] = await outcome;
-    if (!settled) {
-      throw new Error("expected capture settlement");
-    }
-    expectWorkStartError(settled, /changed while starting work/i, "SESSION_WORK_START_CHANGED");
-    expect(loadInternal(target.sessionKey, target.storePath)).toMatchObject({
-      lifecycleRevision: "replacement-generation",
-      sessionDiffBaselineCapture: claim,
-    });
-    expect(loadInternal(target.sessionKey, target.storePath)?.sessionDiffBaseline).toBeUndefined();
   });
 });

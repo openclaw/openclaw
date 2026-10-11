@@ -346,19 +346,19 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
         deviceId: params.deviceId,
         signal,
       });
-      params.prepareLaunch?.(node);
-      if (!params.prepareLaunch && params.idleRetention && node.workerHost.idleRetention !== true) {
-        throw new NodeWorkerLaunchTransportError(
-          "PRIVATE_DIALECT_UNAVAILABLE",
-          "node worker idle retention is unavailable",
-        );
-      }
       if (
         params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND &&
         (node.workerHost.environmentSession !== NODE_WORKER_ENVIRONMENT_SESSION_VERSION ||
           resolveNodeWorkerExecutionIssue(node.workerHost))
       ) {
         throw createNodeRunnerInventoryIssueError(node.nodeId, NODE_RUNNER_UPDATE_REQUIRED_ISSUE);
+      }
+      params.prepareLaunch?.(node);
+      if (!params.prepareLaunch && params.idleRetention && node.workerHost.idleRetention !== true) {
+        throw new NodeWorkerLaunchTransportError(
+          "PRIVATE_DIALECT_UNAVAILABLE",
+          "node worker idle retention is unavailable",
+        );
       }
       // A retained environment already owns its slot. The node arbitrates new physical
       // launches atomically; its advertised free-slot count cannot reject turn reuse.

@@ -1,5 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -22,6 +24,7 @@ import {
   readTranscriptMutationStateInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
 import { readTranscriptStatsFromDatabase } from "./session-accessor.sqlite-transcript-stats.js";
+import { readSessionTranscriptAnchorsAsync } from "./session-transcript-anchor-read.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -51,6 +54,39 @@ function createFixture(state: OpenClawTestState, agentId = "main") {
   `);
   return { database, options, scope };
 }
+
+it("reads physical hot and cold presence with mutation pairs off-thread without restoring payloads", async () => {
+  await withOpenClawTestState({ label: "worker-transcript-metadata" }, async (state) => {
+    const { scope } = createFixture(state);
+    const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    try {
+      const values = [];
+      for (const sessionId of ["hot", "cold", "empty", "missing"]) {
+        values.push(
+          (
+            await readSessionTranscriptAnchorsAsync(scope(sessionId), {
+              entryIds: [],
+              includeMetadata: true,
+            })
+          ).metadata,
+        );
+      }
+      expect(values).toEqual([
+        { present: true, observedAt: 10, updatedAt: 20 },
+        { present: true, observedAt: 30, updatedAt: 40 },
+        { present: false, observedAt: 1, updatedAt: null },
+        { present: false, observedAt: null, updatedAt: null },
+      ]);
+      expect(
+        observation.queries.filter((query) =>
+          /\b(?:transcript_events|session_windows|session_transcript_cold_archives)\b/i.test(query),
+        ),
+      ).toEqual([]);
+    } finally {
+      observation.restore();
+    }
+  });
+});
 
 it.each(["presence", "mutation"] as const)(
   "keeps fresh bindings and rows without recompiling warm transcript %s reads",
@@ -109,6 +145,20 @@ it("reads each in-transaction fence advance and restores the prior pair on rollb
     expect(read()).toEqual({ observedAt: 10, updatedAt: 20 });
     expect(() =>
       runOpenClawAgentWriteTransaction((current) => {
+        advanceTranscriptMutationAtInTransaction(current, "hot", 1);
+        expect(read()).toEqual({ observedAt: 10, updatedAt: 20 });
+        advanceTranscriptMutationAtInTransaction(current, "hot", 25.9);
+        expect(read()).toEqual({ observedAt: 10, updatedAt: 25 });
+        advanceTranscriptMutationAtInTransaction(current, "empty", 0);
+        expect(readTranscriptMutationStateInTransaction(current, "empty")).toEqual({
+          observedAt: 1,
+          updatedAt: 0,
+        });
+        advanceTranscriptMutationAtInTransaction(current, "empty", 0, { strictly: true });
+        expect(readTranscriptMutationStateInTransaction(current, "empty")).toEqual({
+          observedAt: 1,
+          updatedAt: 2,
+        });
         current.db
           .prepare("UPDATE session_windows SET transcript_observed_at = 100 WHERE session_id = ?")
           .run("hot");

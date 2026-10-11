@@ -171,8 +171,56 @@ describe("maybeGenerateDashboardSessionTitle", () => {
   it.each([
     ['```text\n"Release Planning"\n```', "Release Planning"],
     ["Title:  Release   planning ", "Release planning"],
+    ['Instruction to reply exactly "ok"', 'Instruction to reply exactly "ok"'],
+    ['Instruction to reply exactly "ok', "Instruction to reply exactly ok"],
+    ["Reply with 'ok'", "Reply with 'ok'"],
+    ["Reply with ‘ok’", "Reply with ‘ok’"],
+    ["Reply with ‘ok", "Reply with ok"],
+    ["Reply with ok’", "Reply with ok"],
+    ["Bestätige mit „ok“", "Bestätige mit „ok“"],
+    ["Reply with “ok”", "Reply with “ok”"],
+    ["Reply with «ok»", "Reply with «ok»"],
+    ["„Release planning“", "Release planning"],
+    ["“Release planning”", "Release planning"],
+    ["«Release planning»", "Release planning"],
+    ["Reply with „ok", "Reply with ok"],
+    ["Reply with “ok", "Reply with ok"],
+    ["Reply with «ok", "Reply with ok"],
+    ["Reply with ok”", "Reply with ok"],
+    ["Reply with ok»", "Reply with ok"],
+    ["Don't change the user's title", "Don't change the user's title"],
+    ["Don’t change the user’s title", "Don’t change the user’s title"],
+    ["Users' permissions", "Users' permissions"],
+    ["Users’ permissions", "Users’ permissions"],
+    ['"Users\' permissions"', "Users' permissions"],
+    ["“Users’ permissions”", "Users’ permissions"],
+    ["Reply with 'users' permissions", "Reply with 'users' permissions"],
+    ["Reply with ‘users’ permissions", "Reply with ‘users’ permissions"],
+    ["Compare our permissions with other users’", "Compare our permissions with other users’"],
+    ["Compare our permissions with other users'", "Compare our permissions with other users'"],
+    ["'Users' permissions'", "Users' permissions"],
+    ["‘Users’ permissions’", "Users’ permissions"],
+    ["'Users' and admins' permissions'", "Users' and admins' permissions"],
+    ["'Users' can't edit permissions'", "Users' can't edit permissions"],
+    ["“Compare our permissions with other users’”", "Compare our permissions with other users’"],
+    ["'users' or 'admins'", "'users' or 'admins'"],
+    ["Compare users’/admins’ permissions", "Compare users’/admins’ permissions"],
+    ["Review users'/permissions", "Review users'/permissions"],
+    ["Compare users’, then admins’ permissions", "Compare users’, then admins’ permissions"],
+    ["Reply with ‘users’, then ‘admins’", "Reply with ‘users’, then ‘admins’"],
+    ["Reply with 'users', then 'admins'", "Reply with 'users', then 'admins'"],
+    ["Compare users’+admins’ permissions", "Compare users’+admins’ permissions"],
+    ["Reply with ‘users’+‘admins’", "Reply with ‘users’+‘admins’"],
+    ["cafe\u0301’s setup", "cafe\u0301’s setup"],
+    ["\"'Release notes'\"", "Release notes"],
+    ["Reply with »ok«", "Reply with »ok«"],
+    ['"ok" or "later"', '"ok" or "later"'],
+    [`${"a".repeat(52)} "long quoted span"`, `${"a".repeat(52)} long q`],
+    [`${"a".repeat(59)} 🚀`, "a".repeat(59)],
   ])("normalizes generated title wrappers", async (generated, expected) => {
-    generateConversationLabelWithFallback.mockResolvedValue(generated);
+    generateConversationLabelWithFallback.mockImplementation(async ({ normalizeLabel }) =>
+      normalizeLabel(generated),
+    );
 
     await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(true);
 
@@ -455,7 +503,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
       const patch = await update({ ...baseEntry });
       writePrepared.resolve();
       await releaseWrite.promise;
-      options.assertCommitAllowed?.();
+      options.workerGuard?.source?.();
       loadSessionEntry.mockReturnValue({ ...baseEntry, ...patch });
       return loadSessionEntry();
     });
@@ -678,7 +726,7 @@ describe("worktree title source lifecycle", () => {
     mocks.load.mockReset().mockImplementation(() => ({ ...current }));
     mocks.patch.mockReset().mockImplementation(async (_scope, update, options) => {
       const patch = await update({ ...current });
-      options.assertCommitAllowed?.();
+      options.workerGuard?.source?.();
       if (patch) {
         current = { ...current, ...patch };
       }
@@ -720,7 +768,7 @@ describe("worktree title source lifecycle", () => {
         await Promise.resolve();
         writeContext = context.getStore();
         const before = source.asserted.length;
-        options.assertCommitAllowed?.();
+        options.workerGuard?.source?.();
         writeAssertions = source.asserted.slice(before);
         current = { ...current, ...patch };
         return { ...current };

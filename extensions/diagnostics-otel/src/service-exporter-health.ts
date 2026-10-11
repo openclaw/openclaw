@@ -157,9 +157,8 @@ export function observeOtlpExporterHealth<TExporter extends ObservableOtlpExport
     signal: ExporterHealthUpdate["signal"];
   },
 ): TExporter {
-  const observed = exporter;
-  const exportItems = observed.export.bind(observed);
-  const shutdown = observed.shutdown.bind(observed);
+  const exportItems = exporter.export.bind(exporter);
+  const shutdown = exporter.shutdown.bind(exporter);
 
   const emit = (
     status: ExporterHealthUpdate["status"],
@@ -176,7 +175,7 @@ export function observeOtlpExporterHealth<TExporter extends ObservableOtlpExport
     });
   };
 
-  observed.export = (items, resultCallback) => {
+  exporter.export = (items, resultCallback) => {
     let dependencyCallbackInvoked = false;
     try {
       exportItems(items, (result) => {
@@ -198,7 +197,7 @@ export function observeOtlpExporterHealth<TExporter extends ObservableOtlpExport
     }
   };
 
-  observed.shutdown = async () => {
+  exporter.shutdown = async () => {
     try {
       await shutdown();
     } catch (error) {

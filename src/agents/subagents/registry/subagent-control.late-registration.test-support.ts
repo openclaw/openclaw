@@ -5,6 +5,7 @@ import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-a
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { enqueueSwarmRun, releaseSwarmRun, holdQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
+import * as killSession from "./subagent-control-session.js";
 import { killAllControlledSubagentRuns } from "./subagent-control.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -26,7 +27,7 @@ export function registerLateDescendantControlTests({
   writeSessionStoreFixture: (label: string, store: Record<string, unknown>) => Promise<string>;
 }) {
   it.each([
-    ["runtime load", false],
+    ["session preparation", false],
     ["parent persistence", false],
     ["admission drain", false],
     ["parent persistence", true],
@@ -118,6 +119,16 @@ export function registerLateDescendantControlTests({
       if (replaceChild) {
         await registerChild();
       }
+      if (phase === "session preparation") {
+        const prepareSession = killSession.prepareSubagentKillSession;
+        vi.spyOn(killSession, "prepareSubagentKillSession").mockImplementationOnce(
+          async (...args) => {
+            reached.resolve();
+            await proceed.promise;
+            return prepareSession(...args);
+          },
+        );
+      }
       const reservationReleases: Promise<void>[] = [];
       const pending = killAllControlledSubagentRuns({
         cfg,
@@ -133,9 +144,7 @@ export function registerLateDescendantControlTests({
             : undefined,
       });
       try {
-        if (phase !== "runtime load") {
-          await reached.promise;
-        }
+        await reached.promise;
         if (replaceChild) {
           const hold = holdQueuedSwarmRun("late-child");
           const withdrawn = hold?.withdraw();

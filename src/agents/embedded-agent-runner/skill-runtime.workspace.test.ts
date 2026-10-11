@@ -189,7 +189,7 @@ it("preserves local Code Mode instruction reads after a document-only adapter st
   expect(readFile).not.toHaveBeenCalled();
 });
 
-it("keeps allowlist-excluded Workshop skills unreadable and says they are unavailable", async () => {
+it("keeps learned Workshop skills readable under an allowlist and calls a missing skill unavailable", async () => {
   const root = temps.make("skills-read-allowlist-");
   const bundled = path.join(root, "bundled");
   await fs.mkdir(bundled);
@@ -229,16 +229,17 @@ it("keeps allowlist-excluded Workshop skills unreadable and says they are unavai
     });
   };
 
+  // Learned skills belong to the agent that learned them, so an allowlist never hides them.
   const allowlisted = await prepare(["listed"]);
-  expect(allowlisted.installedSkills.map((skill) => skill.name)).toEqual(["listed"]);
+  expect(allowlisted.installedSkills.map((skill) => skill.name)).toEqual(["learned", "listed"]);
   const read = expectDefined(createInstalledSkillTools(allowlisted.installedSkills)[1], "read");
-  expect(getTextContent(await read.execute("listed", { name: "listed" }))).toContain(
-    "Listed instructions",
+  expect(getTextContent(await read.execute("learned", { name: "learned" }))).toContain(
+    "Learned instructions",
   );
-  await expect(read.execute("learned", { name: "learned" })).rejects.toThrow(
-    'Skill "learned" is not available to this agent.',
+  await expect(read.execute("absent", { name: "absent" })).rejects.toThrow(
+    'Skill "absent" is not available to this agent.',
   );
-  expect((await prepare([])).installedSkills).toEqual([]);
+  expect((await prepare([])).installedSkills.map((skill) => skill.name)).toEqual(["learned"]);
 });
 
 it.each([

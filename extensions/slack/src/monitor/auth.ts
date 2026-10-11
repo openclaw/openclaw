@@ -21,8 +21,13 @@ import {
   resolveSlackUserAllowListForTeam,
 } from "./allow-list.js";
 import { resolveSlackChannelConfig } from "./channel-config.js";
-import { inferSlackChannelType, resolveSlackChatType } from "./channel-type.js";
-import { normalizeSlackChannelType, type SlackMonitorContext } from "./context.js";
+import {
+  inferSlackChannelType,
+  normalizeSlackChannelType,
+  parseSlackChannelType,
+  resolveSlackChatType,
+} from "./channel-type.js";
+import type { SlackMonitorContext } from "./context.js";
 import type { SlackEventScope } from "./event-scope.js";
 import {
   createSlackIngressSubject,
@@ -475,16 +480,7 @@ export async function authorizeSlackSystemEventSender(params: {
     // DM-specific authorization.
     if (params.interactiveEvent) {
       const inferredFromId = inferSlackChannelType(channelId);
-      const sourceNormalized =
-        typeof resolvedTypeSource === "string"
-          ? resolvedTypeSource.toLowerCase().trim()
-          : undefined;
-      const sourceIsKnownType =
-        sourceNormalized === "im" ||
-        sourceNormalized === "mpim" ||
-        sourceNormalized === "channel" ||
-        sourceNormalized === "group";
-      if (inferredFromId === undefined && !sourceIsKnownType) {
+      if (inferredFromId === undefined && !parseSlackChannelType(resolvedTypeSource)) {
         return {
           allowed: false,
           reason: "ambiguous-channel-type",

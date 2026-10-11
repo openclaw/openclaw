@@ -123,6 +123,7 @@ describe("post-core plugin payload degradation", () => {
     ["unclassified", "ok", "unsafe", "convergence-failed"],
     ["mixed", "warning", "unsafe", "unowned-plugin-payload"],
     ["repaired-advisory", "warning", "unsafe", "plugin-requirement-unknown"],
+    ["retained-clawhub", "warning", "no-payload-repair", undefined],
     ["invalid-config", "error", "core-critical", "invalid-config"],
     ["config-read-file", "error", "core-critical", "config-read-failed"],
     ["config-read-include", "error", "core-critical", "config-read-failed"],
@@ -131,6 +132,7 @@ describe("post-core plugin payload degradation", () => {
     await withOpenClawTestState({ label: `plugin-assessment-${failure}` }, async (state) => {
       await state.writeConfig({ plugins: { enabled: false } });
       const refusal = new Error("original updater authority refused");
+      const retained = failure === "retained-clawhub";
       const installPath = state.path("fixture");
       const smokeFailure = {
         pluginId: "fixture",
@@ -140,7 +142,7 @@ describe("post-core plugin payload degradation", () => {
       };
       const convergeCohort = cohort.convergePluginReleaseCohort;
       const cohortSpy =
-        failure === "integrity" || failure === "repaired-advisory"
+        failure === "integrity" || failure === "repaired-advisory" || retained
           ? vi
               .spyOn(cohort, "convergePluginReleaseCohort")
               .mockImplementationOnce(async (options) => {
@@ -154,6 +156,34 @@ describe("post-core plugin payload degradation", () => {
                   });
                 }
                 const result = await convergeCohort(options);
+                if (retained) {
+                  return {
+                    ...result,
+                    config: {
+                      ...result.config,
+                      plugins: {
+                        ...result.config.plugins,
+                        installs: {
+                          fixture: {
+                            source: "clawhub",
+                            spec: "clawhub:fixture",
+                            version: "1.0.0",
+                            installPath,
+                          },
+                        },
+                      },
+                    },
+                    updateOutcomes: [
+                      {
+                        pluginId: "fixture",
+                        status: "unchanged",
+                        code: "plugin-target-unavailable",
+                        currentVersion: "1.0.0",
+                        message: "Retained fixture while registry publication is pending.",
+                      },
+                    ],
+                  };
+                }
                 return failure === "repaired-advisory"
                   ? {
                       ...result,
@@ -184,7 +214,7 @@ describe("post-core plugin payload degradation", () => {
             installedPluginIdRecovery: new Map(),
             changes: [],
             warnings:
-              failure === "unclassified"
+              failure === "unclassified" || retained
                 ? []
                 : [
                     {
@@ -194,10 +224,10 @@ describe("post-core plugin payload degradation", () => {
                       guidance: [],
                     },
                   ],
-            installRecords: {},
-            errored: true,
+            installRecords: retained ? (cfg.plugins?.installs ?? {}) : {},
+            errored: !retained,
             smokeFailures:
-              failure === "unclassified"
+              failure === "unclassified" || retained
                 ? []
                 : [
                     smokeFailure,
@@ -251,6 +281,15 @@ describe("post-core plugin payload degradation", () => {
             assessment: { kind, ...(reason ? { reason } : {}) },
           });
           expect(result.reason).toBe(kind === "core-critical" ? reason : undefined);
+          if (retained) {
+            expect(result.warnings).toEqual([
+              expect.objectContaining({
+                pluginId: "fixture",
+                reason: "plugin-target-unavailable",
+                guidance: ["openclaw plugins update fixture"],
+              }),
+            ]);
+          }
           if (kind === "core-critical") {
             expect(spy).not.toHaveBeenCalled();
             expect(result.changed).toBe(false);

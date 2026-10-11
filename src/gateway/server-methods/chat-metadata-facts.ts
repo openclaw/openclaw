@@ -137,7 +137,7 @@ export function captureGenerationFacts(deps: ChatMetadataRuntimeDeps): PreparedG
 export function generationFactsMatch(
   left: PreparedGenerationFacts,
   right: PreparedGenerationFacts,
-  scope: "metadata" | "catalog" | "auth" = "metadata",
+  scope: "metadata" | "catalog" | "auth" | "commands" = "metadata",
 ): boolean {
   if (
     left.configKey !== right.configKey ||
@@ -150,12 +150,15 @@ export function generationFactsMatch(
     const candidate = right.agents[index];
     return (
       candidate?.agentId === agent.agentId &&
-      candidate.owner === agent.owner &&
-      candidate.authStoreRevision === agent.authStoreRevision &&
-      // Full catalogs carry their own paired auth generation.
-      candidate.modelCatalog === agent.modelCatalog &&
-      (scope === "auth" || candidate.catalogRefreshFailed === agent.catalogRefreshFailed) &&
-      (scope !== "metadata" || candidate.skillsVersion === agent.skillsVersion)
+      (scope === "commands"
+        ? candidate.skillsVersion === agent.skillsVersion &&
+          candidate.owner.workspaceDir === agent.owner.workspaceDir
+        : candidate.owner === agent.owner &&
+          candidate.authStoreRevision === agent.authStoreRevision &&
+          // Full catalogs carry their own paired auth generation.
+          candidate.modelCatalog === agent.modelCatalog &&
+          (scope === "auth" || candidate.catalogRefreshFailed === agent.catalogRefreshFailed) &&
+          (scope !== "metadata" || candidate.skillsVersion === agent.skillsVersion))
     );
   });
 }

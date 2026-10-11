@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolvePreparedExecEnvironment } from "../agents/bash-tools.exec-request-preparation.js";
 import * as exec from "../process/exec.js";
 import {
   disposeWorkerGitHubEnvironment,
@@ -221,8 +222,7 @@ describe("prepareWorkerGitHubEnvironment", () => {
 
   it("disables the binding before any token use when a Windows profile is not owner-only", async () => {
     const remoteHead = await publishEarlierTurn();
-    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
-    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    vi.spyOn(os, "platform").mockReturnValue("win32");
     inspectPathPermissions.mockResolvedValueOnce({
       ok: true,
       source: "windows-acl",
@@ -232,11 +232,7 @@ describe("prepareWorkerGitHubEnvironment", () => {
       groupWritable: false,
       worldWritable: false,
     } as never);
-    try {
-      await expect(prepare()).resolves.toBeUndefined();
-    } finally {
-      Object.defineProperty(process, "platform", platform);
-    }
+    await expect(prepare()).resolves.toBeUndefined();
 
     expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(initialHead);
     expect(remoteHead).not.toBe(initialHead);
@@ -277,6 +273,7 @@ describe("prepareWorkerGitHubEnvironment", () => {
     const remoteHead = await publishEarlierTurn();
     vi.stubEnv("GH_TOKEN", "inherited-synthetic-token");
     vi.stubEnv("GITHUB_TOKEN", "inherited-synthetic-token");
+    vi.stubEnv("GIT_CONFIG_PARAMETERS", "");
     const runner = vi.spyOn(exec, "runCommandWithTimeout");
 
     const prepared = await prepare();
@@ -320,6 +317,23 @@ describe("prepareWorkerGitHubEnvironment", () => {
     expect(JSON.stringify(prepared)).not.toContain(binding.token);
     expect(process.env.GH_TOKEN).toBe("inherited-synthetic-token");
     expect(process.env.GITHUB_TOKEN).toBe("inherited-synthetic-token");
+    const child = resolvePreparedExecEnvironment({
+      execParams: { command: "git config --get-regexp '^(maintenance.auto|gc.auto|user.name)$'" },
+      host: "gateway",
+      defaultPathPrepend: [],
+      ...prepared,
+      warnings: [],
+    });
+    const config = await exec.runExec(
+      "git",
+      ["-C", cwd, "config", "--get-regexp", "^(maintenance.auto|gc.auto|user.name)$"],
+      { env: child.env, timeoutMs: 10_000, logOutput: false },
+    );
+    expect(config.stdout.trim().split("\n")).toEqual([
+      `user.name ${binding.gitAuthor.name}`,
+      "maintenance.auto false",
+      "gc.auto 0",
+    ]);
     const profileDir = prepared?.localIdentityEnv?.GH_CONFIG_DIR;
     if (!profileDir) {
       throw new Error("Expected a turn-owned GitHub profile");

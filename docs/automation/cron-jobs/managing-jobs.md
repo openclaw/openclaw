@@ -11,6 +11,8 @@ sidebarTitle: "Manage jobs"
 
 Day-to-day operation of stored jobs: copy-ready CLI examples, the management commands, run history semantics, and the `cron.*` configuration keys. Part of the [Automations](/automation/cron-jobs) guide.
 
+Run links from automation messages and notifications open the exact recorded run, even when newer runs fill the first history page. Choose **Show all runs** to return to that automation's full history. Links with a reused session or start-time identity do not select an ambiguous run.
+
 ## CLI examples
 
 <Tabs>
@@ -230,6 +232,8 @@ Disable automations: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
     `cron.sessionRetention` (default `24h`, `false` or `"0h"` disables) prunes isolated run-session entries. Terminal run history is retained for 7 days (`lost` rows for 24 hours), with the newest 2000 rows per job and history class enforced as an additional ceiling.
 
     Gateway retention waits for deferred agent database startup preparation before its first sweep, logging the wait as an intentional deferral. Retention continues even when scheduled execution is disabled.
+
+    Session retention skips agents with pending or completed deletion while continuing maintenance for healthy agents. Pending deletion cleanup remains owned by the agent deletion operation.
 
   </Accordion>
   <Accordion title="Legacy store migration">

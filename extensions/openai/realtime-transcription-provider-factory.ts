@@ -14,6 +14,7 @@ import {
   createOpenAIRealtimeClientSecret,
   readRealtimeErrorDetail,
   resolveOpenAIProviderConfigRecord,
+  resolveOpenAIRealtimeRequestHeaders,
 } from "./realtime-provider-shared.js";
 
 type RealtimeEvent = {
@@ -134,7 +135,6 @@ export function buildOpenAIRealtimeTranscriptionProvider(
         };
       };
       const pendingTranscripts = new Map<string, { bytes: number; text: string }>();
-      const committedItemIds: string[] = [];
       const committedItems = new Map<string, string | null | undefined>();
       const completedTranscripts = new Map<string, string | undefined>();
       const trackedItemIds = new Set<string>();
@@ -148,7 +148,6 @@ export function buildOpenAIRealtimeTranscriptionProvider(
 
       const resetTranscriptionState = () => {
         pendingTranscripts.clear();
-        committedItemIds.length = 0;
         committedItems.clear();
         completedTranscripts.clear();
         trackedItemIds.clear();
@@ -231,11 +230,7 @@ export function buildOpenAIRealtimeTranscriptionProvider(
         previousItemId: string | null | undefined,
         transport: RealtimeTranscriptionWebSocketTransport,
       ) => {
-        if (
-          settledItemIds.has(itemId) ||
-          committedItems.has(itemId) ||
-          !trackItem(itemId, transport)
-        ) {
+        if (committedItems.has(itemId) || !trackItem(itemId, transport)) {
           return;
         }
         if (
@@ -253,32 +248,27 @@ export function buildOpenAIRealtimeTranscriptionProvider(
           itemId,
           previousItemId && settledItemIds.has(previousItemId) ? null : previousItemId,
         );
-        committedItemIds.push(itemId);
-
-        const arrivalOrder = committedItemIds.splice(0);
+        const arrivalOrder = new Map(committedItems);
+        committedItems.clear();
         const successors = new Map<string, string>();
-        for (const candidateId of arrivalOrder) {
-          const previousId = committedItems.get(candidateId);
+        for (const [candidateId, previousId] of arrivalOrder) {
           if (previousId) {
             successors.set(previousId, candidateId);
           }
         }
-        const seen = new Set<string>();
         const appendChain = (startId: string) => {
           let candidateId: string | undefined = startId;
-          while (candidateId && !seen.has(candidateId)) {
-            seen.add(candidateId);
-            committedItemIds.push(candidateId);
+          while (candidateId && !committedItems.has(candidateId)) {
+            committedItems.set(candidateId, arrivalOrder.get(candidateId));
             candidateId = successors.get(candidateId);
           }
         };
-        for (const candidateId of arrivalOrder) {
-          const previousId = committedItems.get(candidateId);
+        for (const [candidateId, previousId] of arrivalOrder) {
           if (previousId == null || settledItemIds.has(previousId)) {
             appendChain(candidateId);
           }
         }
-        for (const candidateId of arrivalOrder) {
+        for (const candidateId of arrivalOrder.keys()) {
           appendChain(candidateId);
         }
       };
@@ -286,8 +276,8 @@ export function buildOpenAIRealtimeTranscriptionProvider(
       const flushCompletedTranscripts = (
         transport: RealtimeTranscriptionWebSocketTransport,
       ): boolean => {
-        while (committedItemIds.length > 0) {
-          const itemId = committedItemIds[0];
+        while (committedItems.size > 0) {
+          const itemId = committedItems.keys().next().value;
           if (!itemId || !completedTranscripts.has(itemId)) {
             return true;
           }
@@ -299,7 +289,6 @@ export function buildOpenAIRealtimeTranscriptionProvider(
           ) {
             return true;
           }
-          committedItemIds.shift();
           committedItems.delete(itemId);
           if (!settleItem(itemId, transport)) {
             return false;
@@ -383,18 +372,11 @@ export function buildOpenAIRealtimeTranscriptionProvider(
               }
             }
           }
-          return (
-            runtime.resolveProviderRequestHeaders({
-              provider: "openai",
-              baseUrl: OPENAI_REALTIME_TRANSCRIPTION_URL,
-              capability: "audio",
-              transport: "websocket",
-              defaultHeaders: {
-                Authorization: `Bearer ${bearer}`,
-              },
-            }) ?? {
-              Authorization: `Bearer ${bearer}`,
-            }
+          return resolveOpenAIRealtimeRequestHeaders(
+            runtime,
+            OPENAI_REALTIME_TRANSCRIPTION_URL,
+            { Authorization: `Bearer ${bearer}` },
+            "websocket",
           );
         },
         connectTimeoutMs: 10_000,
@@ -525,12 +507,6 @@ export function buildOpenAIRealtimeTranscriptionProvider(
               return;
 
             case "conversation.item.input_audio_transcription.failed":
-              if (
-                event.item_id &&
-                (settledItemIds.has(event.item_id) || completedTranscripts.has(event.item_id))
-              ) {
-                return;
-              }
               if (completeItem(event.item_id, undefined, transport)) {
                 config.onError?.(new Error(readRealtimeErrorDetail(event.error)));
               }

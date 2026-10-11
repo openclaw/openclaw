@@ -81,6 +81,7 @@ function runVerifier(
   cwd: string,
   {
     base = "HEAD",
+    version = "2026.7.1",
     target = "HEAD",
     mainRef = target,
     manifest,
@@ -90,7 +91,8 @@ function runVerifier(
     preload,
     env = {},
   }: {
-    base?: string;
+    base?: string | null;
+    version?: string;
     target?: string;
     mainRef?: string | null;
     manifest?: string;
@@ -106,13 +108,12 @@ function runVerifier(
     [
       ...(preload ? ["--import", preload] : []),
       verifier,
-      "--base",
-      base,
+      ...(base === null ? [] : ["--base", base]),
       "--target",
       target,
       ...(mainRef === null ? [] : ["--main-ref", mainRef]),
       "--version",
-      "2026.7.1",
+      version,
       ...(manifest ? ["--manifest", manifest] : []),
       ...(write ? ["--write-ledger"] : []),
       ...(json ? ["--json"] : []),
@@ -123,6 +124,76 @@ function runVerifier(
 }
 
 describe("release-note verification", () => {
+  it.each([
+    { previous: "2026.6.11", divergent: false },
+    { previous: "2026.7.1-beta.2", divergent: false },
+    { previous: "2026.6.11", divergent: true },
+    { previous: "2026.7.1-beta.2", divergent: true },
+  ])(
+    "freezes npm beta $previous (divergent=$divergent) and reuses it after publication",
+    ({ previous, divergent }) => {
+      const cwd = tempDirs.make("openclaw-npm-beta-notes-");
+      git(cwd, ["init", "-q"]);
+      git(cwd, ["config", "commit.gpgsign", "false"]);
+      const version = "2026.7.1-beta.3";
+      writeFileSync(
+        join(cwd, "CHANGELOG.md"),
+        `## ${version}\n\n### Highlights\n\n### Changes\n\n### Fixes\n`,
+      );
+      splitChangelog({ rootDir: cwd });
+      git(cwd, ["add", "."]);
+      git(cwd, ["commit", "-qm", "docs: prepare delta"]);
+      const target = git(cwd, ["rev-parse", "HEAD"]);
+      if (divergent) {
+        git(cwd, ["checkout", "-qb", "shipped"]);
+        writeReleaseChangelog({
+          rootDir: cwd,
+          version: previous,
+          section: `## ${previous}\n\n### Complete contribution record\n\nThis audited record covers the complete ${target}..${target} history: 0 in-range PRs + 0 retained seed-only PRs = 0 unique PRs.\n`,
+        });
+        git(cwd, ["add", "."]);
+        git(cwd, ["commit", "-qm", "docs: shipped record"]);
+        git(cwd, ["tag", `v${previous}`]);
+        git(cwd, ["checkout", "-q", "--detach", target]);
+      } else {
+        git(cwd, ["tag", `v${previous}`]);
+      }
+      const npm = join(cwd, "npm");
+      writeFileSync(
+        npm,
+        `#!${process.execPath}\nconsole.log(JSON.stringify(process.env.TEST_NPM_BETA));\n`,
+      );
+      chmodSync(npm, 0o755);
+      const manifest = join(cwd, "manifest.json");
+      const env = { PATH: `${cwd}:${process.env.PATH}`, TEST_NPM_BETA: previous };
+      const result = runVerifier(cwd, { base: null, version, target, manifest, env });
+      expect(result.status, result.stderr || result.stdout).toBe(0);
+      const capturedBase = divergent ? target : `v${previous}`;
+      expect(JSON.parse(readFileSync(manifest, "utf8"))).toMatchObject({
+        base: capturedBase,
+        target,
+        version,
+      });
+      const record = readFileSync(join(cwd, `CHANGELOG/records/${version}.md`), "utf8");
+      expect(record).toContain(`${capturedBase}..${target}`);
+      if (divergent) {
+        expect(record).toContain(`Shipped baseline exclusions: v${previous} (0 PRs).`);
+      }
+      const publishedEnv = { ...env, TEST_NPM_BETA: version };
+      const refused = runVerifier(cwd, { base: "npm-beta", version, target, env: publishedEnv });
+      expect(refused.status).not.toBe(0);
+      expect(refused.stderr).toContain("reuse the previously captured --base tag");
+      const recovery = runVerifier(cwd, {
+        base: `v${previous}`,
+        version,
+        target,
+        write: false,
+        env: publishedEnv,
+      });
+      expect(recovery.status, recovery.stderr || recovery.stdout).toBe(0);
+    },
+  );
+
   it("refuses docs mirrors before source or GitHub work and preserves frozen records", () => {
     const cwd = tempDirs.make("openclaw-mirror-generation-");
     writeFileSync(

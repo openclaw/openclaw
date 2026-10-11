@@ -238,7 +238,7 @@ Three mechanisms run on eligible turns with no model involvement:
 - **Trigger injection.** Writers can attach short trigger phrases to
   entries describing when they are relevant. Each inbound message runs a
   fast lexical and vector prefilter against those triggers; entries that
-  match strongly (score at or above 0.72) are injected as a compact hidden
+  match strongly (score at or above 0.65) are injected as a compact hidden
   context block, at most three per turn.
 
 Writers store both signals as trailing comments on the same `MEMORY.md` or

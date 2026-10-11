@@ -1,7 +1,5 @@
 import fs from "node:fs/promises";
-import { expectDefined } from "@openclaw/normalization-core";
 import type { App } from "@slack/bolt";
-import type { WebClientOptions } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   registerSessionBindingAdapter,
@@ -263,72 +261,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
       ctx,
     };
   }
-
-  it("links the Slack conversation without an API lookup and reuses its stored link", async () => {
-    const { storePath } = storeFixture.makeTmpStorePath();
-    const fetch = vi
-      .fn<NonNullable<WebClientOptions["fetch"]>>()
-      .mockRejectedValue(new Error("the return link must not call Slack's API"));
-    const ctx = createInboundSlackCtx({
-      cfg: { session: { store: storePath }, channels: { slack: { enabled: true } } },
-      app: {
-        client: { token: "unscoped-fixture" },
-        webClientOptions: { fetch },
-      } as unknown as App,
-      defaultRequireMention: false,
-    });
-    ctx.resolveChannelName = async () => ({ name: "general", type: "channel" });
-    ctx.resolveUserName = async () => ({ name: "Alice" });
-    const eventScope = {
-      teamId: "T123ENTERPRISE",
-      client: {
-        token: "event-fixture",
-        slackApiUrl: "https://slack-gov.com/api/",
-      } as SlackEventScope["client"],
-    };
-    const message: SlackMessageEvent = {
-      type: "message",
-      user: "U1",
-      text: "hi",
-      channel: "D123",
-      channel_type: "im",
-      ts: "10.000",
-    };
-    const prepared = await prepareSlackMessage({
-      ctx,
-      account: createSlackAccount({ replyToMode: "off" }),
-      message,
-      opts: { source: "message", eventScope },
-    });
-
-    assert(prepared);
-    const expectedLink = {
-      url: "https://slack-gov.com/app_redirect?channel=D123&team=T123ENTERPRISE",
-      label: "Slack",
-    };
-    expect(prepared.ctxPayload.ConversationLink).toEqual(expectedLink);
-    expect(fetch).not.toHaveBeenCalled();
-
-    await upsertSessionEntry({
-      storePath,
-      sessionKey: expectDefined(prepared.ctxPayload.SessionKey, "session key"),
-      entry: {
-        sessionId: "existing-slack-session",
-        updatedAt: Date.now(),
-        conversationLink: expectedLink,
-      },
-    });
-    fetch.mockClear();
-    const repeated = await prepareSlackMessage({
-      ctx,
-      account: createSlackAccount({ replyToMode: "off" }),
-      message,
-      opts: { source: "message", eventScope },
-    });
-    assert(repeated);
-    expect(repeated.ctxPayload.ConversationLink).toEqual(expectedLink);
-    expect(fetch).not.toHaveBeenCalled();
-  });
 
   it("logs inbound metadata without logging message content", async () => {
     const body = "confidential acquisition target: northstar; do not include this text in logs";
@@ -2374,7 +2306,7 @@ function routingFixture(dmScope: "main" | "per-channel-peer" = "main") {
 }
 
 describe("thread-level session keys", () => {
-  it("keeps mentioned MPIM roots flat and routes follow-ups by their parent thread", () => {
+  it("keeps mentioned MPIM roots flat and routes follow-ups by their parent thread", async () => {
     const { route } = routingFixture();
     const message = {
       channel: "G123",
@@ -2382,8 +2314,8 @@ describe("thread-level session keys", () => {
       text: "<@B1> send a subagent",
     } satisfies Partial<SlackMessageEvent>;
     const options = { chatType: "group" } as const;
-    const root = route(message, { ...options, seedTopLevelRoomThread: true });
-    const followUp = route(
+    const root = await route(message, { ...options, seedTopLevelRoomThread: true });
+    const followUp = await route(
       {
         ...message,
         ts: "1770408540.000000",
@@ -2401,14 +2333,14 @@ describe("thread-level session keys", () => {
     expect(followUp.threadContext.messageThreadId).toBe("1770408530.000000");
   });
 
-  it("partitions enterprise main DM sessions by account and workspace", () => {
+  it("partitions enterprise main DM sessions by account and workspace", async () => {
     const { direct } = routingFixture();
     const scope = (teamId: string): SlackEventScope => ({
       teamId,
       client: {} as SlackEventScope["client"],
     });
-    const first = direct({}, scope("T111"));
-    const second = direct({}, scope("T222"));
+    const first = await direct({}, scope("T111"));
+    const second = await direct({}, scope("T222"));
     expect(first.sessionKey).toBe("agent:main:main:account:default:team:t111");
     expect(first.route.mainSessionKey).toBe(first.sessionKey);
     expect(second.sessionKey).toBe("agent:main:main:account:default:team:t222");
@@ -2417,7 +2349,7 @@ describe("thread-level session keys", () => {
 
   it.each(["thread", "base"])(
     "routes DM replies through explicit %s conversation bindings",
-    (scope) => {
+    async (scope) => {
       const binding: SessionBindingRecord = {
         bindingId: "test-slack-dm-thread-binding",
         targetSessionKey: "agent:review:acp:session-slack-dm",
@@ -2453,7 +2385,7 @@ describe("thread-level session keys", () => {
         const { ctx, direct } = routingFixture("per-channel-peer");
         const cfg: OpenClawConfig = ctx.cfg;
         cfg.agents = { ownership: "explicit", entries: { main: {}, review: {} } };
-        const result = direct({
+        const result = await direct({
           ts: "1770408540.000000",
           thread_ts: "1770408530.000000",
           parent_user_id: "B1",

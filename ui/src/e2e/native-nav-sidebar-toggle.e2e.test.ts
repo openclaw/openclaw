@@ -296,44 +296,66 @@ suite.define(() => {
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--nav-collapsed");
     await expect.poll(() => newThread.isVisible()).toBe(true);
-    await page.locator(".sidebar-attention--floating .sidebar-issues-button").waitFor();
-    await page.locator(".sidebar-attention--floating .sidebar-issues-button__count").waitFor();
+    await page.locator(".sidebar-rail__bottom .sidebar-issues-button").waitFor();
+    await page.locator(".sidebar-rail__bottom .sidebar-issues-button__count").waitFor();
     await page.evaluate(() => document.fonts.ready);
     await waitForLayoutSettled(
       page,
-      ".macos-titlebar-controls, .sidebar-attention--floating, .chat-pane-cache__pane--visible .chat-pane__crumbs",
+      ".macos-titlebar-controls, .sidebar-rail__bottom, .chat-pane-cache__pane--visible .chat-pane__crumbs",
     );
     const toolbarBox = await toolbar.boundingBox();
-    const attention = page.locator(".sidebar-attention--floating");
+    const rail = page.locator(".sidebar-rail");
+    const attention = rail.locator(".sidebar-issues-button");
     const attentionBox = await attention.boundingBox();
+    const railBox = await rail.boundingBox();
     expect(toolbarBox).not.toBeNull();
     expect(attentionBox).not.toBeNull();
-    expect(attentionBox!.x - (toolbarBox!.x + toolbarBox!.width)).toBeGreaterThanOrEqual(4);
+    expect(railBox).not.toBeNull();
+    expect(railBox!.width).toBe(52);
+    expect(await page.locator(".sidebar-shell").isVisible()).toBe(false);
+    expect(await page.locator(".sidebar-attention--floating").count()).toBe(0);
+    expect(attentionBox!.x).toBeGreaterThanOrEqual(railBox!.x);
+    expect(attentionBox!.x + attentionBox!.width).toBeLessThanOrEqual(railBox!.x + railBox!.width);
+    expect(attentionBox!.y).toBeGreaterThanOrEqual(toolbarBox!.y + toolbarBox!.height + 4);
     const titleBox = await page
       .locator(".chat-pane-cache__pane--visible .chat-pane__crumbs:visible")
       .first()
       .boundingBox();
-    const attentionRight = await attention.evaluate((element) =>
-      Math.max(
-        ...[element, ...element.querySelectorAll("*")].map(
-          (candidate) => candidate.getBoundingClientRect().right,
-        ),
-      ),
-    );
     expect(titleBox).not.toBeNull();
-    expect(titleBox!.x - attentionRight).toBeGreaterThanOrEqual(8);
-    const topLeftControls = page.locator(
-      ".macos-titlebar-controls button:visible, .sidebar-attention--floating button:visible",
-    );
-    const centerlines = await topLeftControls.evaluateAll((buttons) =>
+    expect(titleBox!.x - (toolbarBox!.x + toolbarBox!.width)).toBeGreaterThanOrEqual(8);
+    const titlebarControls = toolbar.locator("button:visible");
+    const centerlines = await titlebarControls.evaluateAll((buttons) =>
       buttons.map((button) => {
         const box = button.getBoundingClientRect();
         return box.top + box.height / 2;
       }),
     );
+    expect(centerlines).toHaveLength(5);
     for (const centerline of centerlines.slice(1)) {
       expect(centerline).toBeCloseTo(centerlines[0]!, 1);
     }
+    const footerControls = rail.locator(
+      ".sidebar-footer-bar__home, .sidebar-issues-button, .sidebar-identity-card",
+    );
+    const footerBoxes = await footerControls.evaluateAll((buttons) =>
+      buttons.map((button) => {
+        const { x, y, width, height } = button.getBoundingClientRect();
+        return { x, y, width, height };
+      }),
+    );
+    expect(footerBoxes).toHaveLength(3);
+    for (const [index, box] of footerBoxes.entries()) {
+      expect(box.x + box.width / 2).toBeCloseTo(railBox!.x + (railBox!.width - 1) / 2, 1);
+      expect(box.y).toBeGreaterThanOrEqual(toolbarBox!.y + toolbarBox!.height + 4);
+      expect(box.y + box.height).toBeLessThanOrEqual(railBox!.y + railBox!.height);
+      if (index > 0) {
+        const previous = footerBoxes[index - 1]!;
+        expect(box.y - (previous.y + previous.height)).toBeGreaterThanOrEqual(4);
+      }
+    }
+    const shellControls = page.locator(
+      ".macos-titlebar-controls button:visible, .sidebar-rail__bottom .sidebar-issues-button:visible",
+    );
     await page.mouse.move(600, 400);
     if (railProofDir) {
       await page.screenshot({
@@ -343,7 +365,7 @@ suite.define(() => {
     }
     await expect
       .poll(() =>
-        topLeftControls.evaluateAll((buttons) =>
+        shellControls.evaluateAll((buttons) =>
           buttons.map((button) => {
             const style = getComputedStyle(button);
             return {
@@ -361,13 +383,14 @@ suite.define(() => {
           shadow: "none",
         })),
       );
-    const inbox = attention.locator(".sidebar-issues-button");
+    const inbox = attention;
     await inbox.hover();
     expect(await inbox.evaluate((button) => getComputedStyle(button).backgroundColor)).not.toBe(
       "rgba(0, 0, 0, 0)",
     );
-    await newThread.focus();
-    await page.keyboard.press("Tab");
+    // Home is unavailable in this narrow feature catalog; enter Inbox from the profile button.
+    await rail.locator(".sidebar-identity-card").focus();
+    await page.keyboard.press("Shift+Tab");
     await expect
       .poll(() => inbox.evaluate((button) => button.matches(":focus-visible")))
       .toBe(true);
@@ -450,7 +473,7 @@ suite.define(() => {
     await focusChatSidePanel(page);
 
     const shellControls = page.locator(
-      ".macos-titlebar-controls button:visible, .sidebar-attention--floating button:visible",
+      ".macos-titlebar-controls button:visible, .sidebar-rail__bottom button:visible",
     );
     const panelControls = page.locator(".chat-pane__actions button:visible");
     const shellBoxes = await Promise.all(
@@ -478,7 +501,7 @@ suite.define(() => {
       }
     }
     if (testCase.deviceLess) {
-      await page.locator(".sidebar-attention--floating .sidebar-issues-button__count").waitFor();
+      await page.locator(".sidebar-rail__bottom .sidebar-issues-button__count").waitFor();
       expect(await page.locator(".scope-upgrade-shell-status").count()).toBe(0);
     }
     for (let index = 0; index < (await panelControls.count()); index += 1) {
@@ -554,6 +577,12 @@ suite.define(() => {
       }),
     ).toBe(false);
 
+    await navigation.locator('[data-navigation-view="sessions"]').click();
+    // These shared ownerless fixtures are deliberately outside the human Mine scope.
+    await navigation
+      .locator(".sidebar-navigation-scope")
+      .getByRole("button", { name: "All", exact: true })
+      .click();
     const row = navigation.locator(".sidebar-recent-session").first();
     await row.hover();
     await row.click({ button: "right" });

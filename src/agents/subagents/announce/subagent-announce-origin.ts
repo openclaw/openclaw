@@ -120,15 +120,8 @@ export function resolveAnnounceOrigin(
 ): DeliveryContext | undefined {
   const normalizedRequester = normalizeDeliveryContext(requesterOrigin);
   const normalizedEntry = deliveryContextFromSession(entry);
-  if (normalizedRequester?.channel && isInternalMessageChannel(normalizedRequester.channel)) {
-    return mergeDeliveryContext(
-      {
-        accountId: normalizedRequester.accountId,
-        threadId: normalizedRequester.threadId,
-      },
-      normalizedEntry,
-    );
-  }
+  // The captured turn owns completion routing, including an explicit WebChat
+  // origin. Stored outbound history is a fallback, not permission to redirect it.
   return mergeAnnounceDeliveryContext(normalizedRequester, normalizedEntry);
 }
 
@@ -228,10 +221,7 @@ export async function resolveSubagentCompletionOrigin(params: {
 
 function stripNonDeliverableChannel(context?: DeliveryContext): DeliveryContext | undefined {
   const normalized = normalizeDeliveryContext(context);
-  if (!normalized?.channel) {
-    return normalized;
-  }
-  if (isDeliverableMessageChannel(normalized.channel)) {
+  if (!normalized?.channel || isDeliverableMessageChannel(normalized.channel)) {
     return normalized;
   }
   const { channel: _channel, ...rest } = normalized;

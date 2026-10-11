@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"os"
 	"regexp"
 	"strings"
@@ -43,7 +42,7 @@ func hashBytes(data []byte) string {
 }
 
 func normalizeText(text string) string {
-	return strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+	return strings.Join(strings.Fields(text), " ")
 }
 
 func docsI18nModel() string {
@@ -85,12 +84,4 @@ func validateNoTranslationTranscriptArtifacts(source, translated string) error {
 		return fmt.Errorf("agent transcript artifact leaked into translation: %q", match)
 	}
 	return nil
-}
-
-func fatal(err error) {
-	if err == nil {
-		return
-	}
-	_, _ = io.WriteString(os.Stderr, err.Error()+"\n")
-	os.Exit(1)
 }

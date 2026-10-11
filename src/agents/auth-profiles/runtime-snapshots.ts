@@ -32,7 +32,6 @@ import {
   runtimeAuthProfileSnapshotSharesOwner,
   runtimeAuthSharedOwnerRebound,
   resolveRuntimeAuthSharedOwnerPath,
-  runtimeAuthCredentialState as credentialState,
   runtimeAuthMetadataState,
   type RuntimeAuthSharedOwner,
   type RuntimeAuthProfileLegacyCandidates,
@@ -41,6 +40,7 @@ import {
 import {
   createRuntimeAuthProfileSnapshotSelection,
   prepareRuntimeAuthProfileSharedCredentialSnapshots,
+  prepareRuntimeAuthProfileSharedOwnerHandoff,
   sharedMutationAffectsSnapshot,
   type OwnedRuntimeSnapshot,
   type SharedAuthProfileStoreMutation,
@@ -64,13 +64,9 @@ export const {
   listRuntimeAuthProfileStoreSnapshotsForSharedOwner,
 } = createRuntimeAuthProfileSnapshotSelection(
   runtimeAuthStoreSnapshots,
-  getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath,
   clearRuntimeAuthProfileStoreSnapshotAtDatabasePath,
 );
 
-function runtimeStoreEntries(): Array<[string, RuntimeAuthProfileStore]> {
-  return Array.from(runtimeAuthStoreSnapshots, ([key, entry]) => [key, entry.store]);
-}
 type RuntimeAuthProfileStoreMutationListener = (event: {
   agentDir?: string;
   affectsInheritedStores: boolean;
@@ -106,26 +102,20 @@ export const runtimeAuthProfileRowsCache = createRuntimeAuthProfileRowsCache((da
   };
 });
 
-registerFreshSharedAuthStoreHandoff(({ previousSharedDatabasePath, sharedDatabasePath, env }) => {
-  let rebound = false;
-  const entries = listOwnedRuntimeAuthProfileStoreSnapshots();
-  for (const entry of entries) {
-    if (
-      (entry.owner.kind === "resolved" && entry.owner.location !== "legacy-main") ||
-      !runtimeAuthProfileSnapshotSharesOwner(entry.owner, {
-        sharedDatabasePath: previousSharedDatabasePath,
-        location: "legacy-main",
-      })
-    ) {
-      continue;
-    }
-    rebound = true;
-    entry.owner = { kind: "resolved", sharedDatabasePath, location: "state-db" };
-    entry.legacyCandidates = captureRuntimeAuthProfileLegacyCandidates(entry.agentDir, env);
+registerFreshSharedAuthStoreHandoff((handoff) => {
+  if (!handoff.sourceStillCurrent) {
+    invalidateRuntimeAuthProfileStoreSnapshotsForOwner({
+      databasePath: handoff.previousSharedDatabasePath,
+      sharedDatabasePath: handoff.previousSharedDatabasePath,
+      location: "legacy-main",
+    });
+    return;
   }
-  if (rebound) {
-    // Keep each published view and its overlays; the following credential commit rebuilds
-    // these now-derived views from the same owner that secrets activation will observe.
+  const entries = prepareRuntimeAuthProfileSharedOwnerHandoff(
+    listOwnedRuntimeAuthProfileStoreSnapshots(),
+    handoff,
+  );
+  if (entries) {
     replaceOwnedRuntimeAuthProfileStoreSnapshots(entries);
   }
 });
@@ -391,15 +381,15 @@ export function replaceOwnedRuntimeAuthProfileStoreSnapshots(
       })
       .map((entry) => entry.databasePath),
   );
+  const keys = new Set([...runtimeAuthStoreSnapshots.keys(), ...next.keys()]);
   const credentialsChanged =
-    !isDeepStrictEqual(
-      credentialState(runtimeStoreEntries()),
-      credentialState(Array.from(next, ([key, entry]) => [key, entry.store])),
-    ) || reboundKeys.size > 0;
+    reboundKeys.size > 0 ||
+    [...keys].some((key) =>
+      authProfilesChanged(runtimeAuthStoreSnapshots.get(key)?.store, next.get(key)?.store),
+    );
   if (credentialsChanged) {
     runtimeAuthStoreCredentialsRevision += 1;
   }
-  const keys = new Set([...runtimeAuthStoreSnapshots.keys(), ...next.keys()]);
   const profileSetChanged = [...keys].some((key) =>
     authProfileSetChanged(runtimeAuthStoreSnapshots.get(key)?.store, next.get(key)?.store),
   );
@@ -435,7 +425,9 @@ export function replaceOwnedRuntimeAuthProfileStoreSnapshots(
 /** Clears all runtime auth profile snapshots. */
 export function clearRuntimeAuthProfileStoreSnapshots(): void {
   const snapshotsChanged = runtimeAuthStoreSnapshots.size > 0;
-  const credentialsChanged = credentialState(runtimeStoreEntries()).length > 0;
+  const credentialsChanged = [...runtimeAuthStoreSnapshots.values()].some(
+    ({ store }) => Object.keys(store.profiles).length > 0,
+  );
   if (credentialsChanged) {
     runtimeAuthStoreCredentialsRevision += 1;
   }
@@ -495,9 +487,6 @@ function setRuntimeAuthProfileStoreSnapshotAtKey(
   legacyCandidates?: RuntimeAuthProfileLegacyCandidates,
 ): void {
   const previous = runtimeAuthStoreSnapshots.get(key);
-  const sharedOwnerChanged =
-    !isDeepStrictEqual(previous?.owner, owner) ||
-    !isDeepStrictEqual(previous?.legacyCandidates, legacyCandidates);
   const credentialsChanged = authProfilesChanged(previous?.store, store);
   const sharedOwnerRebound = previous && runtimeAuthSharedOwnerRebound(previous.owner, owner);
   if (credentialsChanged || sharedOwnerRebound) {
@@ -508,17 +497,7 @@ function setRuntimeAuthProfileStoreSnapshotAtKey(
   if (sharedOwnerRebound || credentialsChanged) {
     clearRuntimeAuthMaterializationsAtDatabasePath(key);
   }
-  const metadataChanged = credentialsChanged || sharedOwnerChanged;
-  if (metadataChanged) {
-    advanceRuntimeAuthStoreMetadataRevision(key);
-  }
-  const changedMetadata =
-    metadataChanged ||
-    recordMetadataRevision(key, previous, {
-      store,
-      owner,
-      legacyCandidates,
-    });
+  const changedMetadata = recordMetadataRevision(key, previous, { store, owner, legacyCandidates });
   const snapshotChanged = changedMetadata || !isDeepStrictEqual(previousStore, store);
   if (snapshotChanged) {
     advanceRuntimeAuthStoreSnapshotsRevision();

@@ -118,7 +118,7 @@ export function convertMessages(
 
     if (isRuntimeContextMessage(msg)) {
       params.push({
-        role: model.reasoning && compat.supportsDeveloperRole ? "developer" : "system",
+        role: compat.supportsDeveloperRole ? "developer" : "user",
         content: sanitizeSurrogates(runtimeContextContentToText(msg.content)),
       });
       options.cacheOptOutIndexes?.add(params.length - 1);

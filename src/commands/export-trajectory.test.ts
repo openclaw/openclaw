@@ -324,6 +324,57 @@ describe("exportTrajectoryCommand", () => {
     });
   });
 
+  it.each(["main", "global"])(
+    "exports %s from the sole configured agent without an explicit selector",
+    async (sessionKey) => {
+      const runtime = createTestRuntime();
+      mocks.getRuntimeConfig.mockReturnValue({
+        agents: { ownership: "explicit", entries: { work: {} } },
+      });
+
+      await exportTrajectoryCommand({ sessionKey }, runtime);
+
+      expect(mocks.loadSessionEntryReadOnly).toHaveBeenCalledWith({
+        agentId: "work",
+        sessionKey,
+        storePath: "/tmp/openclaw/sessions.json",
+      });
+      expect(mocks.exportTrajectoryForCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionTarget: expect.objectContaining({ agentId: "work" }),
+        }),
+      );
+    },
+  );
+
+  it("requires an explicit owner for an ambiguous alias before reading or exporting", async () => {
+    const runtime = createTestRuntime();
+    mocks.getRuntimeConfig.mockReturnValue({
+      agents: { ownership: "explicit", entries: { main: {}, work: {} } },
+    });
+
+    await expect(exportTrajectoryCommand({ sessionKey: "global" }, runtime)).rejects.toThrow(
+      "--agent <id>",
+    );
+
+    expect(mocks.loadSessionEntryReadOnly).not.toHaveBeenCalled();
+    expect(mocks.exportTrajectoryForCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed agent keys before selecting a configured owner", async () => {
+    const runtime = createTestRuntime();
+    mocks.getRuntimeConfig.mockReturnValue({
+      agents: { ownership: "explicit", entries: { main: {}, work: {} } },
+    });
+
+    await expect(exportTrajectoryCommand({ sessionKey: "agent:work" }, runtime)).rejects.toThrow(
+      "Malformed agent session key",
+    );
+
+    expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
+    expect(mocks.loadSessionEntryReadOnly).not.toHaveBeenCalled();
+  });
+
   it("uses configured session.store when no explicit store is provided", async () => {
     const runtime = createTestRuntime();
     mocks.getRuntimeConfig.mockReturnValue({

@@ -32,9 +32,5 @@ export function parseSlashCommandWithSetUnset<T>(params: {
     const value = parseConfigValue(args.slice(equalsIndex + 1));
     return value.error ? error(value.error) : { action: "set", path, value: value.value };
   }
-  const knownAction = params.onKnownAction(action, args);
-  if (knownAction) {
-    return knownAction;
-  }
-  return error(params.usageMessage);
+  return params.onKnownAction(action, args) || error(params.usageMessage);
 }

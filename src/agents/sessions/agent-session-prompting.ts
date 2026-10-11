@@ -14,6 +14,7 @@ import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.types.js";
+import { notifyListeners } from "../../shared/listeners.js";
 import { attachSteeringRuntimeContext } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import {
   isOpenClawSystemUpdateMessage,
@@ -34,11 +35,24 @@ import {
 import type { CustomMessage } from "./messages.js";
 import { expandPromptTemplate } from "./prompt-templates.js";
 import type { ResourceLoader } from "./resource-loader.js";
-import { withSessionManagerWrite } from "./session-manager-write-admission.js";
+import { withSessionManagerAppend } from "./session-manager-append-admission.js";
 import { setSteeringMessageIdentity } from "./steering-message-identity.js";
 
 type PostAgentRunAction = "continue" | "settled" | "handoff";
 type PromptAdmission = (onAdmitted: (commit?: () => void) => void) => Promise<void>;
+
+function createCustomMessage<T>(
+  message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
+): CustomMessage<T> {
+  return {
+    role: "custom",
+    customType: message.customType,
+    content: message.content,
+    display: message.display,
+    details: message.details,
+    timestamp: Date.now(),
+  };
+}
 
 /** @internal Host preparation runs after SDK prompt hooks and owns its run cancellation. */
 export const agentSessionSetPromptPreparation: unique symbol = Symbol.for(
@@ -386,14 +400,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       );
       if (result?.messages) {
         for (const msg of result.messages) {
-          messages.push({
-            role: "custom",
-            customType: msg.customType,
-            content: msg.content,
-            display: msg.display,
-            details: msg.details,
-            timestamp: Date.now(),
-          });
+          messages.push(createCustomMessage(msg));
         }
       }
       this.systemPromptOverride = result?.systemPrompt;
@@ -506,68 +513,47 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     }
 
     const expandedText = this.expandPrompt(text);
-    return enqueueMessageInjection(this, () =>
-      this.prepareSteer(
+    return enqueueMessageInjection(this, async () => {
+      const preparedMessage = await userTurnTranscriptRecorder?.resolveMessage();
+      const message = this.createSteeringMessage(
         expandedText,
         images,
-        userTurnTranscriptRecorder,
+        preparedMessage && userTurnTranscriptRecorder
+          ? { message: preparedMessage, recorder: userTurnTranscriptRecorder }
+          : undefined,
         media,
         imageOrder,
         queueIdentity,
-        canInject,
         currentInboundContext,
-        prepareInjection,
-      ),
-    );
-  }
-
-  private async prepareSteer(
-    text: string,
-    images?: ImageContent[],
-    userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
-    media?: MediaFact[],
-    imageOrder?: PromptImageOrderEntry[],
-    queueIdentity?: string,
-    canInject?: () => boolean,
-    currentInboundContext?: CurrentInboundPromptContext,
-    prepareInjection?: () => Promise<void>,
-  ): Promise<void> {
-    const preparedMessage = await userTurnTranscriptRecorder?.resolveMessage();
-    const message = this.createSteeringMessage(
-      text,
-      images,
-      preparedMessage && userTurnTranscriptRecorder
-        ? { message: preparedMessage, recorder: userTurnTranscriptRecorder }
-        : undefined,
-      media,
-      imageOrder,
-      queueIdentity,
-      currentInboundContext,
-    );
-    let notify: (() => void) | undefined;
-    let failure: { error: unknown } | undefined;
-    try {
-      await withMessageInjectionAdmission(prepareInjection, () => {
-        if (canInject && !canInject()) {
-          throw new Error("active session is finalizing");
-        }
-        notify = this.queueSteer(message, text);
-      });
-    } catch (error) {
-      failure = { error };
-    }
-    try {
-      notify?.();
-    } catch (cause) {
-      throw new MessageInjectionAcceptedUnconfirmedError({
-        cause: failure
-          ? new AggregateError([failure.error, cause], "Steering admission and notification failed")
-          : cause,
-      });
-    }
-    if (failure) {
-      throw failure.error;
-    }
+      );
+      let notify: (() => void) | undefined;
+      let failure: { error: unknown } | undefined;
+      try {
+        await withMessageInjectionAdmission(prepareInjection, () => {
+          if (canInject && !canInject()) {
+            throw new Error("active session is finalizing");
+          }
+          notify = this.queueSteer(message, expandedText);
+        });
+      } catch (error) {
+        failure = { error };
+      }
+      try {
+        notify?.();
+      } catch (cause) {
+        throw new MessageInjectionAcceptedUnconfirmedError({
+          cause: failure
+            ? new AggregateError(
+                [failure.error, cause],
+                "Steering admission and notification failed",
+              )
+            : cause,
+        });
+      }
+      if (failure) {
+        throw failure.error;
+      }
+    });
   }
 
   /**
@@ -613,16 +599,9 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     const notifyAgent = this.agent.admitSteeringMessage(message);
     return () => {
       const errors: unknown[] = [];
-      try {
-        this.emitQueueUpdate();
-      } catch (error) {
-        errors.push(error);
-      }
-      try {
-        notifyAgent();
-      } catch (error) {
-        errors.push(error);
-      }
+      notifyListeners([() => this.emitQueueUpdate(), () => notifyAgent()], undefined, (error) =>
+        errors.push(error),
+      );
       if (errors.length === 1) {
         throw errors[0];
       }
@@ -666,14 +645,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
     options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
   ): Promise<void> {
-    const appMessage = {
-      role: "custom" as const,
-      customType: message.customType,
-      content: message.content,
-      display: message.display,
-      details: message.details,
-      timestamp: Date.now(),
-    } satisfies CustomMessage<T>;
+    const appMessage = createCustomMessage(message);
     if (options?.deliverAs === "nextTurn") {
       this.pendingNextTurnMessages.push(appMessage);
     } else if (this.isStreaming) {
@@ -690,12 +662,13 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
   }
 
   private async persistCustomMessage(message: CustomMessage): Promise<void> {
-    await withSessionManagerWrite(this.sessionManager, async () => {
+    await withSessionManagerAppend(this.sessionManager, async () => {
       await this.sessionManager.appendCustomMessageEntryAsync(
         message.customType,
         message.content,
         message.display,
         message.details,
+        message.timestamp,
       );
       this.agent.state.messages.push(message);
     });

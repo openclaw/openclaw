@@ -47,6 +47,10 @@ type PreparedRuntime = Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>;
 type SessionPromptState = Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
 
 type ReplayState = ReturnType<typeof createEmbeddedRunReplayState>;
+export type NormalizedEmbeddedRunAttempt = Extract<
+  Awaited<ReturnType<typeof normalizeEmbeddedRunAttempt>>,
+  { action: "proceed" }
+>;
 
 export async function normalizeEmbeddedRunAttempt(input: {
   runInput: PreparedEmbeddedRunInput;
@@ -126,12 +130,15 @@ export async function normalizeEmbeddedRunAttempt(input: {
       aborted: terminalAborted,
     });
   };
-  await applyEmbeddedAttemptSessionIdentity({
-    sessionPromptState,
-    sessionFileUsed,
-    sessionIdUsed,
-    assertCurrent: () => runInput.laneController.throwIfAborted(),
-  });
+  // Detached runs may fork a foreground transcript whose id they must never adopt.
+  if (params.sessionPersistence !== "detached") {
+    await applyEmbeddedAttemptSessionIdentity({
+      sessionPromptState,
+      sessionFileUsed,
+      sessionIdUsed,
+      assertCurrent: () => runInput.laneController.throwIfAborted(),
+    });
+  }
   runInput.laneController.throwIfAborted();
   const bootstrapPromptWarningSignaturesSeen =
     attempt.bootstrapPromptWarningSignaturesSeen ??

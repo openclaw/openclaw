@@ -17,7 +17,6 @@ import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   readSessionTranscriptWatermark,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
   type TranscriptEvent,
 } from "./session-accessor.js";
@@ -25,6 +24,7 @@ import { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
 import { rotateTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { readSessionTranscriptHotWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 
 function transcriptMessages(count: number): TranscriptEvent[] {
   return Array.from({ length: count }, (_, index) => ({

@@ -129,7 +129,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     const result = await this.runCheckedCommand({
       ...buildPinnedMutationPlan({
         kind: "readdir",
-        check: { target, options: { action: "list directories", allowedType: "directory" } },
+        target,
         pinned: await this.pathGuard.resolveAnchoredPinnedDirectoryEntry(
           target,
           "list directories",
@@ -147,19 +147,11 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       cwd: params.cwd,
     });
     this.ensureWriteAccess(destination, "copy files");
-    const sourceCheck = {
-      target: source,
-      options: { action: "copy files", allowedType: "file" } as const,
-    };
-    const destinationCheck = {
-      target: destination,
-      options: { action: "copy files", requireWritable: true } as const,
-    };
     await this.runCheckedCommand({
       ...buildPinnedMutationPlan({
         kind: "copy",
-        sourceCheck,
-        destinationCheck,
+        sourceTarget: source,
+        destinationTarget: destination,
         source: await this.pathGuard.resolveAnchoredPinnedEntry(source, "copy files"),
         destination: await this.resolveMutationPin(destination, params.pinnedPath, "copy files"),
         mkdir: params.mkdir !== false,
@@ -194,11 +186,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     const action = PINNED_MUTATION_ACTION_LABELS[kind];
     const target = this.resolveResolvedPath(params);
     this.ensureWriteAccess(target, action);
-    const check = {
-      target,
-      options: { action, requireWritable: true } as const,
-    };
-    await this.pathGuard.assertPathSafety(target, check.options);
+    await this.pathGuard.assertPathSafety(target, { action, requireWritable: true });
     const buffer = Buffer.isBuffer(params.data)
       ? params.data
       : Buffer.from(params.data, params.encoding ?? "utf8");
@@ -206,7 +194,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     const result = await this.runCheckedCommand({
       ...buildPinnedMutationPlan({
         kind,
-        check,
+        target,
         pinned,
         mkdir: params.mkdir !== false,
       }),
@@ -220,18 +208,10 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   async mkdirp(params: Parameters<SandboxFsBridge["mkdirp"]>[0]): Promise<void> {
     const target = this.resolveResolvedPath(params);
     this.ensureWriteAccess(target, "create directories");
-    const mkdirCheck = {
-      target,
-      options: {
-        action: "create directories",
-        requireWritable: true,
-        allowedType: "directory",
-      } as const,
-    };
     await this.runCheckedCommand({
       ...buildPinnedMutationPlan({
         kind: "mkdirp",
-        check: mkdirCheck,
+        target,
         pinned: this.pathGuard.resolvePinnedDirectoryEntry(
           params.pinnedPath === undefined
             ? target
@@ -248,18 +228,10 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   async remove(params: Parameters<SandboxFsBridge["remove"]>[0]): Promise<void> {
     const target = this.resolveResolvedPath(params);
     this.ensureWriteAccess(target, "remove files");
-    const removeCheck = {
-      target,
-      options: {
-        action: "remove files",
-        requireWritable: params.recursive ? "subtree" : true,
-        allowedType: "file-or-directory",
-      } as const,
-    };
     await this.runCheckedCommand({
       ...buildPinnedMutationPlan({
         kind: "remove",
-        check: removeCheck,
+        target,
         pinned: this.pathGuard.resolvePinnedEntry(
           params.pinnedPath === undefined
             ? target
@@ -278,27 +250,11 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     const to = this.resolveResolvedPath({ filePath: params.to, cwd: params.cwd });
     this.ensureWriteAccess(from, "rename files");
     this.ensureWriteAccess(to, "rename files");
-    const fromCheck = {
-      target: from,
-      options: {
-        action: "rename files",
-        requireWritable: "subtree",
-        allowedType: "file-or-directory",
-      } as const,
-    };
-    const toCheck = {
-      target: to,
-      options: {
-        action: "rename files",
-        requireWritable: "subtree",
-        allowedType: "file-or-directory",
-      } as const,
-    };
     await this.runCheckedCommand({
       ...buildPinnedMutationPlan({
         kind: "rename",
-        sourceCheck: fromCheck,
-        destinationCheck: toCheck,
+        sourceTarget: from,
+        destinationTarget: to,
         source: this.pathGuard.resolvePinnedEntry(from, "rename files"),
         destination: this.pathGuard.resolvePinnedEntry(to, "rename files"),
       }),

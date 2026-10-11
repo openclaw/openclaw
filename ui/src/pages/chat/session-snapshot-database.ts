@@ -1,9 +1,16 @@
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
+import { requestResult, transactionComplete } from "../../lib/chat/control-ui-database.runtime.ts";
+import {
+  sidebarSnapshotInvalidationMatches,
+  type SessionSnapshotInvalidationReason,
+  type SnapshotInvalidation,
+} from "./session-snapshot-invalidation-events.ts";
 
 export const CHAT_SNAPSHOT_DB_NAME = "openclaw-chat-snapshots";
 export const CHAT_SNAPSHOT_STORE_NAME = "snapshots";
 export const CHAT_SNAPSHOT_METADATA_STORE_NAME = "snapshotMetadata";
-const CHAT_SNAPSHOT_DB_VERSION = 4;
+export const SIDEBAR_SNAPSHOT_STORE_NAME = "sidebarSnapshots";
+const CHAT_SNAPSHOT_DB_VERSION = 6;
 
 export function isPersistableChatSnapshotKey(key: string): boolean {
   return key.startsWith("scope:[") && !isIncognitoSessionKey(key.slice(key.indexOf("\u0000") + 1));
@@ -39,6 +46,17 @@ function openIndexedDb(factory: IDBFactory): Promise<IDBDatabase> {
         database.createObjectStore(CHAT_SNAPSHOT_STORE_NAME, { keyPath: "sessionKey" });
         database.createObjectStore(CHAT_SNAPSHOT_METADATA_STORE_NAME, { keyPath: "sessionKey" });
       }
+      if (event.oldVersion < 5) {
+        database.createObjectStore(SIDEBAR_SNAPSHOT_STORE_NAME, { keyPath: "sessionKey" });
+      } else {
+        request.transaction?.objectStore(SIDEBAR_SNAPSHOT_STORE_NAME).clear();
+      }
+      // The unified projection replaces this disposable cache; retirement never gates startup.
+      try {
+        factory
+          .deleteDatabase("openclaw-session-roster")
+          .addEventListener("error", (error) => error.preventDefault());
+      } catch {}
     });
     request.addEventListener("success", () => resolve(request.result));
     request.addEventListener("error", () =>
@@ -83,9 +101,10 @@ export async function openSessionSnapshotDatabase(): Promise<IDBDatabase | null>
   }
   database.addEventListener("versionchange", () => database.close());
   if (
-    database.objectStoreNames.length === 2 &&
+    database.objectStoreNames.length === 3 &&
     database.objectStoreNames.contains(CHAT_SNAPSHOT_STORE_NAME) &&
-    database.objectStoreNames.contains(CHAT_SNAPSHOT_METADATA_STORE_NAME)
+    database.objectStoreNames.contains(CHAT_SNAPSHOT_METADATA_STORE_NAME) &&
+    database.objectStoreNames.contains(SIDEBAR_SNAPSHOT_STORE_NAME)
   ) {
     return database;
   }
@@ -113,17 +132,12 @@ export async function readStoredChatSnapshotRecord(sessionKey: string): Promise<
     if (!isPersistableChatSnapshotKey(sessionKey)) {
       return undefined;
     }
-    return await new Promise<unknown>((resolve, reject) => {
-      const transaction = database.transaction(CHAT_SNAPSHOT_STORE_NAME, "readonly");
-      const request = transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME).get(sessionKey);
-      transaction.addEventListener("complete", () => resolve(request.result));
-      transaction.addEventListener("error", () =>
-        reject(transaction.error ?? new Error("IndexedDB read failed")),
-      );
-      transaction.addEventListener("abort", () =>
-        reject(transaction.error ?? new Error("IndexedDB read aborted")),
-      );
-    });
+    const transaction = database.transaction(CHAT_SNAPSHOT_STORE_NAME, "readonly");
+    const [value] = await Promise.all([
+      requestResult(transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME).get(sessionKey)),
+      transactionComplete(transaction),
+    ]);
+    return value;
   } catch (error) {
     debugSnapshotStore("resetting cache after IndexedDB read failure", error);
     await resetSessionSnapshotDatabase(database);
@@ -141,58 +155,59 @@ export async function resetSessionSnapshotDatabase(database?: IDBDatabase | null
   }
 }
 
-export async function deleteSessionSnapshotDatabaseRecord(sessionKey: string): Promise<void> {
+export async function deleteSessionSnapshotEntries(
+  key: string,
+  match: "key" | "prefix",
+  reason?: SessionSnapshotInvalidationReason,
+): Promise<void> {
+  const byPrefix = match === "prefix";
+  const invalidation: SnapshotInvalidation = byPrefix
+    ? { scopePrefix: key }
+    : { sessionKey: key, reason };
   const database = await openSessionSnapshotDatabase();
   if (!database) {
     return;
   }
   try {
     await new Promise<void>((resolve) => {
-      const transaction = database.transaction(
-        [CHAT_SNAPSHOT_STORE_NAME, CHAT_SNAPSHOT_METADATA_STORE_NAME],
-        "readwrite",
-      );
-      transaction.addEventListener("complete", () => resolve());
-      transaction.addEventListener("error", () => resolve());
-      transaction.addEventListener("abort", () => resolve());
-      transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME).delete(sessionKey);
-      transaction.objectStore(CHAT_SNAPSHOT_METADATA_STORE_NAME).delete(sessionKey);
-    });
-  } catch {
-  } finally {
-    database.close();
-  }
-}
-
-export async function deleteSessionSnapshotScope(prefix: string): Promise<void> {
-  const database = await openSessionSnapshotDatabase();
-  if (!database) {
-    return;
-  }
-  try {
-    await new Promise<void>((resolve) => {
-      const transaction = database.transaction(
-        [CHAT_SNAPSHOT_STORE_NAME, CHAT_SNAPSHOT_METADATA_STORE_NAME],
-        "readwrite",
-      );
+      const names = [
+        CHAT_SNAPSHOT_STORE_NAME,
+        CHAT_SNAPSHOT_METADATA_STORE_NAME,
+        SIDEBAR_SNAPSHOT_STORE_NAME,
+      ];
+      const transaction = database.transaction(names, "readwrite");
       for (const event of ["complete", "error", "abort"]) {
-        transaction.addEventListener(event, () => resolve(), { once: true });
+        transaction.addEventListener(event, () => resolve(), byPrefix ? { once: true } : undefined);
       }
-      for (const name of [CHAT_SNAPSHOT_STORE_NAME, CHAT_SNAPSHOT_METADATA_STORE_NAME]) {
+      for (const name of names) {
         const store = transaction.objectStore(name);
+        if (!byPrefix && name !== SIDEBAR_SNAPSHOT_STORE_NAME) {
+          store.delete(key);
+          continue;
+        }
         const request = store.openKeyCursor();
         request.onsuccess = () => {
           const cursor = request.result;
           if (!cursor) {
             return;
           }
-          if (typeof cursor.primaryKey === "string" && cursor.primaryKey.startsWith(prefix)) {
+          if (
+            typeof cursor.primaryKey === "string" &&
+            (name === SIDEBAR_SNAPSHOT_STORE_NAME
+              ? sidebarSnapshotInvalidationMatches(cursor.primaryKey, invalidation)
+              : cursor.primaryKey.startsWith(key))
+          ) {
             store.delete(cursor.primaryKey);
           }
           cursor.continue();
         };
       }
     });
+  } catch (error) {
+    // Scope clearing reports setup failures; single-record invalidation is best effort.
+    if (byPrefix) {
+      throw error;
+    }
   } finally {
     database.close();
   }

@@ -172,67 +172,38 @@ export async function readWorkspaceTreeFile(params: {
   return blob.stdout;
 }
 
-export async function directoryContainsOnlyJournalPaths(
+export async function directoryContainsOnlyWorkspaceEntries(
   root: string,
   directory: string,
-  paths: ReadonlySet<string>,
-  directories: ReadonlySet<string>,
   isRetainedInput: ReturnType<typeof createStagedInputPathMatcher>,
+  journal?: { paths: ReadonlySet<string>; directories: ReadonlySet<string> },
 ): Promise<boolean> {
+  let foundEntry = false;
   for (const name of await fs.readdir(localPath(root, directory))) {
     const child = `${directory}/${name}`;
     if (isManagedSandboxSkillsPath(child)) {
       return false;
     }
-    if (isDerivedWorkspacePath(child, await isRetainedInput(child))) {
-      continue;
-    }
-    const stats = await fs.lstat(localPath(root, child));
-    if (stats.isDirectory() && !stats.isSymbolicLink()) {
-      if (
-        !directories.has(child) &&
-        !(await directoryContainsOnlyDerivedWorkspaceEntries(root, child, isRetainedInput))
-      ) {
+    if (!isDerivedWorkspacePath(child, await isRetainedInput(child))) {
+      const stats = await fs.lstat(localPath(root, child));
+      if (stats.isDirectory() && !stats.isSymbolicLink()) {
+        if (
+          !(await directoryContainsOnlyWorkspaceEntries(
+            root,
+            child,
+            isRetainedInput,
+            journal?.directories.has(child) ? journal : undefined,
+          ))
+        ) {
+          return false;
+        }
+      } else if (!journal?.paths.has(child)) {
         return false;
       }
-      if (
-        directories.has(child) &&
-        !(await directoryContainsOnlyJournalPaths(root, child, paths, directories, isRetainedInput))
-      ) {
-        return false;
-      }
-    } else if (!paths.has(child)) {
-      return false;
     }
+    foundEntry = true;
   }
-  return true;
-}
-
-export async function directoryContainsOnlyDerivedWorkspaceEntries(
-  root: string,
-  directory: string,
-  isRetainedInput: ReturnType<typeof createStagedInputPathMatcher>,
-): Promise<boolean> {
-  const names = await fs.readdir(localPath(root, directory));
-  let foundDerivedEntry = false;
-  for (const name of names) {
-    const child = `${directory}/${name}`;
-    if (isManagedSandboxSkillsPath(child)) {
-      return false;
-    }
-    if (isDerivedWorkspacePath(child, await isRetainedInput(child))) {
-      foundDerivedEntry = true;
-      continue;
-    }
-    const stats = await fs.lstat(localPath(root, child));
-    if (
-      !stats.isDirectory() ||
-      stats.isSymbolicLink() ||
-      !(await directoryContainsOnlyDerivedWorkspaceEntries(root, child, isRetainedInput))
-    ) {
-      return false;
-    }
-    foundDerivedEntry = true;
-  }
-  return foundDerivedEntry;
+  // Journal-owned directories may be empty; an unlisted directory must contain
+  // derived content before it can be treated as disposable residue.
+  return journal !== undefined || foundEntry;
 }

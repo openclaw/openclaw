@@ -218,11 +218,12 @@ extension TalkModeRuntime {
             return false
         }
         guard hasGatewayRealtimeRelayTuple else {
+            let realtime = self.config?.snapshot.realtime
             logger.warning(
                 "talk macOS realtime relay opted in but Gateway tuple is incompatible: " +
-                    "mode=\(realtimeMode ?? "missing", privacy: .public) " +
-                    "transport=\(realtimeTransport ?? "missing", privacy: .public) " +
-                    "brain=\(realtimeBrain ?? "missing", privacy: .public); using native fallback")
+                    "mode=\(realtime?.mode ?? "missing", privacy: .public) " +
+                    "transport=\(realtime?.transport ?? "missing", privacy: .public) " +
+                    "brain=\(realtime?.brain ?? "missing", privacy: .public); using native fallback")
             return false
         }
         return true
@@ -271,8 +272,8 @@ extension TalkModeRuntime {
             self.controller()?.updatePhase(.listening)
         }
         logger.info(
-            "talk realtime ready provider=\(realtimeProvider ?? "default", privacy: .public) " +
-                "model=\(realtimeModelId ?? "default", privacy: .public)")
+            "talk realtime ready provider=\(self.config?.snapshot.realtime.provider ?? "default", privacy: .public) " +
+                "model=\(self.config?.snapshot.realtime.modelId ?? "default", privacy: .public)")
     }
 
     func applyRealtimeTalkConfig(
@@ -353,11 +354,12 @@ extension TalkModeRuntime {
               realtimeRelayGeneration == relayGeneration
         else { throw CancellationError() }
         let activeSessionKey = await self.dependencies.selectedSession()
+        let realtime = self.config?.snapshot.realtime
         let options = RealtimeTalkRelaySession.Options(
             sessionKey: activeSessionKey ?? bootstrap.sessionKey,
-            provider: realtimeProvider,
-            model: realtimeModelId,
-            voice: realtimeSpeakerVoice)
+            provider: realtime?.provider,
+            model: realtime?.modelId,
+            voice: realtime?.speakerVoice)
         let dependencies = self.dependencies
         return await MainActor.run {
             let audioCapture = dependencies.audioCapture()
@@ -471,12 +473,12 @@ extension TalkModeRuntime {
         let issue = RealtimeTalkRelayIssue(
             code: "audio_input_unavailable",
             message: message,
-            provider: realtimeProvider,
-            model: realtimeModelId,
+            provider: self.config?.snapshot.realtime.provider,
+            model: self.config?.snapshot.realtime.modelId,
             transport: "gateway-relay",
             phase: "audio-input")
-        await handleRealtimeIssue(issue, relayGeneration: relayGeneration)
-        await handleRealtimeTermination(
+        await self.handleRealtimeIssue(issue, relayGeneration: relayGeneration)
+        await self.handleRealtimeTermination(
             .audioInputFailed(message: issue.message),
             relayGeneration: relayGeneration)
     }
@@ -716,7 +718,7 @@ extension TalkModeRuntime {
     }
 
     func _test_enableRealtimeRelaySelection() {
-        (macOSRealtimeRelayOptIn, hasGatewayRealtimeRelayTuple) = (true, true)
+        macOSRealtimeRelayOptIn = true
     }
 
     func _test_prepareEnabledLifecycle() -> Int {

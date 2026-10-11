@@ -10,7 +10,7 @@ import { buildRuntimeContextCustomMessage } from "../../agents/embedded-agent-ru
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import {
-  completeWorkerLaunchDescriptor,
+  parseWorkerLaunchDescriptor,
   parseWorkerLaunchPlan,
   type WorkerLaunchPlan,
 } from "../../worker/launch-descriptor.js";
@@ -419,9 +419,12 @@ describe("fitLaunchDescriptor", () => {
       ...images,
     ]);
     expect(fitted.plan.assignment.operationalRunInstance).toEqual(operationalRunInstance);
-    const completed = completeWorkerLaunchDescriptor(fitted.plan, {
-      kind: "unix",
-      socketPath: "/tmp/worker.sock",
+    const completed = parseWorkerLaunchDescriptor({
+      ...fitted.plan,
+      connectionEndpoint: {
+        kind: "unix",
+        socketPath: "/tmp/worker.sock",
+      },
     });
     const encoded = serializeWorkerProcessInput(buildWorkerProcessTurn(completed));
     parseWorkerProcessRequest(JSON.parse(encoded));
@@ -466,11 +469,14 @@ describe("fitLaunchDescriptor", () => {
       parseNodeWorkerLaunchInput(paramsJSON);
       const suffix = "/__openclaw__/worker";
       const prefix = "wss://worker.invalid/";
-      const descriptor = completeWorkerLaunchDescriptor(candidate, {
-        kind: "websocket",
-        url: prefix + "x".repeat(4_096 - prefix.length - suffix.length) + suffix,
-        tlsFingerprint: "a".repeat(64),
-        cloudflareAccess: { clientId: "i".repeat(4_096), clientSecret: "s".repeat(4_096) },
+      const descriptor = parseWorkerLaunchDescriptor({
+        ...candidate,
+        connectionEndpoint: {
+          kind: "websocket",
+          url: prefix + "x".repeat(4_096 - prefix.length - suffix.length) + suffix,
+          tlsFingerprint: "a".repeat(64),
+          cloudflareAccess: { clientId: "i".repeat(4_096), clientSecret: "s".repeat(4_096) },
+        },
       });
       const line = JSON.stringify({
         type: "turn",

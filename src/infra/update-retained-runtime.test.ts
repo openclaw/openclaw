@@ -74,6 +74,8 @@ it.for([false, true])(
     const original = new Error("original update failure");
     const entered = createDeferred();
     const release = createDeferred();
+    const nativeEntered = createDeferred();
+    const nativeRelease = createDeferred();
     const removed = vi.spyOn(fs, "rm");
     const reportRetained = vi.spyOn(temporaryArtifacts, "reportRetainedUpdateRuntime");
     vi.spyOn(os, "tmpdir").mockReturnValue(base);
@@ -115,7 +117,11 @@ it.for([false, true])(
       source.runtimeGeneration.retain({}, async () => {
         entered.resolve();
         await release.promise;
-        resourcesSettled = true;
+        return async () => {
+          nativeEntered.resolve();
+          await nativeRelease.promise;
+          resourcesSettled = true;
+        };
       });
       acceptedWrite = store.execute({ type: "append", input: "accepted before exit" });
       void acceptedWrite.catch(() => undefined);
@@ -143,8 +149,27 @@ it.for([false, true])(
       expect(assertResourcesSettled).not.toHaveBeenCalled();
       assert.ok(directory);
       expect((await stat(directory)).isDirectory()).toBe(true);
+      release.resolve();
+      await withinTest(
+        awaitGateBeforeSettlement(
+          nativeEntered.promise,
+          settled,
+          "Updater returned before native retirement",
+        ),
+        signal,
+      );
+      expect(await maintain()).toContainEqual(
+        expect.stringContaining("the creating update still owns this runtime"),
+      );
+      expect(assertResourcesSettled).not.toHaveBeenCalled();
+      expect(reportRetained).not.toHaveBeenCalledWith(
+        directory,
+        expect.stringContaining("worker generation settled; cleanup deferred"),
+      );
+      expect((await stat(directory)).isDirectory()).toBe(true);
     } finally {
       release.resolve();
+      nativeRelease.resolve();
       await settled;
     }
     expect(await settled).toEqual(failed ? { error: original } : { value: receipt.metrics });
@@ -296,26 +321,40 @@ async function fixture(
   return root;
 }
 
-it.each([false, true])(
-  "separates package control from runtime assets (explicitLink=%s)",
-  async (explicitLink) => {
-    const root = await fixture(tempDirs.make("retained-control-boundary-"), "npm");
-    const control = resolvePackageActivationControl(
-      resolvePackageActivationAnchor(path.join(root, "node_modules/openclaw")),
+it.each(
+  ["control", "anchor", "superseded"].flatMap((kind) =>
+    [false, true].map((explicitLink) => ({ kind, explicitLink })),
+  ),
+)(
+  "leaves package recovery $kind untouched during runtime retention (explicitLink=$explicitLink)",
+  async ({ kind, explicitLink }) => {
+    const root = await fixture(tempDirs.make("retained-recovery-boundary-"), "npm");
+    const anchor = resolvePackageActivationAnchor(path.join(root, "node_modules/openclaw"));
+    const recoveryRoot =
+      kind === "control"
+        ? resolvePackageActivationControl(anchor)
+        : kind === "anchor"
+          ? anchor
+          : `${anchor}.superseded-00000000-0000-4000-8000-000000000001`;
+    const recoveryFile = path.join(
+      recoveryRoot,
+      kind === "control" ? "operation.sqlite" : "previous/dist/entry.js",
     );
-    const journal = path.join(control, "operation.sqlite");
-    await mkdir(control, { mode: 0o700 });
-    await writeFile(journal, "mutable control", { mode: 0o600 });
+    await mkdir(path.dirname(recoveryFile), { recursive: true, mode: 0o700 });
+    await writeFile(recoveryFile, "preserved recovery evidence", { mode: 0o600 });
+    const before = await fs.lstat(recoveryFile, { bigint: true });
     const assets = [
       path.join("node_modules", "runtime.control", "asset.sqlite"),
-      path.join("dist", path.basename(control), "asset.sqlite"),
+      path.join("node_modules", `${path.basename(anchor)}.notes`, "asset.sqlite"),
+      path.join("node_modules", `${path.basename(anchor)}.superseded-not-a-uuid`, "asset.sqlite"),
+      path.join("dist", path.basename(recoveryRoot), "asset.sqlite"),
     ];
     for (const relative of assets) {
       await mkdir(path.dirname(path.join(root, relative)), { recursive: true });
       await writeFile(path.join(root, relative), "runtime asset");
     }
     if (explicitLink) {
-      await symlink(journal, path.join(root, "dist/control-link"));
+      await symlink(recoveryFile, path.join(root, "dist/recovery-link"));
     }
     const moduleUrl = pathToFileURL(path.join(root, "dist/updater.mjs"));
     const operation = withRetainedUpdateRuntime(moduleUrl.href, async (retain) => {
@@ -326,8 +365,13 @@ it.each([false, true])(
       for (const relative of assets) {
         expect(await readFile(path.join(retainedRoot, relative), "utf8")).toBe("runtime asset");
       }
-      expect(fsSync.existsSync(path.join(retainedRoot, path.relative(root, control)))).toBe(false);
-      expect((await stat(journal)).nlink).toBe(1);
+      expect(await fs.lstat(recoveryFile, { bigint: true })).toMatchObject({
+        nlink: before.nlink,
+        ctimeNs: before.ctimeNs,
+      });
+      expect(fsSync.existsSync(path.join(retainedRoot, path.relative(root, recoveryRoot)))).toBe(
+        false,
+      );
     });
     if (explicitLink) {
       await expect(operation).rejects.toThrow(
@@ -336,8 +380,15 @@ it.each([false, true])(
     } else {
       await operation;
     }
-    expect(await readFile(journal, "utf8")).toBe("mutable control");
-    expect((await stat(journal)).nlink).toBe(1);
+    expect(await readFile(recoveryFile, "utf8")).toBe("preserved recovery evidence");
+    // Old sealed helpers hash these fields: hard-linking identical bytes still
+    // invalidates their recovery fingerprint, even after the link is removed.
+    expect(await fs.lstat(recoveryFile, { bigint: true })).toMatchObject({
+      dev: before.dev,
+      ino: before.ino,
+      nlink: before.nlink,
+      ctimeNs: before.ctimeNs,
+    });
   },
 );
 
@@ -557,6 +608,81 @@ it.each(["npm", "pnpm", "pnpm-workspace", "git", "git-linked", "git-modules"] as
   },
 );
 
+it.each(["npm", "pnpm11"] as const)(
+  "keeps the retained %s runtime inside its install's dependency owner",
+  async (layout) => {
+    const base = await fs.realpath(tempDirs.make("retained-dependency-owner-"));
+    const globalRoot = path.join(base, "prefix", layout === "npm" ? "lib/node_modules" : "v11");
+    const root =
+      layout === "npm"
+        ? path.join(globalRoot, "openclaw")
+        : path.join(globalRoot, ".pnpm/openclaw@1/node_modules/openclaw");
+    const dependency = path.join(
+      globalRoot,
+      layout === "npm" ? "fixture" : ".pnpm/node_modules/fixture",
+    );
+    const ambientModules = path.join(base, "node_modules");
+    for (const directory of [
+      path.join(root, "dist"),
+      dependency,
+      path.join(ambientModules, "ambient-peer"),
+      path.join(ambientModules, "unrelated"),
+    ]) {
+      await mkdir(directory, { recursive: true });
+    }
+    await writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "openclaw", type: "module", dependencies: { fixture: "1.0.0" } }),
+    );
+    await writeFile(path.join(root, "dist/updater.mjs"), 'export { value } from "fixture";');
+    await writeFile(
+      path.join(dependency, "package.json"),
+      JSON.stringify({
+        name: "fixture",
+        type: "module",
+        exports: "./index.js",
+        peerDependencies: { "ambient-peer": "*" },
+        peerDependenciesMeta: { "ambient-peer": { optional: true } },
+      }),
+    );
+    await writeFile(path.join(dependency, "index.js"), 'export const value = "hoisted survived";');
+    await writeFile(
+      path.join(ambientModules, "ambient-peer/package.json"),
+      '{"name":"ambient-peer"}',
+    );
+    await writeFile(path.join(ambientModules, "unrelated/sentinel.txt"), "unrelated dependency");
+    const moduleUrl = pathToFileURL(path.join(root, "dist/updater.mjs"));
+    await withRetainedUpdateRuntime(moduleUrl.href, async (retain) => {
+      await retain({
+        mutationRoots: [globalRoot],
+        installTarget: {
+          manager: layout === "npm" ? "npm" : "pnpm",
+          command: layout === "npm" ? "npm" : "pnpm",
+          globalRoot,
+          packageRoot: root,
+        },
+        timeoutMs: 30_000,
+        assertCurrent() {},
+      });
+      const retainedUrl = captureRuntimeWorkerSource(moduleUrl).moduleUrl;
+      const retainedRoot = path.resolve(path.dirname(fileURLToPath(retainedUrl)), "..");
+      const retainedAmbient = path.resolve(retainedRoot, path.relative(root, ambientModules));
+      await rename(globalRoot, `${globalRoot}.previous`);
+      await mkdir(globalRoot);
+      await rm(`${globalRoot}.previous`, { recursive: true });
+      expect((await import(retainedUrl.href)).value).toBe("hoisted survived");
+      await expect(stat(path.join(retainedAmbient, "ambient-peer"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(
+        readFile(path.join(retainedAmbient, "unrelated/sentinel.txt")),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    });
+  },
+);
+
 it("refuses unsafe fallback storage without changing the installed runtime", async () => {
   const base = tempDirs.make("retained-owner-refusal-");
   const owner = path.join(base, "manager-project");
@@ -717,7 +843,6 @@ it("falls back when the runtime sibling is read-only", async () => {
     });
     assert.ok(retained && generation);
     expect(await readFile(retained, "utf8")).toBe(backend);
-    expect(() => generation!.resolve(pathToFileURL(retained!))).toThrow("generation is closing");
   } finally {
     allocation.mockRestore();
     temporaryRoot.mockRestore();

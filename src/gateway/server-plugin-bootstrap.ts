@@ -1,5 +1,3 @@
-// Gateway plugin bootstrap helpers.
-// Resolves activation config before loading or staging a Gateway registry.
 import { performance } from "node:perf_hooks";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { PluginLogger } from "../plugins/logger-types.js";
@@ -34,7 +32,6 @@ export type GatewayPluginRuntimePreparation = (
   afterCommit: () => void;
 }>;
 
-/** Prepares gateway plugin runtime and returns the loaded plugin registry state. */
 export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
   return withPluginCache(
     params.pluginMetadataSnapshot

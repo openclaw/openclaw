@@ -6,6 +6,12 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createResponsesAssistantOutput } from "../../packages/ai/src/providers/openai-responses-shared.js";
+import { processCompletionsStream } from "../../packages/ai/src/transports/openai-completions-stream.js";
+import {
+  createAssistantOutput,
+  makeCompletionsChunk,
+  makeCompletionsModel,
+} from "../../packages/ai/src/transports/openai-completions.test-support.js";
 import { processResponsesStream } from "../../packages/ai/src/transports/openai-responses-stream-internal.js";
 import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -457,6 +463,102 @@ function postedText(reply: ReturnType<typeof vi.fn>) {
 }
 
 describe("reasoning delivery", () => {
+  it.each(["text_end", "message_end"] as const)(
+    "delivers completed native reasoning before %s answers without repeating it at message_end",
+    (blockReplyBreak) => {
+      const { emit, onBlockReply } = blockHarness({ blockReplyBreak, reasoningMode: "on" });
+      const thinking = { type: "thinking" as const, thinking: "Because it helps" };
+      const message: TestAssistant = { role: "assistant", content: [thinking] };
+      emit({ type: "message_start", message });
+      emitProviderUpdate(emit, message, {
+        type: "thinking_end",
+        content: thinking.thinking,
+        contentIndex: 0,
+      });
+      message.content = [thinking, { type: "text", text: "Final answer" }];
+      emitProviderUpdate(emit, message, {
+        type: "text_delta",
+        delta: "Final answer",
+        contentIndex: 1,
+      });
+      emitProviderUpdate(emit, message, {
+        type: "text_end",
+        content: "Final answer",
+        contentIndex: 1,
+      });
+      emit({ type: "message_end", message });
+      expect(onBlockReply.mock.calls.map(([payload]) => payload)).toEqual([
+        expect.objectContaining({ text: "Because it helps", isReasoning: true }),
+        expect.objectContaining({ text: "Final answer" }),
+      ]);
+    },
+  );
+
+  it.each(["text_end", "message_end"] as const)(
+    "orders terminal-only reasoning before %s answer blocks",
+    (blockReplyBreak) => {
+      const { emit, onBlockReply } = blockHarness({ blockReplyBreak, reasoningMode: "on" });
+      emit({ type: "message_end", message: createReasoningFinalAnswerMessage() });
+      expect(onBlockReply.mock.calls.map(([payload]) => payload.text)).toEqual([
+        "Because it helps",
+        "Final answer",
+      ]);
+    },
+  );
+
+  it("keeps reasoning deduplicated across distinct Responses answer items", () => {
+    const h = setup({ reasoningMode: "on" });
+    const thinking = { type: "thinking", thinking: "Because it helps" };
+    const message = { role: "assistant", content: [thinking] };
+    h.emit({ type: "message_start", message });
+    h.emit({
+      type: "message_update",
+      message,
+      assistantMessageEvent: { type: "thinking_end", content: thinking.thinking },
+    });
+    responsePair(h, "Alpha", "item_alpha");
+    responsePair(h, "Beta", "item_beta");
+    h.emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [thinking, block("Alpha", "item_alpha"), block("Beta", "item_beta")],
+      },
+    });
+    expect(h.texts()).toEqual(["Because it helps", "Alpha", "Beta"]);
+  });
+
+  it("does not repeat accumulated reasoning and resets delivery for the next message", () => {
+    const { emit, onBlockReply } = blockHarness({ reasoningMode: "on" });
+    for (const answer of ["First answer", "Next answer"]) {
+      const message: TestAssistant = { role: "assistant", content: [] };
+      emit({ type: "message_start", message });
+      for (const thought of ["First thought", "Second thought"]) {
+        message.content.push({ type: "thinking", thinking: thought });
+        emitProviderUpdate(emit, message, {
+          type: "thinking_end",
+          content: thought,
+          contentIndex: message.content.length - 1,
+        });
+      }
+      message.content.push({ type: "text", text: answer });
+      emitProviderUpdate(emit, message, {
+        type: "text_end",
+        content: answer,
+        contentIndex: message.content.length - 1,
+      });
+      emit({ type: "message_end", message });
+    }
+    expect(onBlockReply.mock.calls.map(([payload]) => payload.text)).toEqual([
+      "First thought",
+      "Second thought",
+      "First answer",
+      "First thought",
+      "Second thought",
+      "Next answer",
+    ]);
+  });
+
   it.each(THINKING_TAG_CASES.filter(({ tag }) => tag === "mm:think"))(
     "promotes $tag reasoning to thinking blocks before delivering the answer",
     ({ open, close }) => {
@@ -538,35 +640,46 @@ describe("terminal provider phase resolution", () => {
     },
   );
 
-  it("withholds reasoning-associated completions text until terminal resolution", () => {
-    const onPartialReply = vi.fn();
-    const { emit, onBlockReply } = blockHarness({ onPartialReply, blockReplyBreak: "message_end" });
-    const message: TestAssistant = {
-      ...textMessage("Interim text.", "openai-completions"),
-      openclawDelivery: { textPhaseRequiresTerminal: true },
-    };
-    emit({ type: "message_start", message });
-    emitProviderUpdate(emit, message, {
-      type: "text_delta",
-      contentIndex: 0,
-      delta: "Interim text.",
-    });
-    expect(onPartialReply).not.toHaveBeenCalled();
-    const terminal = {
-      ...message,
-      content: [
-        textBlock("Interim text.", "commentary-0", "commentary"),
-        textBlock("Final text.", "final-0", "final_answer"),
-      ],
-    };
-    emitProviderUpdate(emit, terminal, {
-      type: "text_delta",
-      contentIndex: 1,
-      delta: "Final text.",
-    });
-    emit({ type: "message_end", message: terminal });
-    expect(onPartialReply).not.toHaveBeenCalled();
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(postedText(onBlockReply)).toBe("Final text.");
-  });
+  it.each([true, false])(
+    "streams completions live and delivers the confirmed final answer (interleaved: %s)",
+    async (interleaved) => {
+      const onPartialReply = vi.fn();
+      const { emit, subscription, onBlockReply } = setup({
+        onPartialReply,
+        blockReplyBreak: "message_end",
+      });
+      const model = makeCompletionsModel();
+      const output = createAssistantOutput(model);
+      async function* chunks() {
+        if (interleaved) {
+          yield makeCompletionsChunk({ reasoning_content: "First thought." });
+        }
+        yield makeCompletionsChunk({ content: "Initial text." });
+        await subscription.waitForPendingEvents();
+        expect(onPartialReply).toHaveBeenCalledWith(
+          expect.objectContaining({ text: "Initial text." }),
+        );
+        expect(onBlockReply).not.toHaveBeenCalled();
+        yield makeCompletionsChunk({ reasoning_content: "Second thought." });
+        if (interleaved) {
+          yield makeCompletionsChunk({ content: "Final text." });
+          await subscription.waitForPendingEvents();
+          expect(onPartialReply.mock.calls.at(-1)?.[0].text).toContain("Final text.");
+          expect(onBlockReply).not.toHaveBeenCalled();
+        }
+        yield makeCompletionsChunk({}, "stop");
+      }
+      emit({ type: "message_start", message: output });
+      await processCompletionsStream(chunks(), output, model, {
+        push(event) {
+          emit({ type: "message_update", message: output, assistantMessageEvent: event });
+        },
+      });
+      emit({ type: "message_end", message: output });
+      await subscription.waitForPendingEvents();
+      expect(onBlockReply.mock.calls.map(([payload]) => payload.text)).toEqual([
+        interleaved ? "Final text." : "Initial text.",
+      ]);
+    },
+  );
 });

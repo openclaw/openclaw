@@ -1,6 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-// Gateway sessions.resolve implementation helper.
-// Resolves key/sessionId/label/shortId selectors into one canonical session key.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ErrorShape,
@@ -60,14 +58,12 @@ function resolveSessionVisibilityFilterOptions(p: SessionsResolveParams) {
   };
 }
 
-/** Rejects sessions whose owning agent no longer exists in config (#65524). */
 function validateSessionAgentExists(
   cfg: OpenClawConfig,
   key: string,
-  entry?: SessionEntry | null,
   acpMeta?: SessionEntry["acp"] | null,
 ): SessionsResolveResult | null {
-  const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, key, entry, { acpMeta });
+  const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, key, acpMeta);
   if (deletedAgentId === null) {
     return null;
   }
@@ -108,27 +104,22 @@ export async function withPreparedSessionResolve<T>(
   };
   while (true) {
     try {
-      if (key || pending.size > 0) {
-        return await withReadySessionRows(
-          projection,
-          (cfg) => {
-            const selected = [...pending.values()];
-            if (key) {
-              const agent = resolveRequestedSessionAgentId(cfg, key, p.agentId);
-              if (agent.ok) {
-                selected.push({ key, agentId: agent.agentId });
-              }
+      return await withReadySessionRows(
+        projection,
+        (cfg) => {
+          const selected = [...pending.values()];
+          if (key) {
+            const agent = resolveRequestedSessionAgentId(cfg, key, p.agentId);
+            if (agent.ok) {
+              selected.push({ key, agentId: agent.agentId });
             }
-            return selected;
-          },
-          resolve,
-        );
-      }
-      do {
-        await projection.ensureMaterialized();
-        assertCurrent();
-      } while (projection.needsMaterialization);
-      return resolve();
+          }
+          return selected;
+        },
+        resolve,
+        // Discovery needs current selection metadata, not every session's display row.
+        { selection: !key },
+      );
     } catch (error) {
       if (!(error instanceof SessionResolvePreparationRequired)) {
         throw error;
@@ -211,7 +202,7 @@ export function resolveSessionKeyFromResolveParams(params: {
       throw new SessionResolvePreparationRequired(unresolved);
     }
     return (candidateKey: string, entry: SessionEntry | undefined) =>
-      validateSessionAgentExists(cfg, candidateKey, entry, (entry && facts.get(entry)) ?? null);
+      validateSessionAgentExists(cfg, candidateKey, (entry && facts.get(entry)) ?? null);
   };
 
   const sessionIdMatches = (agentId?: string) => {

@@ -116,6 +116,7 @@ export class SettingsManager {
   }
 
   private static loadScope(storage: SettingsStorage, scope: SettingsScope): SettingsScopeState {
+    const state: SettingsScopeState = { settings: {}, modified: new Map(), loadError: null };
     let content: string | undefined;
     try {
       if (storage.readSettingsScope) {
@@ -126,25 +127,14 @@ export class SettingsManager {
           return undefined;
         });
       }
-      const settings = content ? requireSupportedSettings(JSON.parse(content), scope) : {};
-      return SettingsManager.createScopeState(settings);
+      state.settings = content ? requireSupportedSettings(JSON.parse(content), scope) : {};
     } catch (error) {
       if (isInvalidConfigError(error)) {
         throw error;
       }
-      return SettingsManager.createScopeState({}, error as Error);
+      state.loadError = error as Error;
     }
-  }
-
-  private static createScopeState(
-    settings: Settings,
-    loadError: Error | null = null,
-  ): SettingsScopeState {
-    return {
-      settings,
-      modified: new Map(),
-      loadError,
-    };
+    return state;
   }
 
   getGlobalSettings(): Settings {
@@ -184,18 +174,6 @@ export class SettingsManager {
   applyOverrides(overrides: Partial<Settings>): void {
     this.runtimeOverrides = deepMergeSettings(this.runtimeOverrides, overrides);
     this.recomputeSettings();
-  }
-
-  private markModified(scope: SettingsScope, field: keyof Settings, nestedKey?: string): void {
-    const state = this.scopes[scope];
-    const existing = state.modified.get(field);
-    if (!nestedKey || existing === null) {
-      state.modified.set(field, null);
-      return;
-    }
-    const nestedFields = existing ?? new Set<string>();
-    nestedFields.add(nestedKey);
-    state.modified.set(field, nestedFields);
   }
 
   private recordError(scope: SettingsScope, error: unknown): void {
@@ -252,13 +230,19 @@ export class SettingsManager {
       });
   }
 
-  private setScopedSetting<K extends keyof Settings>(
-    scope: SettingsScope,
-    field: K,
-    value: Settings[K],
-  ): void {
-    this.scopes[scope].settings[field] = scope === "project" ? structuredClone(value) : value;
-    this.markModified(scope, field);
+  private setScopedSettings(scope: SettingsScope, values: Settings, nestedField?: string): void {
+    const state = this.scopes[scope];
+    Object.assign(state.settings, scope === "project" ? structuredClone(values) : values);
+    for (const field of Object.keys(values) as (keyof Settings)[]) {
+      const existing = state.modified.get(field);
+      if (!nestedField || existing === null) {
+        state.modified.set(field, null);
+      } else {
+        const nestedFields = existing ?? new Set<string>();
+        nestedFields.add(nestedField);
+        state.modified.set(field, nestedFields);
+      }
+    }
     this.save(scope);
   }
 
@@ -270,9 +254,7 @@ export class SettingsManager {
     const current = this.scopes.global.settings[field];
     const nested = isRecord(current) ? { ...current } : {};
     nested[nestedField] = value;
-    (this.scopes.global.settings as Record<string, unknown>)[field] = nested;
-    this.markModified("global", field, nestedField);
-    this.save("global");
+    this.setScopedSettings("global", { [field]: nested }, nestedField);
   }
 
   async flush(): Promise<void> {
@@ -290,7 +272,7 @@ export class SettingsManager {
   }
 
   setLastChangelogVersion(version: string): void {
-    this.setScopedSetting("global", "lastChangelogVersion", version);
+    this.setScopedSettings("global", { lastChangelogVersion: version });
   }
 
   getSessionDir(): string | undefined {
@@ -314,19 +296,15 @@ export class SettingsManager {
   }
 
   setDefaultProvider(provider: string): void {
-    this.setScopedSetting("global", "defaultProvider", provider);
+    this.setScopedSettings("global", { defaultProvider: provider });
   }
 
   setDefaultModel(modelId: string): void {
-    this.setScopedSetting("global", "defaultModel", modelId);
+    this.setScopedSettings("global", { defaultModel: modelId });
   }
 
   setDefaultModelAndProvider(provider: string, modelId: string): void {
-    this.scopes.global.settings.defaultProvider = provider;
-    this.scopes.global.settings.defaultModel = modelId;
-    this.markModified("global", "defaultProvider");
-    this.markModified("global", "defaultModel");
-    this.save("global");
+    this.setScopedSettings("global", { defaultProvider: provider, defaultModel: modelId });
   }
 
   getSteeringMode(): "all" | "one-at-a-time" {
@@ -334,7 +312,7 @@ export class SettingsManager {
   }
 
   setSteeringMode(mode: "all" | "one-at-a-time"): void {
-    this.setScopedSetting("global", "steeringMode", mode);
+    this.setScopedSettings("global", { steeringMode: mode });
   }
 
   getFollowUpMode(): "all" | "one-at-a-time" {
@@ -342,7 +320,7 @@ export class SettingsManager {
   }
 
   setFollowUpMode(mode: "all" | "one-at-a-time"): void {
-    this.setScopedSetting("global", "followUpMode", mode);
+    this.setScopedSettings("global", { followUpMode: mode });
   }
 
   getTheme(): string | undefined {
@@ -350,7 +328,7 @@ export class SettingsManager {
   }
 
   setTheme(theme: string): void {
-    this.setScopedSetting("global", "theme", theme);
+    this.setScopedSettings("global", { theme });
   }
 
   getDefaultThinkingLevel(): Settings["defaultThinkingLevel"] {
@@ -358,7 +336,7 @@ export class SettingsManager {
   }
 
   setDefaultThinkingLevel(level: NonNullable<Settings["defaultThinkingLevel"]>): void {
-    this.setScopedSetting("global", "defaultThinkingLevel", level);
+    this.setScopedSettings("global", { defaultThinkingLevel: level });
   }
 
   getTransport(): TransportSetting {
@@ -366,7 +344,7 @@ export class SettingsManager {
   }
 
   setTransport(transport: TransportSetting): void {
-    this.setScopedSetting("global", "transport", transport);
+    this.setScopedSettings("global", { transport });
   }
 
   getCompactionEnabled(): boolean {
@@ -436,7 +414,7 @@ export class SettingsManager {
     if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
       throw new Error(`Invalid httpIdleTimeoutMs setting: ${String(timeoutMs)}`);
     }
-    this.setScopedSetting("global", "httpIdleTimeoutMs", Math.floor(timeoutMs));
+    this.setScopedSettings("global", { httpIdleTimeoutMs: Math.floor(timeoutMs) });
   }
 
   getProviderRetrySettings(): { timeoutMs?: number; maxRetries?: number; maxRetryDelayMs: number } {
@@ -452,7 +430,7 @@ export class SettingsManager {
   }
 
   setHideThinkingBlock(hide: boolean): void {
-    this.setScopedSetting("global", "hideThinkingBlock", hide);
+    this.setScopedSettings("global", { hideThinkingBlock: hide });
   }
 
   getShellPath(): string | undefined {
@@ -460,7 +438,7 @@ export class SettingsManager {
   }
 
   setShellPath(path: string | undefined): void {
-    this.setScopedSetting("global", "shellPath", path);
+    this.setScopedSettings("global", { shellPath: path });
   }
 
   getQuietStartup(): boolean {
@@ -468,7 +446,7 @@ export class SettingsManager {
   }
 
   setQuietStartup(quiet: boolean): void {
-    this.setScopedSetting("global", "quietStartup", quiet);
+    this.setScopedSettings("global", { quietStartup: quiet });
   }
 
   getShellCommandPrefix(): string | undefined {
@@ -476,7 +454,7 @@ export class SettingsManager {
   }
 
   setShellCommandPrefix(prefix: string | undefined): void {
-    this.setScopedSetting("global", "shellCommandPrefix", prefix);
+    this.setScopedSettings("global", { shellCommandPrefix: prefix });
   }
 
   getNpmCommand(): string[] | undefined {
@@ -484,7 +462,7 @@ export class SettingsManager {
   }
 
   setNpmCommand(command: string[] | undefined): void {
-    this.setScopedSetting("global", "npmCommand", command ? [...command] : undefined);
+    this.setScopedSettings("global", { npmCommand: command ? [...command] : undefined });
   }
 
   getCollapseChangelog(): boolean {
@@ -492,7 +470,7 @@ export class SettingsManager {
   }
 
   setCollapseChangelog(collapse: boolean): void {
-    this.setScopedSetting("global", "collapseChangelog", collapse);
+    this.setScopedSettings("global", { collapseChangelog: collapse });
   }
 
   getEnableInstallTelemetry(): boolean {
@@ -500,7 +478,7 @@ export class SettingsManager {
   }
 
   setEnableInstallTelemetry(enabled: boolean): void {
-    this.setScopedSetting("global", "enableInstallTelemetry", enabled);
+    this.setScopedSettings("global", { enableInstallTelemetry: enabled });
   }
 
   getPackages(): PackageSource[] {
@@ -508,11 +486,11 @@ export class SettingsManager {
   }
 
   setPackages(packages: PackageSource[]): void {
-    this.setScopedSetting("global", "packages", packages);
+    this.setScopedSettings("global", { packages });
   }
 
   setProjectPackages(packages: PackageSource[]): void {
-    this.setScopedSetting("project", "packages", packages);
+    this.setScopedSettings("project", { packages });
   }
 
   getExtensionPaths(): string[] {
@@ -520,11 +498,11 @@ export class SettingsManager {
   }
 
   setExtensionPaths(paths: string[]): void {
-    this.setScopedSetting("global", "extensions", paths);
+    this.setScopedSettings("global", { extensions: paths });
   }
 
   setProjectExtensionPaths(paths: string[]): void {
-    this.setScopedSetting("project", "extensions", paths);
+    this.setScopedSettings("project", { extensions: paths });
   }
 
   getSkillPaths(): string[] {
@@ -532,11 +510,11 @@ export class SettingsManager {
   }
 
   setSkillPaths(paths: string[]): void {
-    this.setScopedSetting("global", "skills", paths);
+    this.setScopedSettings("global", { skills: paths });
   }
 
   setProjectSkillPaths(paths: string[]): void {
-    this.setScopedSetting("project", "skills", paths);
+    this.setScopedSettings("project", { skills: paths });
   }
 
   getPromptTemplatePaths(): string[] {
@@ -544,11 +522,11 @@ export class SettingsManager {
   }
 
   setPromptTemplatePaths(paths: string[]): void {
-    this.setScopedSetting("global", "prompts", paths);
+    this.setScopedSettings("global", { prompts: paths });
   }
 
   setProjectPromptTemplatePaths(paths: string[]): void {
-    this.setScopedSetting("project", "prompts", paths);
+    this.setScopedSettings("project", { prompts: paths });
   }
 
   getThemePaths(): string[] {
@@ -556,11 +534,11 @@ export class SettingsManager {
   }
 
   setThemePaths(paths: string[]): void {
-    this.setScopedSetting("global", "themes", paths);
+    this.setScopedSettings("global", { themes: paths });
   }
 
   setProjectThemePaths(paths: string[]): void {
-    this.setScopedSetting("project", "themes", paths);
+    this.setScopedSettings("project", { themes: paths });
   }
 
   getEnableSkillCommands(): boolean {
@@ -568,7 +546,7 @@ export class SettingsManager {
   }
 
   setEnableSkillCommands(enabled: boolean): void {
-    this.setScopedSetting("global", "enableSkillCommands", enabled);
+    this.setScopedSettings("global", { enableSkillCommands: enabled });
   }
 
   getThinkingBudgets(): ThinkingBudgetsSettings | undefined {
@@ -628,7 +606,7 @@ export class SettingsManager {
   }
 
   setEnabledModels(patterns: string[] | undefined): void {
-    this.setScopedSetting("global", "enabledModels", patterns);
+    this.setScopedSettings("global", { enabledModels: patterns });
   }
 
   getDoubleEscapeAction(): "fork" | "tree" | "none" {
@@ -636,7 +614,7 @@ export class SettingsManager {
   }
 
   setDoubleEscapeAction(action: "fork" | "tree" | "none"): void {
-    this.setScopedSetting("global", "doubleEscapeAction", action);
+    this.setScopedSettings("global", { doubleEscapeAction: action });
   }
 
   getTreeFilterMode(): "default" | "no-tools" | "user-only" | "labeled-only" | "all" {
@@ -646,7 +624,7 @@ export class SettingsManager {
   }
 
   setTreeFilterMode(mode: "default" | "no-tools" | "user-only" | "labeled-only" | "all"): void {
-    this.setScopedSetting("global", "treeFilterMode", mode);
+    this.setScopedSettings("global", { treeFilterMode: mode });
   }
 
   getShowHardwareCursor(): boolean {
@@ -654,7 +632,7 @@ export class SettingsManager {
   }
 
   setShowHardwareCursor(enabled: boolean): void {
-    this.setScopedSetting("global", "showHardwareCursor", enabled);
+    this.setScopedSettings("global", { showHardwareCursor: enabled });
   }
 
   getEditorPaddingX(): number {
@@ -662,11 +640,9 @@ export class SettingsManager {
   }
 
   setEditorPaddingX(padding: number): void {
-    this.setScopedSetting(
-      "global",
-      "editorPaddingX",
-      Math.max(0, Math.min(3, Math.floor(padding))),
-    );
+    this.setScopedSettings("global", {
+      editorPaddingX: Math.max(0, Math.min(3, Math.floor(padding))),
+    });
   }
 
   getAutocompleteMaxVisible(): number {
@@ -674,11 +650,9 @@ export class SettingsManager {
   }
 
   setAutocompleteMaxVisible(maxVisible: number): void {
-    this.setScopedSetting(
-      "global",
-      "autocompleteMaxVisible",
-      Math.max(3, Math.min(20, Math.floor(maxVisible))),
-    );
+    this.setScopedSettings("global", {
+      autocompleteMaxVisible: Math.max(3, Math.min(20, Math.floor(maxVisible))),
+    });
   }
 
   getCodeBlockIndent(): string {
@@ -690,6 +664,6 @@ export class SettingsManager {
   }
 
   setWarnings(warnings: WarningSettings): void {
-    this.setScopedSetting("global", "warnings", { ...warnings });
+    this.setScopedSettings("global", { warnings: { ...warnings } });
   }
 }

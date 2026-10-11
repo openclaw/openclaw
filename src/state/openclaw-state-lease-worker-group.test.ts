@@ -100,52 +100,18 @@ function facts(identities: readonly OpenClawStateLeaseIdentity[], expiresAt = Da
 }
 
 describe("state lease group admission", () => {
-  it.each(["registered-guard", "admission", "environment-values"] as const)(
-    "refuses source replacement at %s before callback entry",
-    async (kind) => {
-      const context = sourceContext();
-      const members = [fixture(context), fixture(context, "target")];
-      const operation = vi.fn(async () => {});
-      if (kind === "registered-guard") {
-        context.admission.assertCurrent = () => {};
-        expect(() =>
-          withOpenClawStateLeasesWorkerAdmission(
-            members.map(({ lease }) => lease),
-            context,
-            operation,
-          ),
-        ).toThrow("source binding was replaced");
-      } else {
-        const pending = runWithOpenClawStateLeasesWorker(
-          members.map(({ lease }) => lease),
-          context,
-          operation,
-        );
-        if (kind === "admission") {
-          context.admission = { ...context.admission };
-        } else {
-          context.environment.OPENCLAW_STATE_DIR = "/unrelated-state";
-        }
-        await expect(pending).rejects.toThrow("source binding was replaced");
-        expect(runWorkerOperation).not.toHaveBeenCalled();
-      }
-      expect(operation).not.toHaveBeenCalled();
-      expect(members.every(({ owner }) => owner.canRelease())).toBe(true);
-    },
-  );
-
   it.each([
     "admission",
     "maintenance",
-    "maintenance-owner",
     "effect",
+    "transaction-replacement",
     "commit",
     "member-0",
     "member-1",
     "caller",
     "expiry",
     "async",
-  ] as const)("refuses commit after %s authority changes", async (kind) => {
+  ] as const)("refuses grants after %s authority changes", async (kind) => {
     const context = sourceContext();
     let now = 1_000;
     let sourceCurrent = true;
@@ -164,13 +130,21 @@ describe("state lease group admission", () => {
     });
     if (kind === "admission") {
       context.admission.assertCurrent = assertSourceCurrent;
-    } else if (kind === "maintenance" || kind === "maintenance-owner") {
+    } else if (kind === "maintenance") {
       context.maintenanceScope = maintenance;
     }
     const members = [fixture(context), fixture(context, "target")];
     const authority = {
       assertCurrent() {
+        if (kind === "transaction-replacement") {
+          authority.beforeTransaction = () => {};
+        }
         if (!currentCaller) {
+          throw callerError;
+        }
+      },
+      beforeTransaction() {
+        if (kind === "transaction-replacement") {
           throw callerError;
         }
       },
@@ -197,13 +171,17 @@ describe("state lease group admission", () => {
         async (scope) => {
           const current = job(scope.createAdmission);
           const held = facts(scope.identities, 2_000);
+          if (kind === "transaction-replacement") {
+            expect(current.request("transaction", held)).toBe(2);
+            expect(current.admission.failure).toBe(callerError);
+            current.settled.resolve({ kind: "completed" });
+            return;
+          }
           expect(current.request("transaction", held)).toBe(1);
           if (kind === "admission") {
             context.admission.assertCurrent = () => {};
           } else if (kind === "maintenance") {
             maintenance.assertAdmission = () => {};
-          } else if (kind === "maintenance-owner") {
-            maintenance.assertOwnerCurrent = () => {};
           } else if (kind === "effect") {
             authority.assertCurrent = () => {};
             currentCaller = false;
@@ -225,7 +203,7 @@ describe("state lease group admission", () => {
                     ? "State lease worker ownership was refused"
                     : kind === "async"
                       ? "State lease worker authority must complete synchronously"
-                      : "State lease worker source binding was replaced",
+                      : "original source retired",
             });
           }
           current.settled.resolve({ kind: "completed" });
@@ -283,7 +261,9 @@ describe("state lease group admission", () => {
     const context = sourceContext();
     const first = fixture(context);
     const second = fixture(context, "target");
-    const beforeCommit = vi.fn();
+    const callbacks: string[] = [];
+    const beforeTransaction = vi.fn(() => callbacks.push("prepare"));
+    const beforeCommit = vi.fn(() => callbacks.push("commit"));
     await withOpenClawStateLeasesWorkerAdmission(
       [first.lease, second.lease],
       context,
@@ -293,13 +273,16 @@ describe("state lease group admission", () => {
         // Schema and domain commands share their retained actor, not a grant port or stage.
         for (let index = 0; index < 2; index += 1) {
           const current = job(scope.createAdmission);
-          expect(current.request("transaction", facts(scope.identities))).toBe(1);
+          if (index === 0) {
+            expect(current.request("transaction", facts(scope.identities))).toBe(1);
+          }
           expect(current.request("commit", facts(scope.identities))).toBe(1);
-          expect(current.request("commit", facts(scope.identities))).toBe(2);
         }
       },
-      { assertCurrent() {}, beforeCommit },
+      { assertCurrent() {}, beforeTransaction, beforeCommit },
     );
+    expect(callbacks).toEqual(["prepare", "commit", "prepare", "commit"]);
+    expect(beforeTransaction).toHaveBeenCalledTimes(2);
     expect(beforeCommit).toHaveBeenCalledTimes(2);
     const firstJob = expectDefined(jobs[0], "schema job");
     const secondJob = expectDefined(jobs[1], "domain job");
@@ -314,51 +297,39 @@ describe("state lease group admission", () => {
     expect(second.owner.canRelease()).toBe(true);
   });
 
-  it.each([
-    "missing",
-    "extra",
-    "reordered",
-    "wrong-owner",
-    "expired",
-    "transaction",
-    "commit",
-  ] as const)("refuses invalid %s grant requests", async (kind) => {
-    const context = sourceContext();
-    const members = [fixture(context), fixture(context, "target")];
-    await withOpenClawStateLeasesWorkerAdmission(
-      members.map(({ lease }) => lease),
-      context,
-      async (scope) => {
-        const current = job(scope.createAdmission);
-        const held = facts(scope.identities);
-        if (kind === "missing") {
-          held.pop();
-        }
-        if (kind === "extra") {
-          held.push(expectDefined(held[0], "first lease facts"));
-        }
-        if (kind === "reordered") {
-          held.reverse();
-        }
-        if (kind === "wrong-owner") {
-          expectDefined(held[1], "second lease facts").identity.owner = "unrelated";
-        }
-        if (kind === "expired") {
-          expectDefined(held[1], "second lease facts").expiresAt = Date.now();
-        }
-        if (kind === "transaction") {
-          expect(current.request("transaction", held)).toBe(1);
-        }
-        expect(current.request(kind === "commit" ? "commit" : "transaction", held)).toBe(2);
-        expect(current.admission.failure).toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
-        current.settled.resolve(
-          kind === "transaction" || kind === "commit"
-            ? { kind: "completed" }
-            : { kind: "not-entered", error: current.admission.failure },
-        );
-      },
-    );
-  });
+  it.each(["missing", "extra", "reordered", "wrong-owner", "expired"] as const)(
+    "refuses invalid %s grant requests",
+    async (kind) => {
+      const context = sourceContext();
+      const members = [fixture(context), fixture(context, "target")];
+      await withOpenClawStateLeasesWorkerAdmission(
+        members.map(({ lease }) => lease),
+        context,
+        async (scope) => {
+          const current = job(scope.createAdmission);
+          const held = facts(scope.identities);
+          if (kind === "missing") {
+            held.pop();
+          }
+          if (kind === "extra") {
+            held.push(expectDefined(held[0], "first lease facts"));
+          }
+          if (kind === "reordered") {
+            held.reverse();
+          }
+          if (kind === "wrong-owner") {
+            expectDefined(held[1], "second lease facts").identity.owner = "unrelated";
+          }
+          if (kind === "expired") {
+            expectDefined(held[1], "second lease facts").expiresAt = Date.now();
+          }
+          expect(current.request("transaction", held)).toBe(2);
+          expect(current.admission.failure).toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
+          current.settled.resolve({ kind: "not-entered", error: current.admission.failure });
+        },
+      );
+    },
+  );
 
   it.each([
     "empty",

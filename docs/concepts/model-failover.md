@@ -20,6 +20,10 @@ is instructed to inspect interrupted actions before deciding whether to repeat
 them. A retry status shows the wait and attempt count. Cancellation remains
 available. No additional configuration is required.
 
+ChatGPT Responses WebSocket connection expiry follows this recovery policy even
+after streaming starts. The failed socket is retired; recovery continues the
+saved transcript instead of replaying the request inside the transport.
+
 Anthropic streaming errors retain their structured error type, so rate limits,
 overload, and authentication failures follow the same recovery policy even when
 the provider's message is generic.
@@ -344,6 +348,8 @@ Overloaded and rate-limit errors allow one same-provider auth-profile rotation b
 If all profiles for a provider fail, OpenClaw moves to the next model in `agents.defaults.model.fallbacks` when the failure matches one of the failover reasons listed below. This includes `model_not_found` for HTTP 404 responses. It does not include a 404 whose response body identifies a more specific condition, such as context overflow, session expiry, billing, authentication, or request format. Provider errors that do not expose enough detail are still labeled precisely in fallback state. `empty_response` means the provider returned no usable message or status. `no_error_details` means the provider explicitly returned `Unknown error (no error details in response)`. `unclassified` means OpenClaw preserved the raw preview but no classifier matched it yet.
 
 Provider-busy signals such as `ModelNotReadyException` land in the overloaded bucket and follow the same one-rotation-then-fallback policy as rate limits.
+
+`agents.defaults.timeoutSeconds` and run-specific model timeouts apply to each model candidate attempt. When an attempt times out, the next configured fallback receives its own full budget, so total elapsed time can exceed the setting. Progress does not renew an attempt's budget. User cancellation stops the entire fallback chain, and an independent outer deadline, such as the cron scheduler's deadline, still applies. See [Agent timeouts](/concepts/agent-loop#timeouts).
 
 The failover controller owns OpenClaw's transient recovery budget. Rate limits receive up to **10 total attempts** before auth-profile rotation or model fallback. Jittered exponential waits cap at 30 seconds, while provider `retry-after` and `retry-after-ms` hints remain minimum waits even beyond that cap. Other transient failures retain eight retries and a 90-second window for consecutive outages. A completed successful model response clears that window without resetting the total retry count; partial output and tool activity alone do not. Once that budget or window is exhausted, recovery proceeds to eligible auth-profile rotation, configured model fallback, or a visible error. Continuations preserve the transcript instead of replaying the original user request. Recovery and any fallback winner remain turn-local.
 

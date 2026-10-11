@@ -65,12 +65,9 @@ export function removeBrowserAnnotationWithUndo(
         return;
       }
       settled = true;
-      const insertionIndex = Math.min(sourceIndex, latest.length);
-      host.setAttachments([
-        ...latest.slice(0, insertionIndex),
-        attachment,
-        ...latest.slice(insertionIndex),
-      ]);
+      const restored = [...latest];
+      restored.splice(Math.min(sourceIndex, latest.length), 0, attachment);
+      host.setAttachments(restored);
       host.requestUpdate();
       host.focusRestoredAnnotation(attachment.id);
     },

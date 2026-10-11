@@ -1,16 +1,13 @@
 import { randomUUID } from "node:crypto";
-import {
-  isExactAttachedEnvironment,
-  type WorkerDispatchPlacement,
-} from "./placement-dispatch-failure.js";
-import { resolvePriorWorkspaceResultConflict } from "./placement-dispatch-pending-results.js";
-import type { WorkerPlacementMoveIntent } from "./placement-move-intent.js";
+import type { WorkerDispatchPlacement } from "./placement-dispatch-failure.js";
+import type { WorkerPlacementMoveIntent } from "./placement-move-intent.types.js";
 import type {
   WorkerPlacementReclaimBarriers,
   WorkerReclaimPlacement,
 } from "./placement-reclaim-contract.js";
 import { placementTurnOwner, reportPlacementTransition } from "./placement-record.js";
 import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
+import { isExactAttachedEnvironment } from "./placement-target.js";
 import { completeWorkerWorkspaceTeardown } from "./placement-teardown.js";
 import { findPendingWorkerWorkspaceResult } from "./placement-workspace-result.js";
 import type {
@@ -31,6 +28,7 @@ import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
   createWorkspaceResultJournal,
   finalizeWorkspaceResultConflicts,
+  resolvePriorWorkspaceResultConflict,
   settleStagedWorkspaceResult,
 } from "./workspace-result-settlement.js";
 import {
@@ -66,7 +64,9 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
       authorize,
       beforeDrain,
       begin: async (assertCurrent) => {
-        const current = placements.get(request.sessionId);
+        const current = await placements.getAsync(request.sessionId);
+        assertCurrent?.();
+        beforeDrain?.assertCurrent?.();
         // A queued stop can observe the previous stop's completion only after
         // entering the lifecycle fence; joining an outside promise can deadlock it.
         if (
@@ -251,7 +251,6 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                     }
                   };
                   assertCurrent();
-                  reauthorize?.();
                   const quiescence = await tunnel.quiesceWorkspace(current.remoteWorkspaceDir);
                   try {
                     assertCurrent();
@@ -285,7 +284,6 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                     if (reconciliation.changed && !wasAccepted()) {
                       throw new Error("Cloud worker stop did not commit its reconciled workspace");
                     }
-                    reauthorize?.();
                     assertCurrent();
                     await placements.acceptWorkspaceResult(reclaimClaim, reauthorize);
                     const recordedStagedResultRef = (
@@ -347,19 +345,11 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                           turnClaim: reclaimClaim,
                           environmentId: current.environmentId,
                           ownerEpoch: current.activeOwnerEpoch,
-                          operationId: moveIntent?.operationId,
+                          move: moveIntent,
                         });
                         // Publish the committed owner before cleanup refs and the tunnel can yield.
                         reportPlacementTransition(onTransition, completed);
                         return completed;
-                      },
-                      validateCompleted: (completed) => {
-                        const expectedState = moveIntent ? "local" : "reclaimed";
-                        if (completed.state !== expectedState) {
-                          throw new Error(
-                            `Cloud worker teardown did not produce ${expectedState} placement`,
-                          );
-                        }
                       },
                     });
                   } finally {

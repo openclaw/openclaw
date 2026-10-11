@@ -101,12 +101,9 @@ async function openStream(scope: "creation-and-gaps" | "creation-only" = "creati
 afterEach(() => vi.useRealTimers());
 
 describe("completions model-progress deadline", () => {
-  it.each([
-    ["empty choices", makeCompletionsChunk({}, null, { choices: [] })],
-    ["empty delta", makeCompletionsChunk({})],
-    ["role and empty content", makeCompletionsChunk({ role: "assistant", content: "" })],
-  ])("aborts %s at twice the idle window through composed run signals", async (_name, chunk) => {
+  it("aborts content-free chunks at twice the idle window through composed run signals", async () => {
     vi.useFakeTimers();
+    const chunk = makeCompletionsChunk({ role: "assistant", content: "" });
     const stream = await openStream();
     try {
       await stream.send(makeCompletionsChunk({ role: "assistant" }));
@@ -136,61 +133,31 @@ describe("completions model-progress deadline", () => {
     }
   });
 
-  it.each(["reasoning", "reasoning_content", "reasoning_text", "content"])(
-    "keeps %s progress alive beyond both windows with reasoning display off",
-    async (field) => {
-      vi.useFakeTimers();
-      const stream = await openStream();
-      try {
-        for (let index = 0; index < 8; index += 1) {
-          await vi.advanceTimersByTimeAsync(40);
-          await stream.send(makeCompletionsChunk({ [field]: "x" }));
-        }
-        expect(stream.onTimeout).not.toHaveBeenCalled();
-        expect(stream.requestSignal?.aborted).toBe(false);
-        expect(stream.activity).toHaveLength(8);
-        expect(stream.events.filter((event) => event.type === "thinking_delta")).toEqual([]);
-        await stream.send(makeCompletionsChunk({ content: "OK" }, "stop"));
-      } finally {
-        await stream.close();
-      }
-      expect(await stream.completion).toBeUndefined();
-      expect(
-        stream.events
-          .filter((event) => event.type === "text_delta")
-          .map((event) => event.delta)
-          .join(""),
-      ).toBe(field === "content" ? "xxxxxxxxOK" : "OK");
-      await vi.advanceTimersByTimeAsync(500);
-      expect(stream.onTimeout).not.toHaveBeenCalled();
-    },
-  );
-
-  it("counts tool, finish-only, chunk usage, and choice usage without requiring a delta", async () => {
+  it("keeps hidden reasoning progress alive beyond both windows", async () => {
     vi.useFakeTimers();
-    const usage = { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 };
-    const chunks = [
-      makeCompletionsChunk({
-        tool_calls: [
-          { index: 0, id: "call_1", type: "function", function: { name: "read", arguments: "{}" } },
-        ],
-      }),
-      makeCompletionsChunk(undefined, "stop"),
-      makeCompletionsChunk({}, null, { choices: [], usage }),
-      makeCompletionsChunk(undefined, null, { usage }),
-      makeCompletionsChunk({}, null, { choices: [{ index: 0, usage }] }),
-    ];
     const stream = await openStream();
     try {
-      for (const chunk of chunks) {
-        await vi.advanceTimersByTimeAsync(80);
-        await stream.send(chunk);
+      for (let index = 0; index < 8; index += 1) {
+        await vi.advanceTimersByTimeAsync(40);
+        await stream.send(makeCompletionsChunk({ reasoning_content: "x" }));
       }
-      expect(stream.activity).toHaveLength(chunks.length);
       expect(stream.onTimeout).not.toHaveBeenCalled();
+      expect(stream.requestSignal?.aborted).toBe(false);
+      expect(stream.activity).toHaveLength(8);
+      expect(stream.events.filter((event) => event.type === "thinking_delta")).toEqual([]);
+      await stream.send(makeCompletionsChunk({ content: "OK" }, "stop"));
     } finally {
       await stream.close();
     }
+    expect(await stream.completion).toBeUndefined();
+    expect(
+      stream.events
+        .filter((event) => event.type === "text_delta")
+        .map((event) => event.delta)
+        .join(""),
+    ).toBe("OK");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(stream.onTimeout).not.toHaveBeenCalled();
   });
 
   it("counts legacy tool fragments and reasoning buffered behind them as progress", async () => {

@@ -83,28 +83,6 @@ function retainParticipantId(selected: string[], userId: string): void {
   }
 }
 
-function buildParticipantRoster(params: {
-  selectedUserIds: string[];
-  totalCount: number;
-  states: APIVoiceState[];
-}): DiscordVoiceParticipantRoster {
-  const selected = new Set(params.selectedUserIds);
-  const statesByUserId = new Map<string, APIVoiceState>();
-  for (const state of params.states) {
-    const userId = state.user_id?.trim();
-    if (userId && selected.has(userId)) {
-      statesByUserId.set(userId, state);
-    }
-  }
-  return {
-    participants: params.selectedUserIds.map((userId) => ({
-      userId,
-      state: statesByUserId.get(userId),
-    })),
-    totalCount: params.totalCount,
-  };
-}
-
 export function collectDiscordVoiceParticipants(params: {
   states: APIVoiceState[];
   botUserId?: string;
@@ -128,7 +106,6 @@ export function collectDiscordVoiceParticipants(params: {
   for (const userId of params.additionalUserIds ?? []) {
     addAdditionalUserId(userId);
   }
-  const seenAdditionalUserIds = new Set<string>();
   let totalCount = 0;
   // GatewayVoiceStateCache owns one state per user, so this pass can count
   // without retaining an application-unbounded duplicate set.
@@ -138,20 +115,26 @@ export function collectDiscordVoiceParticipants(params: {
       continue;
     }
     totalCount += 1;
-    if (additionalUserIds.has(userId)) {
-      seenAdditionalUserIds.add(userId);
-    }
+    additionalUserIds.delete(userId);
     retainParticipantId(selectedUserIds, userId);
   }
   for (const additionalUserId of additionalUserIds) {
-    if (seenAdditionalUserIds.has(additionalUserId)) {
-      continue;
-    }
     // A speaking event proves presence even if the initial Gateway roster raced startup.
     totalCount += 1;
     retainParticipantId(selectedUserIds, additionalUserId);
   }
-  return buildParticipantRoster({ selectedUserIds, totalCount, states: params.states });
+  const selected = new Set(selectedUserIds);
+  const statesByUserId = new Map<string, APIVoiceState>();
+  for (const state of params.states) {
+    const userId = state.user_id?.trim();
+    if (userId && selected.has(userId)) {
+      statesByUserId.set(userId, state);
+    }
+  }
+  return {
+    participants: selectedUserIds.map((userId) => ({ userId, state: statesByUserId.get(userId) })),
+    totalCount,
+  };
 }
 
 export function countDiscordVoiceHumanParticipants(params: {
@@ -184,21 +167,18 @@ export function countDiscordVoiceHumanParticipants(params: {
   return count;
 }
 
-function formatDiscordVoiceParticipantLine(params: {
-  userId: string;
-  displayName?: string;
-}): string {
-  const label = normalizeLabel(params.displayName) ?? params.userId;
-  return `- user_id=${JSON.stringify(params.userId)} display_name=${JSON.stringify(label)}`;
+function formatDiscordVoiceParticipantLine(userId: string, displayName?: string): string {
+  const label = normalizeLabel(displayName) ?? userId;
+  return `- user_id=${JSON.stringify(userId)} display_name=${JSON.stringify(label)}`;
 }
 
 export function formatDiscordVoiceParticipantStateLine(
   participant: DiscordVoiceParticipantState,
 ): string {
-  return formatDiscordVoiceParticipantLine({
-    userId: participant.userId,
-    displayName: participant.state ? memberLabel(participant.state) : undefined,
-  });
+  return formatDiscordVoiceParticipantLine(
+    participant.userId,
+    participant.state ? memberLabel(participant.state) : undefined,
+  );
 }
 
 export function formatDiscordVoiceParticipantStateLines(
@@ -226,7 +206,7 @@ export async function resolveDiscordVoiceParticipantLines(params: {
           (await params.speakerContext.resolveContext(params.guildId, userId)).label,
         ) ??
         userId;
-      return formatDiscordVoiceParticipantLine({ userId, displayName: label });
+      return formatDiscordVoiceParticipantLine(userId, label);
     }),
   );
   if (params.roster.totalCount > participants.length) {
@@ -262,16 +242,7 @@ export async function resolveDiscordVoiceIngressContextWithParticipants(
       "Use this roster when asked who is currently present. It may change after this turn.",
     ].join("\n");
   }
-  const context = await resolveDiscordVoiceIngressContext({
-    readPolicy: params.readPolicy,
-    entry: params.entry,
-    userId: params.userId,
-    cfg: params.cfg,
-    discordConfig: params.discordConfig,
-    admissionAllowFrom: params.admissionAllowFrom,
-    client: params.client,
-    speakerContext: params.speakerContext,
-  });
+  const context = await resolveDiscordVoiceIngressContext(params);
   if (!context || context.isCurrent?.() === false) {
     return null;
   }

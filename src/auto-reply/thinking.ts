@@ -130,20 +130,6 @@ function resolveThinkingCatalogEntry(
   );
 }
 
-function normalizeProfileLevel(
-  level: ProviderThinkingProfile["levels"][number],
-): RankedThinkingLevelOption | undefined {
-  const normalized = normalizeThinkLevel(level.id);
-  if (!normalized) {
-    return undefined;
-  }
-  return {
-    id: normalized,
-    label: normalizeOptionalString(level.label) ?? normalized,
-    rank: Number.isFinite(level.rank) ? (level.rank as number) : THINKING_LEVEL_RANKS[normalized],
-  };
-}
-
 function normalizeThinkingProfile(
   profile: ProviderThinkingProfile,
   thinkingLevelMap: ThinkingCatalogEntry["thinkingLevelMap"],
@@ -151,12 +137,17 @@ function normalizeThinkingProfile(
 ): ResolvedThinkingProfile {
   const byId = new Map<ThinkLevel, RankedThinkingLevelOption>();
   for (const raw of profile.levels) {
-    const level = normalizeProfileLevel(raw);
-    if (
-      level &&
-      (level.id === "adaptive" || level.id === "ultra" || thinkingLevelMap?.[level.id] !== null)
-    ) {
-      byId.set(level.id, level);
+    const id = normalizeThinkLevel(raw.id);
+    if (!id) {
+      continue;
+    }
+    const level = {
+      id,
+      label: normalizeOptionalString(raw.label) ?? id,
+      rank: Number.isFinite(raw.rank) ? (raw.rank as number) : THINKING_LEVEL_RANKS[id],
+    };
+    if (id === "adaptive" || id === "ultra" || thinkingLevelMap?.[id] !== null) {
+      byId.set(id, level);
     }
   }
   const levels = [...byId.values()].toSorted((a, b) => a.rank - b.rank);
@@ -379,8 +370,7 @@ export function formatThinkingLevels(
   catalog?: ThinkingCatalogEntry[],
   agentRuntime?: string | null,
 ): string {
-  const profile = resolveThinkingProfile({ provider, model, catalog, agentRuntime });
-  return profile.levels.map(({ label }) => label).join(separator);
+  return listThinkingLevelLabels(provider, model, catalog, agentRuntime).join(separator);
 }
 
 /** Resolve the default thinking level for a provider/model pair. */

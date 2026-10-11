@@ -10,6 +10,7 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { captureGatewayDeviceRevocation } from "../device-revocation.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
@@ -34,7 +35,10 @@ describe("chat admission authority", () => {
     "keeps caller authority current through admission callbacks (revoked: $revokeInCallback, scoped: $scoped)",
     async ({ revokeInCallback, scoped }) => {
       const fixture = await createBrowserFollowupFixture();
-      const request = normalizeChatSendRequest({ params: fixture.params, client: fixture.client });
+      const request = await normalizeChatSendRequest({
+        params: fixture.params,
+        client: fixture.client,
+      });
       if (!request.ok) {
         throw new Error(request.error);
       }
@@ -97,7 +101,10 @@ describe("chat admission authority", () => {
     const fixture = await createBrowserFollowupFixture();
     const sessions: Array<ReturnType<typeof qualifyChatSendSession>> = [];
     const prepare = async () => {
-      const request = normalizeChatSendRequest({ params: fixture.params, client: fixture.client });
+      const request = await normalizeChatSendRequest({
+        params: fixture.params,
+        client: fixture.client,
+      });
       if (!request.ok) {
         throw new Error(request.error);
       }
@@ -135,7 +142,8 @@ describe("chat admission authority", () => {
           const reservation = fixture.context.dedupe.get(pendingKey);
           if (reservation && !closing) {
             reservedIdentity = reservation.requestIdentity;
-            closing = closeOpenClawAgentDatabasesAsync();
+            // The revoker is independent of the admission's writer custody.
+            closing = runInDetachedAsyncContext(closeOpenClawAgentDatabasesAsync);
           }
           return value;
         });
@@ -191,7 +199,10 @@ describe("chat admission authority", () => {
 
   it("retains callback custody after its real worker reader is revoked", async () => {
     const fixture = await createBrowserFollowupFixture();
-    const request = normalizeChatSendRequest({ params: fixture.params, client: fixture.client });
+    const request = await normalizeChatSendRequest({
+      params: fixture.params,
+      client: fixture.client,
+    });
     if (!request.ok) {
       throw new Error(request.error);
     }
@@ -237,7 +248,7 @@ describe("chat admission authority", () => {
       // Only the admission's borrowed custody survives the initiating request.
       root.release();
       caller.release();
-      closing = closeOpenClawAgentDatabasesAsync();
+      closing = runInDetachedAsyncContext(closeOpenClawAgentDatabasesAsync);
       entered.resolve();
       await finishCallback.promise;
       return true;
@@ -322,7 +333,10 @@ describe("chat admission authority", () => {
       identityId: member.authenticatedUserProfile!.profileId,
       addedBy: "another-profile",
     });
-    const normalized = normalizeChatSendRequest({ params: fixture.params, client: fixture.client });
+    const normalized = await normalizeChatSendRequest({
+      params: fixture.params,
+      client: fixture.client,
+    });
     if (!normalized.ok) {
       throw new Error(normalized.error);
     }

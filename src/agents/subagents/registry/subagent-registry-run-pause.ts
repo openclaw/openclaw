@@ -234,16 +234,14 @@ export function markSubagentRunPausedAfterYield(params: {
     delete entry.archiveAtMs;
     mutated = true;
   }
-  if (entry.endedReason !== undefined) {
-    entry.endedReason = undefined;
-    mutated = true;
+  for (const key of ["endedReason", "cleanupCompletedAt"] as const) {
+    if (entry[key] !== undefined) {
+      entry[key] = undefined;
+      mutated = true;
+    }
   }
   if (entry.cleanupHandled === true) {
     entry.cleanupHandled = false;
-    mutated = true;
-  }
-  if (entry.cleanupCompletedAt !== undefined) {
-    entry.cleanupCompletedAt = undefined;
     mutated = true;
   }
   if (entry.delivery !== undefined) {

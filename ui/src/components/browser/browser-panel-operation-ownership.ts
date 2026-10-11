@@ -1,5 +1,5 @@
-import type { ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { PanelLifecycleController } from "../solid-panel-controller.ts";
 import {
   bindBrowserRequestClient,
   type BrowserRequestClient,
@@ -9,7 +9,10 @@ import {
 } from "./browser-client.ts";
 import type { BrowserRoute, BrowserTabTarget } from "./browser-target.ts";
 
-export interface BrowserPanelControllerHost extends ReactiveControllerHost {
+export interface BrowserPanelControllerHost {
+  addController(controller: PanelLifecycleController): void;
+  removeController(controller: PanelLifecycleController): void;
+  requestUpdate(): void;
   readonly client: GatewayBrowserClient | null;
   readonly sessionKey: string;
   readonly sessionTabs?: readonly BrowserTabTarget[];
@@ -46,8 +49,6 @@ export class BrowserPanelOperationOwnership {
     sessionKey: string;
   };
   private requestedMutation = 0;
-  private requestedSnapshot = 0;
-  private acceptedSnapshot = 0;
   private requestedCapture = 0;
   private requestedInspection = 0;
   private capturePending = false;
@@ -262,12 +263,10 @@ export class BrowserPanelOperationOwnership {
     const invocation: BrowserPanelInvocation = {
       client,
       epoch: this.lifecycleEpoch,
-      id: ++this.requestedSnapshot,
+      id: mutationId,
       mutationId,
       isCurrent: () =>
-        this.isLive(invocation.epoch, client) &&
-        invocation.id === this.requestedSnapshot &&
-        mutationId === this.requestedMutation,
+        this.isLive(invocation.epoch, client) && mutationId === this.requestedMutation,
     };
     return invocation;
   }
@@ -279,12 +278,11 @@ export class BrowserPanelOperationOwnership {
   ): boolean {
     if (
       !this.isLive(invocation.epoch, invocation.client) ||
-      invocation.id < this.acceptedSnapshot ||
       (!invocation.isCurrent() && snapshotTargetId !== currentTargetId)
     ) {
       return false;
     }
-    this.acceptedSnapshot = invocation.id;
+    // Same-tab refreshes are best effort; input still checks the live document at dispatch.
     return true;
   }
 

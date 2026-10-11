@@ -77,6 +77,7 @@ function proof(supported: boolean): NodeWorkerSupervisorNodeProof {
       capacity: { total: 1, available: 1 },
       environmentSession: 1,
       capturedExecPolicy: true,
+      promptContext: 1,
       ...(supported ? { nativeInference: 1 as const } : {}),
     },
     commands: ["system.run"],

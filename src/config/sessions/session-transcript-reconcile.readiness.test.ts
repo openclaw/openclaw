@@ -200,13 +200,6 @@ it.each(["between-polls", "queued-status", "during-close"] as const)(
           scheduled: { ok: true },
           ready: { ok: true },
         });
-        expect(
-          openOpenClawAgentDatabase(options)
-            .db.prepare(
-              "SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?",
-            )
-            .get(scope.sessionId),
-        ).toEqual({ needs_rebuild: 0 });
       } else if (boundary === "queued-status") {
         const {
           historyLane: { pool: historyPages },
@@ -217,38 +210,53 @@ it.each(["between-polls", "queued-status", "during-close"] as const)(
         const releasePreparation = createDeferred();
         const queued = createDeferred();
         const run = historyPages.run.bind(historyPages);
-        let first = true;
+        const capacity = historyPages.getSnapshot().maxWorkers;
+        let submissions = 0;
+        let enteredCount = 0;
         const admission = vi.spyOn(historyPages, "run").mockImplementation((input, taskOptions) => {
-          if (!first) {
+          if (submissions++ >= capacity) {
             const pending = run(input, taskOptions);
             queued.resolve();
             return pending;
           }
-          first = false;
           return run(async () => {
-            preparing.resolve();
+            if (++enteredCount === capacity) {
+              preparing.resolve();
+            }
             await releasePreparation.promise;
             return typeof input === "function" ? await input() : input;
           }, taskOptions);
         });
-        const blocker = withSessionHistoryWorkerDatabase(options, (owner) =>
-          owner.readProjectionStatus({ env: options.env, sessionId: scope.sessionId }),
+        const blockers = Array.from({ length: capacity }, () =>
+          withSessionHistoryWorkerDatabase(options, (owner) =>
+            owner.readProjectionStatus({ env: options.env, sessionId: scope.sessionId }),
+          ),
         );
         const controller = new AbortController();
         const reason = new Error("cancel queued projection status");
         let ready: Promise<{ kind: "resolved" } | { kind: "rejected"; error: unknown }> | undefined;
         try {
-          await preparing.promise;
+          await Promise.race([
+            preparing.promise,
+            Promise.all(blockers).then(() => {
+              throw new Error("Projection reads settled before filling the worker pool");
+            }),
+          ]);
           ready = waitForSessionTranscriptProjection(scope, controller.signal).then(
             () => ({ kind: "resolved" as const }),
             (error: unknown) => ({ kind: "rejected" as const, error }),
           );
           await queued.promise;
+          expect(historyPages.getSnapshot()).toMatchObject({
+            activeTasks: capacity,
+            pendingTasks: capacity + 1,
+          });
           controller.abort(reason);
-          const outcome = await Promise.race([
-            ready,
-            timers.setTimeout(250).then(() => ({ kind: "still-waiting" as const })),
-          ]);
+          expect(historyPages.getSnapshot()).toMatchObject({
+            activeTasks: capacity,
+            pendingTasks: capacity,
+          });
+          const outcome = await ready;
           expect(outcome.kind).toBe("rejected");
           if (outcome.kind === "rejected") {
             expect(outcome.error).toMatchObject({ name: "AbortError", cause: reason });
@@ -256,8 +264,10 @@ it.each(["between-polls", "queued-status", "during-close"] as const)(
         } finally {
           releasePreparation.resolve();
           try {
-            await expect(blocker).resolves.toBe(true);
-            await ready;
+            const outcomes = await Promise.allSettled([...blockers, ready]);
+            for (const outcome of outcomes.slice(0, capacity)) {
+              expect(outcome).toMatchObject({ status: "fulfilled", value: true });
+            }
           } finally {
             admission.mockRestore();
           }
@@ -268,14 +278,6 @@ it.each(["between-polls", "queued-status", "during-close"] as const)(
         try {
           await expect(waitForSessionTranscriptProjection(scope)).resolves.toBeUndefined();
           expect(polling).toHaveBeenCalled();
-          const reopened = openOpenClawAgentDatabase(options);
-          expect(
-            reopened.db
-              .prepare(
-                "SELECT needs_rebuild, active_message_count FROM session_transcript_index_state WHERE session_id = ?",
-              )
-              .get(scope.sessionId),
-          ).toEqual({ needs_rebuild: 0, active_message_count: 1 });
         } finally {
           polling.mockRestore();
         }

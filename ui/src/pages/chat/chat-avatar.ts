@@ -391,7 +391,7 @@ export async function refreshSenderAgentAvatars(
       return [id, snapshot ? snapshot.url : (previousAvatars?.get(id) ?? null)];
     }),
   );
-  // Leases and identity TTL refresh independently; unchanged URLs keep settled rows memoized.
+  // Identity invalidation and image leases refresh independently; unchanged URLs keep rows memoized.
   if (
     avatars.size !== (previousAvatars?.size ?? 0) ||
     [...avatars].some(([id, url]) => previousAvatars?.get(id) !== url)

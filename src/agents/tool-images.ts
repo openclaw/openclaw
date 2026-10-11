@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { formatByteSize, resolveIntegerOption } from "@openclaw/normalization-core";
 import { toErrorObject } from "../infra/errors.js";
+import { LruCache } from "../infra/lru-cache.js";
 import type { ImageContent } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -30,14 +32,19 @@ type ToolImageSanitizationOptions = ImageSanitizationLimits & {
 
 // Anthropic Messages API rejects oversized images; sanitize here so replayed
 // tool outputs do not break later turns or silent channel replies.
-const MAX_IMAGE_DIMENSION_PX = DEFAULT_IMAGE_MAX_DIMENSION_PX;
-const MAX_IMAGE_BYTES = DEFAULT_IMAGE_MAX_BYTES;
 // Hard cap on decoded input bytes before Buffer.from/resizer allocation. A
 // conservative limit well below demonstrated OOM thresholds, leaving headroom
 // for canonicalization, decode, and image-processing allocations while still
 // permitting legitimate tool-output images.
 const MAX_IMAGE_INPUT_BYTES = 10 * 1024 * 1024;
 const log = createSubsystemLogger("agents/tool-images");
+// Replay re-sanitizes persisted images every attempt without rewriting them. A decoded
+// outcome depends only on the bytes and limits, so content-addressed entries never go
+// stale; byte-bounded LRU eviction is their only lifecycle. `null` means verified as-is.
+const verifiedImageOutcomes = new LruCache<string | null>(4096, {
+  maxBytes: 16 * 1024 * 1024,
+  sizeOf: (replacement) => 128 + (replacement?.length ?? 0),
+});
 
 function isImageTypeBlock(block: unknown): block is Record<string, unknown> & { type: "image" } {
   return (
@@ -135,14 +142,16 @@ function inferImageFileName(params: {
   return undefined;
 }
 
-async function verifyImageDecodability(buffer: Buffer): Promise<void> {
+async function verifyImageDecodability(buffer: Buffer): Promise<boolean> {
   try {
     // Rastermill probes only headers; discard a tiny encode to verify full decodability.
     await resizeToJpeg({ buffer, maxSide: 1, quality: 1, withoutEnlargement: true });
+    return true;
   } catch (err) {
     if (!isImageProcessorUnavailableError(err)) {
       throw err;
     }
+    return false;
   }
 }
 
@@ -158,6 +167,16 @@ async function resizeImageBase64IfNeeded(params: {
   base64: string;
   mimeType: string;
 }> {
+  // Only callers sanitizing persisted bytes verify them, and only those bytes repeat.
+  const cacheKey = params.verifyDecodability
+    ? `${createHash("sha256").update(params.base64).digest("base64url")}:${params.maxDimensionPx}:${params.maxBytes}`
+    : undefined;
+  const cached = cacheKey === undefined ? undefined : verifiedImageOutcomes.get(cacheKey);
+  if (cached !== undefined) {
+    return cached === null
+      ? { base64: params.base64, mimeType: params.mimeType }
+      : { base64: cached, mimeType: "image/jpeg" };
+  }
   const buf = Buffer.from(params.base64, "base64");
   const meta = readImageMetadataFromHeader(buf) ?? (await getImageMetadata(buf));
   const width = meta?.width;
@@ -167,8 +186,9 @@ async function resizeImageBase64IfNeeded(params: {
   const overDimensions =
     hasDimensions && (width > params.maxDimensionPx || height > params.maxDimensionPx);
   if (imageWithinLimits(buf, meta, params.maxDimensionPx, params.maxBytes)) {
-    if (params.verifyDecodability) {
-      await verifyImageDecodability(buf);
+    // An unavailable backend passes images through unverified; never record that.
+    if (cacheKey !== undefined && (await verifyImageDecodability(buf))) {
+      verifiedImageOutcomes.set(cacheKey, null);
     }
     return {
       base64: params.base64,
@@ -230,10 +250,11 @@ async function resizeImageBase64IfNeeded(params: {
             byteReductionPct,
           },
         );
-        return {
-          base64: out.toString("base64"),
-          mimeType: "image/jpeg",
-        };
+        const base64 = out.toString("base64");
+        if (cacheKey !== undefined) {
+          verifiedImageOutcomes.set(cacheKey, base64);
+        }
+        return { base64, mimeType: "image/jpeg" };
       }
     }
   }
@@ -260,10 +281,10 @@ export async function sanitizeContentBlocksImages(
   label: string,
   opts: ToolImageSanitizationOptions = {},
 ): Promise<ToolContentBlock[]> {
-  const maxDimensionPx = resolveIntegerOption(opts.maxDimensionPx, MAX_IMAGE_DIMENSION_PX, {
+  const maxDimensionPx = resolveIntegerOption(opts.maxDimensionPx, DEFAULT_IMAGE_MAX_DIMENSION_PX, {
     min: 1,
   });
-  const maxBytes = resolveIntegerOption(opts.maxBytes, MAX_IMAGE_BYTES, { min: 1 });
+  const maxBytes = resolveIntegerOption(opts.maxBytes, DEFAULT_IMAGE_MAX_BYTES, { min: 1 });
   const out: ToolContentBlock[] = [];
   const omit = (reason: string) => out.push({ type: "text", text: `[${label}] ${reason}` });
   for (const block of blocks) {
@@ -328,7 +349,7 @@ export async function sanitizeContentBlocksImages(
 export async function sanitizeImageBlocks(
   images: ImageContent[],
   label: string,
-  opts: ImageSanitizationLimits = {},
+  opts: ToolImageSanitizationOptions = {},
 ): Promise<{ images: ImageContent[]; dropped: number }> {
   if (images.length === 0) {
     return { images, dropped: 0 };

@@ -11,11 +11,12 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import type {
   SqliteSessionGenerationClaim,
+  SqliteSessionGenerationComparison,
   SqliteSessionGenerationWindow,
 } from "./session-accessor.sqlite-generation.types.js";
 import { readSessionInputArtifactRows } from "./session-accessor.sqlite-pending-inputs-repair.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import { createTranscriptIdentityInserter } from "./session-accessor.sqlite-transcript-store.js";
+import { createTranscriptIdentityInserter } from "./session-accessor.sqlite-transcript-identity.js";
 import {
   assertSessionTranscriptHot,
   readSessionColdTranscript,
@@ -92,6 +93,31 @@ export function readSqliteSessionGenerationClaim(
   database: Pick<OpenClawAgentDatabase, "db">,
   window: SqliteSessionGenerationWindow,
 ): SqliteSessionGenerationClaim {
+  return readSqliteSessionGenerationFacts(database, window, true);
+}
+
+export function readSqliteSessionGenerationComparison(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  window: SqliteSessionGenerationWindow,
+): SqliteSessionGenerationComparison {
+  return readSqliteSessionGenerationFacts(database, window, false);
+}
+
+function readSqliteSessionGenerationFacts(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  window: SqliteSessionGenerationWindow,
+  custody: true,
+): SqliteSessionGenerationClaim;
+function readSqliteSessionGenerationFacts(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  window: SqliteSessionGenerationWindow,
+  custody: false,
+): SqliteSessionGenerationComparison;
+function readSqliteSessionGenerationFacts(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  window: SqliteSessionGenerationWindow,
+  custody: boolean,
+): SqliteSessionGenerationComparison | SqliteSessionGenerationClaim {
   const rows = readSqliteSessionGenerationRows(database, window.session_id);
   const coldArchive = readSessionColdTranscript(database.db, window.session_id);
   const fingerprint = createHash("sha256")
@@ -165,15 +191,17 @@ export function readSqliteSessionGenerationClaim(
     ).rows,
     (row) => ["conversation", row.role, row.conversation_id, row.route_context_json],
   );
-  const inputs = readSessionInputArtifactRows(database, window.session_id);
-  hashRows("pendingInputs", inputs.pendingInputs);
-  hashRows("inputCompletions", inputs.inputCompletions);
-  return {
+  if (custody) {
+    const inputs = readSessionInputArtifactRows(database, window.session_id);
+    hashRows("pendingInputs", inputs.pendingInputs);
+    hashRows("inputCompletions", inputs.inputCompletions);
+  }
+  const comparison = {
     window,
     coldArchive,
-    fingerprint: fingerprint.digest("hex"),
     contentFingerprint: contentFingerprint.digest("hex"),
   };
+  return custody ? { ...comparison, fingerprint: fingerprint.digest("hex") } : comparison;
 }
 
 export function rehomeSqliteSessionGenerationWindow(

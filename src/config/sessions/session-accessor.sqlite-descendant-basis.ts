@@ -10,6 +10,7 @@ import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 
 /** Compare fresh durable facts after the host grants its live deletion authority. */
 export function assertSessionSubagentRunsCurrent(
@@ -41,16 +42,20 @@ export function assertSessionSubagentRunsCurrent(
   };
   assertSource();
   const matches = withExistingOpenClawStateDatabaseCurrentReadOnly(
-    (database) =>
-      runSqliteDeferredTransactionSync(
-        database.db,
-        () =>
-          (!params.descendantRunBasis ||
-            subagentRunsDurableBasisMatches(database, params.descendantRunBasis)) &&
-          (!params.maintenanceRunBasis ||
-            subagentMaintenanceDurableBasisMatches(database, params.maintenanceRunBasis)),
-        { databaseLabel: pathname, operationLabel: "session.subagent-commit-facts" },
-      ),
+    (database) => {
+      const compare = () =>
+        (!params.descendantRunBasis ||
+          subagentRunsDurableBasisMatches(database, params.descendantRunBasis)) &&
+        (!params.maintenanceRunBasis ||
+          subagentMaintenanceDurableBasisMatches(database, params.maintenanceRunBasis));
+      // Maintenance is one statement; descendant reads already own their composite snapshot.
+      return params.descendantRunBasis && params.maintenanceRunBasis
+        ? runSqliteDeferredTransactionSync(database.db, compare, {
+            databaseLabel: pathname,
+            operationLabel: "session.subagent-commit-facts",
+          })
+        : compare();
+    },
     { path: pathname, env },
   );
   assertSource();
@@ -58,6 +63,9 @@ export function assertSessionSubagentRunsCurrent(
     matches !== true &&
     !(matches === undefined && bases.every((basis) => basis.digest === null))
   ) {
-    throw new Error("Session subagent facts changed before commit");
+    if (params.descendantRunBasis) {
+      throw new Error("Session subagent facts changed before commit");
+    }
+    throw new SqliteSessionMutationConflictError("session maintenance");
   }
 }

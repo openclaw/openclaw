@@ -6,6 +6,7 @@ import { openRootFile } from "../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { retryAsync } from "../infra/retry.js";
 import { getAgentWorkspaceAccess } from "./workspace-access.js";
+import type { WorkspaceBootstrapFile } from "./workspace-bootstrap-policy.js";
 import {
   MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
   readWorkspaceBootstrapFile,
@@ -35,11 +36,21 @@ function workspaceFileIdentity(stat: syncFs.Stats, canonicalPath: string): strin
   return `${canonicalPath}|${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
 }
 
-export function setWorkspaceFileSourceIdentity(
-  file: object,
-  sourceIdentity: WorkspaceFileSourceIdentity,
-): void {
-  workspaceFileSourceIdentities.set(file, sourceIdentity);
+export function createLoadedWorkspaceBootstrapFile(
+  name: WorkspaceBootstrapFile["name"],
+  filePath: string,
+  loaded: Extract<WorkspaceGuardedReadResult, { ok: true }>,
+  personalUser?: true,
+): WorkspaceBootstrapFile {
+  const file: WorkspaceBootstrapFile = {
+    name,
+    path: filePath,
+    content: loaded.content,
+    missing: false,
+    ...(personalUser ? { personalUser } : {}),
+  };
+  workspaceFileSourceIdentities.set(file, loaded.sourceIdentity);
+  return file;
 }
 
 /** Remote source recorded by the successful read, unavailable on hook-created copies. */
@@ -146,14 +157,9 @@ export async function readWorkspaceFileWithGuards(params: {
         const sourceIdentity = [opened.path, opened.stat, identity] as const;
         const cached =
           params.useCache === false ? undefined : readWorkspaceFileCache(opened.path, identity);
-        if (cached !== undefined) {
-          syncFs.closeSync(opened.fd);
-          return { ok: true, content: cached, sourceIdentity };
-        }
-
         try {
-          const content = await readWorkspaceBootstrapFile(opened.fd);
-          if (params.useCache !== false) {
+          const content = cached ?? (await readWorkspaceBootstrapFile(opened.fd));
+          if (cached === undefined && params.useCache !== false) {
             writeWorkspaceFileCache({ filePath: opened.path, content, identity });
           }
           return { ok: true, content, sourceIdentity };

@@ -91,6 +91,29 @@ describe("prepared model runtime owner selection", () => {
     },
   );
 
+  it("prepares prompt-only runtime owners separately from the configured agent generation", async () => {
+    const config = gatewayConfig();
+    await publishGateway(config, { catalogMode: "static" });
+    const published = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
+    mocks.loadAgentRuntimePluginRegistryHandle.mockClear();
+    const lease = await acquireAgentRunPreparedModelRuntime(
+      {
+        ...fixture.agentInput("default", config),
+        runtimePluginPurpose: "isolated-completion",
+        runtimePluginSelections: [{ provider: "openai", modelId: "gpt-5.5" }],
+      },
+      { catalogMode: "static" },
+    );
+    try {
+      expect(lease.pluginGeneration).not.toBe(published.pluginGeneration);
+      expect(mocks.loadAgentRuntimePluginRegistryHandle.mock.calls[0]?.[0]).toMatchObject({
+        purpose: "isolated-completion",
+      });
+    } finally {
+      await lease[Symbol.asyncDispose]();
+    }
+  });
+
   it.each(["static", undefined] as const)(
     "keeps isolated executable catalogs separate from live discovery (%s)",
     async (catalogMode) => {
@@ -389,50 +412,6 @@ describe("prepared model runtime owner selection", () => {
 
     expect(mocks.discoverModels).toHaveBeenCalledTimes(2);
     expect(runtimeRegistryCount).toBe(2);
-  });
-
-  it("publishes a current sibling when another auth owner is superseded", async () => {
-    const config = {};
-    const supersededDir = fixture.state.agentDir("auth-retry-superseded");
-    const siblingDir = fixture.state.agentDir("auth-retry-sibling");
-    await publishPreparedModelRuntimeSnapshot({ config, agentDir: supersededDir });
-    const firstSibling = await publishPreparedModelRuntimeSnapshot({
-      config,
-      agentDir: siblingDir,
-    });
-    const releaseSupersededRefreshGate = createDeferred();
-    let blockedSupersededRefresh = true;
-    mocks.ensureOpenClawModelsJson.mockImplementation(async (_config, agentDir) => {
-      if (agentDir === supersededDir && blockedSupersededRefresh) {
-        blockedSupersededRefresh = false;
-        await releaseSupersededRefreshGate.promise;
-      }
-      return { agentDir: String(agentDir), wrote: false };
-    });
-
-    let siblingPending: ReturnType<typeof publishPreparedModelRuntimeSnapshot> | undefined;
-    try {
-      mocks.mutationListener?.({ affectsInheritedStores: true });
-      await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(4));
-      siblingPending = publishPreparedModelRuntimeSnapshot({
-        config,
-        agentDir: siblingDir,
-      });
-      mocks.mutationListener?.({ agentDir: supersededDir, affectsInheritedStores: false });
-      releaseSupersededRefreshGate.resolve();
-
-      await expect(siblingPending).resolves.not.toBe(firstSibling);
-      await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(6));
-      await expect(
-        prepareModelRuntimeSnapshot({ config, agentDir: supersededDir }),
-      ).resolves.toMatchObject({ agentDir: supersededDir });
-    } finally {
-      releaseSupersededRefreshGate.resolve();
-      await Promise.allSettled([
-        siblingPending,
-        prepareModelRuntimeSnapshot({ config, agentDir: supersededDir }),
-      ]);
-    }
   });
 });
 

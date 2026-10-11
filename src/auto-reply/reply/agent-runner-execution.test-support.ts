@@ -284,30 +284,25 @@ vi.mock("./agent-runner-utils.js", async () => ({
     state.productionBuildEmbeddedRunExecutionParams
       ? state.productionBuildEmbeddedRunExecutionParams(params)
       : {
-          embeddedContext: {
-            ...params.run,
-            messageProvider: params.replyRoute?.originatingChannel,
-            messageTo: params.replyRoute?.originatingTo,
-            agentAccountId:
-              params.replyRoute?.originatingAccountId ??
-              params.sessionCtx.AccountId ??
-              params.run.agentAccountId,
-            chatType:
-              params.replyRoute?.originatingChatType ??
-              params.sessionCtx.ChatType ??
-              params.run.chatType,
-          },
-          senderContext: {},
-          runBaseParams: {
-            runId: params.runId,
-            provider: params.provider,
-            model: params.model,
-            thinkLevel: params.run.thinkLevel,
-            authProfileId:
-              params.provider === params.run.provider ? params.run.authProfileId : undefined,
-            authProfileIdSource:
-              params.provider === params.run.provider ? params.run.authProfileIdSource : undefined,
-          },
+          ...params.run,
+          messageProvider: params.replyRoute?.originatingChannel,
+          messageTo: params.replyRoute?.originatingTo,
+          agentAccountId:
+            params.replyRoute?.originatingAccountId ??
+            params.sessionCtx.AccountId ??
+            params.run.agentAccountId,
+          chatType:
+            params.replyRoute?.originatingChatType ??
+            params.sessionCtx.ChatType ??
+            params.run.chatType,
+          runId: params.runId,
+          provider: params.provider,
+          model: params.model,
+          thinkLevel: params.run.thinkLevel,
+          authProfileId:
+            params.provider === params.run.provider ? params.run.authProfileId : undefined,
+          authProfileIdSource:
+            params.provider === params.run.provider ? params.run.authProfileIdSource : undefined,
         },
   resolveQueuedReplyRuntimeConfig: <T>(config: T) => config,
   resolveModelFallbackOptions: vi.fn(
@@ -331,7 +326,8 @@ vi.mock("./reply-delivery.js", () => ({
     state.createBlockReplyDeliveryHandlerMock(params),
 }));
 
-vi.mock("./reply-media-paths.runtime.js", () => ({
+vi.mock("./reply-media-paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reply-media-paths.js")>()),
   createReplyMediaContext: () => ({
     normalizePayload: (payload: unknown) => payload,
   }),

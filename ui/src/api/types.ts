@@ -183,15 +183,7 @@ export type GatewaySessionRow = Omit<GatewayWireSessionRow, "archivedBy" | "upda
 export type SessionsListResult = SessionsListResultBase<
   GatewayWireSessionsDefaults,
   GatewaySessionRow
-> & {
-  /**
-   * Rows the Gateway returned for this window before UI row overlays removed
-   * any; absent on raw Gateway results. totalCount keeps describing the
-   * server's membership, so a completeness check needs the server's own row
-   * count to tell a locally hidden row from a window that is really short.
-   */
-  serverRowCount?: number;
-};
+>;
 
 export type SessionsPatchResult = SessionsPatchResultBase<{
   sessionId: string;

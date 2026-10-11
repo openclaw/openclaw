@@ -351,9 +351,10 @@ suite.define(() => {
 
       await page.keyboard.press("Escape");
       const abort = await gateway.waitForRequest("chat.abort");
-      const interrupted = pane.locator(".agent-chat__run-status--interrupted");
+      const interrupted = pane.locator(".chat-bubble [role=status]", { hasText: "Interrupted" });
       await interrupted.waitFor({ state: "visible" });
       expect(await interrupted.textContent()).toContain("Interrupted");
+      expect(await pane.getByLabel("Run status: Interrupted").count()).toBe(0);
       await expect
         .poll(() => pane.locator(".agent-chat__run-status-announcement").textContent())
         .toBe("Interrupted");

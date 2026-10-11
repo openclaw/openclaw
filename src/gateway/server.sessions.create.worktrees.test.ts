@@ -4,13 +4,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, test, vi } from "vitest";
+import { captureMethodCall } from "../../test/helpers/capture-method-call.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   findLiveRegistryWorktreeByOwner,
   getRegistryWorktree,
   listRegistryWorktrees,
-} from "../agents/worktrees/registry.js";
-import { managedWorktrees } from "../agents/worktrees/service.js";
+} from "../agents/worktrees/registry.test-support.js";
+import { managedWorktrees, ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { isSessionLifecycleMutationActive } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -133,19 +134,21 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
   const { storePath } = await createSessionStoreDir();
   const key = "agent:main:dashboard:worktree-rollback";
   const adminClient = { connect: { scopes: ["operator.admin"] } } as never;
-  const originalRollback = managedWorktrees.rollbackPreparation.bind(managedWorktrees);
+  const originalRollback = captureMethodCall("rollbackPreparation")(
+    ManagedWorktreeService.prototype,
+  );
   let failedWorktreeId: string | undefined;
   let successorWorktreeId: string | undefined;
   const { promise: rollbackGate, resolve: releaseRollback } = createDeferredCore();
   const { promise: rollbackStarted, resolve: markRollbackStarted } = createDeferredCore();
   const rollbackSpy = vi
-    .spyOn(managedWorktrees, "rollbackPreparation")
-    .mockImplementation(async (record, withRollback) => {
+    .spyOn(ManagedWorktreeService.prototype, "rollbackPreparation")
+    .mockImplementation(async function (this: ManagedWorktreeService, record, withRollback) {
       failedWorktreeId = record.id;
       markRollbackStarted();
       expect(isSessionLifecycleMutationActive(storePath, [key])).toBe(true);
       await rollbackGate;
-      await originalRollback(record, withRollback);
+      await originalRollback(this, record, withRollback);
     });
   try {
     const failedPromise = directSessionReq(
@@ -284,19 +287,21 @@ test.each([
       entered.resolve();
       await proceed.promise;
     };
-    const create = managedWorktrees.createWithOutcome.bind(managedWorktrees);
-    const createEmpty = managedWorktrees.createEmptyWithOutcome.bind(managedWorktrees);
+    const create = captureMethodCall("createWithOutcome")(ManagedWorktreeService.prototype);
+    const createEmpty = captureMethodCall("createEmptyWithOutcome")(
+      ManagedWorktreeService.prototype,
+    );
     const createSpy = vi
-      .spyOn(managedWorktrees, "createWithOutcome")
-      .mockImplementationOnce(async (params) => {
+      .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
+      .mockImplementationOnce(async function (this: ManagedWorktreeService, params) {
         await beforeAllocation();
-        return await create(params);
+        return await create(this, params);
       });
     const createEmptySpy = vi
-      .spyOn(managedWorktrees, "createEmptyWithOutcome")
-      .mockImplementationOnce(async (params) => {
+      .spyOn(ManagedWorktreeService.prototype, "createEmptyWithOutcome")
+      .mockImplementationOnce(async function (this: ManagedWorktreeService, params) {
         await beforeAllocation();
-        return await createEmpty(params);
+        return await createEmpty(this, params);
       });
     const client = soloClient();
     client.connect.scopes = ["operator.admin"];
@@ -376,12 +381,12 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
   await execFileAsync("git", ["-C", workspace, "branch", "selected-base"]);
   testState.agentConfig = { workspace };
   const { dir, storePath } = await createSessionStoreDir();
-  const originalCreate = managedWorktrees.createWithOutcome.bind(managedWorktrees);
+  const originalCreate = captureMethodCall("createWithOutcome")(ManagedWorktreeService.prototype);
   const createSpy = vi
-    .spyOn(managedWorktrees, "createWithOutcome")
-    .mockImplementation(async (params) => {
+    .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
+    .mockImplementation(async function (this: ManagedWorktreeService, params) {
       expect(isSessionLifecycleMutationActive(storePath, [params.ownerId])).toBe(true);
-      return await originalCreate(params);
+      return await originalCreate(this, params);
     });
   let sessionKey: string | undefined;
   try {

@@ -295,8 +295,8 @@ export function renderMattermostModelsPickerView(params: {
     };
   }
 
-  const totalPages = Math.max(1, Math.ceil(models.length / MODELS_PAGE_SIZE));
-  const page = Math.max(1, Math.min(normalizePage(params.page), totalPages));
+  const totalPages = Math.ceil(models.length / MODELS_PAGE_SIZE);
+  const page = Math.min(normalizePage(params.page), totalPages);
   const start = (page - 1) * MODELS_PAGE_SIZE;
   const rows: MattermostInteractiveButtonInput[][] = models
     .slice(start, start + MODELS_PAGE_SIZE)

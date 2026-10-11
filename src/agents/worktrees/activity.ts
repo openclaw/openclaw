@@ -10,16 +10,34 @@ import { readRegistryWorktreeForMutation, requireActiveWorktreeRecord } from "./
 import { assertWorktreeRemovalAvailable, updateRegistryWorktree } from "./registry.js";
 import { withWorktreeRunEnd } from "./run-end-lifecycle.js";
 import { withGitLockTransition } from "./run-lease.js";
-import type { ManagedWorktreeRecord } from "./types.js";
+import type { ManagedWorktreeRecord, WorktreeMutationGuard } from "./types.js";
 
 export async function acquireManagedWorktree(
   env: NodeJS.ProcessEnv,
   id: string,
   now: () => number,
+  params: WorktreeMutationGuard = {},
 ): Promise<ManagedWorktreeRecord> {
+  const assertCurrent = () => {
+    params.signal?.throwIfAborted();
+    params.commitGuard?.();
+    assertWorktreeRemovalAvailable(env, id);
+  };
   return withWorktreeRunEnd(env, () =>
     withWorktreeMutationLease(
-      { env, id, commitGuard: () => assertWorktreeRemovalAvailable(env, id) },
+      {
+        ...params,
+        env,
+        id,
+        commitGuard: assertCurrent,
+        workerAuthority: params.workerAuthority && {
+          ...params.workerAuthority,
+          assertCurrent: () => {
+            params.workerAuthority?.assertCurrent?.();
+            assertCurrent();
+          },
+        },
+      },
       (guard) =>
         // A run cannot adopt this lock until activity publication or its rollback settles.
         withGitLockTransition(id, async () => {
@@ -31,7 +49,10 @@ export async function acquireManagedWorktree(
             signal: guard.signal,
             beforeRun: guard.commitGuard,
           });
-          const acquired = await lockWorktreeForProcess(record, { beforeRun: guard.commitGuard });
+          const acquired = await lockWorktreeForProcess(record, {
+            signal: guard.signal,
+            beforeRun: guard.commitGuard,
+          });
           try {
             guard.commitGuard();
             const lastActiveAt = now();
@@ -42,7 +63,10 @@ export async function acquireManagedWorktree(
               {
                 workerAuthority: {
                   ...guard.workerAuthority,
-                  predicates: [{ kind: "binding", record }],
+                  predicates: [
+                    ...(guard.workerAuthority.predicates ?? []),
+                    { kind: "binding", record },
+                  ],
                 },
               },
             );

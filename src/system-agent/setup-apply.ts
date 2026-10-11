@@ -513,16 +513,12 @@ export async function applySystemAgentSetup(
       const { updateExecApprovals } = await import("../infra/exec-approvals.js");
       beforePersistentApply?.();
       await updateExecApprovals({
-        update: (approvals) =>
-          approvals.agents?.openclaw
-            ? null
-            : {
-                ...approvals,
-                agents: {
-                  ...approvals.agents,
-                  openclaw: { security: "full", ask: "off" },
-                },
-              },
+        assertCurrent: beforePersistentApply,
+        update: {
+          kind: "ensure-agent",
+          agentId: "openclaw",
+          policy: { security: "full", ask: "off" },
+        },
       });
     },
     (error) =>

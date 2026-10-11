@@ -6,7 +6,10 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { FailoverReason } from "../agents/failover/signal.js";
 import type { ProgressContinuationCapability } from "../channels/progress-continuation.js";
-import type { HarnessCompletionRecovery } from "../config/sessions/restart-recovery-types.js";
+import type {
+  HarnessCompletionRecovery,
+  RestartRecoveryTerminalDeliveryEvidence,
+} from "../config/sessions/restart-recovery-types.js";
 import type { ReplyToMode } from "../config/types.base.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
 import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
@@ -220,6 +223,16 @@ export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayl
 /** WeakMap-backed metadata attached to payload objects without changing wire shape. */
 export type SessionWriterDeliveryAuthority = {
   agentId?: string;
+  /** Current facts from the original process-owned actor, never a replacement. */
+  readCurrentSession?: () =>
+    | {
+        sessionId: string;
+        lifecycleRevision?: string;
+        activeWriterRunId?: string;
+        restartRecoveryHarnessCompletion?: HarnessCompletionRecovery;
+        restartRecoveryTerminalDeliveryEvidence?: RestartRecoveryTerminalDeliveryEvidence[];
+      }
+    | undefined;
   /** Captured admitted completion authority, retained by the durable queue. */
   harnessCompletion?: HarnessCompletionRecovery;
   expectedLifecycleRevision?: string;
@@ -313,9 +326,9 @@ export type ReplyPayloadMetadata = {
   independentDeliveryIntentId?: string;
   /**
    * A message-tool reply to the active internal UI source. The final payload is
-   * still the live delivery vehicle; this mirror makes the reply durable for
-   * chat.history and page reloads without turning the internal UI into an
-   * outbound channel.
+   * the live delivery vehicle unless transcriptOwner identifies an already
+   * committed reply delivered through session.message/history. The mirror
+   * makes replies durable without turning the internal UI into an outbound channel.
    */
   sourceReplyTranscriptMirror?: {
     sessionKey: string;

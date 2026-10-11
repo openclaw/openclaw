@@ -7,11 +7,8 @@ import { uploadsEnabled } from "../../../lib/uploads.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { useSingleAttachmentPicker } from "./chat-attachment-picker-policy.ts";
 import { appendChatAttachmentFiles } from "./chat-attachments.ts";
-import "./chat-camera-capture.ts";
+import "./chat-camera-capture.tsx";
 
-const CHAT_ATTACHMENT_ACCEPT =
-  "image/*,audio/*,video/*,application/pdf,text/*,.csv,.json,.md,.txt,.zip," +
-  ".doc,.docx,.xls,.xlsx,.ppt,.pptx";
 function clickComposerInput(target: HTMLElement, selector: string) {
   target.closest("details")?.removeAttribute("open");
   target
@@ -34,6 +31,11 @@ export function renderChatAttachmentInputs(props: ChatAttachmentControlsProps) {
   if (!uploadsEnabled(props.uploadConfig)) {
     return nothing;
   }
+  const openInput = (kind: "camera" | "photo") => (source: HTMLElement) => {
+    if (!props.disabled) {
+      clickComposerInput(source, `.agent-chat__${kind}-input`);
+    }
+  };
   return html`
     <openclaw-chat-camera-capture
       .disabled=${Boolean(props.disabled) || props.cameraActive === false}
@@ -43,22 +45,14 @@ export function renderChatAttachmentInputs(props: ChatAttachmentControlsProps) {
           appendChatAttachmentFiles([file], props);
         }
       }}
-      .onNativeCapture=${(source: HTMLElement) => {
-        if (!props.disabled) {
-          clickComposerInput(source, ".agent-chat__camera-input");
-        }
-      }}
-      .onUpload=${(source: HTMLElement) => {
-        if (!props.disabled) {
-          clickComposerInput(source, ".agent-chat__photo-input");
-        }
-      }}
+      .onNativeCapture=${openInput("camera")}
+      .onUpload=${openInput("photo")}
     ></openclaw-chat-camera-capture>
     ${(["file", "photo", "camera"] as const).map(
       (kind) => html`
         <input
           type="file"
-          accept=${kind === "file" ? CHAT_ATTACHMENT_ACCEPT : "image/*"}
+          accept=${kind === "file" ? nothing : "image/*"}
           ?multiple=${kind !== "camera"}
           capture=${kind === "camera" ? "environment" : nothing}
           class=${`agent-chat__${kind}-input`}
@@ -116,15 +110,14 @@ export function renderChatAttachmentMenuTrigger(
 }
 
 export function renderChatAttachmentMenuOptions() {
-  const options = [
-    { value: "camera", icon: icons.camera, label: t("chat.composer.takePhoto") },
-    ...(useSingleAttachmentPicker()
-      ? [{ value: "file", icon: icons.paperclip, label: t("chat.composer.attach") }]
-      : [
-          { value: "photo", icon: icons.image, label: t("chat.composer.attachPhoto") },
-          { value: "file", icon: icons.paperclip, label: t("chat.composer.attachFileOption") },
-        ]),
-  ];
+  // The single native picker already offers capture; keep its attachment entry exclusive.
+  const options = useSingleAttachmentPicker()
+    ? [{ value: "file", icon: icons.paperclip, label: t("chat.composer.attach") }]
+    : [
+        { value: "camera", icon: icons.camera, label: t("chat.composer.takePhoto") },
+        { value: "photo", icon: icons.image, label: t("chat.composer.attachPhoto") },
+        { value: "file", icon: icons.paperclip, label: t("chat.composer.attachFileOption") },
+      ];
   return options.map(
     ({ value, icon, label }) => html`
       <wa-dropdown-item class="agent-chat__attach-menu-option" value=${value}>

@@ -108,7 +108,11 @@ export async function streamSessionTranscriptHydration(
             await flush();
           }
           const endOfEvent = data.byteLength < SLICE_BYTES;
-          frames.push({ data, endOfEvent });
+          frames.push({
+            data,
+            endOfEvent,
+            ...(request.includeEventJson && endOfEvent ? { seq: row.seq } : {}),
+          });
           bytes += data.byteLength;
           if (bytes >= CHUNK_BYTES || frames.length >= CHUNK_FRAMES) {
             await flush();
