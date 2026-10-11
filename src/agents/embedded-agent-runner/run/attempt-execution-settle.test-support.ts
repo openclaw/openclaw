@@ -127,7 +127,6 @@ export function createFixture(mocks: {
     cache: {},
     history: {
       contextEnginePromptAuthority: "assembled",
-      contextEngineAssemblySucceeded: true,
       unwindowedContextEngineMessagesForPrecheck: [{ role: "user", content: "history" }],
     },
     isProbeSession: false,

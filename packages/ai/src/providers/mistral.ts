@@ -329,7 +329,7 @@ async function consumeChatStream(
   const blocks = output.content;
   const blockIndex = () => blocks.length - 1;
   type ToolBlock = {
-    block: ToolCall & { partialJson?: string };
+    block: ToolCall;
     contentIndex: number;
     preview: ToolArgumentPreviewSchedule;
     explicitIds: Set<string>;

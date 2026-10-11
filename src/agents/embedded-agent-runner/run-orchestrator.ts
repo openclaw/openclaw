@@ -503,7 +503,7 @@ async function runEmbeddedAgentForSession(
               }
 
               assistantErrorTranscript ??=
-                params.assistantErrorTranscript ?? createAssistantErrorTranscript(params);
+                params.assistantErrorTranscript ?? createAssistantErrorTranscript();
               terminal ??=
                 (params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd)
                   ? undefined
@@ -671,7 +671,7 @@ async function runEmbeddedAgentForSession(
         } finally {
           // Error transcript and terminal publication belong to the logical run, not each generation.
           if (ownsAssistantErrorTranscript) {
-            await assistantErrorTranscript?.settle(failed && !params.abortSignal?.aborted);
+            assistantErrorTranscript?.settle(failed && !params.abortSignal?.aborted);
           }
         }
         refresh.mergeTerminalReceipt(result);

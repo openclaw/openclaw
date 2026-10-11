@@ -50,6 +50,7 @@ import {
   getActiveSecretsRuntimeSnapshotRevisionState,
   graftActiveSecretsRuntimeAuthState,
   getPreparedSecretsRuntimeSnapshotRefreshContext,
+  prepareSecretsRuntimeDisplaySnapshot,
   prepareSecretsRuntimeSnapshotRestoreState,
   setPreparedSecretsRuntimeSnapshotRefreshContext,
   type PreparedSecretsRuntimeSnapshot,
@@ -122,6 +123,25 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
 }): Promise<PreparedSecretsRuntimeSnapshot> {
   const runtimeEnv = mergeSecretsRuntimeEnv(params.env);
+  const displaySnapshot =
+    !params.assignmentConfig &&
+    params.includeConfigRefs !== false &&
+    !params.agentDirs &&
+    params.explicitAgentDirs === undefined &&
+    !params.loadAuthStore &&
+    !params.loadablePluginOrigins &&
+    !params.forceColdRefKeys?.size
+      ? prepareSecretsRuntimeDisplaySnapshot({
+          config: params.config,
+          env: runtimeEnv,
+          includeAuthStoreRefs: params.includeAuthStoreRefs ?? true,
+          manifestRegistry:
+            params.manifestRegistry ?? params.pluginMetadataSnapshot?.manifestRegistry,
+        })
+      : null;
+  if (displaySnapshot) {
+    return displaySnapshot;
+  }
   const authStoreCredentialsRevision = getRuntimeAuthProfileStoreCredentialsRevision();
   // Capture before store reads. A live mutation during preparation must advance past
   // this watermark, or activation could overwrite it with the prepared candidate.
@@ -380,6 +400,13 @@ async function prepareActiveSecretsRuntimeRefresh(
   snapshotConfig: OpenClawConfig = sourceConfig,
 ): Promise<PreparedSecretsRuntimeRefresh | null> {
   const expectedRevision = getActiveSecretsRuntimeSnapshotRevisionState();
+  const displaySnapshot =
+    snapshotConfig === sourceConfig
+      ? prepareSecretsRuntimeDisplaySnapshot({ config: sourceConfig, includeAuthStoreRefs })
+      : null;
+  if (displaySnapshot) {
+    return { snapshot: displaySnapshot, expectedRevision };
+  }
   const activeRefreshContext = getActiveSecretsRuntimeRefreshContext();
   const activeSnapshot = getActiveSecretsRuntimeSnapshotState();
   if (!activeSnapshot || !activeRefreshContext) {

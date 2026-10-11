@@ -1,6 +1,6 @@
 import { sleepWithAbort } from "@openclaw/retry";
 import type { BackgroundPreference } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
-import type { ConfigPatchAck } from "../lib/config/config-gateway-operations.ts";
+import type { ConfigPatchAck } from "../lib/config/config-draft-model.ts";
 import { showToast } from "../lib/toast.ts";
 import { readConfirmedPrefs, publishConfirmedPrefs } from "./server-prefs-confirmation.ts";
 import { foldSidebarEntriesBase, hasSidebarOrderIntent } from "./server-prefs-intent.ts";
@@ -222,7 +222,9 @@ export async function drainPendingPrefs(
                 }),
               {
                 waitForWritesResumed: true,
-                configWriteAck: (ack) => ack,
+                // The shared Settings draft adopts the receipt before its trailing save.
+                configWriteAck: (value) => value,
+                shouldRefresh: () => false,
                 canDispatch: () => {
                   if (
                     !isCurrent() ||

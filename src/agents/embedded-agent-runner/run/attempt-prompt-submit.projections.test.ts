@@ -9,7 +9,7 @@ import {
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
-import type { Context } from "../../../llm/types.js";
+import type { Context, ImageContent } from "../../../llm/types.js";
 import { finalizeRuntimePromptImages } from "../../../media/runtime-prompt-image-provenance.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import {
@@ -33,7 +33,7 @@ import { serializeCacheTtlToolResultProjections } from "../cache-ttl-checkpoint.
 import {
   clearEmbeddedSessionPromptStates,
   createToolResultPromptProjectionState,
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
   persistToolResultProjections,
 } from "../session-prompt-state.js";
 import { restoreCacheTtlToolResultProjections } from "../tool-result-truncation.js";
@@ -58,12 +58,13 @@ describe("durable model prompt projection at provider dispatch", () => {
   const sessionId = modelPromptSessionId;
   it.each([
     { projection: "unchanged prompt", steering: "midturn" },
+    { projection: "unchanged prompt", steering: "retry" },
     { projection: "prepend/append hooks", steering: "midturn" },
     { projection: "modelPrompt replacement", steering: "midturn" },
     { projection: "prepend/append hooks", steering: "initial" },
     { projection: "redacted prepend/append hooks", steering: "midturn" },
   ] as const)(
-    "preserves complete serialized prefixes across $steering steering, another turn, and reopen: $projection",
+    "preserves complete serialized prefixes across $steering continuation, another turn, and reopen: $projection",
     async ({ projection, steering }) => {
       await withOpenClawTestState({ label: "model-prompt-projection" }, async (state) => {
         const redactHook = projection === "redacted prepend/append hooks";
@@ -119,6 +120,12 @@ describe("durable model prompt projection at provider dispatch", () => {
           );
           if (steering === "midturn" && requests.length === 1) {
             first.session.agent.steer({ role: "user", content: "queued correction", timestamp: 2 });
+          }
+          if (steering === "retry" && requests.length === 1) {
+            return createAssistantResultStream({
+              ...createAssistant(model, [{ type: "text", text: "Partial answer" }], "error"),
+              errorMessage: "HTTP 503 interrupted response",
+            });
           }
           return createAssistantResultStream(
             createAssistant(model, [{ type: "text", text: `answer ${requests.length}` }]),
@@ -198,15 +205,45 @@ describe("durable model prompt projection at provider dispatch", () => {
                   : [],
               ),
             ),
-          ).toBe(`answer ${requests.length}`);
+          ).toBe(
+            steering === "retry" && requests.length === 1
+              ? "Partial answer"
+              : `answer ${requests.length}`,
+          );
+          return recorder;
         };
 
         if (steering === "initial") {
           first.session.agent.steer({ role: "user", content: "queued correction", timestamp: 2 });
         }
-        await submit(first, 1);
-        const firstTurnRequests = steering === "midturn" ? 2 : 1;
+        const firstRecorder = await submit(first, 1);
+        let firstTurnRequests = steering === "midturn" ? 2 : 1;
         expect(requests).toHaveLength(firstTurnRequests);
+        if (steering === "retry") {
+          await submitEmbeddedAttemptPrompt({
+            ...createBaseInput(),
+            attempt: { sessionId, userTurnTranscriptRecorder: firstRecorder },
+            activeSession: first.session,
+            transcriptPrompt: "original turn 1",
+            modelPrompt: "Changed prompt from the retry",
+            images: finalizeRuntimePromptImages([
+              {
+                image: {
+                  type: "image",
+                  data: createSolidPngBuffer(1, 1, { r: 200, g: 100, b: 50 }).toString("base64"),
+                  mimeType: "image/png",
+                } satisfies ImageContent,
+                factIndex: 0,
+              },
+            ]).images,
+            getUserTranscriptContexts: first.getUserTranscriptContexts,
+            withTranscriptWrite: (write) => withSessionManagerWrite(first.sessionManager, write),
+            promptActiveSession: (prompt, options) => first.session.prompt(prompt, options),
+          });
+          firstTurnRequests++;
+          expect(requests).toHaveLength(firstTurnRequests);
+          expect(JSON.stringify(requests.at(-1))).not.toContain("Changed prompt from the retry");
+        }
         await submit(first, 2);
         expect(requests).toHaveLength(firstTurnRequests + 1);
         first.session.dispose();
@@ -232,7 +269,9 @@ describe("durable model prompt projection at provider dispatch", () => {
         for (const turn of [1, 2, 3]) {
           expect(serialized).toContain(JSON.stringify(expectedProjection(turn)).slice(1, -1));
         }
-        expect(serialized).toContain("queued correction");
+        if (steering !== "retry") {
+          expect(serialized).toContain("queued correction");
+        }
         expect(serialized).not.toContain("modelPromptProjection");
 
         const users = (await readTranscriptMessages(target)).filter(
@@ -240,23 +279,21 @@ describe("durable model prompt projection at provider dispatch", () => {
         );
         expect(users.map((message) => message.content)).toEqual([
           "original turn 1",
-          "queued correction",
+          ...(steering === "retry" ? [] : ["queued correction"]),
           "original turn 2",
           "original turn 3",
         ]);
         for (const [index, turn] of [1, 2, 3].entries()) {
-          expect(users[index === 0 ? 0 : index + 1]).toMatchObject({
+          expect(users[steering === "retry" || index === 0 ? index : index + 1]).toMatchObject({
             idempotencyKey: `projection:${turn}:user`,
-            ...(projection === "unchanged prompt"
-              ? {}
-              : {
-                  __openclaw: {
-                    modelPromptProjection: { version: 1, text: expectedProjection(turn) },
-                  },
-                }),
+            __openclaw: {
+              modelPromptProjection: { version: 1, text: expectedProjection(turn) },
+            },
           });
         }
-        expect(users[1]).not.toHaveProperty("__openclaw.modelPromptProjection");
+        if (steering !== "retry") {
+          expect(users[1]).not.toHaveProperty("__openclaw.modelPromptProjection");
+        }
         if (withImage) {
           expect(users[0]).toHaveProperty("__openclaw.media", [
             expect.objectContaining({ path: imagePath, contentType: "image/png" }),
@@ -395,14 +432,10 @@ describe("durable model prompt projection at provider dispatch", () => {
         );
         expect(users).toHaveLength(1);
         expect(users[0]).toMatchObject({ content: original, idempotencyKey: "fallback:user" });
-        if (enriched) {
-          expect(users[0]).toHaveProperty("__openclaw.modelPromptProjection", {
-            version: 1,
-            text: firstProjection,
-          });
-        } else {
-          expect(users[0]).not.toHaveProperty("__openclaw.modelPromptProjection");
-        }
+        expect(users[0]).toHaveProperty("__openclaw.modelPromptProjection", {
+          version: 1,
+          text: firstProjection,
+        });
       });
     },
   );
@@ -647,7 +680,7 @@ describe("durable model prompt projection at provider dispatch", () => {
           );
         });
 
-        // The active turn sends the routed body; its provenance travels in runtime context.
+        // The first request keeps the same stored provenance envelope as replay.
         await submitEmbeddedAttemptPrompt({
           ...createBaseInput(),
           activeSession: session,
@@ -736,7 +769,8 @@ describe("tool-result projection persistence at dispatch", () => {
 
   it("writes one marker for unchanged requests and another for a new frozen batch", async () => {
     const { session: activeSession, sessionManager: manager } = await createTestSession();
-    const sessionPromptState = getEmbeddedSessionPromptState(toolProjectionSessionId);
+    using promptStateLease = retainEmbeddedSessionPromptState(toolProjectionSessionId);
+    const sessionPromptState = promptStateLease.state;
     const projectionState = sessionPromptState.toolResults;
     const requests: Context["messages"][] = [];
     activeSession.agent.streamFn = (model, context) => {
