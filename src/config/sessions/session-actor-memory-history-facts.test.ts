@@ -125,7 +125,7 @@ describe("memory actor history facts", () => {
     ).toMatchObject({
       status: "ok",
       branches: [
-        { leafEntryId: "new-answer", headline: "**New** branch", messageCount: 2, active: true },
+        { leafEntryId: "new-answer", headline: "New branch", messageCount: 2, active: true },
         { leafEntryId: "old-answer", headline: "Old branch", messageCount: 2, active: false },
       ],
     });
@@ -531,7 +531,7 @@ describe("memory actor history facts", () => {
       type: "session.history.anchors" as const,
       input: { sessionId, entryIds: ["user"], contextAuthority: true as const },
     };
-    await expect(storage.read(retiredWindow, authority)).rejects.toThrow("closed");
+    await expect(async () => storage.read(retiredWindow, authority)).rejects.toThrow("closed");
     const current = await acquire();
     expect(await current.storage!.read(retiredWindow, authority)).toMatchObject({
       anchors: [],
