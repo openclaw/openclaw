@@ -515,11 +515,9 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     rows,
     dirty,
     revisions,
-    advanceRevision: () => {
-      epoch++;
-    },
+    advanceRevision: () => epoch++,
     ensureMaterialized,
-    publishTranscript: transcriptUpdates.publish,
+    publishTranscript: (change) => transcriptUpdates.publish(change),
     invalidateMembership: membership.invalidate,
     mark,
     mutateGeneration: generations.mutate,
