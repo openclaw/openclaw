@@ -228,7 +228,7 @@ export function createGatewayAuxHandlers(
       return;
     }
     const observation = questionManager.observe(question.record.id);
-    void continuations.offer(question, async () => {
+    void continuations.offer(question, async (signal) => {
       let admissionOwed = false;
       try {
         const runtime = params.getQuestionRuntime?.();
@@ -243,10 +243,11 @@ export function createGatewayAuxHandlers(
           context,
           runtime,
           assertCurrent: assertQuestionOwnerCurrent,
+          signal,
         });
         if (receipt.status === "admission_owed") {
           admissionOwed = true;
-          return "admission_owed" as const;
+          return receipt;
         }
         if (receipt.status === "completion_owed" || receipt.status === "terminal_owed") {
           completionReceipts.offer(

@@ -3,6 +3,8 @@ import { matchesDurableQuestionDefinition } from "../config/sessions/session-que
 import type { DurableQuestion } from "../config/sessions/session-questions.types.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 
+export type QuestionAdmissionRetry = { status: "admission_owed"; retryAtMs?: number };
+
 /** Deduplicates one captured custody obligation while its execution/publication tail is owned. */
 export function createQuestionContinuationWork(params: {
   track: (run: () => Promise<void>) => Promise<void>;
@@ -14,7 +16,7 @@ export function createQuestionContinuationWork(params: {
   return {
     offer: (
       question: DurableQuestion,
-      run: () => Promise<void | "admission_owed">,
+      run: (signal: AbortSignal) => Promise<void | QuestionAdmissionRetry>,
     ): Promise<void> | undefined => {
       if (params.isClosing() || scheduler.signal.aborted) {
         return undefined;
@@ -39,14 +41,26 @@ export function createQuestionContinuationWork(params: {
       const retryId = `durable-question-admission:${randomUUID()}`;
       let retryDelayMs = 1_000;
       const attempt = async () => {
-        let retry = false;
+        let retry: void | QuestionAdmissionRetry = undefined;
         try {
           if (!params.isClosing() && !scheduler.signal.aborted) {
-            retry = (await run()) === "admission_owed";
+            retry = await run(scheduler.signal);
           }
         } finally {
-          if (retry && !params.isClosing() && !scheduler.signal.aborted) {
-            scheduler.schedule({ id: retryId, delayMs: retryDelayMs, run: attempt });
+          if (
+            retry &&
+            retry.status === "admission_owed" &&
+            !params.isClosing() &&
+            !scheduler.signal.aborted
+          ) {
+            const deadline = retry.retryAtMs;
+            scheduler.schedule({
+              id: retryId,
+              ...(deadline !== undefined && Number.isFinite(deadline) && deadline > scheduler.now()
+                ? { atMs: deadline }
+                : { delayMs: retryDelayMs }),
+              run: attempt,
+            });
             retryDelayMs = Math.min(retryDelayMs * 2, 30_000);
           } else {
             pending.delete(captured);

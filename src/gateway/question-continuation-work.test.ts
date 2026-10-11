@@ -131,7 +131,7 @@ it("joins a running retry on close and retains exact dedupe through its publicat
   let calls = 0;
   const run = async () => {
     if (++calls === 1) {
-      return "admission_owed" as const;
+      return { status: "admission_owed" } as const;
     }
     entered.resolve();
     await release.promise;

@@ -16,6 +16,7 @@ import { CommandLane } from "../process/lanes.js";
 import { prepareChannelOperatorAdmin } from "./channel-operator-authority.js";
 import { captureChannelOperatorRunAuthority } from "./operator-run-authority.js";
 import { restoreGatewayQuestionOperatorRecovery } from "./operator-run-recovery.js";
+import type { QuestionAdmissionRetry } from "./question-continuation-work.js";
 import type { GatewayInstanceRuntime } from "./server-instance-runtime.types.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
@@ -37,7 +38,7 @@ export type QuestionTerminalOwed = {
 export type QuestionReceiptOwed = QuestionCompletionOwed | QuestionTerminalOwed;
 
 export type QuestionContinuationReceipt =
-  | { status: "admission_owed"; questionId: string }
+  | (QuestionAdmissionRetry & { questionId: string })
   | QuestionReceiptOwed
   | { status: "settled"; questionId: string; runId: string }
   | { status: "interrupted"; questionId: string; runId: string }
@@ -50,6 +51,7 @@ export async function dispatchQuestionContinuation(params: {
   context: GatewayRequestContext;
   runtime: GatewayInstanceRuntime;
   assertCurrent: () => void;
+  signal?: AbortSignal;
 }): Promise<QuestionContinuationReceipt> {
   const { question, scope, context, runtime } = params;
   const questionId = question.record.id;
@@ -60,10 +62,24 @@ export async function dispatchQuestionContinuation(params: {
   const epoch = getAgentEventLifecycleGeneration();
   const assertCurrent = () => {
     params.assertCurrent();
+    params.signal?.throwIfAborted();
     if (!runtime.isAvailable() || getAgentEventLifecycleGeneration() !== epoch) {
       throw new Error("Durable question Gateway owner changed.");
     }
   };
+  // Recovery owns crash-loop quarantine. Keep custody owed until that owner allows admission.
+  assertCurrent();
+  let retryAtMs: number | undefined;
+  try {
+    retryAtMs = await runtime.recovery.prepareRestartRecovery(params.signal);
+  } catch {
+    assertCurrent();
+    return { status: "admission_owed", questionId };
+  }
+  assertCurrent();
+  if (retryAtMs !== undefined) {
+    return { status: "admission_owed", questionId, retryAtMs };
+  }
   let expectedQuestion = question;
   let executionCompleted = false;
   let claimed = false;

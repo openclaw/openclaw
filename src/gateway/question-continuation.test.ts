@@ -11,9 +11,11 @@ import type { InternalAgentTurnDispatchOptions } from "./agent-turn/internal-fac
 import { createQuestionCompletionReceipts } from "./question-completion-receipts.js";
 import { createQuestionContinuationWork } from "./question-continuation-work.js";
 import { dispatchQuestionContinuation } from "./question-continuation.js";
+import { createChannelAutostartRecovery } from "./server-channel-autostart-recovery.js";
 import type { GatewayInstanceRuntime } from "./server-instance-runtime.types.js";
 import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
+import { createMockGatewayRecoveryRuntime } from "./server-recovery-runtime.test-support.js";
 
 const state = vi.hoisted(() => ({
   operate: vi.fn(),
@@ -155,6 +157,7 @@ function fixture(saved = question()) {
       runtime: {
         isAvailable: () => true,
         createAgentTurnFacade: facade,
+        recovery: createMockGatewayRecoveryRuntime(),
       } as unknown as GatewayInstanceRuntime,
       assertCurrent: vi.fn(),
     },
@@ -163,6 +166,58 @@ function fixture(saved = question()) {
 
 describe("durable question continuation custody", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("retains the owed answer during native crash-loop quarantine and resumes at its owner deadline", async () => {
+    const f = fixture();
+    const clock = createGatewaySchedulerClock(Date.now());
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const tracked = new AsyncWorkScope();
+    const pausedUntilMs = clock.clock.now() + 60_000;
+    let suppression: object | null = {};
+    const prepare = createChannelAutostartRecovery({
+      getSuppression: () => suppression,
+      clearSuppression: () => {
+        suppression = null;
+      },
+      tryRecover: async () => (clock.clock.now() < pausedUntilMs ? pausedUntilMs : undefined),
+      signal: scheduler.signal,
+      startChannels: async () => {},
+    });
+    f.params.runtime.recovery = createMockGatewayRecoveryRuntime({
+      prepareRestartRecovery: prepare,
+    });
+    const work = createQuestionContinuationWork({
+      scheduler,
+      track: (run) => tracked.track(run),
+      isClosing: () => false,
+    });
+    const run = async (signal: AbortSignal) => {
+      const receipt = await dispatchQuestionContinuation({ ...f.params, signal });
+      return receipt.status === "admission_owed" ? receipt : undefined;
+    };
+    try {
+      await work.offer(f.saved, run);
+      expect(f.facade).not.toHaveBeenCalled();
+      expect(state.restore).not.toHaveBeenCalled();
+      expect(state.operate).not.toHaveBeenCalled();
+      expect(f.saved.continuation.status).toBe("owed");
+      expect(clock.armedAtMs).toBe(pausedUntilMs);
+      expect(work.offer(structuredClone(f.saved), run)).toBeUndefined();
+      await clock.advanceTo(pausedUntilMs - 1);
+      expect(f.dispatch).not.toHaveBeenCalled();
+      await clock.advanceTo(pausedUntilMs);
+      await tracked.drain();
+      expect(suppression).toBeNull();
+      expect(state.restore).toHaveBeenCalledTimes(1);
+      expect(f.dispatch).toHaveBeenCalledTimes(1);
+      expect(state.operate.mock.calls.filter(([, op]) => op.kind === "finish")).toHaveLength(1);
+    } finally {
+      work.beginClose();
+      await work.stop();
+      await tracked.drain();
+      await scheduler.stop();
+    }
+  });
 
   it("does not dispatch under a system principal when original authority cannot be restored", async () => {
     const f = fixture();
@@ -535,7 +590,7 @@ describe("pre-admission infrastructure recovery", () => {
       const run = vi.fn(async () => {
         try {
           const result = await dispatchQuestionContinuation(f.params);
-          return result.status === "admission_owed" ? ("admission_owed" as const) : undefined;
+          return result.status === "admission_owed" ? result : undefined;
         } catch (error) {
           if (!(error instanceof SessionQuestionCustodyRetiredError)) {
             throw error;
