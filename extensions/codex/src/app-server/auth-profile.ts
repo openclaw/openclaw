@@ -19,6 +19,7 @@ const PUBLIC_OPENAI_MODEL_PROVIDER = "openai";
 
 export const {
   resolveCodexAppServerAuthProfileId,
+  resolveCodexAppServerAuthProfileOrder,
   resolveCodexAppServerAuthProfileIdForAgent,
   resolveCodexAppServerAuthProfileStore,
 } = createCodexAuthProfileSelection({ ensureAuthProfileStore, resolveAuthProfileOrder });

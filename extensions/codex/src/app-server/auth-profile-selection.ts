@@ -38,6 +38,20 @@ export function createCodexAuthProfileSelection({
     })[0]?.trim();
   }
 
+  function resolveCodexAppServerAuthProfileOrder(params: {
+    store: ReturnType<typeof ensureAuthProfileStore>;
+    config?: AuthProfileOrderConfig;
+  }): string[] {
+    return resolveAuthProfileOrder({
+      cfg: params.config,
+      store: params.store,
+      provider: CODEX_APP_SERVER_AUTH_PROVIDER,
+    }).flatMap((profileId) => {
+      const trimmed = profileId.trim();
+      return trimmed ? [trimmed] : [];
+    });
+  }
+
   function resolveCodexAppServerAuthProfileIdForAgent(
     params: CodexAppServerAuthProfileLookup,
   ): string | undefined {
@@ -62,6 +76,7 @@ export function createCodexAuthProfileSelection({
   }
   return {
     resolveCodexAppServerAuthProfileId,
+    resolveCodexAppServerAuthProfileOrder,
     resolveCodexAppServerAuthProfileIdForAgent,
     resolveCodexAppServerAuthProfileStore,
   };
