@@ -3418,7 +3418,6 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     expect(resolveGatewayContext?.()).toBeUndefined();
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
 // These configurations own their Gateway after the shared server has closed.
 describe("OpenAI-compatible HTTP API (e2e) with independent Gateways", () => {
