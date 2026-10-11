@@ -1320,7 +1320,7 @@ def resolve_ios_release_plan!(release_version: nil, app_store_revision: nil, bui
     explicit_gateway = read_ios_version_metadata(release_version: release_version)[:version]
     if explicit_gateway != gateway_metadata[:version]
       UI.user_error!(
-        "Explicit iOS gateway version #{explicit_gateway} does not match canonical root version #{gateway_metadata[:version]}."
+        "Explicit iOS gateway version #{explicit_gateway} does not match the root package version #{gateway_metadata[:version]}."
       )
     end
   end
@@ -1374,7 +1374,7 @@ def resolve_ios_release_plan!(release_version: nil, app_store_revision: nil, bui
   unless status&.success?
     detail = stderr.to_s.strip
     detail = stdout.to_s.strip if detail.empty?
-    UI.user_error!("Unable to resolve deterministic iOS release plan: #{detail}")
+    UI.user_error!("Unable to calculate the iOS release plan: #{detail}")
   end
   plan = JSON.parse(stdout)
   if testflight_group
@@ -2027,7 +2027,7 @@ platform :ios do
     }
   end
 
-  desc "Print the deterministic App Store release plan without mutating remote state"
+  desc "Print the calculated App Store release plan without mutating remote state"
   lane :release_plan do |options|
     app_store_connect_api_key_config
     plan = resolve_ios_release_plan!(
@@ -2282,7 +2282,7 @@ platform :ios do
     end
   end
 
-  desc "Generate deterministic iOS screenshots for App Store metadata"
+  desc "Generate repeatable iOS screenshots for App Store metadata"
   lane :screenshots do |options|
     prepare_screenshot_project(options)
 
@@ -2382,7 +2382,7 @@ platform :ios do
     end
   end
 
-  desc "Generate deterministic Apple Watch screenshot for App Store metadata"
+  desc "Generate repeatable Apple Watch screenshot for App Store metadata"
   lane :watch_screenshot do |options|
     prepare_screenshot_project(options)
     capture_watch_screenshot { build_watch_screenshot_app }
