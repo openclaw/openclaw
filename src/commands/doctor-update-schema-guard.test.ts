@@ -403,7 +403,7 @@ it("refuses early unregistered WAL state and admits post-core repair after verif
       const before = files.map((file) => fs.readFileSync(file));
       const schemas = await prepareDoctorDatabasePreflight();
       await expect(guardUpdateDoctorSchemaUpgrade({ schemas })).rejects.toThrow(
-        "Missing recoverable canonical backup coverage",
+        "Missing recoverable database backup coverage",
       );
       expect(
         files.map((file) => fs.readFileSync(file)),
@@ -501,13 +501,13 @@ it("requires the captured agent path and owner to be verified canonical archive 
         archive.archivePath,
         agents.map((fact) => Object.assign({}, fact, { sourcePath: `${fact.sourcePath}.missing` })),
       ),
-    ).rejects.toThrow("lacks verified canonical SQLite coverage");
+    ).rejects.toThrow("lacks verified SQLite database coverage");
     await expect(
       backupVerify.verifyBackupArchive(
         archive.archivePath,
         agents.map((fact) => Object.assign({}, fact, { agentId: "another-agent" })),
       ),
-    ).rejects.toThrow("lacks verified canonical SQLite coverage");
+    ).rejects.toThrow("lacks verified SQLite database coverage");
     expect(fs.readFileSync(f.pathname)).toEqual(f.bytes);
   });
 });

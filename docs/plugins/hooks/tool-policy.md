@@ -37,7 +37,7 @@ contributions, and transcript persistence. Part of the [Plugin hooks](/plugins/h
 - optional `ctx.requester`, the host-derived requester that initiated the current
   message run. It can include `channel`, `accountId`, `senderId`,
   `senderIsOwner`, and provider-native `roleIds`. Missing fields are unproven,
-  not false assurances; fail closed when policy requires them.
+  not false assurances; deny the action if policy requires those fields.
 
 It can return:
 
@@ -244,7 +244,7 @@ plugin, so different plugins may reuse the same local id. Use this tier only
 for host-trusted gates such as workspace policy, budget enforcement, or
 reserved workflow safety.
 
-Trusted policies may set `matcher` to the same canonical tool-id list accepted
+Trusted policies may set `matcher` to the same standard tool-id list accepted
 by `before_tool_call`. Omit the matcher to retain match-all behavior.
 
 When trusted-policy approval completes inline, ordinary `before_tool_call`
@@ -291,7 +291,7 @@ It is an observation hook, so it cannot change what already happened:
 
 - Handlers run concurrently and their return values are ignored.
 - A thrown or timed-out handler is logged, and execution continues.
-- `matcher` accepts the same canonical tool-id list as `before_tool_call`.
+- `matcher` accepts the same standard tool-id list as `before_tool_call`.
 
 Both `result` and `error` are optional, so an event carrying neither is not
 evidence that the tool succeeded. A handler that infers success from the
@@ -301,7 +301,7 @@ carries for exec and bash-family tools is tracked separately in
 [#102961](https://github.com/openclaw/openclaw/issues/102961).
 
 Do not use this hook to enforce policy. As the
-[hook reference](/plugins/hooks/reference) puts it, use a fail-closed gate
+[hook reference](/plugins/hooks/reference) puts it, use a gate that blocks the operation on error
 rather than assuming an observation or delivery hook will reject the operation
 on failure.
 
