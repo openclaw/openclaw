@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import { existsSync } from "node:fs";
-import path from "node:path";
+import nodePath from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../../../src/plugin-sdk/test-helpers/import-fresh.js";
@@ -18,11 +18,11 @@ const shippedLocales = new Map(
     ),
   ),
 );
-const memoryDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.i18n");
+const memoryDir = nodePath.resolve(nodePath.dirname(fileURLToPath(import.meta.url)), "../.i18n");
 // Swedish is registered before the post-merge locale refresh creates its memory.
 const sourceOnlyLocales = new Map(
   [...shippedLocales].filter(
-    ([locale]) => locale === "sv" && !existsSync(path.join(memoryDir, `${locale}.tm.jsonl`)),
+    ([locale]) => locale === "sv" && !existsSync(nodePath.join(memoryDir, `${locale}.tm.jsonl`)),
   ),
 );
 const translatedLocales = new Map(
