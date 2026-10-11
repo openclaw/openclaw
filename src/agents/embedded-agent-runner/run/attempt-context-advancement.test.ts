@@ -301,7 +301,11 @@ describe("context advancement through embedded attempt guards", () => {
         includeBoundaryTimestamp: false,
         isRawModelRun: false,
         messages: session.messages,
-        prompt: { effectivePrompt: prompt, effectiveTranscriptPrompt: prompt },
+        prompt: {
+          effectivePrompt: prompt,
+          effectiveTranscriptPrompt: prompt,
+          routePromptBuildContextThroughRuntimeCarrier: false,
+        },
         replaceSessionMessages: (messages) => {
           session.agent.state.messages = messages;
         },

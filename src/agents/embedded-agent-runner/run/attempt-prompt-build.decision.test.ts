@@ -180,7 +180,10 @@ async function fixture(
     abortSignal: controller.signal,
     supportsTurnScopedToolRestrictions: true,
   };
-  const assemble = (overrides: Partial<EmbeddedRunAttemptParams> = {}) =>
+  const assemble = (
+    overrides: Partial<EmbeddedRunAttemptParams> = {},
+    assemblyOverrides: { appendOnlyRuntimeContext?: boolean } = {},
+  ) =>
     prepareEmbeddedAttemptPromptAssembly({
       attempt: { ...attempt, ...overrides },
       activeSession: session,
@@ -189,6 +192,7 @@ async function fixture(
       hookAgentId: agentId,
       diagnosticTrace: { traceId: "11111111111111111111111111111111" },
       isRawModelRun: false,
+      ...assemblyOverrides,
       sessionAgentId: agentId,
       runtimeModel: testModel.id,
       systemPromptText: "System",
@@ -444,4 +448,52 @@ describe("prompt assembly with registered Decision runtime", () => {
       expect(f.policy.current.callableToolNames).not.toContain("denied");
     },
   );
+});
+
+describe("prompt assembly hook prompt context", () => {
+  const hookPrepend = "<plugin-context>\nper-run memory nonce\n</plugin-context>";
+  const hookRunner = {
+    hasHooks: (hookName: string) => hookName === "before_prompt_build",
+    runBeforePromptBuild: async () => ({ prependContext: hookPrepend }),
+    hasAuthorizedPromptBuildHooks: () => false,
+  } as unknown as NonNullable<
+    Parameters<typeof prepareEmbeddedAttemptPromptAssembly>[0]["hookRunner"]
+  >;
+
+  it("keeps one-run hook prompt context out of the model prompt on append-only runtime-context models", async () => {
+    const f = await fixture(config(), "structured", "main", hookRunner);
+    const assembly = await f.assemble({}, { appendOnlyRuntimeContext: true });
+    expect(assembly.promptBuildPrependContext).toBe(hookPrepend);
+    // The transcript-identical prompt is what replays byte-for-byte on the next run.
+    expect(assembly.effectivePrompt).toBe("Hello");
+    expect(assembly.effectiveTranscriptPrompt).toBe("Hello");
+  });
+
+  it("publishes one carrier-routing decision for empty-transcript runtime turns", async () => {
+    const f = await fixture(config(), "structured", "main", hookRunner);
+    const assembly = await f.assemble(
+      { prompt: "secret runtime context", transcriptPrompt: "" },
+      { appendOnlyRuntimeContext: true },
+    );
+    // The empty transcript must not drop the routing decision: the runtime-only
+    // submission path is what delivers the stored carrier to the model.
+    expect(assembly.routePromptBuildContextThroughRuntimeCarrier).toBe(true);
+    expect(assembly.promptBuildPrependContext).toBe(hookPrepend);
+    expect(assembly.effectivePrompt).toBe("secret runtime context");
+    expect(assembly.effectiveTranscriptPrompt).toBe("");
+  });
+
+  it("keeps the legacy one-run prompt fold when append-only runtime context is off", async () => {
+    const f = await fixture(config(), "structured", "main", hookRunner);
+    const assembly = await f.assemble();
+    expect(assembly.effectivePrompt).toBe(`${hookPrepend}\n\nHello`);
+    expect(assembly.effectiveTranscriptPrompt).toBe("Hello");
+  });
+
+  it("keeps the legacy prompt fold for context-only turns on append-only models", async () => {
+    const f = await fixture(config(), "structured", "main", hookRunner);
+    const assembly = await f.assemble({ prompt: "   " }, { appendOnlyRuntimeContext: true });
+    // A blank prompt keeps the fold so the context alone still reaches the model.
+    expect(assembly.effectivePrompt.startsWith(hookPrepend)).toBe(true);
+  });
 });
