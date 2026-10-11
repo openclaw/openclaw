@@ -258,6 +258,10 @@ async function rpc(method: string, params: Record<string, unknown>) {
 }
 async function waitForDispatchEnd() {
   await getSessionWorkAdmissionRelease({ scope: storePath, identities: [canonicalKey, sessionId] });
+  // Admission release does not join the producer's remaining terminal writes.
+  // Settle them before the next parity cell revokes its source or replaces its row.
+  await requestExecution.waitForCompletion();
+  await lifecycleWrites.drain();
   expect(context.chatAbortControllers.size).toBe(0);
 }
 async function drainPublications() {
