@@ -235,16 +235,13 @@ candidates require stable/full evidence with soak and blocking performance.
 The embedded preflight enforces these requirements; no publication waiver can
 bypass them.
 
-Planning flags and the P tooling pin can change while saved checklist state is
-still `validated` with no run IDs and no retained `frv-request.json`. The helper
-reuses a saved publication tag only for the same P SHA. Once qualification is
-bound, keep the original flags and request; do not delete dispatch state to
-force a retry. A repaired P that descends from the saved one (trusted `main`
-moves forward) rebinds the same `--output-dir`: bound FRV/npm runs are kept, a
-new publication tag is derived for the new P, and the move is recorded in
-`toolingRebinds`. A rollback, an unrelated P, or an unobserved retained
-`frv-request.json` is refused. Use a separate `--output-dir` only for a
-deliberately new request.
+Planning flags can change while saved checklist state is still `validated` with
+no run IDs and no retained `frv-request.json`. The P tooling pin is not part of
+that identity: a repaired P resumes the same `--output-dir` at any phase, keeps
+bound FRV/npm runs, and gets its own publication tag; the helper reuses a saved
+tag only for the same P SHA. Once qualification is bound, keep the original
+flags and request; do not delete dispatch state to force a retry. Use a separate
+`--output-dir` only for a deliberately new request.
 If FRV was admitted without Windows, omit `--windows-node-tag` when consuming it
 and attach Windows afterward with `windows-node-release.yml`, or obtain new FRV
 evidence with Windows selected. A fresh checklist launch already admits the

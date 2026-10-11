@@ -155,11 +155,6 @@ async function withGithubApiTimeoutEnv<T>(value: string, fn: () => Promise<T>): 
   }
 }
 
-function omitToolingRebinds<T extends { toolingRebinds: unknown }>(state: T) {
-  const { toolingRebinds: _rebinds, ...legacy } = state;
-  return legacy;
-}
-
 describe("release candidate checklist", () => {
   it.each([
     {
@@ -258,7 +253,6 @@ describe("release candidate checklist", () => {
     workflowSha?: string;
     savedToolingTag?: string;
     savedToolingSha?: string;
-    savedToolingAncestor?: boolean;
     telegramRunId?: string;
     retainedHelperRequest?: boolean;
     sdkAcknowledgement?: string;
@@ -278,12 +272,11 @@ describe("release candidate checklist", () => {
       launch: "npm-only",
       retainedHelperRequest,
     })),
-    ...[false, true].map<QualificationCase>((savedToolingAncestor) => ({
+    {
       workflowSha: "b".repeat(40),
       savedToolingSha: "a".repeat(40),
       savedToolingTag: "release-publish/aaaaaaaaaaaa-100",
-      savedToolingAncestor,
-    })),
+    },
     { workflowSha: "b".repeat(40) },
     { workflowSha: "c".repeat(40) },
     { pin: "2026.7.4", expected: "warning" },
@@ -379,7 +372,6 @@ describe("release candidate checklist", () => {
       workflowSha,
       savedToolingTag,
       savedToolingSha,
-      savedToolingAncestor = false,
       telegramRunId,
       retainedHelperRequest,
       sdkAcknowledgement,
@@ -443,10 +435,6 @@ describe("release candidate checklist", () => {
         source.match(/^function savedPublishWorkflowRef\([\s\S]*?^\}/mu)?.[0] ?? "";
       const statePlanning =
         source.match(/^function canUpdateReleaseCandidateState\([\s\S]*?^\}/mu)?.[0] ?? "";
-      const toolingRebind =
-        source
-          .match(/^export function assertReleaseCandidateToolingRebind\([\s\S]*?^\}/mu)?.[0]
-          ?.replace(/^export /u, "") ?? "";
       const shellQuote = source.match(/^function shellQuote\([\s\S]*?^\}/mu)?.[0] ?? "";
       const log = vi.fn();
       const stages: string[] = [];
@@ -483,10 +471,7 @@ describe("release candidate checklist", () => {
             }
           : savedToolingTag
             ? {
-                // State files written before tooling rebinds existed have no rebind history.
-                ...omitToolingRebinds(
-                  buildReleaseCandidateState(options, { targetSha, toolingSha }),
-                ),
+                ...buildReleaseCandidateState(options, { targetSha, toolingSha }),
                 publishWorkflowRef: savedToolingTag,
                 toolingSha: savedToolingSha ?? toolingSha,
                 ...(launch === "npm-only" ? { fullReleaseRunId: "", npmPreflightRunId: "" } : {}),
@@ -579,7 +564,7 @@ describe("release candidate checklist", () => {
       const dispatches: string[][] = [];
       const completion = runInNewContext(
         stripNodeTypeScriptTypes(
-          `${android}\n${selectPublication}\n${statePlanning}\n${toolingRebind}\n${savedTagReader}\n${helperDispatch}\n${shellQuote}\n${main}\nmain();`,
+          `${android}\n${selectPublication}\n${statePlanning}\n${savedTagReader}\n${helperDispatch}\n${shellQuote}\n${main}\nmain();`,
         ),
         {
           process: {
@@ -601,8 +586,6 @@ describe("release candidate checklist", () => {
           gitRevParse: (_ref: string, root: string) =>
             root === targetRoot ? targetSha : toolingSha,
           fetchTrustedWorkflowSha: () => toolingSha,
-          gitIsAncestor: (ancestor: string, target: string) =>
-            savedToolingAncestor && ancestor === savedToolingSha && target === toolingSha,
           ensureReleasePublishToolingTag: ensureToolingTag,
           runReleaseToolingGh,
           // The protected publish tag is verified against live GitHub refs in production.
@@ -753,20 +736,6 @@ describe("release candidate checklist", () => {
         expect(stages).toEqual([]);
         return;
       }
-      if (
-        savedToolingSha &&
-        (launch === "npm-only" ? retainedHelperRequest : !savedToolingAncestor)
-      ) {
-        await expect(completion).rejects.toThrow(
-          launch === "npm-only"
-            ? "An unobserved Full Release Validation request is retained"
-            : "Tooling may only move forward from the saved commit",
-        );
-        expect(ensureToolingTag).not.toHaveBeenCalled();
-        expect(writeState).not.toHaveBeenCalled();
-        expect(stages).toEqual([]);
-        return;
-      }
       if (routingError || stopAtRegistry) {
         await expect(completion).rejects.toThrow(
           launch === "mismatch"
@@ -827,13 +796,13 @@ describe("release candidate checklist", () => {
         readFileSync(join(options.outputDir, "release-candidate-evidence.json"), "utf8"),
       );
       if (savedToolingSha) {
+        // Repaired tooling resumes the same state with its own publication tag.
         expect(options.publishWorkflowRef).toBe(publishWorkflowRef);
         expect(ensureToolingTag).toHaveBeenCalledOnce();
-        // Bound runs survive a forward repair; the move itself is recorded.
         expect(JSON.parse(readFileSync(statePath, "utf8"))).toMatchObject({
           toolingSha,
-          toolingRebinds: savedToolingAncestor ? [{ from: savedToolingSha, to: toolingSha }] : [],
-          ...(savedToolingAncestor ? { fullReleaseRunId: "111", npmPreflightRunId: "222" } : {}),
+          publishWorkflowRef,
+          ...(launch === "npm-only" ? {} : { fullReleaseRunId: savedState?.fullReleaseRunId }),
         });
       }
       if (telegramRunId) {
@@ -1329,67 +1298,35 @@ describe("release candidate checklist", () => {
     ).toThrow("state mismatch for fullReleaseRunId");
   });
 
-  it("rebinds qualified state only to descendant tooling and records the move", () => {
-    const options = parseArgs(["--tag", "v2026.9.1"]);
-    const [oldTooling, newTooling] = ["a".repeat(40), "b".repeat(40)];
-    // A version-2 state file written before rebinds were recorded.
-    const current = buildReleaseCandidateState(options, {
-      targetSha: "c".repeat(40),
-      toolingSha: oldTooling,
-    });
+  it("resumes bound state on repaired release tooling", () => {
+    const options = parseArgs(["--tag", "v2026.7.1-beta.4"]);
     const saved = {
-      ...omitToolingRebinds(current),
-      phase: "completed",
-      publishWorkflowRef: "release-publish/aaaaaaaaaaaa-100",
-      fullReleaseRunId: "111",
-      npmPreflightRunId: "222",
-    };
-    const expected = {
-      ...current,
-      toolingSha: newTooling,
-      publishWorkflowRef: "release-publish/bbbbbbbbbbbb-200",
-      fullReleaseRunId: "",
-      npmPreflightRunId: "",
-    };
-    const descends = (ancestor: string, target: string) =>
-      ancestor === oldTooling && target === newTooling;
-
-    expect(
-      reconcileReleaseCandidateState(
-        saved,
-        { ...expected, toolingSha: oldTooling, publishWorkflowRef: saved.publishWorkflowRef },
-        true,
-      ),
-    ).toMatchObject({ toolingSha: oldTooling, fullReleaseRunId: "111", toolingRebinds: [] });
-    const rebound = reconcileReleaseCandidateState(saved, expected, true, descends);
-    expect(rebound).toMatchObject({
-      toolingSha: newTooling,
-      publishWorkflowRef: "release-publish/bbbbbbbbbbbb-200",
-      fullReleaseRunId: "111",
-      npmPreflightRunId: "222",
-      toolingRebinds: [{ from: oldTooling, to: newTooling }],
-    });
-    // A restart on the rebound state resumes without recording another move.
-    expect(
-      reconcileReleaseCandidateState(structuredClone(rebound), expected, true, () => {
-        throw new Error("unexpected ancestry probe");
+      ...buildReleaseCandidateState(options, {
+        targetSha: "a".repeat(40),
+        toolingSha: "b".repeat(40),
       }),
-    ).toEqual(rebound);
+      publishWorkflowRef: "release-publish/bbbbbbbbbbbb-100",
+      fullReleaseRunId: "111",
+      npmPreflightRunId: "222",
+    };
+    const repaired = {
+      ...buildReleaseCandidateState(options, {
+        targetSha: "a".repeat(40),
+        toolingSha: "c".repeat(40),
+      }),
+      publishWorkflowRef: "release-publish/cccccccccccc-200",
+    };
+
+    expect(reconcileReleaseCandidateState(saved, repaired, true)).toMatchObject({
+      toolingSha: "c".repeat(40),
+      publishWorkflowRef: "release-publish/cccccccccccc-200",
+      fullReleaseRunId: "111",
+      npmPreflightRunId: "222",
+    });
     // Candidate-bound inputs stay frozen across a tooling repair.
     expect(() =>
-      reconcileReleaseCandidateState(
-        saved,
-        { ...expected, skipParallels: !saved.skipParallels },
-        false,
-        descends,
-      ),
+      reconcileReleaseCandidateState(saved, { ...repaired, skipParallels: !saved.skipParallels }),
     ).toThrow("state mismatch for skipParallels");
-    expect(() => reconcileReleaseCandidateState(saved, expected, false, () => false)).toThrow(
-      "Tooling may only move forward from the saved commit",
-    );
-    expect(() =>
-      reconcileReleaseCandidateState({ ...saved, fullReleaseRunId: "" }, expected, true, descends),
-    ).toThrow("An unobserved Full Release Validation request is retained");
   });
 
   it.each(["unbound", "retained request", "full run", "npm run", "later phase"])(

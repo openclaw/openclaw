@@ -118,13 +118,15 @@ const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/u;
 const RELEASE_CANDIDATE_STATE_VERSION = 2;
 const RELEASE_CANDIDATE_STATE_FILE = "release-candidate-state.json";
 const TRUSTED_TOOLING_SHA_ENV = "OPENCLAW_RELEASE_CANDIDATE_TRUSTED_TOOLING_SHA";
+// Release tooling (toolingSha and its publishWorkflowRef tag) is not candidate
+// identity: each run re-verifies the current tooling against trusted main, and
+// saved FRV/npm evidence is authenticated against its own producer run. Tooling
+// repaired mid-release can therefore resume the same state.
 const RELEASE_CANDIDATE_STATE_KEYS = [
   "repo",
   "tag",
   "targetSha",
-  "toolingSha",
   "workflowRef",
-  "publishWorkflowRef",
   "provider",
   "mode",
   "releaseProfile",
@@ -516,7 +518,6 @@ export function buildReleaseCandidateState(
     telegramProviderMode: options.telegramProviderMode,
     fullReleaseRunId: options.fullReleaseRunId,
     npmPreflightRunId: options.npmPreflightRunId,
-    toolingRebinds: [] as Array<{ from: string; to: string }>,
   };
 }
 
@@ -531,35 +532,10 @@ function canUpdateReleaseCandidateState(saved: JsonRecord, hasRetainedRequest: b
   );
 }
 
-/**
- * Bound state may follow repaired release tooling forward along trusted main.
- * FRV and npm preflight evidence is authenticated independently of this
- * coordinator, so only the tooling-bound publication tag is re-derived.
- */
-export function assertReleaseCandidateToolingRebind(
-  saved: JsonRecord,
-  toolingSha: string,
-  hasRetainedRequest: boolean,
-  isAncestor: (ancestor: string, target: string) => boolean,
-) {
-  const savedToolingSha = String(saved.toolingSha);
-  if (hasRetainedRequest && !saved.fullReleaseRunId) {
-    throw new Error(
-      `release candidate state mismatch for toolingSha: saved=${savedToolingSha} current=${toolingSha}. An unobserved Full Release Validation request is retained; finish it with the saved tooling before switching tooling.`,
-    );
-  }
-  if (!/^[a-f0-9]{40}$/u.test(savedToolingSha) || !isAncestor(savedToolingSha, toolingSha)) {
-    throw new Error(
-      `release candidate state mismatch for toolingSha: saved=${savedToolingSha} current=${toolingSha}. Tooling may only move forward from the saved commit; rerun with the saved tooling, or use a fresh --output-dir for a deliberately new request.`,
-    );
-  }
-}
-
 export function reconcileReleaseCandidateState(
   saved: unknown,
   expected: CandidateState,
   hasRetainedRequest = false,
-  isAncestor: (ancestor: string, target: string) => boolean = gitIsAncestor,
 ) {
   if (!saved) {
     return expected;
@@ -572,16 +548,8 @@ export function reconcileReleaseCandidateState(
   if (!canUpdate && (saved.publicationRoute ?? "normal") !== expected.publicationRoute) {
     throw new Error("release candidate state mismatch for publicationRoute");
   }
-  const rebindsTooling = !canUpdate && saved.toolingSha !== expected.toolingSha;
-  if (rebindsTooling) {
-    assertReleaseCandidateToolingRebind(saved, expected.toolingSha, hasRetainedRequest, isAncestor);
-  }
   for (const key of RELEASE_CANDIDATE_STATE_KEYS) {
     if (canUpdate && key !== "repo" && key !== "tag" && key !== "targetSha") {
-      continue;
-    }
-    // The publication tag names its tooling SHA; the caller re-verifies the new one.
-    if (rebindsTooling && (key === "toolingSha" || key === "publishWorkflowRef")) {
       continue;
     }
     if (!isDeepStrictEqual(saved[key], expected[key])) {
@@ -595,12 +563,8 @@ export function reconcileReleaseCandidateState(
       throw new Error(`release candidate state mismatch for ${key}`);
     }
   }
-  const savedRebinds = Array.isArray(saved.toolingRebinds) ? saved.toolingRebinds : [];
   return {
     ...expected,
-    toolingRebinds: rebindsTooling
-      ? [...savedRebinds, { from: String(saved.toolingSha), to: expected.toolingSha }]
-      : savedRebinds,
     phase: typeof saved.phase === "string" ? saved.phase : expected.phase,
     fullReleaseRunId:
       expected.fullReleaseRunId ||
@@ -951,28 +915,13 @@ export function assertReleaseCandidateTag(tag: string, targetSha: string, cwd: s
   }
 }
 
-function savedPublishWorkflowRef(
-  statePath: string,
-  toolingSha: string,
-  hasRetainedRequest: boolean,
-) {
+function savedPublishWorkflowRef(statePath: string, toolingSha: string) {
   if (!existsSync(statePath)) {
     return "";
   }
   const saved = readJson(statePath, "release candidate state");
   if (saved.version !== RELEASE_CANDIDATE_STATE_VERSION) {
     throw new Error("release candidate state has an unsupported schema");
-  }
-  if (saved.toolingSha !== toolingSha) {
-    if (!canUpdateReleaseCandidateState(saved, hasRetainedRequest)) {
-      assertReleaseCandidateToolingRebind(
-        saved,
-        toolingSha,
-        hasRetainedRequest,
-        (ancestor, target) => gitIsAncestor(ancestor, target, TOOLING_ROOT),
-      );
-    }
-    return "";
   }
   const tag = saved.publishWorkflowRef;
   return typeof tag === "string" &&
@@ -2149,10 +2098,10 @@ async function main() {
         `--workflow-sha ${options.workflowSha} does not match tooling checkout ${toolingSha}`,
       );
     }
-    // A resumed candidate keeps the exact tag it recorded; a newer tag at the
-    // same SHA must not fail state reconciliation. The identity check below
-    // still proves that saved tag resolves to this tooling SHA.
-    const savedTag = savedPublishWorkflowRef(statePath, toolingSha, hasRetainedRequest);
+    // A resumed candidate reuses the tag it recorded for this tooling SHA; a
+    // repaired tooling SHA gets its own tag. The identity check below proves
+    // the selected tag resolves to this tooling SHA.
+    const savedTag = savedPublishWorkflowRef(statePath, toolingSha);
     const ensured = savedTag
       ? { tag: savedTag, created: false }
       : ensureReleasePublishToolingTag({
@@ -2191,7 +2140,6 @@ async function main() {
     existsSync(statePath) ? readJson(statePath, "release candidate state") : undefined,
     expectedState,
     hasRetainedRequest,
-    (ancestor, target) => gitIsAncestor(ancestor, target, TOOLING_ROOT),
   );
   options.fullReleaseRunId = candidateState.fullReleaseRunId;
   options.npmPreflightRunId = candidateState.npmPreflightRunId;
