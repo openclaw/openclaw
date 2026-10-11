@@ -11,7 +11,10 @@ import { anchorFromNavigationEvent, composedParent } from "../lib/navigation-cli
 import { subscribeToSharedRequest } from "../lib/shared-request-subscription.ts";
 import "../styles/link-reader-hovercard.css";
 import { linkReaderErrorMessage } from "./link-reader-error.ts";
-import type { HovercardProperties, LinkReaderHovercardProvider } from "./link-reader-hovercard.ts";
+import type {
+  HovercardProperties,
+  LinkReaderHovercardProvider,
+} from "./link-reader-hovercard.types.ts";
 import { renderPagePreview, type PageActivation } from "./link-reader-page-preview.tsx";
 import { disposePreview } from "./link-reader-preview-root.ts";
 import {

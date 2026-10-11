@@ -1,25 +1,14 @@
 import { onCleanup } from "solid-js";
-import type {
-  ControlUiLinkReaderDescriptor,
-  ControlUiLinkReaderPreview,
-} from "../../../src/shared/control-ui-link-reader.js";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { ApplicationContext } from "../app/context.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../lit/solid-bridge.ts";
 import { HovercardOwner } from "./link-reader-hovercard-owner.ts";
+import type {
+  HovercardProperties,
+  HovercardMethods,
+  LinkReaderHovercardProvider as HovercardElement,
+} from "./link-reader-hovercard.types.ts";
 import { EMPTY_LINK_READERS, LINK_READER_HOVERCARD_PROVIDER_TAG } from "./link-reader-target.ts";
 
-export type HovercardProperties = {
-  client: GatewayBrowserClient | null;
-  agentId: string | undefined;
-  readers: readonly ControlUiLinkReaderDescriptor[];
-  previewSeeds: readonly ControlUiLinkReaderPreview[];
-  pagePreviewContext: ApplicationContext | undefined;
-  claimedReaders: readonly ControlUiLinkReaderDescriptor[];
-};
-
-type HovercardMethods = Pick<HovercardOwner, "activateFromBootstrap" | "prefetch">;
-export type LinkReaderHovercardProvider = SolidBridgeElement<HovercardProperties, HovercardMethods>;
+export type LinkReaderHovercardProvider = HovercardElement;
 
 const properties = {
   client: { default: null, attribute: false },
