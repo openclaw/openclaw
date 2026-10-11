@@ -35,7 +35,7 @@ it.each([
   },
   {
     surface: "session hovercard",
-    load: () => import("../components/session-hovercard.ts"),
+    load: () => import("../components/session-hovercard-solid.tsx"),
   },
   {
     surface: "identity",
