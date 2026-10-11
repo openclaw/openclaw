@@ -419,9 +419,12 @@ export type PluginRuntimeCore = {
           orderBy?: "updatedAt";
         },
       ) => Promise<RuntimeSessionStoreEntrySummary | undefined>;
+      /** @deprecated Use listSessionEntriesAsync for metadata reads. Removed at the next Plugin SDK major. */
       listSessionEntries: (
         params?: RuntimeSessionStoreListParams,
       ) => RuntimeSessionStoreEntrySummary[];
+      /** Read-only metadata listing; saved prompts and other detached snapshots are omitted. */
+      listSessionEntriesAsync: typeof import("../../plugin-sdk/session-store-runtime.js").listSessionEntriesAsync;
       createSessionEntryListReader: (params: {
         agentId: string;
         storePath: string;

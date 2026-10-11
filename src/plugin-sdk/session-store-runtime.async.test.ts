@@ -25,6 +25,7 @@ import {
   getSessionEntry,
   getSessionEntryAsync,
   getSessionEntryByIdAsync,
+  listSessionEntriesAsync,
   readAmbientTranscriptWatermarkAsync,
   resolveAmbientTranscriptWatermarkKey,
   upsertSessionEntry,
@@ -54,6 +55,61 @@ const completeEntry: InternalSessionEntry = {
     writerRunId: "synthetic-writer",
   },
 };
+
+it("lists current public metadata off the host after an owner write without creating absent stores", async () => {
+  expectTypeOf<
+    PluginRuntime["agent"]["session"]["listSessionEntriesAsync"]
+  >().parameters.toEqualTypeOf<Parameters<typeof listSessionEntriesAsync>>();
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("sdk-async-list-") };
+  const scope = { agentId: "main", env };
+  const sessionKey = "agent:main:listed";
+  await expect(listSessionEntriesAsync(scope)).resolves.toEqual([]);
+  expect(existsSync(resolveOpenClawAgentSqlitePath(scope))).toBe(false);
+
+  replaceSessionEntrySync(
+    { ...scope, sessionKey },
+    {
+      ...completeEntry,
+      initializationPending: true,
+    },
+  );
+  const read = async () => {
+    const sql = observeHostDataSql();
+    try {
+      const entries = await listSessionEntriesAsync(scope);
+      expect(sql.queries).toEqual([]);
+      return entries;
+    } finally {
+      sql.restore();
+    }
+  };
+  const before = await read();
+  expect(before).toEqual([
+    {
+      sessionKey,
+      entry: expect.objectContaining({
+        sessionId: "selected",
+        initializationPending: true,
+        pluginExtensions: completeEntry.pluginExtensions,
+      }),
+    },
+  ]);
+  expect(before[0]?.entry).not.toHaveProperty("pendingProjectGitUrl");
+  expect(before[0]?.entry).not.toHaveProperty("skillsSnapshot");
+
+  await upsertSessionEntry({
+    ...scope,
+    sessionKey,
+    entry: { sessionId: "replacement", updatedAt: 2, displayName: "Replacement" },
+  });
+  expect(await read()).toEqual([
+    {
+      sessionKey,
+      entry: expect.objectContaining({ sessionId: "replacement", displayName: "Replacement" }),
+    },
+  ]);
+  expect(before[0]?.entry.sessionId).toBe("selected");
+});
 
 it("reads committed watermark updates off the host and ignores a reset predecessor", async () => {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("sdk-async-watermark-") };

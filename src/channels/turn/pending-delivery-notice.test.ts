@@ -183,8 +183,13 @@ describe("pending delivery notice", () => {
 
   it("leaves a replacement notice owed when an earlier send finishes", async () => {
     const sent = createDeferred<{ suppressed: boolean }>();
-    sendRecoveryNotice.mockReturnValueOnce(sent.promise);
+    const sendStarted = createDeferred();
+    sendRecoveryNotice.mockImplementationOnce(() => {
+      sendStarted.resolve();
+      return sent.promise;
+    });
     const attempt = deliverPendingDeliveryNotice(sessionKey, storePath);
+    await sendStarted.promise;
     const entry = loadSessionEntry({ sessionKey, storePath })!;
     const replacement = { ...entry.pendingDeliveryNotice!, intentId: "intent-2" };
     await replaceSessionEntry(

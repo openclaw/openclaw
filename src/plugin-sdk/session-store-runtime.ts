@@ -37,7 +37,10 @@ import {
   type SessionEntryPatchAuthority,
 } from "../config/sessions/session-entry-patch-authority.js";
 import { preserveGenerationPrivateFields } from "../config/sessions/session-entry-public-patch.js";
-import { readSessionUpdatedAtInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import {
+  readSessionEntrySummariesInWorker,
+  readSessionUpdatedAtInWorker,
+} from "../config/sessions/session-entry-read-runtime.js";
 import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import {
   captureExternalSessionCommitGuard,
@@ -203,10 +206,16 @@ export async function getConversationSessionAsync(
  * Lists session entries for one agent. `readOnly` reads without joining the
  * agent database writable lifecycle (no create/register/migrate) — required
  * for detection/introspection paths that may run across the whole fleet.
+ * @deprecated Use listSessionEntriesAsync for metadata reads; removed in the next Plugin SDK major.
  */
 export function listSessionEntries(
   params: SessionStoreListParams & { readOnly?: boolean } = {},
 ): SessionStoreEntrySummary[] {
+  warnPluginSdkDeprecation({
+    family: "session-store",
+    method: "listSessionEntries",
+    replacement: "listSessionEntriesAsync",
+  });
   const list = params.readOnly ? listAccessorSessionEntriesReadOnly : listAccessorSessionEntries;
   return list({
     ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
@@ -216,6 +225,22 @@ export function listSessionEntries(
       : {}),
     ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
   }).map(({ sessionKey, entry }) => ({
+    sessionKey,
+    entry: projectPluginSessionEntry(entry),
+  }));
+}
+
+/** Lists public session metadata without hydrating saved prompts or opening a writable database. */
+export async function listSessionEntriesAsync(params: {
+  agentId: string;
+  env?: NodeJS.ProcessEnv;
+  storePath?: string;
+}): Promise<SessionStoreEntrySummary[]> {
+  const entries = await readSessionEntrySummariesInWorker({
+    ...params,
+    storePath: params.storePath ?? resolveSessionStorePathCore(undefined, params),
+  });
+  return entries.map(({ sessionKey, entry }) => ({
     sessionKey,
     entry: projectPluginSessionEntry(entry),
   }));

@@ -563,6 +563,25 @@ deprecation is recorded in TypeScript and the compatibility registry without
 runtime warnings. This migration changes no schema, stored data, retention, or
 update behavior.
 
+## Await session metadata listings
+
+Use `listSessionEntriesAsync` from `openclaw/plugin-sdk/session-store-runtime`,
+or `api.runtime.agent.session.listSessionEntriesAsync`, to enumerate session
+metadata before preparing work. Pass an explicit `agentId` and optionally the
+existing `storePath` and `env`, then await the result. The read runs through the
+session worker and never creates or registers a missing agent database.
+
+The async listing retains session IDs, initialization status, plugin metadata,
+and derived participants while omitting detached snapshots such as saved skill
+prompts. Use `getSessionEntryAsync` when a complete entry is needed. The async
+listing is always read-only, so it does not take `readOnly`, snapshot hydration,
+or synchronous source-capture options. Keep final deletion or disclosure guards
+at their existing effect boundary.
+
+The synchronous `listSessionEntries` API is deprecated until the next Plugin SDK
+major. Its existing arguments and complete-entry behavior remain available for
+compatibility, with a one-time deprecation warning on legacy use.
+
 ## Prepare session entry changes
 
 Use `prepareSessionEntryPatch` or `applySessionEntryPatch` from

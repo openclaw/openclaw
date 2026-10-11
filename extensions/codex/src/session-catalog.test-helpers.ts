@@ -646,6 +646,10 @@ export function createRuntime(
             ({ sessionKey }) => !agentPrefix || sessionKey.startsWith(agentPrefix),
           );
         }),
+        listSessionEntriesAsync: vi.fn(async (listParams) => {
+          const agentPrefix = `agent:${listParams.agentId}:`;
+          return entries.filter(({ sessionKey }) => sessionKey.startsWith(agentPrefix));
+        }),
         prepareSessionEntryPatch: patchSessionEntry,
       },
     },
