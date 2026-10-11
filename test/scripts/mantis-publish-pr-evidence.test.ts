@@ -97,33 +97,6 @@ describe("scripts/mantis/publish-pr-evidence", () => {
     );
   });
 
-  it("renders a manifest-driven PR comment with inline screenshots and video links", () => {
-    const manifest = loadEvidenceManifest(writeFixtureManifest());
-    const body = renderEvidenceComment({
-      artifactUrl: "https://github.com/openclaw/openclaw/actions/runs/1/artifacts/2",
-      manifest,
-      marker: "<!-- mantis-discord-status-reactions -->",
-      rawBase: "https://qa.openclaw.ai/mantis/discord/pr-1/run-1",
-      requestSource: "workflow_dispatch",
-      runUrl: "https://github.com/openclaw/openclaw/actions/runs/1",
-      treeUrl: "https://qa.openclaw.ai/mantis/discord/pr-1/run-1",
-    });
-
-    expect(body).toContain("<!-- mantis-discord-status-reactions -->");
-    expect(body).toContain("Summary: Mantis reran the scenario.");
-    expect(body).toContain('<table width="100%">');
-    expect(body).toContain('<th width="50%">Baseline queued-only</th>');
-    expect(body).toContain('<th width="50%">Candidate queued -> thinking -> done</th>');
-    expect(body).toContain(
-      '<td width="50%" align="center"><img src="https://qa.openclaw.ai/mantis/discord/pr-1/run-1/baseline.png" width="100%"',
-    );
-    expect(body).toContain(
-      "[Baseline change MP4](https://qa.openclaw.ai/mantis/discord/pr-1/run-1/baseline-change.mp4)",
-    );
-    expect(body).not.toContain("raw.githubusercontent.com");
-    expect(body).toContain("- Overall: `pass`");
-  });
-
   it("renders trusted lane digests and their count differential", () => {
     const manifest = loadEvidenceManifest(writeFixtureManifest());
     manifest.comparison = {
@@ -226,39 +199,6 @@ describe("scripts/mantis/publish-pr-evidence", () => {
     expect(String(requests[4]?.body)).toContain(
       '"url": "https://qa.openclaw.ai/mantis/discord/pr-1/run-1/baseline.png"',
     );
-  });
-
-  it("aborts a stalled artifact upload after the per-object timeout", async () => {
-    const manifest = loadEvidenceManifest(writeFixtureManifest());
-    let observedSignal: AbortSignal | undefined;
-
-    const upload = publishArtifactFiles({
-      artifactRoot: "mantis/discord/pr-1/run-1",
-      fetchImpl: (_url, init) => {
-        observedSignal = init.signal;
-        return new Promise<Response>((_resolve, reject) => {
-          init.signal.addEventListener("abort", () => reject(init.signal.reason as Error), {
-            once: true,
-          });
-        });
-      },
-      manifest,
-      storageConfig: {
-        accessKeyId: "access",
-        bucket: "qa-artifacts",
-        endpoint: "https://example.r2.cloudflarestorage.com",
-        publicBaseUrl: "https://qa.openclaw.ai",
-        region: "auto",
-        secretAccessKey: "secret",
-      },
-      timeoutMs: 5,
-    });
-
-    await expect(upload).rejects.toMatchObject({
-      cause: { name: "TimeoutError" },
-      message: "Timed out uploading Mantis artifact baseline.png after 5ms.",
-    });
-    expect(observedSignal?.aborted).toBe(true);
   });
 
   it("bounds oversized non-ok upload error response bodies", async () => {

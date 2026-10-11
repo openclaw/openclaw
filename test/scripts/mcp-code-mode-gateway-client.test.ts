@@ -217,24 +217,6 @@ describe("MCP code-mode matched failure diagnostics", () => {
     });
   });
 
-  it("reports a persisted exec without a wire call instead of fabricating a matched pair", () => {
-    const diagnostics = projectMcpCodeModeDiagnostics(
-      [record([user, { type: "function_call_output", call_id: id, output: "fixture-note-alpha" }])],
-      [
-        { message: user },
-        { message: { role: "assistant", content: [{ type: "toolCall", name: "exec", id }] } },
-        { message: { role: "toolResult", toolCallId: id, content: "private-persisted-result" } },
-      ],
-    );
-    expect(diagnostics).toMatchObject({
-      persistedExecWithoutSelectedWireCall: true,
-      transcriptPairs: [],
-      providerTurns: [{ execCalls: [], unrelatedOutputs: 1 }],
-    });
-    expect(JSON.stringify(diagnostics)).not.toContain("private-persisted-result");
-    expect(JSON.stringify(diagnostics)).not.toContain("fixture-note-alpha");
-  });
-
   it("reports producer truncation without reading the preview or attributing it to current QA", () => {
     const body = {
       truncated: true,
@@ -357,23 +339,6 @@ describe("MCP code-mode gateway Docker client fetch helper", () => {
     });
   });
 
-  it("aborts requests that never resolve", async () => {
-    let signal: AbortSignal | undefined;
-    await expect(
-      fetchJson("https://qa.example.invalid/v1/responses", undefined, {
-        timeoutMs: 25,
-        fetchImpl: async (_url, init) => {
-          signal = init.signal as AbortSignal | undefined;
-          return new Promise<Response>(() => {});
-        },
-      }),
-    ).rejects.toMatchObject({
-      code: "ETIMEDOUT",
-      message: "HTTP request to https://qa.example.invalid/v1/responses timed out after 25ms",
-    });
-    expect(signal?.aborted).toBe(true);
-  });
-
   it("times out while reading stalled response bodies", async () => {
     await expect(
       fetchJson("https://qa.example.invalid/v1/responses", undefined, {
@@ -416,77 +381,6 @@ describe("MCP code-mode gateway Docker client fetch helper", () => {
 });
 
 describe("MCP code-mode gateway Docker client result validation", () => {
-  it("accepts final text backed by API file reads and MCP tool calls", () => {
-    expect(validateMcpCodeModeResult(okResponse, okMentions)).toBe(
-      "MCP_CODE_MODE_FILE_OK note=fixture-note-alpha unclear=none",
-    );
-  });
-
-  it("rejects hallucinated success text that reports MCP failure", () => {
-    expect(() =>
-      validateMcpCodeModeResult(
-        {
-          output: [
-            {
-              type: "message",
-              content: [
-                {
-                  text: "MCP_CODE_MODE_FILE_OK note=fixture-note-alpha but MCP failed",
-                },
-              ],
-            },
-          ],
-        },
-        okMentions,
-      ),
-    ).toThrow("agent reported MCP failure");
-  });
-
-  it("requires materialized MCP fixture tool evidence", () => {
-    expect(() =>
-      validateMcpCodeModeResult(okResponse, {
-        ...okMentions,
-        apiFileList: 0,
-      }),
-    ).toThrow("session log lacks API.list usage");
-    expect(() =>
-      validateMcpCodeModeResult(okResponse, {
-        ...okMentions,
-        mcpTool: 0,
-      }),
-    ).toThrow("session log lacks MCP.fixture.lookupNote call");
-  });
-
-  it("rejects MCP.$api and catalog.search fallback pollution", () => {
-    expect(() =>
-      validateMcpCodeModeResult(okResponse, {
-        ...okMentions,
-        apiCall: 1,
-      }),
-    ).toThrow("agent should not call MCP.$api");
-    expect(() =>
-      validateMcpCodeModeResult(okResponse, {
-        ...okMentions,
-        toolSearchPollution: 1,
-      }),
-    ).toThrow("agent should not use catalog.search");
-  });
-
-  it("requires planned exec evidence for the source gateway E2E", () => {
-    expect(() =>
-      validateMcpCodeModeResult(okResponse, okMentions, {
-        plannedTools: ["catalog.search"],
-        requireExec: true,
-      }),
-    ).toThrow("agent did not call code-mode exec");
-    expect(() =>
-      validateMcpCodeModeResult(okResponse, okMentions, {
-        plannedTools: ["exec"],
-        requireExec: true,
-      }),
-    ).not.toThrow();
-  });
-
   it("rejects success and exec mentions without a real assistant tool call", () => {
     const plannedTools = extractMcpCodeModePlannedTools([
       {

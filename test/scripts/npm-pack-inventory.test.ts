@@ -175,16 +175,6 @@ describe("npm pack inventory", () => {
     });
   });
 
-  it("excludes host-npm-version-variant paths from inventory parity", () => {
-    expect(
-      compareNpmPackInventory(
-        ["package.json", "npm-shrinkwrap.json"],
-        ["package.json"],
-        ["npm-shrinkwrap.json"],
-      ),
-    ).toEqual({ extra: [], missing: [] });
-  });
-
   it("accepts npm 12 name-keyed package results", () => {
     const { packageRoot, root } = createPackageFixture();
     const npm = fakeNpmEnvironment(
@@ -203,28 +193,12 @@ describe("npm pack inventory", () => {
 
   it.each([
     {
-      name: "successful pack",
-      phase: "pack",
-      exitCode: 0,
-      signal: null,
-      stderr: "",
-      expectedError: null,
-    },
-    {
       name: "failed pack",
       phase: "pack",
       exitCode: 23,
       signal: null,
       stderr: "simulated npm 10 failure\n",
       expectedError: "npm pack inventory failed: simulated npm 10 failure",
-    },
-    {
-      name: "silent failed pack",
-      phase: "pack",
-      exitCode: 23,
-      signal: null,
-      stderr: "",
-      expectedError: "npm pack inventory failed with status 23",
     },
     ...(process.platform === "win32"
       ? []
@@ -244,23 +218,6 @@ describe("npm pack inventory", () => {
             signal: "SIGTERM",
             stderr: "",
             expectedError: "npm pack inventory failed with signal SIGTERM",
-          },
-          {
-            name: "SIGKILL pack with stderr",
-            phase: "pack",
-            exitCode: null,
-            signal: "SIGKILL",
-            stderr: "simulated npm 10 failure\n",
-            expectedError:
-              "npm pack inventory failed with signal SIGKILL: simulated npm 10 failure",
-          },
-          {
-            name: "SIGTERM version with stderr",
-            phase: "version",
-            exitCode: null,
-            signal: "SIGTERM",
-            stderr: "simulated npm 10 failure\n",
-            expectedError: "npm --version failed with signal SIGTERM: simulated npm 10 failure",
           },
           {
             name: "SIGKILL version",

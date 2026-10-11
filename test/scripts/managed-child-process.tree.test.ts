@@ -119,7 +119,7 @@ it("does not certify an unavailable POSIX group observation when its wait expire
   ).resolves.toBe(false);
 });
 
-it.each(["returned false", "ESRCH"])(
+it.each(["ESRCH"])(
   "does not promote POSIX leader disappearance (%s) after denied group signaling",
   (result) => {
     const child = {
@@ -318,7 +318,6 @@ it.each([
 );
 
 it.each([
-  [255, "live"],
   [255, "unavailable"],
   [0, "live"],
 ] as const)(

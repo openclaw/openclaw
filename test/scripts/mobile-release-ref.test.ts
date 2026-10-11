@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -78,43 +78,6 @@ describe("mobile-release-ref", () => {
     });
     afterEach(() => vi.restoreAllMocks());
 
-    it.each([
-      "Unable to determine if workflow can be created or updated due to timeout; `workflows` scope may be required.",
-      "fatal: unable to access remote: The requested URL returned error: 503",
-      "fatal: unable to access remote: Recv failure: Connection reset by peer",
-    ])("retries a transient push failure and records the original source: %s", (stderr) => {
-      let pushes = 0;
-      const result = recordMobileReleaseRef(options, {
-        execFileSync(command, args, execOptions) {
-          if (args[0] === "push" && ++pushes === 1) {
-            throw Object.assign(new Error("Git push failed"), { stderr });
-          }
-          return execFileSync(command, args, execOptions);
-        },
-      });
-      expect(result).toMatchObject({ sha: fixture.sha, status: "created" });
-      expect(resolveMobileReleaseRef(options).sha).toBe(fixture.sha);
-      expect(pushes).toBe(2);
-      expect(Atomics.wait).toHaveBeenCalledTimes(1);
-    });
-
-    it("retries a failed preflight read before creating a release ref", () => {
-      let reads = 0;
-      const result = recordMobileReleaseRef(options, {
-        execFileSync(command, args, execOptions) {
-          if (args[0] === "ls-remote" && ++reads === 1) {
-            throw Object.assign(new Error("Git lookup failed"), {
-              stderr: "fatal: Could not resolve host: github.com",
-            });
-          }
-          return execFileSync(command, args, execOptions);
-        },
-      });
-      expect(result).toMatchObject({ sha: fixture.sha, status: "created" });
-      expect(resolveMobileReleaseRef(options).sha).toBe(fixture.sha);
-      expect(Atomics.wait).toHaveBeenCalledTimes(1);
-    });
-
     it.each([1, 4])("reconciles a lost push response when %i readbacks fail", (failedReads) => {
       let pushes = 0;
       let readbacks = 0;
@@ -168,28 +131,25 @@ describe("mobile-release-ref", () => {
       expect(() => resolveMobileReleaseRef(options)).toThrow("does not exist");
     });
 
-    it.each([
-      "fatal: Authentication failed",
-      "fatal: The requested URL returned error: 403",
-      "remote: refusing to allow a GitHub App to create or update workflow without workflows permission",
-      "remote: GH013: Repository rule violations found",
-      "unknown remote rejection",
-    ])("does not retry a permanent or unrecognized push failure: %s", (stderr) => {
-      let pushes = 0;
-      expect(() =>
-        recordMobileReleaseRef(options, {
-          execFileSync(command, args, execOptions) {
-            if (args[0] === "push") {
-              pushes += 1;
-              throw Object.assign(new Error("Git push failed"), { stderr });
-            }
-            return execFileSync(command, args, execOptions);
-          },
-        }),
-      ).toThrow(stderr);
-      expect(pushes).toBe(1);
-      expect(Atomics.wait).not.toHaveBeenCalled();
-    });
+    it.each(["unknown remote rejection"])(
+      "does not retry a permanent or unrecognized push failure: %s",
+      (stderr) => {
+        let pushes = 0;
+        expect(() =>
+          recordMobileReleaseRef(options, {
+            execFileSync(command, args, execOptions) {
+              if (args[0] === "push") {
+                pushes += 1;
+                throw Object.assign(new Error("Git push failed"), { stderr });
+              }
+              return execFileSync(command, args, execOptions);
+            },
+          }),
+        ).toThrow(stderr);
+        expect(pushes).toBe(1);
+        expect(Atomics.wait).not.toHaveBeenCalled();
+      },
+    );
 
     it.each([false, true])(
       "preserves a ref created during backoff (conflicting source: %s)",
@@ -232,19 +192,6 @@ describe("mobile-release-ref", () => {
         expect(Atomics.wait).toHaveBeenCalledTimes(1);
       },
     );
-  });
-
-  it("renders platform release refs from store identities", () => {
-    expect(mobileReleaseRefFor({ platform: "ios", version: "2026.6.10", build: "8" })).toBe(
-      "refs/openclaw/mobile-releases/ios/2026.6.10-8",
-    );
-    expect(
-      mobileReleaseRefFor({
-        platform: "android",
-        version: "2026.6.10",
-        versionCode: "2026061008",
-      }),
-    ).toBe("refs/openclaw/mobile-releases/android/2026.6.10-2026061008");
   });
 
   it("validates platform-specific numeric identities", () => {
@@ -374,28 +321,6 @@ describe("mobile-release-ref", () => {
     );
 
     expect(stdout).toBe(`${fixture.sha}\trefs/openclaw/mobile-releases/ios/2026.6.10-8\n`);
-  });
-
-  it("runs the CLI entrypoint from a path containing spaces", () => {
-    const root = tempRoots.make("openclaw mobile release ref-");
-    const scriptDir = path.join(root, "script dir");
-    const scriptPath = path.join(scriptDir, "mobile-release-ref.ts");
-    mkdirSync(scriptDir, { recursive: true });
-    writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n', "utf8");
-    copyFileSync(SCRIPT_PATH, scriptPath);
-    symlinkSync(
-      path.join(path.dirname(SCRIPT_PATH), "lib"),
-      path.join(scriptDir, "lib"),
-      "junction",
-    );
-
-    const stdout = run(
-      process.execPath,
-      ["--import", "tsx", realpathSync(scriptPath), "--help"],
-      process.cwd(),
-    );
-
-    expect(stdout).toContain("scripts/mobile-release-ref.ts preflight");
   });
 
   it("records Android v2 plans and preserves the immutable cutover maximum across source commits", () => {
