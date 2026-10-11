@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
-import { expressionBuilder, sql, type Selectable, type SqlBool } from "kysely";
+import { expressionBuilder, sql } from "kysely";
 import {
   createSqliteQueryCache,
   getNodeSqliteKysely,
@@ -21,10 +21,7 @@ import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-age
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import type { ExactSessionEntry, SessionEntrySummary } from "./session-accessor.sqlite-contract.js";
-import {
-  hasSqliteSessionOwnerColumns,
-  type SqliteSessionOwnerRow,
-} from "./session-accessor.sqlite-owner-projection.js";
+import { hasSqliteSessionOwnerColumns } from "./session-accessor.sqlite-owner-projection.js";
 import {
   prepareSqliteSessionParticipantProjection,
   projectSqliteSessionParticipants,
@@ -35,6 +32,7 @@ import {
   selectSessionEntryRows,
 } from "./session-accessor.sqlite-status.js";
 import type { SessionEntryReadScope } from "./session-accessor.types.js";
+import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import {
   assertCanonicalSqliteSessionKeysCurrent,
   canonicalSessionKeyMigrationRequiredError,
@@ -47,10 +45,11 @@ import {
 } from "./session-canonical-row.js";
 import { parseSqliteSessionEntryRecord } from "./session-entry-json.js";
 import {
+  attachSessionEntrySnapshots,
   sessionEntrySnapshotColumnsForKeys,
   type SessionEntryProjection,
-  type SessionEntrySnapshotRow,
 } from "./session-entry-snapshots.js";
+import type { ResolvedSessionEntryRow } from "./session-entry-storage.types.js";
 import {
   collectSessionEntryLookupKeys,
   resolveDeliveryProvenCanonicalSessionKey,
@@ -58,8 +57,6 @@ import {
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type OpenClawAgentDatabaseReader = Pick<OpenClawAgentDatabase, "agentId" | "db">;
-type SessionEntryRow = Selectable<OpenClawAgentKyselyDatabase["session_nodes"]> &
-  SessionEntrySnapshotRow;
 
 function cacheSessionEntryQuery<Row extends ResolvedSessionEntryRow["row"]>(
   database: DatabaseSync,
@@ -136,16 +133,7 @@ const getExactSessionEntryQueries = createSqliteQueryCache((database) => {
   };
 });
 
-export type ResolvedSessionEntryRow = {
-  entry: SessionEntry;
-  row: Pick<SessionEntryRow, "current_session_id" | "entry_json" | "session_key" | "updated_at"> &
-    SqliteSessionOwnerRow &
-    SessionEntrySnapshotRow &
-    Partial<Pick<SessionEntryRow, "legacy_acp_migration_json">> & {
-      board_present?: SqlBool;
-      member_ids_json?: string;
-    };
-};
+export type { ResolvedSessionEntryRow } from "./session-entry-storage.types.js";
 
 type ReadableSessionEntryRow = ResolvedSessionEntryRow["row"] &
   (CanonicalSessionValidationRow | { retained_window_id?: never });
@@ -363,6 +351,18 @@ function scanSessionEntryRows(
       selected: ResolvedSessionEntryRow | undefined;
     }
   | undefined {
+  const actor = readSessionActorTransactionState(database, { sessionKey });
+  if (actor) {
+    const lookupKeys = collectSessionEntryLookupKeys(sessionKey);
+    return {
+      lookupKeys,
+      rows: lookupKeys.flatMap((key) => {
+        const row = actor.entryRows.get(key)?.row;
+        return row ? [structuredClone(row)] : [];
+      }),
+      selected: readExactSessionEntryRow(database, sessionKey, projection),
+    };
+  }
   return runSqliteReadOperationSync(database.db, () => {
     assertCanonicalSqliteSessionKeysCurrent(database);
     const lookupKeys = collectSessionEntryLookupKeys(sessionKey);
@@ -434,6 +434,16 @@ export function readExactSessionEntryRow(
   projection: SessionEntryProjection = "full",
   validation?: "canonical",
 ): ResolvedSessionEntryRow | undefined {
+  const actor = readSessionActorTransactionState(database, { sessionKey });
+  if (actor) {
+    const selected = actor.entryRows.get(sessionKey);
+    return (
+      selected && {
+        row: structuredClone(selected.row),
+        entry: attachSessionEntrySnapshots(structuredClone(selected.entry), {}, projection),
+      }
+    );
+  }
   return runSqliteReadOperationSync(database.db, () => {
     const queries = getExactSessionEntryQueries(database.db);
     const row =
@@ -532,6 +542,31 @@ export function prepareExactSessionEntryRowReads(
     projectParticipants?: false;
   },
 ): (sessionKey: string) => ResolvedSessionEntryRow | undefined {
+  const actor = readSessionActorTransactionState(database);
+  if (
+    actor &&
+    projection !== "delivery" &&
+    sessionKeys.every(
+      (key) =>
+        actor.entryRows.has(key) &&
+        (key === actor.hot.target.sessionKey || !actor.entryRows.get(key)),
+    )
+  ) {
+    return (sessionKey) => {
+      const selected = readExactSessionEntryRow(database, sessionKey, projection, validation);
+      if (selected) {
+        if (options?.includeBoardPresence) {
+          selected.row.board_present = actor.hasBoard ? 1 : 0;
+        }
+        if (options?.includeMembership) {
+          selected.row.member_ids_json = JSON.stringify(
+            actor.hot.members.map((member) => member.identityId),
+          );
+        }
+      }
+      return selected;
+    };
+  }
   return runSqliteReadOperationSync(database.db, () => {
     const readRows = (selection: string | readonly string[]) =>
       readSelectedSessionEntryRows(database, selection, projection, validation, options);
