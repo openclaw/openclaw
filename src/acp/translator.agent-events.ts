@@ -82,6 +82,9 @@ export class AcpTranslatorAgentEvents {
       const preambles = (pending.sentPreambles ??= new Map());
       const isNewPreamble = !preambles.has(itemId);
       let sent = preambles.get(itemId) ?? "";
+      if (!isNewPreamble && !text.startsWith(sent)) {
+        return;
+      }
       let preceding = "";
       const previous = pending.preamblePreview;
       if (isNewPreamble && previous) {

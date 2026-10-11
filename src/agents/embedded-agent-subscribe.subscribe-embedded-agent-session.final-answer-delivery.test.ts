@@ -257,57 +257,43 @@ describe("Responses final delivery", () => {
     },
   );
 
-  it.each([
-    { name: "late completions phase", api: "openai-completions", suppressLiveStreamOutput: false },
-    {
-      name: "suppressed Responses stream",
-      api: "openai-responses",
-      suppressLiveStreamOutput: true,
-    },
-  ] as const)(
-    "delivers all undelivered final blocks after $name",
-    async ({ api, suppressLiveStreamOutput }) => {
-      const onAgentEvent = vi.fn();
-      const h = setup({ onAgentEvent, suppressLiveStreamOutput });
-      const base = { ...createOpenAiResponsesPartial({ text: "", id: "answer-0" }), api };
-      const texts = ["First", "Second"];
-      h.emit({ type: "message_start", message: base });
-      for (const [contentIndex, delta] of texts.entries()) {
-        const partial = {
-          ...base,
-          content: texts
-            .slice(0, contentIndex + 1)
-            .map((text, index) =>
-              block(text, `answer-${index}`, suppressLiveStreamOutput ? "final_answer" : undefined),
-            ),
-        };
-        h.emit({
-          type: "message_update",
-          message: partial,
-          assistantMessageEvent: { type: "text_delta", contentIndex, delta, partial },
-        });
-        await h.subscription.waitForPendingEvents();
-        expect(h.onBlockReply).not.toHaveBeenCalled();
-        expect(h.subscription.assistantTexts).toEqual([]);
-      }
-      if (suppressLiveStreamOutput) {
-        expect(onAgentEvent).not.toHaveBeenCalled();
-      }
+  it("delivers all undelivered final blocks after a suppressed Responses stream", async () => {
+    const onAgentEvent = vi.fn();
+    const h = setup({ onAgentEvent, suppressLiveStreamOutput: true });
+    const base = createOpenAiResponsesPartial({ text: "", id: "answer-0" });
+    const texts = ["First", "Second"];
+    h.emit({ type: "message_start", message: base });
+    for (const [contentIndex, delta] of texts.entries()) {
+      const partial = {
+        ...base,
+        content: texts
+          .slice(0, contentIndex + 1)
+          .map((text, index) => block(text, `answer-${index}`, "final_answer")),
+      };
       h.emit({
-        type: "message_end",
-        message: {
-          ...base,
-          content: texts.map((text, index) => block(text, `answer-${index}`, "final_answer")),
-        },
+        type: "message_update",
+        message: partial,
+        assistantMessageEvent: { type: "text_delta", contentIndex, delta, partial },
       });
       await h.subscription.waitForPendingEvents();
-      expectSingle(h, "First\nSecond");
-      expect(onAgentEvent.mock.calls.at(-1)?.[0]).toMatchObject({
-        stream: "assistant",
-        data: { text: "First\nSecond" },
-      });
-    },
-  );
+      expect(h.onBlockReply).not.toHaveBeenCalled();
+      expect(h.subscription.assistantTexts).toEqual([]);
+    }
+    expect(onAgentEvent).not.toHaveBeenCalled();
+    h.emit({
+      type: "message_end",
+      message: {
+        ...base,
+        content: texts.map((text, index) => block(text, `answer-${index}`, "final_answer")),
+      },
+    });
+    await h.subscription.waitForPendingEvents();
+    expectSingle(h, "First\nSecond");
+    expect(onAgentEvent.mock.calls.at(-1)?.[0]).toMatchObject({
+      stream: "assistant",
+      data: { text: "First\nSecond" },
+    });
+  });
 });
 
 describe("terminal visible replies", () => {
@@ -452,14 +438,8 @@ function textMessage(
 ): TestAssistant {
   return { ...textAssistant(text), api };
 }
-function textBlock(text: string, id: string, phase: "commentary" | "final_answer") {
-  return { ...createOpenAiResponsesTextBlock({ text, id, phase }), type: "text" as const };
-}
 function toolBlock(id: string, name: string) {
   return { type: "toolCall" as const, id, name, arguments: {} };
-}
-function postedText(reply: ReturnType<typeof vi.fn>) {
-  return reply.mock.calls.map(([payload]) => payload?.text ?? "").join(" ");
 }
 
 describe("reasoning delivery", () => {
@@ -596,7 +576,7 @@ describe("reasoning delivery", () => {
   });
 });
 
-describe("terminal provider phase resolution", () => {
+describe("unphased provider text delivery", () => {
   it.each([
     {
       api: "anthropic-messages",
@@ -611,9 +591,9 @@ describe("terminal provider phase resolution", () => {
       args: { id: "ORDER-1234" },
     },
   ] as const)(
-    "withholds $api pre-tool narration from durable replies",
-    ({ api, narration, toolName, args }) => {
-      const { emit, onBlockReply } = blockHarness({
+    "streams $api pre-tool narration once without retroactive phase changes",
+    async ({ api, narration, toolName, args }) => {
+      const { emit, subscription, onBlockReply } = blockHarness({
         blockReplyChunking: { minChars: 4, maxChars: 200 },
       });
       emit({ type: "message_start", message: textMessage("", api) });
@@ -621,27 +601,29 @@ describe("terminal provider phase resolution", () => {
         type: "text_delta",
         delta: narration,
       });
-      emit({ type: "tool_execution_start", toolName, toolCallId: "tool-1", args });
+      emitProviderUpdate(emit, textMessage(narration, api), {
+        type: "text_end",
+        content: narration,
+      });
+      await subscription.waitForPendingEvents();
+      expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual([narration.trimEnd()]);
       emit({
         type: "message_end",
         message: {
           role: "assistant",
           api,
           stopReason: "toolUse",
-          content: [
-            textBlock(narration, "commentary-0", "commentary"),
-            toolBlock("tool-1", toolName),
-          ],
+          content: [{ type: "text", text: narration }, toolBlock("tool-1", toolName)],
         },
       });
-      expect(postedText(onBlockReply)).not.toContain(
-        api === "anthropic-messages" ? "Let me check the files" : "Importing ORDER-1234",
-      );
+      emit({ type: "tool_execution_start", toolName, toolCallId: "tool-1", args });
+      await subscription.waitForPendingEvents();
+      expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual([narration.trimEnd()]);
     },
   );
 
   it.each([true, false])(
-    "streams completions live and delivers the confirmed final answer (interleaved: %s)",
+    "preserves completions text around reasoning (interleaved: %s)",
     async (interleaved) => {
       const onPartialReply = vi.fn();
       const { emit, subscription, onBlockReply } = setup({
@@ -678,7 +660,7 @@ describe("terminal provider phase resolution", () => {
       emit({ type: "message_end", message: output });
       await subscription.waitForPendingEvents();
       expect(onBlockReply.mock.calls.map(([payload]) => payload.text)).toEqual([
-        interleaved ? "Final text." : "Initial text.",
+        interleaved ? "Initial text.\nFinal text." : "Initial text.",
       ]);
     },
   );

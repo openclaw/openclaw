@@ -149,6 +149,19 @@ describe("ACP commentary reclassification", () => {
     ]);
   });
 
+  it.each(["Checking", "Reading files"])(
+    "resumes commentary from the last emitted snapshot after %s",
+    async (snapshot) => {
+      const h = await createHarness();
+      await h.preamble("commentary", "Checking files");
+      await h.preamble("commentary", snapshot);
+      await h.preamble("commentary", "Checking files now");
+      await h.chat("Done.", { state: "final" });
+      await h.prompt;
+      expect(h.updates()).toEqual(["Checking files", " now", "Done."]);
+    },
+  );
+
   it.each([
     { deferred: false, chatFirst: false },
     { deferred: true, chatFirst: false },

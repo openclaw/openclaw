@@ -507,8 +507,6 @@ export interface AssistantMessage {
     mediaUrls?: string[];
     replyToCurrent?: true;
     replyToId?: string;
-    /** Final text phase is unresolved until terminal; live partials may still stream. */
-    textPhaseRequiresTerminal?: true;
     /** Parsed once at the assistant write boundary; delivery resolves policy from these facts. */
     tts?: AssistantDeliveryTtsFacts;
   };

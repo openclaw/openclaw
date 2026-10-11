@@ -127,19 +127,6 @@ function makeOpenAiChunk(
   };
 }
 
-function expectedPhasedText(text: string, phase: "commentary" | "final_answer", index = 0) {
-  return {
-    type: "text",
-    text,
-    textSignature: expect.stringMatching(
-      new RegExp(
-        String.raw`^\{"v":1,"id":"${phase.replaceAll("_", "-")}-${index}-[0-9a-f]{24}","phase":"${phase}"\}$`,
-        "u",
-      ),
-    ),
-  };
-}
-
 function expectedThinking(thinking: string, thinkingSignature: string) {
   return { type: "thinking", thinking, thinkingSignature };
 }
@@ -677,16 +664,16 @@ describe("provider and transport observable parity fixtures", () => {
     }
   });
 
-  it("marks content interrupted by native reasoning as commentary", async () => {
+  it("preserves unphased content when native reasoning resumes", async () => {
     for (const implementation of ["provider", "transport"] as const) {
       for (const chunks of [openAiInterleavedReasoningChunks, openAiCoalescedReasoningChunks]) {
         const result = await runOpenAi(implementation, "success", chunks);
 
         expect(result.terminal.content).toEqual([
           expectedThinking("First thought.", "reasoning_content"),
-          expectedPhasedText("Interim.", "commentary"),
+          { type: "text", text: "Interim." },
           expectedThinking("Second thought.", "reasoning_content"),
-          expectedPhasedText("Final.", "final_answer"),
+          { type: "text", text: "Final." },
         ]);
       }
 
@@ -697,9 +684,9 @@ describe("provider and transport observable parity fixtures", () => {
       );
       expect(typedReasoningResult.terminal.content).toEqual([
         { type: "thinking", thinking: "First thought." },
-        expectedPhasedText("Interim.", "commentary"),
+        { type: "text", text: "Interim." },
         { type: "thinking", thinking: "Second thought." },
-        expectedPhasedText("Final.", "final_answer"),
+        { type: "text", text: "Final." },
       ]);
 
       const structuredReasoningResult = await runOpenAi(
@@ -709,9 +696,9 @@ describe("provider and transport observable parity fixtures", () => {
       );
       expect(structuredReasoningResult.terminal.content).toEqual([
         expectedThinking("First thought.", "reasoning_details"),
-        expectedPhasedText("Interim.", "commentary"),
+        { type: "text", text: "Interim." },
         expectedThinking("Second thought.", "reasoning_details"),
-        expectedPhasedText("Final.", "final_answer"),
+        { type: "text", text: "Final." },
       ]);
 
       const hiddenReasoningResult = await runOpenAi(
@@ -721,12 +708,10 @@ describe("provider and transport observable parity fixtures", () => {
         false,
       );
       expect(hiddenReasoningResult.terminal.content).toEqual([
-        expectedPhasedText("Interim.", "commentary"),
-        expectedPhasedText("Final.", "final_answer"),
+        { type: "text", text: "Interim." },
+        { type: "text", text: "Final." },
       ]);
-      expect(hiddenReasoningResult.terminal.openclawDelivery).toEqual({
-        textPhaseRequiresTerminal: true,
-      });
+      expect(hiddenReasoningResult.terminal.openclawDelivery).toBeUndefined();
 
       const trailingReasoningResult = await runOpenAi(
         implementation,
@@ -747,15 +732,15 @@ describe("provider and transport observable parity fixtures", () => {
       );
       expect(interleavedThenTrailingReasoningResult.terminal.content).toEqual([
         expectedThinking("First thought.", "reasoning_content"),
-        expectedPhasedText("Interim.", "commentary"),
+        { type: "text", text: "Interim." },
         expectedThinking("Second thought.", "reasoning_content"),
-        expectedPhasedText("Final.", "final_answer"),
+        { type: "text", text: "Final." },
         expectedThinking("Trailing thought.", "reasoning_content"),
       ]);
     }
   });
 
-  it("keeps interrupted text non-deliverable when the stream errors", async () => {
+  it("preserves unphased text when the stream errors", async () => {
     for (const implementation of ["provider", "transport"] as const) {
       const result = await runOpenAi(
         implementation,
@@ -769,7 +754,7 @@ describe("provider and transport observable parity fixtures", () => {
       expect(result.terminal.stopReason).toBe("error");
       expect(result.terminal.content).toEqual([
         expectedThinking("First thought.", "reasoning_content"),
-        expectedPhasedText("Interim.", "commentary"),
+        { type: "text", text: "Interim." },
         expectedThinking("Second thought.", "reasoning_content"),
       ]);
     }
@@ -821,11 +806,11 @@ describe("provider and transport observable parity fixtures", () => {
       );
 
       expect(result.terminal.content).toEqual([
-        expectedPhasedText("Visible first.", "final_answer"),
+        { type: "text", text: "Visible first." },
         expectedThinking(" Hidden second.", "reasoning_details"),
-        expectedPhasedText("Interim.", "commentary"),
+        { type: "text", text: "Interim." },
         expectedThinking("Hidden fourth.", "reasoning_content"),
-        expectedPhasedText("Final.", "final_answer", 1),
+        { type: "text", text: "Final." },
       ]);
     }
   });
