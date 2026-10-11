@@ -3,6 +3,7 @@ import path from "node:path";
 import type { ContentBlock, RequestPermissionRequest } from "@agentclientprotocol/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
 
 vi.mock("../secrets/provider-env-vars.js", () => ({
   listKnownProviderAuthEnvVarNamesCore: () => [
@@ -106,6 +107,19 @@ it("rejects unresolved Windows wrappers without shell execution", async () => {
 });
 
 describe("resolvePermissionRequest", () => {
+  it("cancels a pending permission when its interactive session closes", async () => {
+    const lifetime = new AbortController();
+    const answer = createDeferredCore<boolean>();
+    const permission = resolvePermissionRequest(request({ title: "exec: echo marker" }), {
+      signal: lifetime.signal,
+      prompt: () => answer.promise,
+      log: () => {},
+    });
+    lifetime.abort();
+    answer.resolve(true);
+    await expect(permission).resolves.toEqual({ outcome: { outcome: "cancelled" } });
+  });
+
   it.each<
     [Partial<RequestPermissionRequest["toolCall"]>, string | undefined, "auto" | "allow" | "reject"]
   >([

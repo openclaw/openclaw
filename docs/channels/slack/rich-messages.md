@@ -45,7 +45,7 @@ Slack's limits are enforced before native rendering:
 Every native chart also carries a top-level text representation for screen
 readers, notifications, session mirroring, and clients that cannot render the
 block. Standard presentation sends to other OpenClaw channels receive that same
-deterministic chart data as text unless they advertise native chart support. If
+chart data as text unless they advertise native chart support. If
 Slack rejects the chart with `invalid_blocks`, OpenClaw
 removes the rejected native data blocks, keeps any sibling controls, and sends
 the complete chart representation as visible text.
@@ -103,7 +103,7 @@ Slack's published `data_table` limits are enforced before native rendering:
 
 Multiple valid table blocks can render natively while the message remains
 within the aggregate character limit. A table that cannot render within the
-native envelope becomes complete deterministic text instead of losing rows or
+native envelope becomes complete text instead of losing rows or
 cells. If that text exceeds one Slack message, sends and slash responses use
 ordered text chunks. Table edits fail with an explicit size error instead of
 silently truncating rows from an existing message.
@@ -169,7 +169,7 @@ Slack can act as a native approval client with interactive buttons and interacti
 
 For Enterprise Grid org installs, the originating event's validated workspace
 is retained for the approval prompt, approver DM, button callback, and final
-message update. Approval delivery fails closed when an org-installed account
+message update. Approval delivery is blocked when an org-installed account
 does not have that event-owned workspace scope.
 
 This uses the same shared approval button surface as other channels. When `interactivity` is enabled in your Slack app settings, approval prompts render as Block Kit buttons directly in the conversation.

@@ -6,6 +6,7 @@ import {
   NODE_WORKER_BUNDLE_RETENTION_VERSION,
   NODE_WORKER_BUNDLE_STATUS_VERSION,
 } from "../../infra/node-runner-inventory.js";
+import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import {
   NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES,
   NODE_WORKER_RETAIN_REQUEST_MAX_BYTES,
@@ -17,6 +18,7 @@ import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
+import { parseNodeWorkerResponse } from "./node-worker-response.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
@@ -324,12 +326,10 @@ export function createNodeWorkspaceRetainCoordinator(
             `workspace retain command failed (${result.error?.code ?? "unknown"})`,
         );
       }
-      let payload: unknown;
-      try {
-        payload = result.payloadJSON ? (JSON.parse(result.payloadJSON) as unknown) : undefined;
-      } catch {
-        throw new Error("workspace retain command returned malformed JSON");
-      }
+      const payload = parseNodeWorkerResponse(
+        result.payloadJSON || "null",
+        "workspace retain command",
+      );
       const retained = parseNodeWorkerWorkspaceRetainResult(payload);
       if (!retained) {
         throw new Error("workspace retain command violated its private result contract");
@@ -438,7 +438,7 @@ export function createNodeWorkspaceRetainCoordinator(
         }
       } while (pendingNodes.has(target));
     };
-    const operation = run().finally(() => {
+    const operation = runOutsideAsyncWorkScope(run).finally(() => {
       operations.delete(nodeId);
       if (!stopped && pendingNodes.has(target)) {
         void schedule(nodeId);

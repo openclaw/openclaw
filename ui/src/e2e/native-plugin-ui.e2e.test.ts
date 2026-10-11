@@ -23,6 +23,7 @@ import {
   waitForPendingPluginInitializer,
   type NativePluginWindow,
 } from "./native-plugin-ui.test-support.ts";
+import { openHomeFullPage } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Native plugin UI ownership" });
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -397,8 +398,12 @@ suite.define(() => {
           });
           await gateway.waitForRequest("plugins.controlUi.list");
           await expectLoading();
-          // Settings owns manager registration; plugin page startup leaves it unloaded.
-          await page.getByRole("link", { name: "Plugins", exact: true }).waitFor();
+          // Settings owns manager registration; merely opening its catalog leaves it unloaded.
+          await page.getByRole("button", { name: "Pages", exact: true }).click();
+          await page
+            .locator(".sidebar-pages")
+            .getByRole("link", { name: "Plugins", exact: true })
+            .waitFor();
           expect(
             await page.evaluate(() => ({
               contributions: Boolean(customElements.get("openclaw-plugin-contributions")),
@@ -422,7 +427,9 @@ suite.define(() => {
             release();
           });
           await page.getByRole("heading", { name: "Fixture revision pending" }).waitFor();
-          const navigationEntry = page.locator('[data-sidebar-entry="plugin:ui-fixture/proof"]');
+          const navigationEntry = page.locator(
+            '.sidebar-pages [data-sidebar-entry="plugin:ui-fixture/proof"]',
+          );
           await navigationEntry.getByRole("link", { name: "UI fixture", exact: true }).waitFor();
           expect(await navigationEntry.getAttribute("draggable")).toBe("true");
           expect(
@@ -504,6 +511,10 @@ suite.define(() => {
           route.fulfill({ status: 200, contentType: "text/javascript", body: pluginModule("one") }),
         );
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "chat"));
+        await page
+          .locator("openclaw-app-sidebar")
+          .getByRole("button", { name: "Pages", exact: true })
+          .click();
         await page.getByRole("link", { name: "UI fixture", exact: true }).waitFor();
         const accessories = page.locator("[data-fixture-session-accessory]");
         const accessory = accessories.filter({ hasText: sessionKey });
@@ -530,10 +541,18 @@ suite.define(() => {
         }
         await focusChatSidePanel(page);
         await expectOneAccessory();
+        await page
+          .locator("openclaw-app-sidebar")
+          .getByRole("button", { name: "Sessions", exact: true })
+          .click();
         await page.getByRole("button", { name: "Restore split", exact: true }).click();
         await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
         await restoreChatAsMain(page);
         await expectOneAccessory();
+        await page
+          .locator("openclaw-app-sidebar")
+          .getByRole("button", { name: "Sessions", exact: true })
+          .click();
         await page.locator('[data-region-header="side"] .side-panel__minimize').click();
         await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(false);
         await expectOneAccessory();
@@ -616,6 +635,10 @@ suite.define(() => {
         await visitCustomizeUi(page);
         await page.getByRole("combobox", { name: "Workspace", exact: true }).selectOption("");
         await returnFromCustomizeUi(page);
+        await page
+          .locator("openclaw-app-sidebar")
+          .getByRole("button", { name: "Pages", exact: true })
+          .click();
         await page.getByRole("link", { name: "UI fixture", exact: true }).waitFor();
         await page.getByRole("link", { name: "UI fixture", exact: true }).click();
         await page.getByRole("heading", { name: "Fixture revision one" }).waitFor();
@@ -624,15 +647,19 @@ suite.define(() => {
           .poll(() => page.getByLabel("Fixture outcome").textContent())
           .toContain("view has ended");
         await captureNativePluginUiProof(suite, page, "after.png", { fullPage: true });
-        await page.locator(".nav-item--home").click();
+        await openHomeFullPage(page);
         await expectOneAccessory();
+        await page
+          .locator("openclaw-app-sidebar")
+          .getByRole("button", { name: "Sessions", exact: true })
+          .click();
         await page
           .locator(`.sidebar-recent-session[data-session-key="${otherSessionKey}"] a`)
           .click();
         await expectOneAccessory(otherSessionKey);
         await expect.poll(() => accessory.getAttribute("data-presented")).toBe("false");
         expect(await accessory.isVisible()).toBe(false);
-        await page.locator(".nav-item--home").click();
+        await openHomeFullPage(page);
         await expectOneAccessory();
         expect(await accessory.getAttribute("data-presented")).toBe("true");
         await captureNativePluginUiProof(suite, page, "session-accessory-returned.png", {

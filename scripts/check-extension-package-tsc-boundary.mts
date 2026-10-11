@@ -491,7 +491,6 @@ async function runCompileCheck(extensionIds: string[], selectedPreparation: bool
     recordPath: string;
     config: string;
     args: string[];
-    startedAt: number;
     inputReceipt: string;
   }[] = [];
   // Source bytes are a cold-cache scheduling hint, never a coverage selector.
@@ -538,18 +537,16 @@ async function runCompileCheck(extensionIds: string[], selectedPreparation: bool
       }
       rmSync(recordPath, { force: true });
       rmSync(inputReceipt, { force: true });
-      let startedAt = 0;
       return {
         label: extensionId,
         onStart() {
-          startedAt = Date.now();
           process.stdout.write(`[${index + 1}/${extensionIds.length}] ${extensionId}\n`);
         },
         onSuccess(result) {
           process.stdout.write(
             `[${index + 1}/${extensionIds.length}] ${extensionId} (${result.elapsedMs}ms)\n`,
           );
-          completed.push({ recordPath, config, args, startedAt, inputReceipt });
+          completed.push({ recordPath, config, args, inputReceipt });
           compileTimings.push({
             extensionId,
             elapsedMs: result.elapsedMs,
@@ -574,14 +571,9 @@ async function runCompileCheck(extensionIds: string[], selectedPreparation: bool
     const after = new BoundaryInputSnapshot(repoRoot, metadataInputs);
     const records = completed.map((unit) =>
       Object.assign(unit, {
-        record: after.record(
-          unit.config,
-          unit.args,
-          unit.inputReceipt,
-          [portableRelativePath(repoRoot, unit.inputReceipt)],
-          before,
-          unit.startedAt,
-        ),
+        record: after.record(unit.config, unit.args, unit.inputReceipt, [
+          portableRelativePath(repoRoot, unit.inputReceipt),
+        ]),
       }),
     );
     for (const unit of records) {

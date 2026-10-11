@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { nothing } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type {
   SessionsPatchManyParams,
@@ -18,11 +17,7 @@ import {
   createModalDialogTestFixture,
   waitForConfirmDialogActions,
 } from "../../test-helpers/modal-dialog.ts";
-import {
-  createContext,
-  createGateway,
-  type TestSessionsPage,
-} from "./sessions-page.test-support.ts";
+import { createContext, createGateway, createPage } from "./sessions-page.test-support.ts";
 
 async function setup(childCount: number) {
   const root: GatewaySessionRow = {
@@ -102,12 +97,9 @@ async function setup(childCount: number) {
   const client = { request } as unknown as GatewayBrowserClient;
   const gateway = createGateway(client);
   const sessions = createTestSessionCapability(gateway.gateway);
-  const page = document.createElement("openclaw-sessions-page") as TestSessionsPage;
-  page.context = createContext(gateway.gateway, sessions);
-  page.render = () => nothing;
+  const page = await createPage(createContext(gateway.gateway, sessions));
   const toast = document.createElement("openclaw-toast-host");
-  document.body.append(page, toast);
-  await page.updateComplete;
+  document.body.append(toast);
   await sessions.refresh();
   return {
     root,

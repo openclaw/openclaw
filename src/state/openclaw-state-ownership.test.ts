@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,7 +11,13 @@ import {
   readConfigHealthStateFromStore,
   patchConfigHealthEntryToStore,
 } from "../config/io.health-state.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { requireNodeSqlite, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
+import { isPathInside } from "../infra/path-guards.js";
+import {
+  captureSqliteDatabaseAdmissions,
+  retireSqliteDatabaseAdmissionForPath,
+} from "../infra/sqlite-database-admission.js";
 import {
   OpenClawStateOwnershipError,
   OpenClawStateOwnershipMetadataError,
@@ -42,9 +49,53 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    for (const directory of tempDirs.dirs) {
+      retireFixtureAdmissions(directory);
+    }
+    const openFiles = findOpenFixtureFiles();
+    assert.deepEqual(openFiles, [], "Fixture files remain open after database cleanup");
     cleanup();
   });
 });
+
+function findOpenFixtureFiles(): string[] {
+  const openFiles: Array<{ descriptor: string; filename: string }> = [];
+  if (process.platform === "linux") {
+    for (const descriptor of fs.readdirSync("/proc/self/fd")) {
+      try {
+        openFiles.push({ descriptor, filename: fs.readlinkSync(`/proc/self/fd/${descriptor}`) });
+      } catch (error) {
+        if (!hasErrnoCode(error, "ENOENT")) {
+          throw error;
+        }
+      }
+    }
+  } else if (process.platform === "darwin") {
+    let descriptor = "";
+    for (const field of execFileSync("/usr/sbin/lsof", ["-p", String(process.pid), "-Ffn"], {
+      encoding: "utf8",
+    }).split("\n")) {
+      if (field.startsWith("f")) {
+        descriptor = field.slice(1);
+      } else if (field.startsWith("n")) {
+        openFiles.push({ descriptor, filename: field.slice(1) });
+      }
+    }
+  }
+  return openFiles
+    .filter(({ filename }) => [...tempDirs.dirs].some((root) => isPathInside(root, filename)))
+    .map(({ descriptor, filename }) => `${descriptor}: ${filename}`);
+}
+
+function retireFixtureAdmissions(root: string): void {
+  for (const admission of captureSqliteDatabaseAdmissions()) {
+    if (isPathInside(root, admission.location)) {
+      // Physical admission outlives database close; fixtures own its final removal.
+      retireSqliteDatabaseAdmissionForPath(admission.location);
+      assert.throws(() => fs.fstatSync(admission.descriptor), { code: "EBADF" });
+    }
+  }
+}
 
 function createEnv(external = false): NodeJS.ProcessEnv {
   return {
@@ -634,6 +685,7 @@ describe("external shared-state ownership", () => {
     const env = createEnv();
     const databasePath = openOpenClawStateDatabase({ env }).path;
     closeOpenClawStateDatabaseForTest();
+    retireFixtureAdmissions(databasePath);
     fs.renameSync(databasePath, `${databasePath}.seed`);
     fs.copyFileSync(`${databasePath}.seed`, databasePath);
     const { DatabaseSync } = requireNodeSqlite();
@@ -799,6 +851,7 @@ describe("external shared-state ownership", () => {
     const { path: databasePath, db: seeded } = openOpenClawStateDatabase({ env });
     const databaseLocation = seeded.location();
     closeOpenClawStateDatabaseForTest();
+    retireFixtureAdmissions(databasePath);
     fs.renameSync(databasePath, `${databasePath}.seed`);
     fs.copyFileSync(`${databasePath}.seed`, databasePath);
     const { DatabaseSync } = requireNodeSqlite();
@@ -893,8 +946,13 @@ describe("external shared-state ownership", () => {
       )
       .run(STATE_SUPERVISION_KEY, '{"version":1,"mode":"external"}', Date.now());
     database.db.exec("ALTER TABLE worktrees DROP COLUMN run_end_cleanup_json;");
+    const location = database.db.location();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    const owner = captureSqliteDatabaseAdmissions().find((entry) => entry.location === location);
+    assert(owner);
+    retireSqliteDatabaseAdmissionForPath(database.path);
+    assert.throws(() => fs.fstatSync(owner.descriptor), { code: "EBADF" });
     // Persisted startup damage gets a new physical admission, not a live foreign edit.
     fs.copyFileSync(database.path, `${database.path}.startup`);
     fs.renameSync(`${database.path}.startup`, database.path);

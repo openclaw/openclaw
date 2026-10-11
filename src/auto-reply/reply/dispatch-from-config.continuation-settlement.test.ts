@@ -1,4 +1,15 @@
 // Continuation settlement tests cover status delivery and child-terminal handoff.
+// Register dispatch mocks before modules that consume them.
+// oxfmt-ignore
+import {
+  createHookCtx,
+  emptyConfig,
+  hookMocks,
+  mocks,
+  resetPluginTtsAndThreadMocks,
+  sessionStoreMocks,
+  setDiscordTestRegistry,
+} from "./dispatch-from-config.shared.test-harness.js";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import {
@@ -10,15 +21,6 @@ import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { appendUsageLine } from "./agent-runner-usage-line.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
-import {
-  createHookCtx,
-  emptyConfig,
-  hookMocks,
-  mocks,
-  resetPluginTtsAndThreadMocks,
-  sessionStoreMocks,
-  setDiscordTestRegistry,
-} from "./dispatch-from-config.shared.test-harness.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;

@@ -36,9 +36,26 @@ type PluginStateChange =
   | { kind: "unknown"; identity: string | symbol }
   | { kind: "pending" | "settled"; identity: string | symbol; operationId: string };
 
+/** Descriptive read dependencies; these snapshots never grant mutation authority. */
+export type PluginStateReadDependency = {
+  /** A missing database uses a wildcard so its first committed creation invalidates absence. */
+  identity?: string | symbol;
+  pluginId: string;
+  namespace: string;
+  keys: readonly string[];
+};
+
+type PluginStateReadCapture = {
+  dependencies: PluginStateReadDependency[];
+  assertions: Array<() => void>;
+  accepting: boolean;
+  keyCount: number;
+};
+
 const state = resolveGlobalSingleton(Symbol.for("openclaw.pluginStatePublication"), () => ({
   sources: new WeakMap<DatabaseSync, SqliteCommitSource>(),
   capture: new AsyncLocalStorage<Map<string, SqliteCommittedFact<PluginStateRow>>>(),
+  reads: new AsyncLocalStorage<PluginStateReadCapture>(),
   installingFacts: 0,
   facts: new Set<(change: PluginStateChange) => void>(),
   observers: new Set<(change: PluginStateChange) => void>(),
@@ -101,12 +118,124 @@ function publication(receipt: Receipt) {
 export const pluginStatePublication = {
   stagePostimage: stagePluginStatePostimage,
   stageDeletions: stagePluginStateDeletions,
+  /** A compound native owner settled these keys without plugin-state postimages. */
+  invalidateEntries(source: SqliteCommitSource, rows: readonly EntryKey[]): void {
+    const keys = rows.map(keyFor);
+    if (keys.length === 0) {
+      return;
+    }
+    publishSqliteCommittedState(
+      publication(
+        createSqliteCommitReceipt<PluginStateRow, SqliteCommitSource>({
+          source,
+          domain: "plugin-state",
+          keys,
+          readFact: () => ({ kind: "unknown" }),
+        }),
+      ),
+    );
+  },
   /** Install/invalidate prepared facts only; storage mutations belong in postcommit observers. */
   subscribeFacts: (listener: (change: PluginStateChange) => void) =>
     registerListener(state.facts, listener),
   subscribe: (listener: (change: PluginStateChange) => void) =>
     registerListener(state.observers, listener),
 };
+
+/** Record the actual keyed store read without opening or inspecting another database. */
+export function recordPluginStateReadDependency(
+  dependency: PluginStateReadDependency & { assertCurrent?: () => void },
+): void {
+  const capture = state.reads.getStore();
+  if (!capture) {
+    return;
+  }
+  if (!capture.accepting) {
+    throw new Error("Plugin state read capture has ended");
+  }
+  capture.keyCount += dependency.keys.length;
+  if (capture.keyCount > 10_000) {
+    throw new Error("Plugin state ownership reads exceeded 10,000 dependency keys");
+  }
+  const { assertCurrent, ...source } = dependency;
+  capture.dependencies.push({ ...source, keys: [...source.keys] });
+  if (assertCurrent) {
+    capture.assertions.push(assertCurrent);
+  }
+}
+
+/** Pending work is not new committed truth; indeterminate outcomes retire the whole source. */
+export function pluginStateReadDependenciesAffected(
+  dependencies: readonly PluginStateReadDependency[],
+  change: PluginStateChange,
+): boolean {
+  if (change.kind === "pending" || change.kind === "settled") {
+    return false;
+  }
+  const identity = change.kind === "committed" ? change.receipt.source.identity : change.identity;
+  return dependencies.some((dependency) => {
+    if (dependency.identity !== undefined && dependency.identity !== identity) {
+      return false;
+    }
+    if (change.kind === "committed") {
+      return dependency.keys.some((key) =>
+        change.receipt.facts.has(JSON.stringify([dependency.pluginId, dependency.namespace, key])),
+      );
+    }
+    return change.kind === "unknown";
+  });
+}
+
+/** Keep the transient witness until its consumer installs the dependencies in its own cache. */
+export async function capturePluginStateReadDependencies<T>(read: () => Promise<T>) {
+  const capture: PluginStateReadCapture = {
+    dependencies: [],
+    assertions: [],
+    accepting: true,
+    keyCount: 0,
+  };
+  let active = true;
+  let changed = false;
+  const stop = pluginStatePublication.subscribeFacts((change) => {
+    if (pluginStateReadDependenciesAffected(capture.dependencies, change)) {
+      changed = true;
+    }
+  });
+  const release = () => {
+    active = false;
+    capture.accepting = false;
+    stop();
+  };
+  const assertCurrent = () => {
+    if (!active || changed) {
+      throw new Error("Plugin state changed while preparing session ownership");
+    }
+    for (const assertSourceCurrent of capture.assertions) {
+      assertSourceCurrent();
+    }
+  };
+  try {
+    const value = await state.reads.run(capture, read);
+    capture.accepting = false;
+    return {
+      value,
+      dependencies: Object.freeze(capture.dependencies),
+      assertCurrent,
+      isCurrent() {
+        try {
+          assertCurrent();
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      release,
+    };
+  } catch (error) {
+    release();
+    throw error;
+  }
+}
 
 function stage(db: DatabaseSync, facts: Map<string, SqliteCommittedFact<PluginStateRow>>) {
   if (!facts.size) {

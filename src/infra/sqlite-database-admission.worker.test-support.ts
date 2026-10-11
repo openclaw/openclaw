@@ -5,8 +5,12 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
   captureSqliteDatabaseAdmissions,
   getSqliteDatabaseAdmission,
+  hasPendingSqliteDatabaseSchemaMutation,
   installSqliteDatabaseAdmissions,
   publishSqliteDatabaseAdmission,
+  readSqliteDatabaseWriteRevision,
+  retireSqliteDatabaseAdmissionForPath,
+  withSqliteDatabaseWriteScope,
   type SqliteDatabaseAdmissionKey,
 } from "./sqlite-database-admission.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "./sqlite-schema-facts.js";
@@ -25,8 +29,24 @@ export type AdmissionOperations = {
     input: { path: string };
     output: { value: number | undefined; lookupMessages: number };
   };
+  transactionFacts: {
+    input: undefined;
+    output: {
+      transactionLookups: number;
+      transactionRevision: number | undefined;
+      transactionHostFact: number | undefined;
+      transactionWorkerFact: number | undefined;
+      pendingSchema: boolean;
+      transactionSchemaHasProof: boolean;
+      outsideLookups: number;
+      outsideRevision: number | undefined;
+      outsideHostFact: number | undefined;
+      outsideWorkerFact: number | undefined;
+    };
+  };
   mutate: { input: undefined; output: undefined };
-  writeRows: { input: { sql: string }; output: undefined };
+  retirePath: { input: { path: string }; output: undefined };
+  writeRows: { input: { sql: string; sessionKeys?: string[] }; output: undefined };
   mutateAfterHostAdmission: {
     input: { path: string };
     output: { native: boolean; admitted: boolean };
@@ -47,7 +67,7 @@ export const hostFactKey: SqliteDatabaseAdmissionKey<number> = {
   read: (value) => (typeof value === "number" ? value : undefined),
 };
 const absentHostFactKey = { ...hostFactKey, name: "admission-test-host-absent" };
-const workerFactKey = {
+export const workerFactKey = {
   name: "admission-test-worker-value",
   read: hostFactKey.read,
 };
@@ -143,12 +163,63 @@ export function createSqliteWorkerBackend(
         reader.close();
       }
     }
+    if (command.type === "transactionFacts") {
+      let transactionRevision: number | undefined;
+      let transactionHostFact: number | undefined;
+      let transactionWorkerFact: number | undefined;
+      let pendingSchema = false;
+      let transactionSchemaHasProof = false;
+      let transactionLookups = 0;
+      database.exec("BEGIN IMMEDIATE");
+      try {
+        requestSqliteWorkerOperationAdmission({ stage: "prepare", facts: undefined });
+        transactionLookups = countLookupMessages(() => {
+          transactionRevision = readSqliteDatabaseWriteRevision(database);
+          pendingSchema = hasPendingSqliteDatabaseSchemaMutation(database);
+          transactionHostFact = getSqliteDatabaseAdmission(database, hostFactKey);
+          transactionWorkerFact = getSqliteDatabaseAdmission(database, workerFactKey);
+          transactionSchemaHasProof =
+            getAdmittedSqliteSchemaFacts(database)?.tables.has("proof") === true;
+        });
+      } finally {
+        database.exec("ROLLBACK");
+      }
+      let outsideRevision: number | undefined;
+      let outsideHostFact: number | undefined;
+      let outsideWorkerFact: number | undefined;
+      const outsideLookups = countLookupMessages(() => {
+        outsideWorkerFact = getSqliteDatabaseAdmission(database, workerFactKey);
+        outsideHostFact = getSqliteDatabaseAdmission(database, hostFactKey);
+        outsideRevision = readSqliteDatabaseWriteRevision(database);
+      });
+      return {
+        transactionLookups,
+        transactionRevision,
+        transactionHostFact,
+        transactionWorkerFact,
+        pendingSchema,
+        transactionSchemaHasProof,
+        outsideLookups,
+        outsideRevision,
+        outsideHostFact,
+        outsideWorkerFact,
+      };
+    }
+    if (command.type === "retirePath") {
+      retireSqliteDatabaseAdmissionForPath(command.input.path);
+      return undefined;
+    }
     if (command.type === "mutate") {
       database.exec("CREATE TABLE worker_publication (value)");
       return undefined;
     }
     if (command.type === "writeRows") {
-      database.exec(command.input.sql);
+      const run = () => database.exec(command.input.sql);
+      if (command.input.sessionKeys) {
+        withSqliteDatabaseWriteScope(database, command.input.sessionKeys, run);
+      } else {
+        run();
+      }
       return undefined;
     }
     if (command.type === "mutateAfterHostAdmission") {
