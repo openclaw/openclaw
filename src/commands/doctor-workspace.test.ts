@@ -116,8 +116,8 @@ describe("root memory repair", () => {
   });
 
   it("merges true split-brain root memory files into MEMORY.md", async () => {
-    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Canonical\n", "utf8");
-    await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy\n", "utf8");
+    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Canonical 合法 😀 �\n", "utf8");
+    await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy 旧版 �\n", "utf8");
     if (!(await hasDistinctRootMemoryFiles(tmpDir))) {
       return;
     }
@@ -131,12 +131,67 @@ describe("root memory repair", () => {
     await maybeRepairWorkspaceMemoryHealth({ scope, prompter });
 
     const canonical = await fs.readFile(path.join(tmpDir, "MEMORY.md"), "utf8");
-    expect(canonical).toContain("# Canonical");
-    expect(canonical).toContain("# Legacy");
+    expect(canonical).toContain("# Canonical 合法 😀 �");
+    expect(canonical).toContain("# Legacy 旧版 �");
     await expectPathMissing(path.join(tmpDir, "memory.md"));
     const archivedLegacyPath = await expectArchivedLegacyMemory();
-    await expect(fs.readFile(archivedLegacyPath, "utf8")).resolves.toBe("# Legacy\n");
+    await expect(fs.readFile(archivedLegacyPath, "utf8")).resolves.toBe("# Legacy 旧版 �\n");
   });
+
+  it.each([
+    { invalidFile: "MEMORY.md", afterArchive: false },
+    { invalidFile: "memory.md", afterArchive: false },
+    { invalidFile: "MEMORY.md", afterArchive: true },
+    { invalidFile: "memory.md", afterArchive: true },
+  ])(
+    "preserves invalid UTF-8 in $invalidFile (after archive: $afterArchive)",
+    async ({ invalidFile, afterArchive }) => {
+      const canonicalPath = path.join(tmpDir, "MEMORY.md");
+      const legacyPath = path.join(tmpDir, "memory.md");
+      const canonical = Buffer.from("# Canonical\n");
+      const legacy = Buffer.from("# Legacy\n");
+      const invalid = Buffer.from([0x23, 0x20, 0xff, 0x0a]);
+      await fs.writeFile(canonicalPath, canonical);
+      await fs.writeFile(legacyPath, legacy);
+      if (!(await hasDistinctRootMemoryFiles(tmpDir))) {
+        return;
+      }
+      if (afterArchive) {
+        const rename = vi.spyOn(fs, "rename");
+        rename.mockImplementationOnce(async (source, target) => {
+          rename.mockRestore();
+          await fs.rename(source, target);
+          await fs.writeFile(invalidFile === "MEMORY.md" ? canonicalPath : target, invalid);
+        });
+      } else {
+        await fs.writeFile(path.join(tmpDir, invalidFile), invalid);
+      }
+
+      await maybeRepairWorkspaceMemoryHealth({ scope, prompter });
+
+      await expect(fs.readFile(canonicalPath)).resolves.toEqual(
+        invalidFile === "MEMORY.md" ? invalid : canonical,
+      );
+      const message = String(note.mock.calls[0]?.[0]);
+      expect(message).toContain("not valid UTF-8");
+      expect(message).toContain(canonicalPath);
+      expect(message).toContain(legacyPath);
+      expect(message).not.toContain("Workspace memory root merged");
+      if (afterArchive) {
+        await expectPathMissing(legacyPath);
+        const archive = await expectArchivedLegacyMemory();
+        await expect(fs.readFile(archive)).resolves.toEqual(
+          invalidFile === "memory.md" ? invalid : legacy,
+        );
+        expect(message).toContain(`- preserved archive: ${archive}`);
+      } else {
+        await expect(fs.readFile(legacyPath)).resolves.toEqual(
+          invalidFile === "memory.md" ? invalid : legacy,
+        );
+        await expectPathMissing(path.join(tmpDir, ".openclaw-repair"));
+      }
+    },
+  );
 
   it("reads legacy content after moving it into the archive", async () => {
     const canonicalPath = path.join(tmpDir, "MEMORY.md");

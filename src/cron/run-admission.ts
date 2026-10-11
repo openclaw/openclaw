@@ -113,21 +113,6 @@ export function prepareCronRunAdmission(params: {
               scheduled: {
                 policy: scheduledToolPolicy,
                 assertCurrent: scheduledMessageAuthority,
-                ...(scheduledMessageAuthority.prepareUse
-                  ? {
-                      prepareUse: (sourceSensitive: boolean, assertCurrent?: () => void) => {
-                        const prepare = (
-                          sourceSensitive
-                            ? scheduledMessageSourceAuthority
-                            : scheduledMessageAuthority
-                        )?.prepareUse;
-                        if (!prepare) {
-                          throw new Error("Cron message source has no prepared authority");
-                        }
-                        return prepare(assertCurrent);
-                      },
-                    }
-                  : {}),
                 ...(scheduledMessageSourceAuthority
                   ? { assertSourceCurrent: scheduledMessageSourceAuthority }
                   : {}),

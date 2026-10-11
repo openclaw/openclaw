@@ -640,9 +640,10 @@ service restoration, including when the Gateway is still starting or restoration
 also fails. A startup warning after otherwise successful Doctor repair does not
 clear a repair phase timeout.
 
-Recorded pending-migration warnings stop appearing after the migration owner
-records completion. Unrelated warnings and later or reintroduced obligations
-remain visible; the original update history is preserved.
+Recorded pending-migration warnings stop appearing when the plugin is no longer
+pending in the migration owner's current state, including warnings delivered
+after completion by a Doctor child. Unrelated warnings and reintroduced pending
+obligations remain visible; the original update history is preserved.
 
 After post-update or finalization work fails and its child processes settle,
 OpenClaw checks the installed Gateway using the normal startup and readiness

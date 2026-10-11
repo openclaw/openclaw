@@ -342,8 +342,7 @@ function renderPreviewFrame(params: PreviewFrameParams) {
 }
 
 const loadMcpAppView = async () => {
-  const registration = await import("../../../components/mcp-app-view-registration.ts");
-  registration.registerMcpAppView();
+  await import("../../../components/mcp-app-view-registration.ts");
 };
 
 const loadCanvasWidgetView = () => import("../../../components/canvas-widget-view.ts");
