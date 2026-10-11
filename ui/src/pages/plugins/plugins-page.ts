@@ -27,6 +27,7 @@ import { installedPluginDetailTabFromHash, type InstalledPluginDetailTab } from 
 import { PluginDiscoveryController } from "./plugin-discovery-controller.ts";
 import { PluginHelpController } from "./plugin-help-controller.ts";
 import { PluginMcpLoginController } from "./plugin-mcp-login-controller.ts";
+import { focusHeadingAfterRemoval } from "./plugin-removal-focus.ts";
 import { pluginRowKey, type PluginRowMessage } from "./plugin-row-message.tsx";
 import { PluginSettingsController } from "./plugin-settings-controller.ts";
 import { pluginMutationWarnings, PluginsConsentController } from "./plugins-consent-controller.ts";
@@ -668,6 +669,7 @@ export class PluginsPageController implements ReactiveControllerHost {
   async uninstall(pluginId: string, rowKey: string): Promise<void> {
     const name =
       this.state.result?.plugins.find((plugin) => plugin.id === pluginId)?.name ?? pluginId;
+    const trigger = this.element.contains(document.activeElement) ? document.activeElement : null;
     await this.consentController.runMutation(
       rowKey,
       (client) => uninstallPlugin(client, pluginId),
@@ -686,6 +688,10 @@ export class PluginsPageController implements ReactiveControllerHost {
           }
         }
         await this.refreshCatalog(client);
+        if (isLatest()) {
+          await this.updateComplete;
+          focusHeadingAfterRemoval(this.element, trigger);
+        }
       },
       {
         action: "uninstall",
