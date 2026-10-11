@@ -33,7 +33,7 @@ export async function withSessionRowDatabaseFacts(
   owner: {
     rows: ReadonlyMap<string, Row>;
     dirty: ReadonlySet<string>;
-    revision: () => number | undefined;
+    isActive: () => boolean;
     prepareRegistryFacts: () => Promise<void> | undefined;
     cfg: OpenClawConfig;
     env: NodeJS.ProcessEnv;
@@ -47,7 +47,6 @@ export async function withSessionRowDatabaseFacts(
     ) => void;
   },
 ): Promise<void> {
-  const revision = owner.revision();
   const ids: string[] = [];
   for (const id of owner.selected ?? owner.dirty) {
     ids.push(id);
@@ -233,19 +232,13 @@ export async function withSessionRowDatabaseFacts(
         }
         // Registry renewal changes presentation, not the captured SQLite facts.
         // Prepare the current lineage before accepting those facts instead of reading them again.
-        for (
-          let pending = owner.prepareRegistryFacts();
-          pending;
-          pending = owner.prepareRegistryFacts()
-        ) {
-          await pending;
-        }
+        await owner.prepareRegistryFacts();
         for (const databaseOwner of owners) {
           databaseOwner.assertCurrent();
         }
         sharedRead?.assertCurrent();
         assertCurrent();
-        if (revision !== undefined && owner.revision() === revision) {
+        if (owner.isActive()) {
           const currentIds = rows
             .filter(
               (row) =>

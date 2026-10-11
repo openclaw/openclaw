@@ -5,15 +5,9 @@ import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
-import { PLUGINS_HUB_PANEL_ID, type PluginsHubTab } from "./plugins-hub.ts";
+import { PLUGINS_HUB_DOCS_URLS, PLUGINS_HUB_PANEL_ID, type PluginsHubTab } from "./plugins-hub.ts";
 
 registerPluginManagementEnglish();
-
-const HUB_DOCS_URLS = {
-  plugins: "https://docs.openclaw.ai/plugins/manage-plugins",
-  skills: "https://docs.openclaw.ai/tools/skills",
-  "skill-workshop": "https://docs.openclaw.ai/tools/skill-workshop",
-} as const;
 
 type PluginsHubHeaderProps = {
   active: PluginsHubTab;
@@ -25,6 +19,7 @@ type PluginsHubHeaderProps = {
   };
 };
 
+// The unported Skill Workshop retains this stateless template until its page migrates.
 export function renderPluginsHubHeader(props: PluginsHubHeaderProps): TemplateResult {
   return html`
     <section
@@ -34,7 +29,8 @@ export function renderPluginsHubHeader(props: PluginsHubHeaderProps): TemplateRe
       <div class="hub-page-header__title">
         <h1 class="page-title">${titleForRoute(props.active)}</h1>
         <div class="page-subtitle">
-          ${subtitleForRoute(props.active)} ${renderLearnMoreLink(HUB_DOCS_URLS[props.active])}
+          ${subtitleForRoute(props.active)}
+          ${renderLearnMoreLink(PLUGINS_HUB_DOCS_URLS[props.active])}
         </div>
       </div>
       <div class="hub-page-header__tabs">

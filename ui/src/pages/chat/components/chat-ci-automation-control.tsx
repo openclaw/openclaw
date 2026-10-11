@@ -392,16 +392,12 @@ function ChatCiAutomationContent(props: Props, host: SolidBridgeElement<Props>) 
   );
 }
 
-export const ChatCiAutomation = defineSolidBridge<Props>(
-  "openclaw-chat-ci-automation",
-  ChatCiAutomationContent,
-  {
-    properties: {
-      gateway: { default: undefined, attribute: false },
-      pullRequest: { default: undefined, attribute: false },
-      sessionKey: { default: "", attribute: false },
-      sessionId: { default: "", attribute: false },
-      presented: { default: true, type: Boolean },
-    },
+defineSolidBridge<Props>("openclaw-chat-ci-automation", ChatCiAutomationContent, {
+  properties: {
+    gateway: { default: undefined, attribute: false },
+    pullRequest: { default: undefined, attribute: false },
+    sessionKey: { default: "", attribute: false },
+    sessionId: { default: "", attribute: false },
+    presented: { default: true, type: Boolean },
   },
-);
+});

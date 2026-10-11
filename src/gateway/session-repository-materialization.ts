@@ -23,6 +23,7 @@ import {
   assertSafeGitPublicationWorkspace,
   createGitHubPublicationCommandRunner,
 } from "./github-publication-git-transport.js";
+import { readRepositoryGitHubPublicationBranchAsync } from "./github-publication-store-async.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { prepareRepositoryPublicationRestore } from "./github-repository-publication-restore.js";
 import { readRepositoryGitHubPublicationBranch } from "./github-repository-publication-store.js";
@@ -87,13 +88,13 @@ async function materializeCapturedRepositoryWorkspace(
       `Repository workspace does not match the configured GitHub host (${githubHost}); restore its GitHub configuration before retrying the Gateway move`,
     );
   }
-  const branch = () =>
-    readRepositoryGitHubPublicationBranch({
-      workspaceId,
-      branch: repository.branch,
-      pushRepository: `${remote.owner}/${remote.repo}`,
-    });
-  const selected = branch();
+  const branchInput = {
+    workspaceId,
+    branch: repository.branch,
+    pushRepository: `${remote.owner}/${remote.repo}`,
+  };
+  const branch = () => readRepositoryGitHubPublicationBranch(branchInput);
+  const selected = await readRepositoryGitHubPublicationBranchAsync(branchInput);
   const published = selected.head;
   if (selected.unsettled) {
     throw new Error(
