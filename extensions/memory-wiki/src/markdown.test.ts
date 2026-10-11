@@ -7,6 +7,7 @@ import {
   extractHumanNotesBlock,
   parseWikiMarkdown,
   preserveHumanNotesBlock,
+  replaceWikiManagedMarkdownBlock,
   renderWikiMarkdown,
   scanWikiPageSummary,
   slugifyWikiSegment,
@@ -93,6 +94,219 @@ describe("human Notes blocks", () => {
     expect(preserveHumanNotesBlock(existing, rendered)).toBe(existing);
   });
 
+  it("updates a managed block beside an ordinary unmarked Notes section", () => {
+    const original = [
+      "# Source",
+      "",
+      "## Generated",
+      "<!-- openclaw:wiki:generated:start -->",
+      "old summary",
+      "<!-- openclaw:wiki:generated:end -->",
+      "",
+      "## Notes",
+      "Ordinary hand-written note<!-- openclaw:wiki:generated:end -->",
+      "",
+    ].join("\n");
+    expect(
+      replaceWikiManagedMarkdownBlock({
+        original,
+        heading: "## Generated",
+        startMarker: "<!-- openclaw:wiki:generated:start -->",
+        endMarker: "<!-- openclaw:wiki:generated:end -->",
+        body: "current summary",
+      }),
+    ).toBe(
+      [
+        "# Source",
+        "",
+        "## Generated",
+        "<!-- openclaw:wiki:generated:start -->",
+        "current summary",
+        "<!-- openclaw:wiki:generated:end -->",
+        "",
+        "## Notes",
+        "Ordinary hand-written note<!-- openclaw:wiki:generated:end -->",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("preserves standalone generated end markers inside ordinary Notes", () => {
+    const start = "<!-- openclaw:wiki:generated:start -->";
+    const end = "<!-- openclaw:wiki:generated:end -->";
+    const original = [
+      "# Source",
+      "",
+      "## Generated",
+      start,
+      "old summary",
+      end,
+      "",
+      "## Notes",
+      end,
+      "",
+    ].join("\n");
+
+    expect(
+      replaceWikiManagedMarkdownBlock({
+        original,
+        heading: "## Generated",
+        startMarker: start,
+        endMarker: end,
+        body: "current summary",
+      }),
+    ).toBe(
+      ["# Source", "", "## Generated", start, "current summary", end, "", "## Notes", end, ""].join(
+        "\n",
+      ),
+    );
+  });
+
+  it("does not pair literal generated markers inside ordinary Notes", () => {
+    const start = "<!-- openclaw:wiki:generated:start -->";
+    const end = "<!-- openclaw:wiki:generated:end -->";
+    const original = [
+      "# Source",
+      "",
+      "## Generated",
+      start,
+      "old summary",
+      end,
+      "",
+      "## Notes",
+      start,
+      "literal generated-block example",
+      end,
+      "",
+    ].join("\n");
+
+    expect(
+      replaceWikiManagedMarkdownBlock({
+        original,
+        heading: "## Generated",
+        startMarker: start,
+        endMarker: end,
+        body: "current summary",
+      }),
+    ).toBe(original.replace("old summary", "current summary"));
+  });
+
+  it("does not let a Notes marker close an unfinished generated block", () => {
+    const start = "<!-- openclaw:wiki:generated:start -->";
+    const end = "<!-- openclaw:wiki:generated:end -->";
+    const original = ["# Source", "## Generated", start, "old summary", "## Notes", end].join("\n");
+
+    expect(() =>
+      replaceWikiManagedMarkdownBlock({
+        original,
+        heading: "## Generated",
+        startMarker: start,
+        endMarker: end,
+        body: "current summary",
+      }),
+    ).toThrow("restore the missing end marker");
+  });
+
+  it("rejects a generated block that would span ordinary Notes", () => {
+    const start = "<!-- openclaw:wiki:generated:start -->";
+    const end = "<!-- openclaw:wiki:generated:end -->";
+    const original = [
+      "# Source",
+      "## Generated",
+      start,
+      "old summary",
+      "## Notes",
+      "ordinary hand-written note",
+      "## History",
+      end,
+    ].join("\n");
+
+    expect(() =>
+      replaceWikiManagedMarkdownBlock({
+        original,
+        heading: "## Generated",
+        startMarker: start,
+        endMarker: end,
+        body: "current summary",
+      }),
+    ).toThrow("restore the missing end marker");
+  });
+
+  it("finds the real Notes heading after a fenced code example", () => {
+    const start = "<!-- openclaw:wiki:generated:start -->";
+    const end = "<!-- openclaw:wiki:generated:end -->";
+    const realNote = end;
+    const original = [
+      "# Source",
+      "",
+      "## Generated",
+      start,
+      "old summary",
+      end,
+      "",
+      "```markdown",
+      "## Notes",
+      "Example note heading",
+      "## Example",
+      "```",
+      "",
+      "## Notes",
+      realNote,
+      "",
+    ].join("\n");
+
+    const updated = replaceWikiManagedMarkdownBlock({
+      original,
+      heading: "## Generated",
+      startMarker: start,
+      endMarker: end,
+      body: "current summary",
+    });
+
+    expect(updated).toBe(original.replace("old summary", "current summary"));
+    expect(updated).toContain(["## Notes", realNote].join("\n"));
+    expect(updated).toContain(
+      ["```markdown", "## Notes", "Example note heading", "## Example", "```"].join("\n"),
+    );
+  });
+
+  it.each(["\n", "\r\n"])("protects Notes while recovering history markers (%j)", (newline) => {
+    const start = "<!-- openclaw:wiki:generated:start -->";
+    const end = "<!-- openclaw:wiki:generated:end -->";
+    const original = [
+      "# Source",
+      "## Notes",
+      `Ordinary note${end}`,
+      "```md",
+      "## Summary",
+      `Code example ${end}`,
+      "```",
+      "## Summary",
+      start,
+      "old summary",
+      end,
+      "## History",
+      `Retained rationale${end}`,
+      "",
+    ].join(newline);
+
+    const updated = replaceWikiManagedMarkdownBlock({
+      original,
+      heading: "## Summary",
+      startMarker: start,
+      endMarker: end,
+      body: "current summary",
+    });
+
+    expect(updated).toContain(
+      ["## Notes", `Ordinary note${end}`, "```md", "## Summary", `Code example ${end}`, "```"].join(
+        newline,
+      ),
+    );
+    expect(updated).toContain(`## History${newline}Retained rationale${newline}`);
+    expect(updated).not.toContain(`Retained rationale${end}`);
+  });
+
   it.each([
     {
       name: "closing",
@@ -141,6 +355,107 @@ describe("human Notes blocks", () => {
 
     expect(extractHumanNotesBlock(existing)).toBe(`${startMarker}\n${notes}\n${endMarker}`);
     expect(preserveHumanNotesBlock(rendered, existing)).toBe(existing);
+  });
+
+  it("does not treat a generated Notes heading as the human Notes section", () => {
+    const generatedStart = "<!-- openclaw:wiki:generated:start -->";
+    const generatedEnd = "<!-- openclaw:wiki:generated:end -->";
+    const original = [
+      "# Synthesis",
+      "",
+      "## Summary",
+      generatedStart,
+      "Old summary",
+      "## Notes",
+      "Generated subsection content",
+      generatedEnd,
+      "",
+      "## Notes",
+      startMarker,
+      "Durable human annotation",
+      endMarker,
+      "",
+    ].join("\n");
+
+    const updated = replaceWikiManagedMarkdownBlock({
+      original,
+      heading: "## Summary",
+      startMarker: generatedStart,
+      endMarker: generatedEnd,
+      body: "Current summary",
+    });
+
+    expect(updated).toContain("Current summary");
+    expect(updated).not.toContain("Old summary");
+    expect(updated).toContain("Durable human annotation");
+    expect(updated.match(new RegExp(generatedStart, "gu"))).toHaveLength(1);
+  });
+
+  it("rejects a managed range that contains marked Notes before another Notes section", () => {
+    const generatedStart = "<!-- openclaw:wiki:generated:start -->";
+    const generatedEnd = "<!-- openclaw:wiki:generated:end -->";
+    const original = [
+      "# Synthesis",
+      "",
+      "## Summary",
+      generatedStart,
+      "Old summary",
+      "## Notes",
+      startMarker,
+      "Durable earlier annotation",
+      endMarker,
+      "Generated tail",
+      generatedEnd,
+      "",
+      "## Notes",
+      startMarker,
+      "Durable later annotation",
+      endMarker,
+      "",
+    ].join("\n");
+
+    expect(() =>
+      replaceWikiManagedMarkdownBlock({
+        original,
+        heading: "## Summary",
+        startMarker: generatedStart,
+        endMarker: generatedEnd,
+        body: "Current summary",
+      }),
+    ).toThrow("Updating managed wiki content would replace human Notes");
+  });
+
+  it("ignores a fenced human-end example in generated content when preserving Notes", () => {
+    const generatedStart = "<!-- openclaw:wiki:generated:start -->";
+    const generatedEnd = "<!-- openclaw:wiki:generated:end -->";
+    const original = [
+      "# Synthesis",
+      "",
+      "## Notes",
+      startMarker,
+      "Durable human annotation",
+      endMarker,
+      "",
+      "## Summary",
+      generatedStart,
+      "Old summary",
+      generatedEnd,
+      "",
+    ].join("\n");
+
+    const updated = replaceWikiManagedMarkdownBlock({
+      original,
+      heading: "## Summary",
+      startMarker: generatedStart,
+      endMarker: generatedEnd,
+      body: ["Current summary", "```markdown", endMarker, "```"].join("\n"),
+    });
+
+    expect(updated).toContain("Current summary");
+    expect(updated).toContain("Durable human annotation");
+    expect(extractHumanNotesBlock(updated)).toBe(
+      `${startMarker}\nDurable human annotation\n${endMarker}`,
+    );
   });
 
   it("ignores source-body marker pairs when extracting and preserving actual Notes", () => {

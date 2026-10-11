@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import {
+  replaceManagedMarkdownBlock,
+  withTrailingNewline,
+  type ManagedMarkdownBlockParams,
+} from "openclaw/plugin-sdk/memory-host-markdown";
+import {
   asFiniteNumber,
   asNullableRecord,
   normalizeLowercaseStringOrEmpty,
@@ -9,7 +14,8 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import YAML from "yaml";
-import { extractWikiLinks } from "./markdown-links.js";
+import { extractWikiLinks, forEachMarkdownCodeRange } from "./markdown-links.js";
+import { hasMarkedNotesInsideManagedRange } from "./markdown-notes.js";
 
 export { WIKI_RELATED_END_MARKER, WIKI_RELATED_START_MARKER } from "./markdown-links.js";
 
@@ -21,6 +27,8 @@ export const WIKI_PAGE_GROUPS = [
   { kind: "report", dir: "reports", heading: "Reports" },
 ] as const;
 export const WIKI_RAW_SOURCE_MARKER = "<!-- openclaw:wiki:raw-source -->";
+export const WIKI_GENERATED_START_MARKER = "<!-- openclaw:wiki:generated:start -->";
+export const WIKI_GENERATED_END_MARKER = "<!-- openclaw:wiki:generated:end -->";
 
 export type WikiPageKind = (typeof WIKI_PAGE_GROUPS)[number]["kind"];
 type GeneratedSourceBody = "bridge" | "unsafe-local" | "local-file" | "chatgpt-export";
@@ -320,10 +328,95 @@ function afterSourceContentFence(page: string): number {
   return fenceLineStart + fence.length + close.index + close[0].length;
 }
 
-function findNotesHumanBlock(page: string): { start: number; end: number } | null {
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function findBalancedManagedMarkdownRanges(
+  page: string,
+  startMarker: string,
+  endMarker: string,
+  protectedRanges: ReadonlyArray<{ start: number; end: number }> = [],
+): Array<{ start: number; end: number }> {
+  const markerPattern = new RegExp(
+    `^ {0,3}(${escapeRegExp(startMarker)}|${escapeRegExp(endMarker)})[\\t ]*(?=\\r?$)`,
+    "gm",
+  );
+  const codeRanges: Array<{ start: number; end: number }> = [];
+  forEachMarkdownCodeRange(page, (start, end) => codeRanges.push({ start, end }));
+  const isCode = (offset: number) =>
+    codeRanges.some((range) => offset >= range.start && offset < range.end);
+  const isProtected = (start: number, end: number) =>
+    protectedRanges.some((range) => start < range.end && end > range.start);
+  const ranges: Array<{ start: number; end: number }> = [];
+  let depth = 0;
+  let start = -1;
+  for (const marker of page.matchAll(markerPattern)) {
+    const markerText = marker[1];
+    if (
+      !markerText ||
+      isCode(marker.index) ||
+      isProtected(marker.index, marker.index + marker[0].length)
+    ) {
+      continue;
+    }
+    if (markerText === startMarker) {
+      if (depth === 0) {
+        start = marker.index;
+      }
+      depth += 1;
+    } else if (depth > 0) {
+      depth -= 1;
+      if (depth === 0) {
+        ranges.push({ start, end: marker.index + marker[0].length });
+        start = -1;
+      }
+    }
+  }
+  return ranges;
+}
+
+function findWikiGeneratedRanges(page: string): Array<{ start: number; end: number }> {
+  const candidateRanges = findBalancedManagedMarkdownRanges(
+    page,
+    WIKI_GENERATED_START_MARKER,
+    WIKI_GENERATED_END_MARKER,
+  );
+  const notesSection = findNotesSectionRange(page, candidateRanges);
+  return findBalancedManagedMarkdownRanges(
+    page,
+    WIKI_GENERATED_START_MARKER,
+    WIKI_GENERATED_END_MARKER,
+    notesSection ? [notesSection] : [],
+  );
+}
+
+function findNotesHumanBlock(
+  page: string,
+  excludedRanges: ReadonlyArray<{ start: number; end: number }> = findWikiGeneratedRanges(page),
+): { start: number; end: number } | null {
   const searchFrom = afterSourceContentFence(page);
-  const start = page.indexOf(HUMAN_START_MARKER, searchFrom);
-  const endMarker = page.lastIndexOf(HUMAN_END_MARKER);
+  const codeRanges: Array<{ start: number; end: number }> = [];
+  forEachMarkdownCodeRange(page, (start, end) => codeRanges.push({ start, end }));
+  const isIgnored = (offset: number) =>
+    codeRanges.some((range) => offset >= range.start && offset < range.end) ||
+    excludedRanges.some((range) => offset >= range.start && offset < range.end);
+  let start = -1;
+  let endMarker = -1;
+  const markerPattern = new RegExp(
+    `${escapeRegExp(HUMAN_START_MARKER)}|${escapeRegExp(HUMAN_END_MARKER)}`,
+    "g",
+  );
+  for (const marker of page.matchAll(markerPattern)) {
+    if (marker.index < searchFrom || isIgnored(marker.index)) {
+      continue;
+    }
+    if (marker[0] === HUMAN_START_MARKER && start === -1) {
+      start = marker.index;
+    } else if (marker[0] === HUMAN_END_MARKER) {
+      endMarker = marker.index;
+    }
+  }
   if (start === -1 && endMarker < searchFrom) {
     const notesSection = /(?:^|\r?\n)## Notes[\t ]*(?:\r?\n|$)([\s\S]*)/u.exec(
       page.slice(searchFrom),
@@ -341,8 +434,54 @@ function findNotesHumanBlock(page: string): { start: number; end: number } | nul
   return { start, end: endMarker + HUMAN_END_MARKER.length };
 }
 
+function findNotesSectionRange(
+  page: string,
+  candidateManagedRanges: ReadonlyArray<{ start: number; end: number }> = [],
+): { start: number; end: number } | null {
+  const searchFrom = afterSourceContentFence(page);
+  const codeRanges: Array<{ start: number; end: number }> = [];
+  forEachMarkdownCodeRange(page, (start, end) => codeRanges.push({ start, end }));
+  const isCode = (offset: number) =>
+    codeRanges.some((range) => offset >= range.start && offset < range.end);
+  const noteHeadings: number[] = [];
+  const headings: number[] = [];
+  let lineStart = searchFrom;
+  while (lineStart < page.length) {
+    const newline = page.indexOf("\n", lineStart);
+    const lineEnd = newline === -1 ? page.length : newline;
+    const line = page.slice(lineStart, lineEnd).replace(/\r$/u, "");
+    if (!isCode(lineStart)) {
+      if (/^ {0,3}##[\t ]+/u.test(line)) {
+        headings.push(lineStart);
+        if (/^## Notes[\t ]*$/u.test(line)) {
+          noteHeadings.push(lineStart);
+        }
+      }
+    }
+    lineStart = newline === -1 ? page.length : newline + 1;
+  }
+  const start = noteHeadings.find((heading) => {
+    const containingRange = candidateManagedRanges.find(
+      (range) => heading > range.start && heading < range.end,
+    );
+    return !containingRange || !noteHeadings.some((candidate) => candidate >= containingRange.end);
+  });
+  if (start === undefined) {
+    return null;
+  }
+  const end = headings.find((heading) => heading > start);
+  return { start, end: end ?? page.length };
+}
+
 export function extractHumanNotesBlock(page: string): string | null {
   const block = findNotesHumanBlock(page);
+  return extractHumanNotesBlockFromRange(page, block);
+}
+
+function extractHumanNotesBlockFromRange(
+  page: string,
+  block: { start: number; end: number } | null,
+): string | null {
   if (!block) {
     return null;
   }
@@ -351,6 +490,52 @@ export function extractHumanNotesBlock(page: string): string | null {
     block.end - HUMAN_END_MARKER.length,
   );
   return notes.trim() ? page.slice(block.start, block.end) : null;
+}
+
+export function replaceWikiManagedMarkdownBlock(params: ManagedMarkdownBlockParams): string {
+  const hasHumanMarkers =
+    params.original.includes(HUMAN_START_MARKER) || params.original.includes(HUMAN_END_MARKER);
+  const candidateGeneratedRanges = findBalancedManagedMarkdownRanges(
+    params.original,
+    params.startMarker,
+    params.endMarker,
+  );
+  if (hasMarkedNotesInsideManagedRange(params.original, candidateGeneratedRanges)) {
+    throw new Error(
+      "Updating managed wiki content would replace human Notes; restore human Notes outside managed markers before updating this page",
+    );
+  }
+  const notesSection = findNotesSectionRange(params.original, candidateGeneratedRanges);
+  const generatedRanges = findBalancedManagedMarkdownRanges(
+    params.original,
+    params.startMarker,
+    params.endMarker,
+    notesSection ? [notesSection] : [],
+  );
+  const notes = hasHumanMarkers ? findNotesHumanBlock(params.original, generatedRanges) : null;
+  const updated = withTrailingNewline(
+    replaceManagedMarkdownBlock({
+      ...params,
+      recoverInlineOrphanEnds: true,
+      protectedRanges: [
+        ...(params.protectedRanges ?? []),
+        ...(notesSection ? [notesSection] : []),
+        ...(notes ? [notes] : []),
+      ],
+    }),
+  );
+  if (
+    hasHumanMarkers &&
+    extractHumanNotesBlockFromRange(
+      params.original,
+      findNotesHumanBlock(params.original, generatedRanges),
+    ) !== extractHumanNotesBlockFromRange(updated, findNotesHumanBlock(updated))
+  ) {
+    throw new Error(
+      "Updating managed wiki content would replace human Notes; restore human Notes outside managed markers before updating this page",
+    );
+  }
+  return updated;
 }
 
 export function preserveHumanNotesBlock(rendered: string, existing: string): string {
