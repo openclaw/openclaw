@@ -1,6 +1,8 @@
 import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import type { ConfigFormStructuredDraftProps } from "../../components/config-form-structured-draft.ts";
-import type { OpenClawFilePreviewModal } from "../../components/file-preview-modal.ts";
+import type { FilePreviewModalFile } from "../../components/file-preview-modal.ts";
+
+type OpenClawFilePreviewModal = HTMLElementTagNameMap["openclaw-file-preview-modal"];
 
 // The remaining custom elements own their children and behavior during the page cutover.
 declare module "@solidjs/web" {
@@ -16,7 +18,7 @@ declare module "@solidjs/web" {
       "openclaw-file-preview-modal": HTMLAttributes<OpenClawFilePreviewModal> & {
         layout?: OpenClawFilePreviewModal["layout"];
         "prop:label"?: OpenClawFilePreviewModal["label"];
-        "prop:files"?: OpenClawFilePreviewModal["files"];
+        "prop:files"?: FilePreviewModalFile[];
         "prop:directories"?: OpenClawFilePreviewModal["directories"];
         "prop:activePath"?: OpenClawFilePreviewModal["activePath"];
         "prop:loading"?: OpenClawFilePreviewModal["loading"];
