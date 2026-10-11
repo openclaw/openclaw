@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { root as fsRoot } from "../../infra/fs-safe.js";
-import type { GitCommandOptions } from "../../infra/git-exec.js";
+import { normalizeGitPathForFilesystem, type GitCommandOptions } from "../../infra/git-exec.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.js";
 import type { WorktreeWaitBudget } from "./allocation.js";

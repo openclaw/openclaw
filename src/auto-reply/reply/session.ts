@@ -8,7 +8,6 @@ import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/registry.js";
-import { captureAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveSessionParentSessionKey } from "../../channels/plugins/session-conversation.js";
@@ -19,7 +18,6 @@ import { resolveSessionLifecycleTimestampsAsync } from "../../config/sessions/li
 import {
   hasTerminalMainSessionTranscriptNewerThanRegistrySync,
   isRestartRecoveryTombstone,
-  resolveSessionWorkStartError,
 } from "../../config/sessions/lifecycle.js";
 import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
 import {
@@ -128,6 +126,7 @@ import {
 } from "./session-init-conflict-retry.js";
 import type { SessionInitResult } from "./session-init.types.js";
 import {
+  assertReplySessionInitializationAllowed,
   prepareReplySessionInitialization,
   resolveInitSessionStateAttemptContext,
   resolveInitializationSessionReader,
@@ -431,14 +430,10 @@ async function initSessionStateAttemptLocked(
     nativeCommandTarget: resolveCommandTurnTargetSessionKey(ctx),
     sessionKey,
   });
-  const archivedSessionError = resolveSessionWorkStartError(sessionKey, entry, {
-    allowPendingWorkspace: captureAgentWorkspaceReadiness(sessionKey) ? true : undefined,
+  assertReplySessionInitializationAllowed(sessionKey, entry, {
     allowRestartTombstoneReplacement: restartTombstoneReset || restartTombstoneParentFork,
     providerReviewAcknowledgment: params.providerReviewAcknowledgment,
   });
-  if (archivedSessionError) {
-    throw new Error(archivedSessionError);
-  }
   // Locked model selection is coupled to the current native session id. Reject before
   // lifecycle cleanup so a reset cannot detach the durable harness binding.
   const lockedModelSelection = isModelSelectionLocked(entry);
