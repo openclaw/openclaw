@@ -681,3 +681,47 @@ describe("normalizePlainTextToolCallStreamEvents protected ranges", () => {
     expectLiteral(events, text, textContent(text));
   });
 });
+
+describe("normalizePlainTextToolCallStreamEvents trim replay ordering", () => {
+  it("drains buffered reasoning when a terminal trim clears the candidate", async () => {
+    const prefix = `[read]${" ".repeat(300)}`;
+    const events = await normalize([
+      streamTextDelta(prefix),
+      streamTextDelta("nope\n<function=read>"),
+      { type: "thinking_delta", contentIndex: 0, delta: "checking" },
+    ]);
+    expect(textDeltas(events)).toEqual([`${prefix}nope\n`]);
+    expect(eventTypes(events)).toContain("thinking_delta");
+    expect(JSON.stringify(events)).not.toContain("<function=read>");
+  });
+
+  it("replays each prefix segment at its original content index", async () => {
+    const events = await normalize([
+      streamTextDelta("[read]", 0),
+      streamTextDelta("x\n<function=read>", 1),
+    ]);
+    expect(
+      events
+        .filter((event) => event.type === "text_delta")
+        .map((event) => [event.contentIndex, event.delta]),
+    ).toEqual([
+      [0, "[read]"],
+      [1, "x\n"],
+    ]);
+    expect(JSON.stringify(events)).not.toContain("<function=read>");
+  });
+
+  it("replays a decided prefix and buffered reasoning in arrival order", async () => {
+    const events = await normalize([
+      streamTextDelta("[read]"),
+      { type: "thinking_delta", contentIndex: 0, delta: "checking" },
+      streamTextDelta("\n<function=read>"),
+    ]);
+    expect(events.map((event) => [event.type, event.delta])).toEqual([
+      ["text_delta", "[read]"],
+      ["thinking_delta", "checking"],
+      ["text_delta", "\n"],
+    ]);
+    expect(JSON.stringify(events)).not.toContain("<function=read>");
+  });
+});

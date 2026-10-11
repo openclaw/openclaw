@@ -96,12 +96,16 @@ type CandidatePendingState = {
   bufferBytes: number;
   entryBytes: number;
   entries?: Record<string, unknown>[];
+  /** Buffer offsets of queued entries, used to keep replayed output in arrival order. */
+  entryOffsets?: WeakMap<Record<string, unknown>, number>;
   kind: "candidate";
   nextScanChars: number;
   parts: StandalonePlainTextToolCallCandidate["parts"];
   sequenceOverCap: boolean;
   snapshotOffset: number;
   template: Record<string, unknown>;
+  /** Latest text template per content block, used to replay prefix segments in place. */
+  templates?: Map<number, Record<string, unknown>>;
 };
 
 type SuppressingPendingState = {
@@ -636,7 +640,7 @@ function createPendingState(
   snapshotOffset = 0,
 ): CandidatePendingState {
   const entries = [...(heldStart ? [{ ...heldStart }] : []), { ...record }];
-  return {
+  const pending: CandidatePendingState = {
     buffer: text,
     bufferBytes: cappedUtf8ByteLength(text),
     entries,
@@ -655,7 +659,22 @@ function createPendingState(
     sequenceOverCap,
     snapshotOffset,
     template: eventTemplate(record),
+    templates: new Map([[eventContentIndex(record), eventTemplate(record)]]),
   };
+  rememberPendingEntryOffsets(pending, entries, 0);
+  return pending;
+}
+
+function rememberPendingEntryOffsets(
+  pending: CandidatePendingState,
+  entries: readonly Record<string, unknown>[],
+  offset: number,
+): void {
+  pending.entryOffsets ??= new WeakMap<Record<string, unknown>, number>();
+  const offsets = pending.entryOffsets;
+  for (const entry of entries) {
+    offsets.set(entry, offset);
+  }
 }
 
 function queuePendingEvent(pending: PendingState, record: Record<string, unknown>): void {
@@ -680,6 +699,9 @@ function queuePendingEvent(pending: PendingState, record: Record<string, unknown
     }
   } else {
     pending.entries.push(event);
+    if (pending.kind === "candidate") {
+      rememberPendingEntryOffsets(pending, [event], pending.buffer.length);
+    }
   }
 }
 
@@ -707,7 +729,9 @@ function appendPendingText(
       pending.parts.push({ contentIndex, start, end: pending.buffer.length });
     }
   }
-  pending.template = eventTemplate(record);
+  const template = eventTemplate(record);
+  pending.templates?.set(eventContentIndex(record), template);
+  pending.template = template;
 }
 
 function replayFalsePositiveCandidate(pending: CandidatePendingState): Record<string, unknown>[] {
@@ -1275,6 +1299,34 @@ export async function* normalizePlainTextToolCallStreamEvents(
     const projected = projectEventIndex(record, projection);
     return projected ? { ...projected, partial: projection.message } : undefined;
   };
+  const projectPendingAuxEvent = (
+    event: Record<string, unknown>,
+    projection?: PlainTextToolCallMessageProjection,
+  ): Record<string, unknown> | undefined => {
+    let eventProjection = projection ?? scrubSnapshot(event.partial, true, true);
+    const projectedEvent = { ...event };
+    if (eventProjection && typeof event.contentIndex === "number") {
+      let contentIndex = eventProjection.sourceToProjectedContentIndex.get(event.contentIndex);
+      if (contentIndex === undefined && projection) {
+        const partialProjection = scrubSnapshot(event.partial, true, true);
+        const partialContentIndex = partialProjection?.sourceToProjectedContentIndex.get(
+          event.contentIndex,
+        );
+        if (partialProjection && partialContentIndex !== undefined) {
+          eventProjection = partialProjection;
+          contentIndex = partialContentIndex;
+        }
+      }
+      if (contentIndex === undefined) {
+        return undefined;
+      }
+      projectedEvent.contentIndex = contentIndex;
+    }
+    if (eventProjection && Object.hasOwn(projectedEvent, "partial")) {
+      projectedEvent.partial = eventProjection.message;
+    }
+    return projectedEvent;
+  };
   const forceProjectPendingAux = (
     candidate: PendingState,
     projection?: PlainTextToolCallMessageProjection,
@@ -1286,53 +1338,111 @@ export async function* normalizePlainTextToolCallStreamEvents(
           return [];
         }
       }
-      let eventProjection = projection ?? scrubSnapshot(event.partial, true, true);
-      const projectedEvent = { ...event };
-      if (eventProjection && typeof event.contentIndex === "number") {
-        let contentIndex = eventProjection.sourceToProjectedContentIndex.get(event.contentIndex);
-        if (contentIndex === undefined && projection) {
-          const partialProjection = scrubSnapshot(event.partial, true, true);
-          const partialContentIndex = partialProjection?.sourceToProjectedContentIndex.get(
-            event.contentIndex,
-          );
-          if (partialProjection && partialContentIndex !== undefined) {
-            eventProjection = partialProjection;
-            contentIndex = partialContentIndex;
-          }
-        }
-        if (contentIndex === undefined) {
-          return [];
-        }
-        projectedEvent.contentIndex = contentIndex;
-      }
-      if (eventProjection && Object.hasOwn(projectedEvent, "partial")) {
-        projectedEvent.partial = eventProjection.message;
-      }
-      return [projectedEvent];
+      const projected = projectPendingAuxEvent(event, projection);
+      return projected ? [projected] : [];
     });
   };
 
+  const buildCandidateReplayChunks = (
+    state: CandidatePendingState,
+    replayedText: string,
+  ): Array<{
+    contentIndex: number;
+    start: number;
+    template: Record<string, unknown>;
+    text: string;
+  }> => {
+    // Buffered entries mark where reasoning and text arrived, so replay can split the
+    // decided prefix at those boundaries instead of emitting it as one late segment.
+    const boundaries = new Set<number>();
+    for (const entry of state.entries ?? []) {
+      const offset = state.entryOffsets?.get(entry);
+      if (offset !== undefined && offset > 0 && offset < replayedText.length) {
+        boundaries.add(offset);
+      }
+    }
+    const cutsByPart = [...boundaries].toSorted((left, right) => left - right);
+    const chunks: Array<{
+      contentIndex: number;
+      start: number;
+      template: Record<string, unknown>;
+      text: string;
+    }> = [];
+    for (const part of state.parts) {
+      const start = Math.min(part.start, replayedText.length);
+      const end = Math.min(part.end, replayedText.length);
+      if (end <= start) {
+        continue;
+      }
+      // Each block keeps its own offset origin so unit accounting follows the block that
+      // actually streamed the text, and each segment reuses its block's event template.
+      const blockStart = part.start === 0 ? state.snapshotOffset : 0;
+      const template = state.templates?.get(part.contentIndex) ?? state.template;
+      const cuts = [start, ...cutsByPart.filter((cut) => cut > start && cut < end), end];
+      for (let index = 0; index + 1 < cuts.length; index += 1) {
+        const from = cuts[index];
+        const to = cuts[index + 1];
+        if (from === undefined || to === undefined) {
+          break;
+        }
+        const segment = replayedText.slice(from, to);
+        const skip =
+          from === start
+            ? Math.max(
+                0,
+                (emittedTextUnits.get(part.contentIndex) ?? 0) - (blockStart + (from - part.start)),
+              )
+            : 0;
+        const text = skip > 0 ? segment.slice(skip) : segment;
+        if (text) {
+          chunks.push({ contentIndex: part.contentIndex, start: from, template, text });
+        }
+      }
+    }
+    return chunks;
+  };
   const applyCandidateTrim = (
     state: CandidatePendingState,
     classification: Extract<PendingClassification, { kind: "trim" }>,
-    key: number,
+    projection?: PlainTextToolCallMessageProjection,
   ): Record<string, unknown>[] => {
     // A trim either discards an over-cap prefix or re-surfaces a false-positive one; only
     // the second kind is user-visible text, and a replayed trim must not repeat units the
-    // caller already streamed for this content block.
+    // caller already streamed for its content block. Buffered auxiliary events stay in
+    // arrival order with the replayed text instead of being dropped by the queue reset.
     const trimmed = classification.candidate;
     const output: Record<string, unknown>[] = [];
-    if (classification.replayedText !== undefined) {
-      const emittedUnits = emittedTextUnits.get(key) ?? 0;
-      const novelText = classification.replayedText.slice(
-        Math.max(0, emittedUnits - state.snapshotOffset),
-      );
-      if (novelText) {
-        output.push(createSyntheticTextDelta(state.template, novelText));
-        lineStarts.set(key, nextAtLineStart(lineStarts.get(key) ?? true, novelText));
-        advanceProtectionContext(novelText);
+    const replayChunks =
+      classification.replayedText === undefined
+        ? []
+        : buildCandidateReplayChunks(state, classification.replayedText);
+    let replayIndex = 0;
+    const flushReplayBefore = (limit: number) => {
+      while (replayIndex < replayChunks.length) {
+        const chunk = replayChunks[replayIndex];
+        if (!chunk || chunk.start >= limit) {
+          return;
+        }
+        replayIndex += 1;
+        output.push(createSyntheticTextDelta(chunk.template, chunk.text));
+        lineStarts.set(
+          chunk.contentIndex,
+          nextAtLineStart(lineStarts.get(chunk.contentIndex) ?? true, chunk.text),
+        );
+        advanceProtectionContext(chunk.text);
+      }
+    };
+    for (const event of state.entries ?? []) {
+      if (isTextStreamEvent(event)) {
+        continue;
+      }
+      flushReplayBefore(state.entryOffsets?.get(event) ?? Number.POSITIVE_INFINITY);
+      const projected = projectPendingAuxEvent(event, projection);
+      if (projected) {
+        output.push(projected);
       }
     }
+    flushReplayBefore(Number.POSITIVE_INFINITY);
     const trimmedOffset = state.buffer.length - trimmed.text.length;
     state.buffer = trimmed.text;
     state.bufferBytes = cappedUtf8ByteLength(trimmed.text);
@@ -1600,15 +1710,15 @@ export async function* normalizePlainTextToolCallStreamEvents(
                 );
                 pending.buffer = candidateText;
                 pending.bufferBytes = cappedUtf8ByteLength(candidateText);
-                pending.entries = [
-                  ...(retained ?? []),
-                  createSyntheticTextDelta(
-                    pending.template,
-                    candidateText,
-                    asOptionalObjectRecord(record.partial),
-                  ),
-                  { ...incomingRecord, content: incoming },
-                ];
+                const bufferedText = createSyntheticTextDelta(
+                  pending.template,
+                  candidateText,
+                  asOptionalObjectRecord(record.partial),
+                );
+                const snapshotText = { ...incomingRecord, content: incoming };
+                pending.entries = [...(retained ?? []), bufferedText, snapshotText];
+                rememberPendingEntryOffsets(pending, [bufferedText], 0);
+                rememberPendingEntryOffsets(pending, [snapshotText], candidateText.length);
                 pending.parts = pending.parts.map((entry, index) =>
                   index < partIndex
                     ? entry
@@ -1623,6 +1733,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
                 // The extended buffer still starts where it did in the content block, so
                 // keep its block offset: replay slicing and later snapshots share that origin.
                 pending.template = eventTemplate(incomingRecord);
+                pending.templates?.set(contentIndex, pending.template);
               } else {
                 // A text_end snapshot is authoritative for its own content block. Carry a
                 // newly observed block into classification or visible text can vanish at EOF.
@@ -1660,8 +1771,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
           if (classification.kind === "trim") {
             scrubFuturePartials = true;
             const partialProjection = scrubSnapshot(record.partial, true, true);
-            yield* forceProjectPendingAux(pending, partialProjection);
-            yield* applyCandidateTrim(pending, classification, key);
+            yield* applyCandidateTrim(pending, classification, partialProjection);
             break;
           }
           if (classification.kind === "suppress") {
@@ -1792,11 +1902,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
               true,
             );
             if (classification.kind === "trim") {
-              yield* applyCandidateTrim(
-                pending,
-                classification,
-                eventContentIndex(pending.template),
-              );
+              yield* applyCandidateTrim(pending, classification, normalized);
             } else if (classification.kind === "stripped" && classification.text) {
               const template = projectEventIndex(pending.template, normalized);
               if (template) {
@@ -1823,15 +1929,12 @@ export async function* normalizePlainTextToolCallStreamEvents(
           if (pending?.kind === "candidate" && pendingClassification?.kind === "false-positive") {
             yield* replayFalsePositiveCandidate(pending);
           } else if (pending) {
-            if (pending.kind === "candidate" && pendingClassification?.kind === "trim") {
-              yield* applyCandidateTrim(
-                pending,
-                pendingClassification,
-                eventContentIndex(pending.template),
-              );
-            }
             const projection = scrubSnapshot(record.message, true, true);
-            yield* forceProjectPendingAux(pending, projection);
+            if (pending.kind === "candidate" && pendingClassification?.kind === "trim") {
+              yield* applyCandidateTrim(pending, pendingClassification, projection);
+            } else {
+              yield* forceProjectPendingAux(pending, projection);
+            }
             message = projection?.message ?? message;
           }
           yield message === record.message ? record : { ...record, message };
@@ -1867,19 +1970,9 @@ export async function* normalizePlainTextToolCallStreamEvents(
           pending?.kind === "candidate"
             ? classifyPending(pending, options.matcher, options.resolveProtectedRanges, true)
             : undefined;
-        if (pending?.kind === "candidate" && pendingClassification?.kind === "trim") {
-          yield* applyCandidateTrim(
-            pending,
-            pendingClassification,
-            eventContentIndex(pending.template),
-          );
-        }
         const knownCandidate =
           pending?.kind === "suppressing" ||
           (pending?.kind === "candidate" && pendingClassification?.kind !== "false-positive");
-        if (pending?.kind === "candidate" && !knownCandidate) {
-          yield* replayFalsePositiveCandidate(pending);
-        }
         const streamedPartial = scrubSnapshot(record.partial, true, knownCandidate);
         const streamedError = scrubSnapshot(
           record.error,
@@ -1887,8 +1980,15 @@ export async function* normalizePlainTextToolCallStreamEvents(
           knownCandidate,
         );
         const projection = streamedPartial ?? streamedError;
-        if (pending && knownCandidate) {
-          yield* forceProjectPendingAux(pending, projection);
+        if (pending?.kind === "candidate" && pendingClassification?.kind === "trim") {
+          yield* applyCandidateTrim(pending, pendingClassification, projection);
+        } else {
+          if (pending?.kind === "candidate" && !knownCandidate) {
+            yield* replayFalsePositiveCandidate(pending);
+          }
+          if (pending && knownCandidate) {
+            yield* forceProjectPendingAux(pending, projection);
+          }
         }
         yield {
           ...record,
@@ -1920,7 +2020,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
             continue;
           }
           if (pending.kind === "candidate" && classification?.kind === "trim") {
-            yield* applyCandidateTrim(pending, classification, eventContentIndex(pending.template));
+            yield* applyCandidateTrim(pending, classification);
           }
           forceScrubTerminal = true;
           if (pending.kind === "candidate") {
@@ -1960,7 +2060,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
       if (classification.kind === "false-positive") {
         yield* replayFalsePositiveCandidate(pending);
       } else if (classification.kind === "trim") {
-        yield* applyCandidateTrim(pending, classification, eventContentIndex(pending.template));
+        yield* applyCandidateTrim(pending, classification);
       } else {
         yield* forceProjectPendingAux(pending);
       }
