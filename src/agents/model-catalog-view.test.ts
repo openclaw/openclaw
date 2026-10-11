@@ -4,6 +4,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import * as providerPolicySurface from "../plugins/provider-policy-surface.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
 import {
   createModelCatalogView,
@@ -454,6 +459,8 @@ describe("prepared native catalog readiness", () => {
   });
 
   it.each([
+    { name: "preferred account", preferredProfileId: "custom:chosen", cfg: {} },
+    { name: "pinned account", pinnedProfileId: "custom:chosen", cfg: {} },
     {
       name: "auth profile order",
       cfg: { auth: { order: { custom: ["custom:chosen"] } } },

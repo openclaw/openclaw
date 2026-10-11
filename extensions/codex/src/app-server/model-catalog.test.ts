@@ -455,7 +455,7 @@ describe("Codex app-server model catalog", () => {
 
     const catalog = await owner.load(catalogParams, nativePluginConfig);
 
-    expect(catalog).toMatchObject([
+    expect(catalog.entries).toMatchObject([
       {
         provider: "openai",
         id: "gpt-6-luna",
@@ -467,6 +467,7 @@ describe("Codex app-server model catalog", () => {
         },
       },
     ]);
+    expect(catalog.outcomes).toEqual([{ provider: "openai", status: "ready" }]);
     expect(listModelsMock).toHaveBeenCalledTimes(2);
     expect(rpc.request).toHaveBeenCalledTimes(2);
     expect(read({ modelId: "gpt-6-luna" }, nativePluginConfig)).toEqual({
@@ -478,7 +479,10 @@ describe("Codex app-server model catalog", () => {
   it("keeps a genuinely empty catalog empty after one retry", async () => {
     listModelsMock.mockResolvedValue({ models: [] });
 
-    expect(await owner.load(catalogParams, nativePluginConfig)).toEqual([]);
+    expect(await owner.load(catalogParams, nativePluginConfig)).toMatchObject({
+      entries: [],
+      outcomes: [{ provider: "openai", status: "ready" }],
+    });
     expect(listModelsMock).toHaveBeenCalledTimes(2);
     expect(rpc.request).toHaveBeenCalledTimes(2);
     expect(read({}, nativePluginConfig)).toBeUndefined();
@@ -510,9 +514,11 @@ describe("Codex app-server model catalog", () => {
       return { account: { type: "chatgpt" }, requiresOpenaiAuth: true };
     });
 
-    expect(await owner.load(catalogParams, nativePluginConfig)).toMatchObject([
+    const catalog = await owner.load(catalogParams, nativePluginConfig);
+    expect(catalog.entries).toMatchObject([
       { id: "gpt-6-sol", nativeRuntime: "codex", reasoning: true },
     ]);
+    expect(catalog.outcomes).toEqual([{ provider: "openai", status: "ready" }]);
     expect(listModelsMock).toHaveBeenCalledTimes(2);
     expect(rpc.request).toHaveBeenCalledTimes(2);
     expect(read({ modelId: "gpt-6-sol" }, nativePluginConfig)).toEqual({

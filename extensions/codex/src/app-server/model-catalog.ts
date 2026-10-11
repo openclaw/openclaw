@@ -147,29 +147,6 @@ export function createCodexAppServerModelCatalog(runtime: string) {
         async (request, client) => {
           try {
             const discover = async () => {
-            const isCurrent = captureSharedCodexAppServerCatalogLifetime(client);
-            const listed = await listAllCodexAppServerModels({
-              request,
-              limit: 100,
-              includeHidden: true,
-            });
-            const models = listed.models.filter(
-              (model) =>
-                !model.hidden ||
-                params.configuredModelRefs?.some(
-                  (ref) => ref.provider === "openai" && ref.model === model.id,
-                ),
-            );
-            const account = await request<CodexGetAccountResponse>({
-              method: "account/read",
-              requestParams: { refreshToken: false },
-            });
-            const observedType = account.account?.type;
-            const accountType = account.requiresOpenaiAuth
-              ? observedType === "apiKey" || observedType === "chatgpt"
-                ? observedType
-                : undefined
-              : undefined;
               const isCurrent = captureSharedCodexAppServerCatalogLifetime(client);
               const listed = await listAllCodexAppServerModels({
                 request,
@@ -193,7 +170,12 @@ export function createCodexAppServerModelCatalog(runtime: string) {
                   ? observedType
                   : undefined
                 : undefined;
-              return { models, rawModelCount: listed.models.length, isCurrent, accountType } as const;
+              return {
+                models,
+                rawModelCount: listed.models.length,
+                isCurrent,
+                accountType,
+              } as const;
             };
             const first = await discover();
             if (first.rawModelCount > 0 && first.isCurrent()) {
