@@ -1,5 +1,5 @@
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { fetchLiveProviderModelRows } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { getCachedLiveCatalogValue } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
@@ -194,7 +194,7 @@ function chatSurfaceModelToModelDefinition(
   };
 }
 
-function canDiscoverDeepInfra(options?: DeepInfraDiscoveryOptions): boolean {
+async function canDiscoverDeepInfra(options?: DeepInfraDiscoveryOptions): Promise<boolean> {
   if (options?.hasApiKey !== undefined) {
     return options.hasApiKey;
   }
@@ -202,7 +202,7 @@ function canDiscoverDeepInfra(options?: DeepInfraDiscoveryOptions): boolean {
   const fromEnv = env.DEEPINFRA_API_KEY;
   return (
     (typeof fromEnv === "string" && fromEnv.trim() !== "") ||
-    isProviderApiKeyConfigured({ provider: "deepinfra", agentDir: options?.agentDir })
+    (await isProviderApiKeyConfiguredAsync({ provider: "deepinfra", agentDir: options?.agentDir }))
   );
 }
 
@@ -210,7 +210,7 @@ function canDiscoverDeepInfra(options?: DeepInfraDiscoveryOptions): boolean {
 export async function discoverDeepInfraSurfaces(
   options?: DeepInfraDiscoveryOptions,
 ): Promise<DeepInfraDiscoveredCatalog> {
-  if (canDiscoverDeepInfra(options)) {
+  if (await canDiscoverDeepInfra(options)) {
     try {
       return await loadDeepInfraSurfaces();
     } catch (error) {
@@ -280,7 +280,7 @@ async function discoverDeepInfraPricing() {
 export async function discoverDeepInfraModels(
   options?: DeepInfraDiscoveryOptions,
 ): Promise<ModelDefinitionConfig[]> {
-  if (!canDiscoverDeepInfra(options)) {
+  if (!(await canDiscoverDeepInfra(options))) {
     return DEEPINFRA_MODEL_CATALOG.map(buildDeepInfraModelDefinition);
   }
   const strict = options?.discoveryMode !== "advisory";

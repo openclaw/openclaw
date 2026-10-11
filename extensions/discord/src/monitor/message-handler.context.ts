@@ -21,7 +21,7 @@ import { buildAgentSessionKey, resolveThreadSessionKeys } from "openclaw/plugin-
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import {
-  getSessionEntry,
+  getSessionEntryAsync,
   readSessionUpdatedAtAsync,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -173,7 +173,7 @@ export async function buildDiscordMessageProcessContext(params: {
     agentId: route.agentId,
   });
   const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
-  const routeSession = getSessionEntry({
+  const routeSession = await getSessionEntryAsync({
     agentId: route.agentId,
     storePath,
     sessionKey: route.sessionKey,
@@ -194,23 +194,9 @@ export async function buildDiscordMessageProcessContext(params: {
   const historySession = recoversHistory
     ? historySessionScope.sessionKey === route.sessionKey
       ? routeSession
-      : getSessionEntry(historySessionScope)
+      : await getSessionEntryAsync(historySessionScope)
     : undefined;
-  const isHistoryCurrent = () => {
-    if (abortSignal?.aborted || ctx.isPolicyCurrent?.() === false) {
-      return false;
-    }
-    if (!recoversHistory) {
-      return true;
-    }
-    const current = getSessionEntry(historySessionScope);
-    return (
-      current?.sessionId === historySession?.sessionId &&
-      current?.lifecycleRevision === historySession?.lifecycleRevision &&
-      current?.sessionStartedAt === historySession?.sessionStartedAt &&
-      (current?.updatedAt === 0) === (historySession?.updatedAt === 0)
-    );
-  };
+  const isHistoryCurrent = () => !abortSignal?.aborted && ctx.isPolicyCurrent?.() !== false;
   const channelHistory = createChannelHistoryWindow({ historyMap: guildHistories });
   let visibleChannelHistory: DiscordHistoryEntry[] | undefined;
   // Failed downloads (CDN error, SSRF block, size cap, timeout) produce

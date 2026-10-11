@@ -48,14 +48,14 @@ function summarizeImageGenerationCapabilities(provider: ImageGenerationProvider)
   return caps.join("; ");
 }
 
-export function createImageGenerateListActionResult(params: {
+export async function createImageGenerateListActionResult(params: {
   cfg?: OpenClawConfig;
   providers: ImageGenerationProvider[];
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
   authProfileStoreSource?: boolean;
-}): MediaGenerateActionResult {
+}): Promise<MediaGenerateActionResult> {
   return createMediaGenerateProviderListActionResult({
     ...params,
     kind: "image_generation",

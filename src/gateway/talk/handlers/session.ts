@@ -19,7 +19,7 @@ import {
   projectInternalRealtimeVoicePublicConfig,
   resolveInternalRealtimeVoiceGatewayRelayLaunchError,
 } from "../../../talk/provider-internal.js";
-import { resolveConfiguredRealtimeVoiceProvider } from "../../../talk/provider-resolver.js";
+import { resolveConfiguredRealtimeVoiceProviderAsync } from "../../../talk/provider-resolver.js";
 import { captureGatewayOperatorRunAuthority } from "../../operator-run-authority.js";
 import { ADMIN_SCOPE, hasGatewayAdminScope } from "../../operator-scopes.js";
 import { resolveSandboxedSessionCreation } from "../../operator-session-run.js";
@@ -213,7 +213,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           });
           const requested = replacement ? { ...params, ...replacement.launch } : params;
           const runtimeConfig = context.getRuntimeConfig();
-          const realtimeConfig = buildTalkRealtimeConfig(
+          const realtimeConfig = await buildTalkRealtimeConfig(
             runtimeConfig,
             requested.provider,
             requested.model,
@@ -236,7 +236,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           );
           assertCommitAllowed();
           assertSecretOwnerAvailable("capability", "talk:realtime");
-          const resolution = resolveConfiguredRealtimeVoiceProvider({
+          const resolution = await resolveConfiguredRealtimeVoiceProviderAsync({
             configuredProviderId: realtimeConfig.provider,
             providerConfigs: realtimeConfig.providers,
             providerConfigOverrides: launchOptions.model ? { model: launchOptions.model } : {},
@@ -391,18 +391,19 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
             return;
           }
           const runtimeConfig = context.getRuntimeConfig();
-          const transcriptionConfig = buildTalkTranscriptionConfig(
+          const transcriptionConfig = await buildTalkTranscriptionConfig(
             runtimeConfig,
             params.provider,
             params.model,
           );
-          const resolution = resolveConfiguredRealtimeTranscriptionProvider({
+          const resolution = await resolveConfiguredRealtimeTranscriptionProvider({
             config: runtimeConfig,
             configuredProviderId: transcriptionConfig.provider,
             providerConfigs: transcriptionConfig.providers,
             requestedModel: normalizeOptionalString(params.model),
             defaultModel: transcriptionConfig.model,
           });
+          requester.assertCurrent();
           const session = createTalkTranscriptionRelaySession({
             context,
             connId,

@@ -13,7 +13,6 @@ import type { SessionEntry } from "../config/sessions.js";
 import * as entryCache from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import type { GatewayClient } from "./server-methods/types.js";
@@ -125,7 +124,7 @@ describe("session list resolver cache", () => {
                       identity: { name: "Refreshed owner" },
                       fastModeDefault: true,
                     };
-                    sessionChanges.emit({ all: true, scope: "config" });
+                    setRuntimeConfigSnapshot(cfg);
                     identityDuringPause = resolveAgentIdentity(cfg, ownerId)?.name;
                     resolve();
                   });
@@ -284,7 +283,7 @@ describe("session list resolver cache", () => {
           },
         ]),
       );
-      const store = Object.fromEntries(
+      const store: Record<string, SessionEntry> = Object.fromEntries(
         Array.from({ length: 80 }, (_, index) => {
           const agentId = index % 2 ? "research" : "main";
           return [
@@ -362,12 +361,27 @@ describe("session list resolver cache", () => {
           // Acquisition shares both hits and misses; defaults retain their separate lookup.
           expect(catalogSpy.mock.calls.length).toBeLessThanOrEqual(10);
           const inputs = vi.spyOn(rowProjection, "readSessionRowInputs");
+          catalogSpy.mockClear();
+          let warmCatalogReads: number;
           try {
             await listProjectedSessions({ projection, opts: { limit: 80 } });
             expect(inputs).not.toHaveBeenCalled();
+            warmCatalogReads = catalogSpy.mock.calls.length;
           } finally {
             inputs.mockRestore();
           }
+          catalogSpy.mockClear();
+          const updatedKey = "agent:main:dashboard:catalog-2";
+          for (let update = 0; update < 4; update++) {
+            store[updatedKey] = { ...store[updatedKey]!, label: `Metadata update ${update}` };
+            writeResidentEntries({ [updatedKey]: store[updatedKey]! }, 1);
+            const updated = await listProjectedSessions({ projection, opts: { limit: 80 } });
+            expect(updated.sessions.find((row) => row.key === updatedKey)).toMatchObject({
+              label: `Metadata update ${update}`,
+              contextTokens: revision * 20_000,
+            });
+          }
+          expect(catalogSpy.mock.calls.length).toBeLessThanOrEqual(warmCatalogReads * 4);
           catalogSpy.mockClear();
           const key = "agent:main:dashboard:catalog-0";
           const patch = projectSessionPatchResult({

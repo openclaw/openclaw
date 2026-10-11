@@ -34,7 +34,10 @@ vi.mock("../model-auth.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../model-auth.js")>()),
   applySecretRefHeaderSentinels: (model: unknown) => model,
   ensureAuthProfileStore: compactAuthMocks.ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync: compactAuthMocks.ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles:
+    compactAuthMocks.ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync:
     compactAuthMocks.ensureAuthProfileStoreWithoutExternalProfiles,
   getApiKeyForModelCore: compactAuthMocks.getApiKeyForModelCore,
 }));
