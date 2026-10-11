@@ -1,15 +1,20 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { nothing, render } from "lit";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { createComposerProps } from "./chat-composer.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
-import { renderChat } from "./chat-view.ts";
+import { renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";
+import {
+  installTranscriptDomMocks,
+  resetTranscriptTestDom,
+} from "./components/chat-transcript.test-support.ts";
 
 function sessionsResult(rows: GatewaySessionRow[]): SessionsListResult {
   return {
@@ -22,7 +27,11 @@ function sessionsResult(rows: GatewaySessionRow[]): SessionsListResult {
 }
 
 describe.each([false, true])("chat run activity (recovery ready: %s)", (recoveryScopeReady) => {
-  afterEach(() => resetChatComposerState());
+  beforeEach(installTranscriptDomMocks);
+  afterEach(() => {
+    resetChatComposerState();
+    resetTranscriptTestDom();
+  });
 
   it.each([
     {
@@ -81,8 +90,8 @@ describe.each([false, true])("chat run activity (recovery ready: %s)", (recovery
     state.sessionsResult = sessionsResult([parent, child]);
     pane.render();
 
-    const container = document.createElement("div");
-    render(renderChat(pane.chatProps!), container);
+    const container = createApplicationContextProvider(context);
+    renderChatPropsInto(container, expectDefined(pane.chatProps, "chat props"));
 
     expect(pane.chatProps?.canAbort).toBe(true);
     expect(
@@ -98,8 +107,10 @@ describe.each([false, true])("chat run activity (recovery ready: %s)", (recovery
 });
 
 describe("composer run status", () => {
+  beforeEach(installTranscriptDomMocks);
   afterEach(() => {
     resetChatComposerState();
+    resetTranscriptTestDom();
     vi.restoreAllMocks();
   });
 
@@ -124,40 +135,32 @@ describe("composer run status", () => {
     state.sessionKey = parent.key;
     state.sessionsResult = sessionsResult([parent]);
     pane.render();
-    const container = document.body.appendChild(createApplicationContextProvider(context));
+    const container = createApplicationContextProvider(context);
     const onOpenSubagents = vi.fn();
-    onTestFinished(() => {
-      render(nothing, container);
-      container.remove();
-      pane.chatProps?.transcript.hostDisconnected();
-    });
     const draw = (children: GatewaySessionRow[]) =>
-      render(
-        renderChat({
-          ...pane.chatProps!,
-          selectedSession: parent,
-          messages: [
-            {
-              role: "assistant",
-              runId: "parent-run",
-              timestamp: 2_000,
-              content: [{ type: "toolCall", id: "yield", name: "sessions_yield", arguments: {} }],
-            },
-            {
-              role: "toolResult",
-              runId: "parent-run",
-              toolCallId: "yield",
-              toolName: "sessions_yield",
-              timestamp: 2_001,
-              content: [{ type: "text", text: '{"status":"yielded"}' }],
-            },
-          ],
-          subagentSessions: children,
-          subagentSessionsHydrated: true,
-          onOpenSubagents,
-        }),
-        container,
-      );
+      renderChatPropsInto(container, {
+        ...expectDefined(pane.chatProps, "chat props"),
+        selectedSession: parent,
+        messages: [
+          {
+            role: "assistant",
+            runId: "parent-run",
+            timestamp: 2_000,
+            content: [{ type: "toolCall", id: "yield", name: "sessions_yield", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            runId: "parent-run",
+            toolCallId: "yield",
+            toolName: "sessions_yield",
+            timestamp: 2_001,
+            content: [{ type: "text", text: '{"status":"yielded"}' }],
+          },
+        ],
+        subagentSessions: children,
+        subagentSessionsHydrated: true,
+        onOpenSubagents,
+      });
     draw([child]);
     const line = container.querySelector(".agent-chat__composer-run-status--waiting");
     expect(line).not.toBeNull();

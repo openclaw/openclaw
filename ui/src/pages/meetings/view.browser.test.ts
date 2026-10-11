@@ -43,6 +43,7 @@ function readerProps(): Parameters<typeof renderTranscripts>[0] {
     onSummaryRetry: vi.fn(),
     exportState: { kind: "idle" },
     onNavigate: vi.fn(),
+    onOpenCaptureSettings: vi.fn(),
     onRefresh: vi.fn(),
     onReaderRetry: vi.fn(),
     onReaderTab: vi.fn(),

@@ -256,15 +256,17 @@ export async function resolveEmbeddedRunModelSetup(params: {
 }) {
   const runParams = params.runParams;
   const operatorAuthority = readRunOperatorAuthority(runParams);
-  const hookSelection = await resolveHookModelSelection({
-    prompt: runParams.prompt,
-    attachments: buildBeforeModelResolveAttachments(runParams.images),
-    provider: params.provider,
-    modelId: params.modelId,
-    modelSelectionLocked: runParams.modelSelectionLocked,
-    hookRunner: params.hookRunner,
-    hookContext: params.hookContext,
-  });
+  const hookSelection =
+    runParams.resolvedModelSelection ??
+    (await resolveHookModelSelection({
+      prompt: runParams.prompt,
+      attachments: buildBeforeModelResolveAttachments(runParams.images),
+      provider: params.provider,
+      modelId: params.modelId,
+      modelSelectionLocked: runParams.modelSelectionLocked,
+      hookRunner: params.hookRunner,
+      hookContext: params.hookContext,
+    }));
   const modelSelectionChangedByHook =
     hookSelection.provider !== params.provider || hookSelection.modelId !== params.modelId;
   let provider = hookSelection.provider;

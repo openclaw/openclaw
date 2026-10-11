@@ -51,7 +51,7 @@ import {
   isConfirmedActionPopoverFocused,
   openChatRewindConfirmation,
 } from "./chat-message-confirmation.ts";
-import type { MessageActionDetails, MessageReplyTarget } from "./chat-message-markdown.ts";
+import type { MessageActionDetails, MessageReplyTarget } from "./chat-message-markdown.types.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
 import type { ChatSendStatusActions } from "./chat-message-send-status.ts";
 import type { ReplyMessageStatus } from "./chat-reply-preview.ts";

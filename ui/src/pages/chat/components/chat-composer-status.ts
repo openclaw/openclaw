@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
 import { icons } from "../../../components/icons.ts";
-import "../../../components/elapsed-time.ts";
+import "../../../components/elapsed-time.tsx";
 import { t } from "../../../i18n/index.ts";
 import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
 import type { FallbackStatus } from "../tool-stream-contract.ts";
