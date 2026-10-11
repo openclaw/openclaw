@@ -5,6 +5,7 @@ import type {
 import {
   DEFAULT_COMFY_MODEL,
   isComfyCapabilityConfigured,
+  isComfyCapabilityConfiguredAsync,
   runComfyWorkflow,
 } from "./workflow-runtime.js";
 
@@ -34,6 +35,8 @@ export function buildComfyVideoGenerationProvider(): VideoGenerationProvider {
         agentDir,
         capability: "video",
       }),
+    isConfiguredAsync: ({ cfg, agentDir }) =>
+      isComfyCapabilityConfiguredAsync({ cfg, agentDir, capability: "video" }),
     capabilities: {
       generate: {
         maxVideos: 1,

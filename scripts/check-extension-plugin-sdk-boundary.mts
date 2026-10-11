@@ -158,8 +158,8 @@ const formatInventoryHuman = (mode: BoundaryMode, inventory: BoundaryEntry[]): s
     inventory,
   );
 
-export function createExtensionPluginSdkBoundaryChecker(options: { repoRoot?: string } = {}) {
-  const repoRoot = path.resolve(options.repoRoot ?? DEFAULT_REPO_ROOT);
+function createExtensionPluginSdkBoundaryChecker() {
+  const repoRoot = path.resolve(DEFAULT_REPO_ROOT);
   // Generated bundles are validated at their build owner; they are not bounded authored source.
   const generatedExtensionAssetSources = new Set(
     listGeneratedExtensionAssetSources({ rootDir: repoRoot }),

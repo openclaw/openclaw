@@ -18,6 +18,10 @@ import {
   projectTranscriptPayloadNavigationSql,
 } from "./session-model-context-projection.js";
 import { projectSessionTranscriptReportFacts } from "./session-transcript-report-facts.js";
+import {
+  deriveTranscriptPredicateFields,
+  type TranscriptPredicateFields,
+} from "./transcript-predicate-fields.js";
 
 export const MAX_COMPRESSED_EVENT_BYTES = 4 * 1024 * 1024;
 const MAX_NAVIGATION_BYTES = 16 * 1024;
@@ -27,7 +31,7 @@ const registeredDecoders = new WeakSet<DatabaseSync>();
 const storageEncodings = new WeakMap<DatabaseSync, string>();
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
-export type TranscriptPayloadRecord = {
+export type TranscriptPayloadRecord = TranscriptPredicateFields & {
   event_json: string | null;
   event_zstd: Uint8Array | null;
   event_utf8_bytes: number | null;
@@ -56,6 +60,13 @@ export function createTranscriptEventInserter(database: DatabaseSync, sessionId:
         event_zstd: parameter((row) => row.event_zstd),
         event_utf8_bytes: parameter((row) => row.event_utf8_bytes),
         navigation_json: parameter((row) => row.navigation_json),
+        navigation_type: parameter((row) => row.navigation_type),
+        navigation_custom_type: parameter((row) => row.navigation_custom_type),
+        navigation_display: parameter((row) => row.navigation_display),
+        message_role: parameter((row) => row.message_role),
+        navigation_last_type: parameter((row) => row.navigation_last_type),
+        navigation_last_custom_type: parameter((row) => row.navigation_last_custom_type),
+        navigation_valid: parameter((row) => row.navigation_valid),
         created_at: parameter((row) => row.createdAt),
       }),
   );
@@ -85,6 +96,13 @@ export function createTranscriptPayloadUpdater(database: DatabaseSync, sessionId
         event_zstd: parameter((row) => row.event_zstd),
         event_utf8_bytes: parameter((row) => row.event_utf8_bytes),
         navigation_json: parameter((row) => row.navigation_json),
+        navigation_type: parameter((row) => row.navigation_type),
+        navigation_custom_type: parameter((row) => row.navigation_custom_type),
+        navigation_display: parameter((row) => row.navigation_display),
+        message_role: parameter((row) => row.message_role),
+        navigation_last_type: parameter((row) => row.navigation_last_type),
+        navigation_last_custom_type: parameter((row) => row.navigation_last_custom_type),
+        navigation_valid: parameter((row) => row.navigation_valid),
       })
       .where("session_id", "=", sessionId)
       .where(
@@ -220,6 +238,7 @@ export function prepareTranscriptPayload(
   const rawBytes = Buffer.byteLength(eventJson, "utf8");
   const utf8 = readTranscriptStorageEncoding(database) === "UTF-8";
   const identity: TranscriptPayloadRecord = {
+    ...deriveTranscriptPredicateFields(eventJson),
     event_json: eventJson,
     event_zstd: null,
     event_utf8_bytes: utf8 ? rawBytes : null,

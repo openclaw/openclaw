@@ -15,7 +15,6 @@ import {
   recordRuntimeAuthProfileStorePersistedMutation,
   resolveRuntimeStoreKey,
 } from "./mutation-lineage.js";
-import { publishOAuthRefreshClaimIdentities } from "./oauth-refresh-observation.js";
 import { captureAuthProfileOwnerScope } from "./path-resolve.js";
 import { mergeAuthProfileStores } from "./persisted.js";
 import { removePersonalAuthProfileReferences } from "./runtime-external-profile-references.js";
@@ -84,23 +83,10 @@ let runtimeAuthStoreMetadataRevision = 0;
 const runtimeAuthStoreMetadataRevisions = new Map<string, number>();
 let runtimeAuthStoreMetadataRevisionFloor = 0;
 
-export const runtimeAuthProfileRowsCache = createRuntimeAuthProfileRowsCache((databasePath) => {
-  const owner = runtimeAuthStoreSnapshots.get(databasePath)?.owner;
-  return {
-    rows: `${getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath(databasePath)}:${getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(databasePath)}`,
-    selection: `${runtimeAuthStoreMetadataRevisions.get(databasePath) ?? runtimeAuthStoreMetadataRevisionFloor}:${getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(databasePath, "credentials")}`,
-    // Shared publication can remove the derived snapshot while its reader is in flight.
-    ownerLineage:
-      owner?.kind === "resolved"
-        ? [owner.sharedDatabasePath]
-        : owner
-          ? [
-              resolveRuntimeAuthSharedOwnerPath(owner, "state-db"),
-              resolveRuntimeAuthSharedOwnerPath(owner, "legacy-main"),
-            ]
-          : [],
-  };
-});
+export const runtimeAuthProfileRowsCache = createRuntimeAuthProfileRowsCache(
+  (databasePath) =>
+    `${getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath(databasePath)}:${getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(databasePath)}`,
+);
 
 registerFreshSharedAuthStoreHandoff((handoff) => {
   if (!handoff.sourceStillCurrent) {
@@ -277,24 +263,6 @@ export function getRuntimeAuthProfileStoreSnapshotAtDatabasePath(
     observeCachedCanonicalAuthProfileCredentials(store.profiles);
   }
   return store ? cloneAuthProfileStore(store) : undefined;
-}
-
-/** Capture an authoritative local pin without copying or reopening credential material. */
-export function captureRuntimeAuthProfileLocalPin(
-  databasePath: string,
-  profileId: string,
-):
-  | {
-      databasePath: string;
-      matchesCredential: (credential: AuthProfileStore["profiles"][string] | undefined) => boolean;
-    }
-  | undefined {
-  const store = runtimeAuthStoreSnapshots.get(databasePath)?.store;
-  const credential = store?.profiles[profileId];
-  if (!credential || !store?.runtimeLocalProfileIds?.includes(profileId)) {
-    return undefined;
-  }
-  return { databasePath, matchesCredential: (current) => isDeepStrictEqual(credential, current) };
 }
 
 /**
@@ -623,9 +591,6 @@ export function noteRuntimeAuthProfileStorePersistedMutation(
   const changedProfileIds = [...mutation.profileIds];
   if (mutation.credentialsChanged) {
     runtimeAuthStoreCredentialsRevision += 1;
-  }
-  if (mutation.credentialsChanged && mutation.oauthRefreshClaimIds?.size) {
-    publishOAuthRefreshClaimIdentities(ownerKey, mutation.oauthRefreshClaimIds);
   }
   runtimeAuthProfileRowsCache.clear(ownerKey);
   if (mutation.selectionChanged) {

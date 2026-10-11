@@ -5184,7 +5184,7 @@ async function loadAuthBackedLiveModelRegistry(params: {
   providerList: string[] | undefined;
 }): Promise<{
   authProfileStore: AuthProfileStore;
-  authStorage: ReturnType<typeof discoverAuthStorageFacts>["authStorage"];
+  authStorage: Awaited<ReturnType<typeof discoverAuthStorageFacts>>["authStorage"];
   modelRegistry: ReturnType<typeof discoverModels>;
   all: Array<Model>;
 }> {
@@ -6858,7 +6858,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       const hostStore = ensureAuthProfileStore(agentDir, {
         allowKeychainPrompt: false,
       });
-      const { authStorage } = discoverAuthStorageFacts(agentDir);
+      const { authStorage } = await discoverAuthStorageFacts(agentDir);
       const modelRegistry = discoverModels(authStorage, agentDir);
       const anthropic = modelRegistry.find("anthropic", "claude-opus-4-6") as Model | null;
       const zai = modelRegistry.find("zai", "glm-5.1") as Model | null;

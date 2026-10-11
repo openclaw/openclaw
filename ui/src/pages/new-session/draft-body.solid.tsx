@@ -6,7 +6,7 @@ import "../../styles/chat/text.css";
 import "../../styles/chat/grouped.css";
 import "../../styles/chat/working-indicator.css";
 import { beginNativeWindowDragFromTopInset } from "../../app/native-window-drag.ts";
-import { resolveIdentityAvatarView } from "../../components/identity-avatar-view.ts";
+import { renderIdentityAvatar } from "../../components/identity-avatar-view.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { parseMarkdownJson } from "../../components/markdown-json.ts";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -160,9 +160,8 @@ function NewSessionSubmission(props: {
         <Show when={props.avatarPlacement === "gutter" ? normalized().sender : undefined}>
           {(sender) => (
             <LitContent
-              value={renderUserAvatarSlot(
-                resolveIdentityAvatarView(sender()),
-                formatSenderLabel(sender()) ?? "",
+              value={renderIdentityAvatar(sender(), (view) =>
+                renderUserAvatarSlot(view, formatSenderLabel(sender()) ?? ""),
               )}
             />
           )}

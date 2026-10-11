@@ -706,7 +706,9 @@ export async function processResponsesStream<TApi extends Api>(
     return terminalResponse ?? undefined;
   } finally {
     for (const block of output.content) {
-      delete (block as { partialJson?: string }).partialJson;
+      if (block.type === "toolCall") {
+        delete block.partialJson;
+      }
     }
   }
 }

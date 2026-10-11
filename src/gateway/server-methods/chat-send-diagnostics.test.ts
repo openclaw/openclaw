@@ -7,6 +7,12 @@ import {
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
+import {
+  measureDiagnosticsTimelineSpan,
+  measureDiagnosticsTimelineSpanSync,
+  withDiagnosticsTimelineObserver,
+} from "../../infra/diagnostics-timeline.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { startChatSendDiagnostics } from "./chat-send-diagnostics.js";
 
 let previousDiagnostics: boolean;
@@ -119,4 +125,67 @@ test("logging failures preserve the send error and retire unfinished scopes", ()
   expect(log.info).toHaveBeenCalledExactlyOnceWith(
     "slow chat send 1500ms stage=request persist=1500ms",
   );
+});
+
+test("startup spans stay request-owned and include unfinished parents without timeline logging", async () => {
+  const firstLog = { info: vi.fn() };
+  const secondLog = { info: vi.fn() };
+  const first = startChatSendDiagnostics(firstLog);
+  const second = startChatSendDiagnostics(secondLog);
+  const resume = createDeferredCore();
+  first.acknowledge();
+  second.acknowledge();
+  const parent = withDiagnosticsTimelineObserver(first.observeSpan, () =>
+    measureDiagnosticsTimelineSpan("reply.init_session_state", async () => {
+      await resume.promise;
+      measureDiagnosticsTimelineSpanSync(
+        "agent.prepare",
+        () => {
+          clock = 1_100;
+        },
+        { attributes: { stage: "attempt.tool_catalog" } },
+      );
+      first.finish();
+    }),
+  );
+  clock = 1_000;
+  withDiagnosticsTimelineObserver(second.observeSpan, () =>
+    measureDiagnosticsTimelineSpanSync("reply.ensure_workspace", () => {
+      clock = 1_020;
+    }),
+  );
+  second.finish();
+  resume.resolve();
+  await parent;
+  // A span finishing after startup cannot reopen or append to the completed report.
+  first.finish();
+  expect(firstLog.info).toHaveBeenCalledExactlyOnceWith(
+    "slow chat send 1100ms stage=startup ack=0ms detail.attempt.tool_catalog=80ms detail.reply.init_session_state=1100ms",
+  );
+  expect(secondLog.info).toHaveBeenCalledExactlyOnceWith(
+    "slow chat send 1020ms stage=startup ack=0ms detail.reply.ensure_workspace=20ms",
+  );
+});
+
+test("span observer failures preserve synchronous and asynchronous results and errors", async () => {
+  const failure = new Error("operation failure");
+  const observer = () => {
+    throw new Error("observer failure");
+  };
+  expect(
+    withDiagnosticsTimelineObserver(observer, () =>
+      measureDiagnosticsTimelineSpanSync("sync", () => 42),
+    ),
+  ).toBe(42);
+  await expect(
+    withDiagnosticsTimelineObserver(
+      () => () => {
+        throw new Error("finish failure");
+      },
+      () =>
+        measureDiagnosticsTimelineSpan("async", async () => {
+          throw failure;
+        }),
+    ),
+  ).rejects.toBe(failure);
 });

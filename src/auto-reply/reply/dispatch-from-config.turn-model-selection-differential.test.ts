@@ -24,7 +24,7 @@ const { resolveVisibleRepliesPolicy } = await import("./dispatch-from-config.har
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function expectHarnessSelection(fixture: TurnModelDifferentialFixture) {
+async function expectHarnessSelection(fixture: TurnModelDifferentialFixture) {
   const storePath = path.join(tempDirs.make("turn-model-harness-"), "sessions.json");
   const sessionKey = "agent:main:telegram:group:selection";
   if (fixture.parent) {
@@ -35,7 +35,7 @@ function expectHarnessSelection(fixture: TurnModelDifferentialFixture) {
   }
 
   selectAgentHarnessMock.mockClear();
-  resolveVisibleRepliesPolicy({
+  await resolveVisibleRepliesPolicy({
     cfg: {
       session: { store: storePath },
       agents: { defaults: { model: { primary: turnModelRefLabel(TURN_MODEL_DEFAULT_REF) } } },
@@ -74,11 +74,11 @@ describe("turn model selection harness-path differential", () => {
         name === "parent persisted override versus channel" ||
         name === "explicit default rejects stale child and parent overrides",
     ),
-  )("pins observed $name behavior", (fixture) => {
-    expectHarnessSelection(fixture);
+  )("pins observed $name behavior", async (fixture) => {
+    await expectHarnessSelection(fixture);
   });
 
-  it("resolves turn aliases in the session agent scope", () => {
+  it("resolves turn aliases in the session agent scope", async () => {
     const sessionKey = "agent:worker:telegram:group:selection";
     const cfg = {
       agents: {
@@ -99,7 +99,7 @@ describe("turn model selection harness-path differential", () => {
     } as unknown as OpenClawConfig;
 
     selectAgentHarnessMock.mockClear();
-    resolveVisibleRepliesPolicy({
+    await resolveVisibleRepliesPolicy({
       cfg,
       chatType: "direct",
       ctx: buildTestCtx({ SessionKey: sessionKey }),

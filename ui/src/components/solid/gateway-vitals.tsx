@@ -7,23 +7,6 @@ import {
   type GatewayStatusSample,
   type GatewayStatusSnapshot,
 } from "../gateway-vitals.ts";
-import type { SparklineSample } from "../sparkline-tile.tsx";
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-sparkline": HTMLAttributes<HTMLElement> & {
-        "prop:label": string;
-        "prop:sub"?: string;
-        "prop:samples": readonly SparklineSample[];
-        "prop:format": (value: number) => string;
-        "prop:floorMax"?: number;
-        "prop:stackColors"?: readonly string[];
-        autorange?: boolean;
-      };
-    }
-  }
-}
 
 registerEnglishCatalog(registerDebugEnglish);
 

@@ -129,7 +129,9 @@ type RealtimeCallRegistration = {
   capabilities?: ResolvedRealtimeVoiceProvider["capabilities"];
 };
 
-export type ResolveRealtimeCallRegistration = (call: CallRecord) => RealtimeCallRegistration;
+export type ResolveRealtimeCallRegistration = (
+  call: CallRecord,
+) => RealtimeCallRegistration | Promise<RealtimeCallRegistration>;
 
 type ForcedConsultState = {
   owner: ActiveRealtimeVoiceBridge;
@@ -642,7 +644,7 @@ export class RealtimeCallHandler {
     let registration: RealtimeCallRegistration;
     let sessionPolicy: ReturnType<typeof resolveRealtimeVoiceSessionPolicy>;
     try {
-      registration = this.resolveCallRegistration(callRecord);
+      registration = await this.resolveCallRegistration(callRecord);
       sessionPolicy = resolveRealtimeVoiceSessionPolicy({
         isAgentProxy: false,
         capabilities: registration.capabilities,

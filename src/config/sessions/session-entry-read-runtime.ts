@@ -1,9 +1,6 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import {
-  assertExistingDatabaseIdentity,
-  readDatabasePathIdentitySync,
-} from "../../infra/sqlite-worker-identity.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-contract.js";
 import { retainOpenClawAgentDatabaseReadCandidates } from "../../state/openclaw-agent-db.js";
@@ -603,13 +600,6 @@ export async function withSessionStoreReaderInWorker<T>(
             reader.assertCurrent();
             continuation?.assertCurrent();
             route.assertCurrent();
-            if (sourceIdentity?.key.startsWith("file:")) {
-              assertExistingDatabaseIdentity(
-                database.path,
-                sourceIdentity.key,
-                sourceIdentity.birthtime,
-              );
-            }
           };
           if (dataOnly && (logical?.assertCurrent || preparedSource)) {
             assertFinalCurrent = assertCapturedCurrent;
@@ -637,11 +627,6 @@ export async function withSessionStoreReaderInWorker<T>(
       const assertPreparedCurrent = () => {
         preparedSource.assertCurrent();
         assertSessionStoreReadCandidate(preparedSource.path, candidates);
-        assertExistingDatabaseIdentity(
-          preparedSource.path,
-          `file:${preparedSource.databaseIdentity}`,
-          preparedSource.databaseBirthtime,
-        );
       };
       assertPreparedCurrent();
       result = await readDatabase(

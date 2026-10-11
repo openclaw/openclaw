@@ -207,9 +207,11 @@ describe("deepseek provider plugin", () => {
     await expect(
       provider.resolveUsageAuth?.({
         env: {},
-        resolveApiKeyFromConfigAndStore: (options?: { envDirect?: Array<string | undefined> }) => {
+        resolveApiKeyCandidatesFromConfigAndStore: async (options?: {
+          envDirect?: Array<string | undefined>;
+        }) => {
           expect(options?.envDirect).toEqual([undefined]);
-          return "config-deepseek-key";
+          return ["config-deepseek-key"];
         },
       } as never),
     ).resolves.toEqual({ token: "config-deepseek-key" });

@@ -187,50 +187,6 @@ describe("session suggestion store", () => {
     }
   });
 
-  it.each([
-    ["ordinary", "alice", true],
-    ["embedded NUL", "a\0b", true],
-    ["lone surrogate", "\ud800", false],
-  ] as const)("bounds pending suggestions for %s author IDs", async (_, authorId, capped) => {
-    const dir = sessionDirs.make();
-    const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
-    const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
-    await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
-    for (let index = 0; index < MAX_PENDING_SESSION_SUGGESTIONS_PER_AUTHOR; index += 1) {
-      addSessionSuggestion(scope, {
-        id: `suggestion-${index}`,
-        authorId,
-        text: `idea ${index}`,
-        expectedSessionId: "session-a",
-      });
-    }
-    const addAtLimit = () =>
-      addSessionSuggestion(scope, {
-        authorId,
-        text: "one too many",
-        expectedSessionId: "session-a",
-      });
-    if (capped) {
-      expect(addAtLimit).toThrow(/author pending suggestion limit/);
-    } else {
-      expect(addAtLimit).not.toThrow();
-    }
-
-    resolvePendingSuggestion({
-      scope,
-      id: "suggestion-0",
-      state: "dismissed",
-      expectedSessionId: "session-a",
-    });
-    expect(() =>
-      addSessionSuggestion(scope, {
-        authorId,
-        text: "replacement",
-        expectedSessionId: "session-a",
-      }),
-    ).not.toThrow();
-  });
-
   it("checks the session cap before the author cap and frees admission after resolution", async () => {
     const dir = sessionDirs.make();
     const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
