@@ -350,9 +350,7 @@ describe("session companion context", () => {
     const result = await defaultSessionCompanionContextReader
       .read(scope)
       .finally(() => hostSql.restore());
-    expect(
-      hostSql.queries.filter((query) => query.includes("session_transcript_active_events")),
-    ).toEqual([]);
+    expect(hostSql.queries).toEqual([]);
     expect(result).toEqual({
       kind: "ready",
       context: {

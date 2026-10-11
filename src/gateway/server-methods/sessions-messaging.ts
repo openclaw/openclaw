@@ -16,11 +16,8 @@ import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { invalidSessionRequest } from "../session-request-error.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
-import {
-  loadSessionEntry,
-  loadGatewaySessionEntryReadOnly,
-  prepareDeletedAgentSessionCheck,
-} from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
+import { loadSessionEntry, prepareDeletedAgentSessionCheck } from "../session-utils.js";
 import { gatewayClientUploadPolicyError } from "../upload-policy.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -89,7 +86,12 @@ async function createAgentMainSessionForSend(
   }
 
   const createdKey = normalizeOptionalString(createResult.payload?.key) ?? canonicalKey;
-  const loaded = loadGatewaySessionEntryReadOnly(createdKey, { agentId });
+  const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+    cfg: options.context.getRuntimeConfig(),
+    key: createdKey,
+    agentId,
+    assertActive: readGatewayRequestMutationAuthority(options).assertPreparationCurrent,
+  });
   if (!loaded.entry?.sessionId) {
     return {
       ok: false,

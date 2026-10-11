@@ -20,8 +20,12 @@ vi.mock("./http-utils.js", () => ({
     mocks.authorize(...args),
 }));
 
-vi.mock("./session-utils-store.js", () => ({
-  loadGatewaySessionEntryReadOnly: (...args: unknown[]) => mocks.loadEntry(...args),
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: () => ({}),
+}));
+
+vi.mock("./session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: (...args: unknown[]) => mocks.loadEntry(...args),
 }));
 
 vi.mock("../media/media-reference.js", () => ({
@@ -95,7 +99,7 @@ describe("handleChannelAvatarHttpRequest", () => {
           () => authorityCurrent,
         ),
       );
-    mocks.loadEntry.mockReset().mockReturnValue({ entry: avatarEntry() });
+    mocks.loadEntry.mockReset().mockResolvedValue({ entry: avatarEntry() });
     mocks.resolveReference.mockReset().mockResolvedValue({
       id: "channel-avatar.png",
       normalizedSource: AVATAR_REFERENCE,

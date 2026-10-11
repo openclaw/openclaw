@@ -3,6 +3,7 @@ import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coer
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { collectTextContentBlocks } from "../agents/content-blocks.js";
 import { extractStoredAssistantText } from "../agents/tools/chat-history-text.js";
+import { getRuntimeConfig } from "../config/io.js";
 import {
   captureIncognitoSessionSource,
   withIncognitoSessionEntry,
@@ -14,6 +15,7 @@ import {
   type SessionCompanionPreparedContext,
 } from "./session-companion-state.js";
 import { readSessionTranscriptBoundedMessageTailPageAsync } from "./session-transcript-readers.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 const CONTEXT_MAX_MESSAGES = 40;
@@ -94,7 +96,11 @@ async function readSessionCompanionContext(params: {
   }
   return readSessionCompanionContextFromEntry(
     params,
-    loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: params.agentId }),
+    await loadGatewaySessionEntryReadOnlyInWorker({
+      cfg: getRuntimeConfig(),
+      key: params.sessionKey,
+      agentId: params.agentId,
+    }),
   );
 }
 
