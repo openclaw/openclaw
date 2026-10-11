@@ -1022,9 +1022,7 @@ Object.assign(module.exports.plugin.config, {
               workspace: workspaceDir,
             },
           },
-          ...(policy === "unconfigured"
-            ? {}
-            : { channels: { "external-chat": { token: "configured" } } }),
+          channels: { "external-chat": { token: "configured" } },
           plugins: {
             allow: policy === "untrusted" ? [] : ["external-chat-plugin"],
             deny: policy === "denied" ? ["external-chat-plugin"] : [],

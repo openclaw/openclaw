@@ -85,32 +85,24 @@ describe("channel plugin catalog", () => {
 
   it.each(["missing"] as const)(
     "shares %s generated catalog facts across consumers until the owner changes",
-    (initialState) => {
+    () => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shared-channel-catalog-"));
       tempDirs.push(root);
       fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
       vi.spyOn(process, "cwd").mockReturnValue(root);
       const catalogPath = path.join(root, "dist", "channel-catalog.json");
       const options = { catalogPaths: [path.join(root, "external.json")], env: {} };
-      if (initialState === "present") {
-        writeChannelCatalog(catalogPath, "shared-catalog", "Original catalog");
-      }
-      const originalLabel = initialState === "present" ? "Original catalog" : undefined;
-      expect(getChannelPluginCatalogEntry("shared-catalog", options)?.meta.label).toBe(
-        originalLabel,
-      );
+      expect(getChannelPluginCatalogEntry("shared-catalog", options)?.meta.label).toBeUndefined();
 
       writeChannelCatalog(catalogPath, "shared-catalog", "Updated catalog");
-      expect(findBundledChannelCatalogMetadata("shared-catalog")?.label).toBe(originalLabel);
+      expect(findBundledChannelCatalogMetadata("shared-catalog")?.label).toBeUndefined();
       expect(
         withPluginCache(
           createPluginCache(),
           () => getChannelPluginCatalogEntry("shared-catalog", options)?.meta.label,
         ),
       ).toBe("Updated catalog");
-      expect(getChannelPluginCatalogEntry("shared-catalog", options)?.meta.label).toBe(
-        originalLabel,
-      );
+      expect(getChannelPluginCatalogEntry("shared-catalog", options)?.meta.label).toBeUndefined();
 
       clearPluginMetadataLifecycleCaches();
       expect(getChannelPluginCatalogEntry("shared-catalog", options)?.meta.label).toBe(
