@@ -26,6 +26,20 @@ paths are migration debt, not a pattern to extend. The
 [migration inventory](/reference/database-schemas/worker-access-inventory) separates
 candidate main-thread paths from SQL already executing in workers.
 
+Managed outgoing media cleanup uses the same retained session reader as media
+serving. Durable session discovery and entry reads execute in the existing
+read workers; bound incognito reads use their actor. Cleanup distinguishes an
+unavailable or ambiguous store from a missing transcript reference and retains
+media when ownership cannot be read. It no longer keeps a separate native
+session selector or discovery cache. Stored media, retention policy, schemas,
+and update behavior are unchanged.
+
+Session accessor kernels remain mixed where released synchronous SDK methods,
+opaque transaction callbacks, or unbound process-held incognito readers still
+call them. A worker caller does not make the shared kernel worker-only. The
+inventory retains those calls as migration debt; raw-row removal guarded by
+Doctor's `expectedRawEntryJson` variant is an offline repair exception.
+
 Node-host configuration writes and one-use GitHub setup handoffs use the existing
 shared-state writer. Handoff consumption deletes and returns the matching live
 row in one statement, so concurrent consumers cannot reuse it. Configuration
@@ -241,6 +255,29 @@ Authored config files, compare-and-set checks, rollback, audit, and metadata
 semantics are unchanged.
 
 ## SDK session writer migration
+
+Historical dashboard title generation uses the same awaited transcript reader as
+incognito title generation. Its bounded title probes and watermark cache run in
+the existing history worker. Full suffix replacement derives its retained prefix
+from the canonical rows already compared inside the writer transaction; it does
+not reread the derived active-event prefix. Unsupported direct edits to derived
+rows are repaired by reconciliation rather than checked on every replacement.
+
+The session S–Z inventory still includes shared native kernels. They must not be
+marked worker-only merely because their ordinary durable callers use workers:
+
+| Native owner                            | Shared kernels and remaining contract                                                                                                                                                                                                                                                                |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SessionManager and transcript SDK       | Suffix reads/writes, transcript state, identity, parent, store, cursors, snapshots, statistics, anchors, and message rewrite retain released synchronous methods and opaque callbacks.                                                                                                               |
+| Unbound incognito storage               | Reports, projection reconciliation, search, matching, cold storage, eviction, pending inputs, categories, reactions, and suggestions still accept process-held native databases. Actor-bound callers use the existing workers; retiring the native paths requires the incognito acquisition cutover. |
+| Synchronous completion and dispatch     | Pending-input completion and turn append retain released callbacks. Chat-start acceptance and CLI history effect guards also retain native watermark reads.                                                                                                                                          |
+| Sharing and worktree authority          | Membership/source-disclosure and worktree-deletion guards retain their current native checks at the effect boundary.                                                                                                                                                                                 |
+| Store discovery and canonical admission | Native fixed-store topology, cleanup selection, and canonical-key admission remain mixed with worker readers. The pending-canonical-validation probe is startup/Doctor-only; runtime carries its captured source to the worker.                                                                      |
+
+These are explicit residuals, not additional synchronous exceptions. Their owner
+cutovers must preserve the released contracts and remove the superseded native
+paths together. Shared snapshot and payload kernels keep SQL-side projections
+that avoid materializing large retained values.
 
 Session entry SDK callers use `prepareSessionEntryPatch` for one host preparation
 followed by the existing exact-snapshot worker commit, or `applySessionEntryPatch`
