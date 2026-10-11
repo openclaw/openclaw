@@ -24,25 +24,23 @@ export async function withMemoryForgetWorker<T>(
   operation: (scope: Pick<SqliteWorkerStore<MemoryEntryOriginOperations>, "execute">) => Promise<T>,
 ): Promise<T> {
   const { memoryCpuProcessEntrypoints } = await loadEntrypoints();
-  return withMemoryIndexGeneration(
-    resolveOpenClawAgentSqlitePath(options),
-    "mutation",
-    async () => {
-      const assertCurrent = () => execution.assertCurrent();
-      const worker = await openOpenClawAgentSqliteWorkerStoreV2<MemoryEntryOriginOperations>(
-        options,
-        { version: 2, assertCurrent },
-        {
-          moduleUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.entryOrigins),
-          input,
-        },
-      );
-      try {
-        await worker.prepare();
-        return await worker.run(operation, assertCurrent);
-      } finally {
-        await worker.close();
-      }
+  const assertCurrent = () => execution.assertCurrent();
+  const worker = await openOpenClawAgentSqliteWorkerStoreV2<MemoryEntryOriginOperations>(
+    options,
+    { version: 2, assertCurrent },
+    {
+      moduleUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.entryOrigins),
+      input,
     },
   );
+  try {
+    await worker.prepare();
+    return await withMemoryIndexGeneration(
+      resolveOpenClawAgentSqlitePath(options),
+      "mutation",
+      () => worker.run(operation, assertCurrent),
+    );
+  } finally {
+    await worker.close();
+  }
 }

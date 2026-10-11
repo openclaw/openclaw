@@ -45,82 +45,6 @@ function violationKey(violation: WrapperShadowingViolation) {
   return `${violation.name}\0${violation.wrapper}\0${violation.wrapped}\0${violation.via ?? ""}`;
 }
 
-// These released SQLite names are retained until the next Plugin SDK major.
-// Only the SDK adapters warn; worker/Doctor primitives keep their canonical names.
-// See SQLITE_RUNTIME_COMPAT_RECORDS in src/plugins/compat/sqlite-runtime-records.ts.
-const sqliteSdkCompatibilityWrappers: readonly WrapperShadowingViolation[] = [
-  {
-    name: "borrowOpenClawAgentDatabase",
-    wrapped: "src/state/openclaw-agent-db.ts",
-    wrapper: "src/plugin-sdk/sqlite-runtime-legacy.ts",
-  },
-  {
-    name: "executeSqliteQuerySync",
-    wrapped: "src/infra/kysely-sync.ts",
-    wrapper: "src/plugin-sdk/sqlite-runtime-legacy.ts",
-  },
-  {
-    name: "executeSqliteQueryTakeFirstSync",
-    wrapped: "src/infra/kysely-sync.ts",
-    wrapper: "src/plugin-sdk/sqlite-runtime-legacy.ts",
-  },
-  {
-    name: "getNodeSqliteKysely",
-    wrapped: "src/infra/kysely-sync.ts",
-    wrapper: "src/plugin-sdk/sqlite-runtime-legacy.ts",
-  },
-  {
-    name: "iterateSqliteQuerySync",
-    wrapped: "src/infra/kysely-sync.ts",
-    wrapper: "src/plugin-sdk/sqlite-runtime-legacy.ts",
-  },
-  {
-    name: "openNodeSqliteDatabase",
-    wrapped: "src/infra/node-sqlite.ts",
-    wrapper: "src/plugin-sdk/sqlite-runtime-legacy.ts",
-  },
-  {
-    name: "openOpenClawAgentDatabase",
-    wrapped: "src/state/openclaw-agent-db.ts",
-    wrapper: "src/plugin-sdk/sqlite-runtime-legacy.ts",
-  },
-  {
-    name: "prepareSqliteQuerySync",
-    wrapped: "src/infra/kysely-sync.ts",
-    wrapper: "src/plugin-sdk/sqlite-runtime-legacy.ts",
-  },
-  {
-    name: "runOpenClawAgentWriteAdmission",
-    wrapped: "src/state/openclaw-agent-write-admission.ts",
-    wrapper: "src/plugin-sdk/sqlite-runtime-legacy.ts",
-  },
-  {
-    name: "runSqliteImmediateTransaction",
-    wrapped: "src/infra/sqlite-transaction.ts",
-    wrapper: "src/plugin-sdk/sqlite-runtime-legacy.ts",
-  },
-  {
-    name: "runSqliteImmediateTransactionSync",
-    wrapped: "src/infra/sqlite-transaction.ts",
-    wrapper: "src/plugin-sdk/sqlite-runtime-legacy.ts",
-  },
-  {
-    name: "withOpenClawAgentDatabaseAsync",
-    wrapped: "src/state/openclaw-agent-db.ts",
-    wrapper: "src/plugin-sdk/sqlite-runtime-legacy.ts",
-  },
-  {
-    name: "withOpenClawAgentDatabaseRuntime",
-    wrapped: "src/state/openclaw-agent-db.ts",
-    wrapper: "src/plugin-sdk/sqlite-runtime-legacy.ts",
-  },
-  {
-    name: "withOpenClawAgentDatabaseWrite",
-    wrapped: "src/state/openclaw-agent-db-write.ts",
-    wrapper: "src/plugin-sdk/sqlite-runtime-legacy.ts",
-  },
-];
-
 function resolveSourceModulePath(
   sourcePath: string,
   specifier: string,
@@ -264,22 +188,7 @@ export async function main(
     return 2;
   }
 
-  const observed = await collectRepositoryWrapperShadowing(repoRoot);
-  const observedKeys = new Set(observed.map(violationKey));
-  const compatibilityKeys = new Set(sqliteSdkCompatibilityWrappers.map(violationKey));
-  const stale = sqliteSdkCompatibilityWrappers.filter(
-    (violation) => !observedKeys.has(violationKey(violation)),
-  );
-  if (stale.length > 0) {
-    console.error("Remove stale released-SDK wrapper exceptions:");
-    for (const violation of stale) {
-      console.error(`- ${JSON.stringify(violation)}`);
-    }
-    return 1;
-  }
-  const violations = observed.filter(
-    (violation) => !compatibilityKeys.has(violationKey(violation)),
-  );
+  const violations = await collectRepositoryWrapperShadowing(repoRoot);
   if (violations.length === 0) {
     console.log("wrapper shadowing guard passed.");
     return 0;

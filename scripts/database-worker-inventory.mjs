@@ -2371,7 +2371,7 @@ function findCalls(source) {
           namespaces.has(namespace) &&
           owner &&
           ts.isFunctionDeclaration(owner) &&
-          owner.name?.text === called &&
+          (owner.name?.text === called || owner.name?.text === `${called}Legacy`) &&
           parent &&
           ts.isReturnStatement(parent) &&
           parent.expression === node &&

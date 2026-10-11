@@ -191,7 +191,7 @@ it("normalizes only exact SDK query forwarders on both sides without hiding raw 
   git("commit", "-m", "original call");
   const log = vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
-  const wrappers = `
+  let wrappers = `
 import * as queries from "../infra/kysely-sync.js";
 export function executeSqliteQuerySync(database, query) {
   warn();
@@ -209,6 +209,19 @@ export function executeSqliteQueryTakeFirstSync(database, query) {
   });
   expect(main(root, ["--base", "HEAD"])).toBe(0);
   expect(log).toHaveBeenCalledWith(expect.stringContaining("raw calls: 1 -> 3"));
+  wrappers =
+    wrappers
+      .replace("export function executeSqliteQuerySync(", "function executeSqliteQuerySyncLegacy(")
+      .replace(
+        "export function executeSqliteQueryTakeFirstSync(",
+        "function executeSqliteQueryTakeFirstSyncLegacy(",
+      ) +
+    `export {
+  executeSqliteQuerySyncLegacy as executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSyncLegacy as executeSqliteQueryTakeFirstSync,
+};\n`;
+  fs.writeFileSync(file, wrappers);
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
   for (const primitive of ["executeSqliteQuerySync", "executeSqliteQueryTakeFirstSync"]) {
     const direct = `return queries.${primitive}(database, query);`;
     for (const altered of [
