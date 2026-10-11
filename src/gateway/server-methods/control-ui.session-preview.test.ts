@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
 import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import * as subagentState from "../../agents/subagents/registry/subagent-registry-state.js";
@@ -13,6 +14,9 @@ import type { OpenClawConfig } from "../../config/types.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { ControlUiSessionPreview } from "../control-ui-contract.js";
+import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import * as sessionRows from "../session-row-projection-record.js";
+import { createSessionRowProjection } from "../session-row-projection.js";
 import { createControlUiRequestOptions } from "./control-ui-request.test-support.js";
 import { controlUiHandlers, createControlUiHandlers } from "./control-ui.js";
 import { identifiedClient } from "./sessions-sharing.test-support.js";
@@ -21,6 +25,13 @@ import type { RespondFn } from "./types.js";
 const requestOptions = createControlUiRequestOptions(() => ({
   agents: { entries: { main: {} } },
 }));
+
+async function createPreviewContext(cfg: OpenClawConfig = {}, getRuntimeConfig = () => cfg) {
+  const projection = await createSessionRowProjection({ cfg });
+  onTestFinished(() => projection.dispose());
+  await projection.ensureMaterialized();
+  return bindSessionRowProjection({ getRuntimeConfig }, () => projection);
+}
 
 describe("controlUi.sessionPreview", () => {
   it("joins a second compact recovery before presenting an authorized preview", async () => {
@@ -38,6 +49,7 @@ describe("controlUi.sessionPreview", () => {
             createdActor: { type: "human", source: "profile", id: "owner" },
           },
         );
+        const context = await createPreviewContext();
         const run = createSubagentRunRecord({
           runId: "preview-old",
           childSessionKey: "agent:main:subagent:preview-recovery",
@@ -92,7 +104,7 @@ describe("controlUi.sessionPreview", () => {
         )(
           requestOptions({ sessionKey }, respond, {
             client: { ...identifiedClient("reader"), connId: "preview-reader" },
-            context: { getRuntimeConfig: () => ({}) },
+            context,
           }),
         );
         try {
@@ -138,29 +150,28 @@ describe("controlUi.sessionPreview", () => {
       const respond = vi.fn<RespondFn>(() => {
         events.push("response");
       });
+      const context = await createPreviewContext({}, () => {
+        if (!queued) {
+          queued = true;
+          queueMicrotask(() => {
+            try {
+              replaceSessionEntrySync(scope, { ...entry, visibility: "draft" });
+              events.push("revoked");
+              revoked.resolve();
+            } catch (error) {
+              revoked.reject(error);
+            }
+          });
+        }
+        return {};
+      });
       await expectDefined(
         controlUiHandlers["controlUi.sessionPreview"],
         "registered preview",
       )(
         requestOptions({ sessionKey }, respond, {
           client: { ...identifiedClient("reader"), connId: "preview-reader" },
-          context: {
-            getRuntimeConfig: () => {
-              if (!queued) {
-                queued = true;
-                queueMicrotask(() => {
-                  try {
-                    replaceSessionEntrySync(scope, { ...entry, visibility: "draft" });
-                    events.push("revoked");
-                    revoked.resolve();
-                  } catch (error) {
-                    revoked.reject(error);
-                  }
-                });
-              }
-              return {};
-            },
-          },
+          context,
         }),
       );
       expect(queued).toBe(true);
@@ -186,6 +197,7 @@ describe("controlUi.sessionPreview", () => {
         createdActor: { type: "human" as const, source: "profile" as const, id: "owner" },
       };
       await replaceSessionEntry(scope, entry);
+      const context = await createPreviewContext();
       const prepared = createDeferred();
       const identity = vi
         .spyOn(subagentState, "getSubagentSessionListReadSnapshotIdentity")
@@ -200,7 +212,7 @@ describe("controlUi.sessionPreview", () => {
       )(
         requestOptions({ sessionKey }, respond, {
           client: { ...identifiedClient("reader"), connId: "preview-reader" },
-          context: { getRuntimeConfig: () => ({}) },
+          context,
         }),
       );
       try {
@@ -219,15 +231,19 @@ describe("controlUi.sessionPreview", () => {
     });
   });
 
-  it("keeps the resolved owner when previewing a qualified global main alias", async () => {
+  it("keeps the resolved owner without host SQL when previewing a qualified global main alias", async () => {
     await withOpenClawTestState({ label: "hover-global-owner" }, async () => {
       const cfg: OpenClawConfig = {
         session: { scope: "global" },
-        agents: { entries: { main: { default: true }, research: {} } },
+        agents: { entries: { main: {}, research: {} } },
       };
       for (const agentId of ["main", "research"]) {
         const scope = { agentId, sessionKey: "global", sessionId: `hover-${agentId}` };
-        await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 42 });
+        await replaceSessionEntry(scope, {
+          sessionId: scope.sessionId,
+          updatedAt: 42,
+          displayName: `Title from ${agentId}`,
+        });
         await persistSessionTranscriptTurn(scope, {
           cwd: "/tmp",
           updateMode: "none",
@@ -238,11 +254,30 @@ describe("controlUi.sessionPreview", () => {
         createControlUiHandlers()["controlUi.sessionPreview"],
         "session preview handler",
       );
+      const publications = new Map([
+        ["main", createDeferred()],
+        ["research", createDeferred()],
+      ]);
+      const publishTranscriptFields = sessionRows.publishTranscriptFields;
+      const publication = vi
+        .spyOn(sessionRows, "publishTranscriptFields")
+        .mockImplementation((row, ...args) => {
+          const changed = publishTranscriptFields(row, ...args);
+          if (row.key === "global" && row.lastMessagePreview === `Title from ${row.agentId}`) {
+            publications.get(row.agentId)?.resolve();
+          }
+          return changed;
+        });
+      onTestFinished(() => publication.mockRestore());
+      const context = await createPreviewContext(cfg);
+      await Promise.all([...publications.values()].map((completion) => completion.promise));
+      const statements = observeHostDataSql();
+      onTestFinished(() => statements.restore());
       for (const agentId of ["main", "research"]) {
         const respond = vi.fn<RespondFn>();
         await handler(
           requestOptions({ sessionKey: `agent:${agentId}:main` }, respond, {
-            context: { getRuntimeConfig: () => cfg },
+            context,
           }),
         );
         expect(respond).toHaveBeenCalledWith(
@@ -257,66 +292,93 @@ describe("controlUi.sessionPreview", () => {
           undefined,
         );
       }
+      expect(statements.queries).toEqual([]);
+      statements.restore();
     });
   });
 
   it("returns bounded, redacted metadata for one session", async () => {
-    const secret = "sk-test-session-preview-secret-1234567890";
-    const loadSessionPreview = vi.fn().mockReturnValue({
-      sessionKey: "agent:main:research",
-      title: `  ${"T".repeat(240)}  `,
-      derivedTitle: "  Research notes  ",
-      agentId: "main",
-      kind: "direct",
-      channel: "webchat",
-      updatedAt: 1_786_000_000_000,
-      lastMessagePreview: `  OPENAI_API_KEY=${secret} ${"x".repeat(240)}  `,
-      archived: false,
-    });
-    const handlers = createControlUiHandlers(vi.fn(), loadSessionPreview);
-    const respond = vi.fn<RespondFn>();
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const secret = "sk-test-session-preview-secret-1234567890";
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:research",
+        sessionId: "bounded-preview",
+      };
+      await replaceSessionEntry(scope, {
+        sessionId: scope.sessionId,
+        displayName: `  ${"T".repeat(240)}  `,
+        updatedAt: 1_786_000_000_000,
+        delivery: {
+          kind: "external",
+          route: { channel: "webchat" },
+          context: { channel: "webchat" },
+          origin: { provider: "webchat" },
+        },
+      });
+      await persistSessionTranscriptTurn(scope, {
+        cwd: "/tmp",
+        updateMode: "none",
+        messages: [
+          {
+            message: {
+              role: "user",
+              content: `  OPENAI_API_KEY=${secret} ${"x".repeat(240)}  `,
+            },
+            now: 1_786_000_000_000,
+          },
+        ],
+      });
+      const published = createDeferred();
+      const publishTranscriptFields = sessionRows.publishTranscriptFields;
+      const publication = vi
+        .spyOn(sessionRows, "publishTranscriptFields")
+        .mockImplementation((row, ...args) => {
+          const changed = publishTranscriptFields(row, ...args);
+          if (row.key === scope.sessionKey && row.lastMessagePreview) {
+            published.resolve();
+          }
+          return changed;
+        });
+      onTestFinished(() => publication.mockRestore());
+      const context = await createPreviewContext();
+      await published.promise;
+      const respond = vi.fn<RespondFn>();
+      await expectDefined(
+        controlUiHandlers["controlUi.sessionPreview"],
+        "session preview handler",
+      )(requestOptions({ sessionKey: " agent:main:research " }, respond, { context }));
 
-    await expectDefined(
-      handlers["controlUi.sessionPreview"],
-      'handlers["controlUi.sessionPreview"] test invariant',
-    )(requestOptions({ sessionKey: " agent:main:research " }, respond));
-
-    expect(loadSessionPreview).toHaveBeenCalledWith(
-      "agent:main:research",
-      expect.any(Object),
-      null,
-    );
-    const payload = respond.mock.calls[0]?.[1] as ControlUiSessionPreview | undefined;
-    expect(respond.mock.calls[0]?.[0]).toBe(true);
-    expect(payload).toMatchObject({
-      status: "ok",
-      sessionKey: "agent:main:research",
-      derivedTitle: "Research notes",
-      agentId: "main",
-      kind: "direct",
-      channel: "webchat",
-      updatedAt: 1_786_000_000_000,
-      archived: false,
+      const payload = respond.mock.calls[0]?.[1] as ControlUiSessionPreview | undefined;
+      expect(respond.mock.calls[0]?.[0]).toBe(true);
+      expect(payload).toMatchObject({
+        status: "ok",
+        sessionKey: scope.sessionKey,
+        agentId: "main",
+        kind: "direct",
+        channel: "webchat",
+        updatedAt: 1_786_000_000_000,
+        archived: false,
+      });
+      if (payload?.status !== "ok") {
+        throw new Error("expected an available session preview");
+      }
+      expect(payload.title).toHaveLength(200);
+      expect(payload.derivedTitle).toHaveLength(200);
+      expect(payload.lastMessagePreview).toBeTruthy();
+      expect(payload.lastMessagePreview?.length).toBeLessThanOrEqual(200);
+      expect(payload.lastMessagePreview).not.toContain(secret);
     });
-    if (payload?.status !== "ok") {
-      throw new Error("expected an available session preview");
-    }
-    expect(payload.title).toHaveLength(200);
-    expect(payload.lastMessagePreview?.length).toBeLessThanOrEqual(200);
-    expect(payload.lastMessagePreview).not.toContain(secret);
   });
 
   it("rejects malformed preview params", async () => {
-    const loadSessionPreview = vi.fn();
-    const handlers = createControlUiHandlers(vi.fn(), loadSessionPreview);
     const respond = vi.fn<RespondFn>();
 
     await expectDefined(
-      handlers["controlUi.sessionPreview"],
+      controlUiHandlers["controlUi.sessionPreview"],
       'handlers["controlUi.sessionPreview"] test invariant',
     )(requestOptions({ sessionKey: "agent:main:research", extra: true }, respond));
 
-    expect(loadSessionPreview).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(false, undefined, {
       code: "INVALID_REQUEST",
       message: "invalid controlUi.sessionPreview params",

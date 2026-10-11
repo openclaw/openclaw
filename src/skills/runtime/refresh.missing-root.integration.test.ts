@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { WatchSubscription } from "@openclaw/fs-safe/watch";
+import type { WatchOptions, WatchSubscription } from "@openclaw/fs-safe/watch";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
@@ -8,12 +8,13 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { resolveWorkspaceSkillSourcePlan } from "../loading/workspace-skill-sources.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
-import { getSkillsResourceVersion, getSkillsSourceVersion } from "./refresh-state.js";
+import { getSkillsSnapshotVersion, getSkillsSourceVersion } from "./refresh-state.js";
 import { toWatchRoot } from "./refresh-watch-path.js";
 import { pathWatchers } from "./refresh-watch-registry.js";
 import { useSkillsWatcherFixture } from "./refresh.watcher.test-support.js";
 
 const subscriptions: WatchSubscription[] = [];
+const observations = new Map<WatchSubscription, { rootDir: string; options: WatchOptions }>();
 const starts: Promise<void>[] = [];
 vi.mock("@openclaw/fs-safe/watch", async () => {
   const { createRequire } = await import("node:module");
@@ -34,6 +35,7 @@ vi.mock("@openclaw/fs-safe/watch", async () => {
       return scoped;
     };
     subscriptions.push(subscription);
+    observations.set(subscription, { rootDir: root.rootDir, options });
     starts.push(subscription.ready);
     return subscription;
   };
@@ -49,6 +51,7 @@ const planning: Promise<unknown>[] = [];
 const samples: Promise<unknown>[] = [];
 beforeEach(async () => {
   subscriptions.length = starts.length = planning.length = samples.length = 0;
+  observations.clear();
   const settling = await import("./refresh-file-stability.js");
   const createScheduler = settling.createSkillFileScheduler;
   vi.spyOn(settling, "createSkillFileScheduler").mockImplementation((options) =>
@@ -144,57 +147,38 @@ it("discovers a newly created root and keeps observing edits and deletion", asyn
   expect(read()).toEqual([]);
 });
 
-it("refreshes supporting resources without invalidating discovery, including atomic saves", async () => {
-  const dir = path.join(fixture.workspaceDir, "skills", "guide");
-  await writeSkill({ dir, name: "guide", description: "Stable discovery" });
-  await ensure();
-  expect(read()).toEqual(["Stable discovery"]);
-  const file = path.join(dir, "README.md");
-  const sourceVersion = getSkillsSourceVersion(fixture.workspaceDir);
-  const changed = vi.fn();
-  refresh.registerSkillsChangeListener(changed);
-  for (const operation of ["create", "replace", "delete"] as const) {
-    const before = getSkillsResourceVersion(fixture.workspaceDir);
-    if (operation === "create") {
-      await fs.writeFile(file, "created");
-    } else if (operation === "replace") {
-      const temporary = path.join(fixture.root, "replacement");
-      await fs.writeFile(temporary, "replacement");
-      await fs.rename(temporary, file);
-    } else {
-      await fs.unlink(file);
-    }
-    await reconcile();
-    expect(getSkillsResourceVersion(fixture.workspaceDir)).toBeGreaterThan(before);
-    expect(getSkillsSourceVersion(fixture.workspaceDir)).toBe(sourceVersion);
-    expect(changed).not.toHaveBeenCalled();
-  }
-  await fs.mkdir(file);
-  await reconcile();
-  expect(getSkillsSourceVersion(fixture.workspaceDir)).toBeGreaterThan(sourceVersion);
-});
-
-it("observes admitted symlink targets and removes them from cached discovery on unlink", async () => {
-  const target = await fixture.createFixtureDirectory("outside");
-  const dir = path.join(target, "guide");
-  await writeSkill({ dir, name: "guide", description: "Linked instructions" });
-  const link = path.join(fixture.workspaceDir, "skills", "linked");
-  await fs.symlink(target, link, linkType);
-  await ensure();
-  expect(read()).toEqual([]);
+it("keeps admitted symlink coverage available after unchanged overflow", async () => {
+  const root = path.join(fixture.workspaceDir, "skills");
+  const target = await fixture.createFixtureDirectory("linked-target");
+  await writeSkill({ dir: path.join(target, "guide"), name: "guide", description: "Unchanged" });
+  await fs.rm(root, { recursive: true });
+  await fs.symlink(target, root, linkType);
   const config = { skills: { load: { allowSymlinkTargets: [target] } } };
   await ensure(config);
-  expect(read(config)).toEqual(["Linked instructions"]);
-  await writeSkill({ dir, name: "guide", description: "Edited target" });
-  await reconcile();
-  expect(read(config)).toEqual(["Edited target"]);
-  const observation = pathWatchers.get(toWatchRoot(target));
-  expect(observation).toBeDefined();
-  await fs.unlink(link);
-  await reconcile();
-  expect(read(config)).toEqual([]);
-  await ensure(config);
-  expect(observation?.closed).toBe(true);
+  expect(read(config)).toEqual(["Unchanged"]);
+  const version = getSkillsSnapshotVersion(fixture.workspaceDir);
+  const changes = vi.fn();
+  const unsubscribe = refresh.registerSkillsChangeListener(changes);
+  const scopeUpdates = subscriptions.map((subscription) => vi.spyOn(subscription, "setScopes"));
+  const aliases = [...observations.values()].filter(({ rootDir, options }) =>
+    options.scopes.some(
+      (scope) => scope.kind === "entry" && path.resolve(rootDir, scope.path) === root,
+    ),
+  );
+  expect(aliases.length).toBeGreaterThan(0);
+  for (const { options } of aliases) {
+    options.onInvalidate({ reason: "overflow" });
+  }
+  expect(pathWatchers.get(toWatchRoot(root))).toMatchObject({
+    verified: true,
+    unavailable: false,
+  });
+  await ready();
+  await advance(250);
+  expect(scopeUpdates.every((update) => update.mock.calls.length === 0)).toBe(true);
+  expect(changes).not.toHaveBeenCalled();
+  expect(getSkillsSnapshotVersion(fixture.workspaceDir)).toBe(version);
+  unsubscribe();
 });
 
 it("settles an atomic SKILL.md replacement until the writer stops changing it", async () => {

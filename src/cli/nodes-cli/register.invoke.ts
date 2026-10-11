@@ -1,8 +1,5 @@
 // Generic node.invoke command with shell-exec commands intentionally blocked.
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { defaultRuntime } from "../../runtime.js";
 import { runNodesCommand } from "./cli-utils.js";
@@ -34,7 +31,7 @@ export function registerNodesInvokeCommands(nodes: Command) {
       .requiredOption("--command <command>", "Command (e.g. canvas.navigate)")
       .option("--params <json>", "JSON object string for params", "{}")
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 15000)", "15000")
-      .option("--idempotency-key <key>", "Idempotency key (optional)")
+      .option("--idempotency-key <key>", "Key to avoid duplicate requests (optional)")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("invoke", async () => {
           const nodeQuery = normalizeOptionalString(opts.node) ?? "";
@@ -42,7 +39,7 @@ export function registerNodesInvokeCommands(nodes: Command) {
           if (!nodeQuery || !command) {
             throw new Error("--node and --command required");
           }
-          if (BLOCKED_NODE_INVOKE_COMMANDS.has(normalizeLowercaseStringOrEmpty(command))) {
+          if (BLOCKED_NODE_INVOKE_COMMANDS.has(command.toLowerCase())) {
             throw new Error(
               `command "${command}" is reserved for shell execution; use the exec tool with host=node instead`,
             );

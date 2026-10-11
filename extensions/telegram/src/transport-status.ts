@@ -10,11 +10,11 @@ export function createTelegramStatusPublisher(
   mode: "polling" | "webhook",
   setStatus?: TelegramStatusSink,
 ) {
+  const disconnected = { mode, connected: false };
   return {
     noteStart() {
       setStatus?.({
-        mode,
-        connected: false,
+        ...disconnected,
         lastConnectedAt: null,
         lastEventAt: null,
         lastTransportActivityAt: null,
@@ -32,23 +32,22 @@ export function createTelegramStatusPublisher(
         }),
       );
     },
+    noteActivity(at = Date.now()) {
+      setStatus?.({ lastEventAt: at });
+    },
     noteRecovery() {
       setStatus?.({ lifecycle: "recovering" });
     },
     noteError(error: string, lifecycle?: "recovering" | "blocked") {
       setStatus?.({
-        mode,
-        connected: false,
+        ...disconnected,
         ...(lifecycle ? { lifecycle } : {}),
         ...(lifecycle === "blocked" ? { terminalDisconnect: true } : {}),
         lastError: error,
       });
     },
     noteStop() {
-      setStatus?.({
-        mode,
-        connected: false,
-      });
+      setStatus?.({ ...disconnected });
     },
   };
 }

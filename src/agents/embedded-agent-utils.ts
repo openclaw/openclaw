@@ -27,7 +27,6 @@ import type { AgentMessage } from "./runtime/index.js";
 
 export { stripDowngradedToolCallText } from "../shared/text/downgraded-tool-call-text.js";
 
-/** Narrow an agent message to an assistant message. */
 export function isAssistantMessage(msg: AgentMessage | undefined): msg is AssistantMessage {
   return msg?.role === "assistant";
 }
@@ -42,7 +41,7 @@ function sanitizeAssistantText(
     text,
     assistantVisibleTextFilters(
       phase === "final_answer" ? "final-answer-delivery" : "delivery",
-      streaming && phase === "final_answer",
+      streaming,
       options,
     ),
   );
@@ -59,6 +58,7 @@ export function sanitizeAssistantVisibleStreamText(
 ): string {
   return sanitizeUserFacingText(sanitizeAssistantText(text, phase, true, options), {
     errorContext: false,
+    streaming: true,
   });
 }
 
@@ -66,9 +66,9 @@ export function createAssistantVisibleStreamText(phase?: AssistantPhase) {
   return createTextProjection([
     ...assistantVisibleTextFilters(
       phase === "final_answer" ? "final-answer-delivery" : "delivery",
-      phase === "final_answer",
+      true,
     ),
-    ...userFacingTextFilters(),
+    ...userFacingTextFilters(false, true),
     trimTextFilter("both", { preserveCodeIndentation: true }),
   ]);
 }
@@ -82,13 +82,15 @@ function finalizeAssistantExtraction(errorContext: boolean, extracted: string): 
 function prepareEmbeddedAssistantTextForPhase(
   msg: AssistantMessage,
   requestedPhase: AssistantPhase,
-  prepareText?: (
-    text: string,
-    final: boolean,
-    phase?: AssistantPhase,
-    contentIndex?: number,
-  ) => string,
+  prepareText?: Parameters<typeof prepareAssistantVisibleText>[1],
 ): () => string {
+  const prepareRender = (selectedPhase: AssistantPhase | undefined, renderText: () => string) => {
+    const errorContext = msg.stopReason === "error";
+    return () => {
+      const extracted = finalizeAssistantExtraction(errorContext, renderText());
+      return selectedPhase === "final_answer" && !extracted.trim() ? "" : extracted;
+    };
+  };
   const messagePhase = normalizeAssistantPhase((msg as { phase?: unknown }).phase);
   if (typeof msg.content === "string") {
     const selectedPhase =
@@ -99,14 +101,7 @@ function prepareEmbeddedAssistantTextForPhase(
       return () => "";
     }
     const preparedText = prepareText ? prepareText(msg.content, true, messagePhase) : msg.content;
-    const errorContext = msg.stopReason === "error";
-    return () => {
-      const text = finalizeAssistantExtraction(
-        errorContext,
-        sanitizeAssistantText(preparedText, messagePhase),
-      );
-      return selectedPhase === "final_answer" && !text.trim() ? "" : text;
-    };
+    return prepareRender(selectedPhase, () => sanitizeAssistantText(preparedText, messagePhase));
   }
   if (!Array.isArray(msg.content)) {
     return () => "";
@@ -161,19 +156,31 @@ function prepareEmbeddedAssistantTextForPhase(
       part.text = prepareText(part.text, index === parts.length - 1, part.phase, part.contentIndex);
     }
   }
-  const errorContext = msg.stopReason === "error";
-  return () => {
-    const extracted = finalizeAssistantExtraction(
-      errorContext,
-      // A native block boundary can divide markup; finalize only the selected snapshot.
-      parts
-        .map(({ text, phase }) => sanitizeAssistantText(text, phase))
-        .filter((text) => text.trim())
-        .join("\n")
-        .trimEnd(),
-    );
-    return selectedPhase === "final_answer" && !extracted.trim() ? "" : extracted;
-  };
+  // Adjacent blocks in the same phase share markup state; a phase boundary stays explicit.
+  const groupedParts: { text: string; phase?: AssistantPhase; contentIndex: number }[] = [];
+  for (const part of parts) {
+    const text = trimTextPreservingCode(part.text);
+    const previous = groupedParts.at(-1);
+    if (
+      previous &&
+      previous.phase === part.phase &&
+      previous.contentIndex + 1 === part.contentIndex
+    ) {
+      previous.contentIndex = part.contentIndex;
+      if (text) {
+        previous.text += `\n${text}`;
+      }
+    } else if (text) {
+      groupedParts.push({ text, phase: part.phase, contentIndex: part.contentIndex });
+    }
+  }
+  return prepareRender(selectedPhase, () =>
+    groupedParts
+      .map(({ text, phase }) => sanitizeAssistantText(text, phase))
+      .filter((text) => text.trim())
+      .join("\n")
+      .trimEnd(),
+  );
 }
 
 /** Prepare selected source parts now; render their visible text only when requested. */
@@ -197,12 +204,10 @@ export function extractAssistantVisibleText(
   return prepareAssistantVisibleText(msg, prepareText)();
 }
 
-/** Extract the commentary/narration text of a commentary-phase assistant message. */
 export function extractAssistantCommentaryText(msg: AssistantMessage): string {
   return prepareEmbeddedAssistantTextForPhase(msg, "commentary")();
 }
 
-/** Extract sanitized assistant text across all text content blocks. */
 export function extractEmbeddedAssistantText(msg: AssistantMessage): string {
   const extracted =
     extractTextFromChatContent(msg.content, {
@@ -240,13 +245,11 @@ export function extractAssistantThinking(msg: AssistantMessage): string {
   return blocks.join("\n");
 }
 
-/** Format reasoning text for markdown-friendly channel surfaces. */
 export function formatReasoningMessage(text: string): string {
   const trimmed = text.trim();
   if (!trimmed) {
     return "";
   }
-  // Show reasoning in italics (cursive) for markdown-friendly surfaces (Discord, etc.).
   // Keep a plain prefix so existing parsing/detection keeps working.
   // Note: Underscore markdown cannot span multiple lines on Telegram, so we wrap
   // each non-empty line separately.
@@ -267,7 +270,6 @@ const THINKING_TAG_CLOSE_RE = new RegExp(
   String.raw`<\s*\/\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
   "i",
 );
-/** Global regex used to scan provider-emitted thinking tags. */
 export const THINKING_TAG_SCAN_RE = new RegExp(
   String.raw`<\s*(\/?)\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
   "gi",
@@ -295,80 +297,56 @@ export function createThinkingTagStreamState(): ThinkingTagStreamState {
   };
 }
 
-/** Split text that starts with thinking tags into structured thinking/text blocks. */
 function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
   const trimmedStart = text.trimStart();
   // Avoid false positives: only treat it as structured thinking when it begins
   // with a think tag (common for local/OpenAI-compat providers that emulate
   // reasoning blocks via tags).
-  if (!trimmedStart.startsWith("<")) {
-    return null;
-  }
-  if (!THINKING_TAG_OPEN_RE.test(trimmedStart)) {
-    return null;
-  }
-  if (!THINKING_TAG_CLOSE_RE.test(text)) {
+  if (
+    !trimmedStart.startsWith("<") ||
+    !THINKING_TAG_OPEN_RE.test(trimmedStart) ||
+    !THINKING_TAG_CLOSE_RE.test(text)
+  ) {
     return null;
   }
 
   let inThinking = false;
   let cursor = 0;
-  let thinkingStart = 0;
   const blocks: ThinkTaggedSplitBlock[] = [];
 
-  const pushText = (value: string) => {
-    if (!value) {
-      return;
+  const pushBlock = (type: ThinkTaggedSplitBlock["type"], value: string) => {
+    const content = type === "thinking" ? value.trim() : value;
+    if (content) {
+      blocks.push(type === "thinking" ? { type, thinking: content } : { type, text: content });
     }
-    blocks.push({ type: "text", text: value });
-  };
-  const pushThinking = (value: string) => {
-    const cleaned = value.trim();
-    if (!cleaned) {
-      return;
-    }
-    blocks.push({ type: "thinking", thinking: cleaned });
   };
 
   for (const match of text.matchAll(THINKING_TAG_SCAN_RE)) {
     const index = match.index ?? 0;
     const isClose = match[1]?.includes("/") ?? false;
 
-    if (!inThinking && !isClose) {
-      pushText(text.slice(cursor, index));
-      thinkingStart = index + match[0].length;
-      inThinking = true;
+    // Ignore nested opens and unmatched closes.
+    if (isClose !== inThinking) {
       continue;
     }
-
-    if (inThinking && isClose) {
-      pushThinking(text.slice(thinkingStart, index));
-      cursor = index + match[0].length;
-      inThinking = false;
-    }
+    pushBlock(inThinking ? "thinking" : "text", text.slice(cursor, index));
+    cursor = index + match[0].length;
+    inThinking = !isClose;
   }
 
   if (inThinking) {
     return null;
   }
-  pushText(text.slice(cursor));
+  pushBlock("text", text.slice(cursor));
 
-  const hasThinking = blocks.some((b) => b.type === "thinking");
-  if (!hasThinking) {
-    return null;
-  }
-  return blocks;
+  return blocks.some((block) => block.type === "thinking") ? blocks : null;
 }
 
-/** Promote inline thinking-tag text blocks into native thinking blocks in place. */
 export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
-  if (!Array.isArray(message.content)) {
-    return;
-  }
-  const hasThinkingBlock = message.content.some(
-    (block) => block && typeof block === "object" && block.type === "thinking",
-  );
-  if (hasThinkingBlock) {
+  if (
+    !Array.isArray(message.content) ||
+    message.content.some((block) => block && typeof block === "object" && block.type === "thinking")
+  ) {
     return;
   }
 
@@ -376,11 +354,7 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
   let changed = false;
 
   for (const block of message.content) {
-    if (!block || typeof block !== "object" || !("type" in block)) {
-      next.push(block);
-      continue;
-    }
-    if (block.type !== "text") {
+    if (!block || typeof block !== "object" || !("type" in block) || block.type !== "text") {
       next.push(block);
       continue;
     }
@@ -409,7 +383,6 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
   stripCompactionReplayCheckpointInPlace(message);
 }
 
-/** Extract closed thinking-tag content from a complete text payload. */
 export function extractThinkingFromTaggedText(text: string): string {
   if (!text) {
     return "";
@@ -429,7 +402,6 @@ export function extractThinkingFromTaggedText(text: string): string {
   return result.trim();
 }
 
-/** Incrementally extract thinking-tag content from a growing streaming payload. */
 export function extractThinkingFromTaggedStream(
   text: string,
   state: ThinkingTagStreamState,

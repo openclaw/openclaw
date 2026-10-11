@@ -2,17 +2,17 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { GatewayScheduler } from "./gateway-scheduler.js";
 import type { UpdateCampaignController } from "./update-campaign.js";
-import type { resolveStartupInstallStatus } from "./update-install-status.js";
+import type { StartupInstallStatus } from "./update-install-status.types.js";
 
 export type UpdateCheckLifecycle = {
   scheduler: GatewayScheduler;
   signal: AbortSignal;
   campaign?: UpdateCampaignController;
-  installStatus?: Awaited<ReturnType<typeof resolveStartupInstallStatus>>;
+  installStatus?: StartupInstallStatus;
   isCurrent: () => boolean;
   refreshes: WeakMap<OpenClawConfig, Promise<void>>;
   run: <T>(work: (signal: AbortSignal) => Promise<T>) => Promise<T>;
-  initialize: () => ReturnType<typeof resolveStartupInstallStatus>;
+  initialize: () => Promise<StartupInstallStatus>;
   schedule: (id: string, work: () => Promise<number>) => void;
   stop: () => Promise<void>;
 };
@@ -23,7 +23,7 @@ export function createGatewayUpdateLifecycle(scheduler: GatewayScheduler): Updat
   const scope = new AsyncWorkScope();
   const scheduled = scheduler.scope();
   const { signal } = scheduled;
-  let initialization: ReturnType<typeof resolveStartupInstallStatus> | undefined;
+  let initialization: Promise<StartupInstallStatus> | undefined;
   let stopping: Promise<void> | undefined;
 
   const run = <T>(work: (signal: AbortSignal) => Promise<T>): Promise<T> =>

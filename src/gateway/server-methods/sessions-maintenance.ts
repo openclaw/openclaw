@@ -13,25 +13,25 @@ import {
 } from "../session-cold-storage-maintenance.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { defineValidatedGatewayHandler } from "./validation.js";
+
+const maintenanceError = (error: unknown) =>
+  errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error));
 
 function createSessionStorageHandler(
   method: "sessions.storage.status" | "sessions.storage.run",
 ): GatewayRequestHandlers[string] {
-  return async (options) => {
-    const {
-      params,
+  return defineValidatedGatewayHandler(
+    method,
+    validateSessionsStorageParams,
+    async ({
       respond,
       context,
       sessionMutationAuthorization,
       sessionMutationCommitGuard,
       signal,
       hasCurrentClientAuthority,
-    } = options;
-    if (!assertValidParams(params, validateSessionsStorageParams, method, respond)) {
-      return;
-    }
-    try {
+    }) => {
       const agents = await getSessionColdStorageStatus(context.getRuntimeConfig());
       signal?.throwIfAborted();
       sessionMutationCommitGuard?.();
@@ -50,22 +50,38 @@ function createSessionStorageHandler(
         },
         undefined,
       );
-    } catch (error) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)));
-    }
-  };
+    },
+    maintenanceError,
+  );
 }
 
 export const sessionMaintenanceHandlers: GatewayRequestHandlers = {
   "sessions.storage.status": createSessionStorageHandler("sessions.storage.status"),
   "sessions.storage.run": createSessionStorageHandler("sessions.storage.run"),
-  "sessions.cleanup": async ({ params, respond, context }) => {
-    if (!assertValidParams(params, validateSessionsCleanupParams, "sessions.cleanup", respond)) {
-      return;
-    }
-    try {
+  "sessions.cleanup": defineValidatedGatewayHandler(
+    "sessions.cleanup",
+    validateSessionsCleanupParams,
+    async ({
+      params,
+      respond,
+      context,
+      signal,
+      hasCurrentClientAuthority,
+      sessionMutationAuthorization,
+      sessionMutationCommitGuard,
+    }) => {
+      const assertCurrent = () => {
+        signal?.throwIfAborted();
+        sessionMutationAuthorization?.assertCurrent();
+        if (hasCurrentClientAuthority?.() === false) {
+          throw new Error("Session cleanup requester is no longer authorized");
+        }
+      };
+      assertCurrent();
       const { mode, appliedSummaries, failure } = await runSessionsCleanup({
         cfg: context.getRuntimeConfig(),
+        assertCurrent,
+        beforeCommitInTransaction: sessionMutationCommitGuard,
         opts: {
           agent: params.agent,
           allAgents: params.allAgents,
@@ -101,8 +117,7 @@ export const sessionMaintenanceHandlers: GatewayRequestHandlers = {
       if (failure?.lifecycleCommitted) {
         emitSessionsChanged(context, { reason: "cleanup", sessionKey: undefined });
       }
-    } catch (error) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)));
-    }
-  },
+    },
+    maintenanceError,
+  ),
 };

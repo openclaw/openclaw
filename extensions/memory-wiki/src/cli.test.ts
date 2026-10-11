@@ -234,7 +234,7 @@ describe("memory-wiki cli", () => {
       config: { vault: { scope: "agent" } },
     });
     const appConfig = {
-      agents: { list: [{ id: "support", default: true }, { id: "marketing" }] },
+      agents: { entries: { support: {}, marketing: {} } },
     };
     const program = new Command();
     program.name("test");
@@ -257,7 +257,7 @@ describe("memory-wiki cli", () => {
       },
     });
     const appConfig = {
-      agents: { list: [{ id: "support", default: true }, { id: "marketing" }] },
+      agents: { entries: { support: {}, marketing: {} } },
     };
     const status = createGatewayStatus(config);
     const report: MemoryWikiDoctorReport = {
@@ -433,6 +433,26 @@ Orders join to [customers](/tables/customers.md).
     await expect(
       program.parseAsync(["wiki", "get", "entity.alpha", "--lines", "1.5"], { from: "user" }),
     ).rejects.toThrow("--lines must be a positive integer.");
+  });
+
+  it("reports invalid search backends through Commander before dispatch", async () => {
+    const { config } = await createCliVault({ initialize: false });
+    const writeErr = vi.fn();
+    const program = new Command().name("test").exitOverride();
+    program.configureOutput({ writeErr });
+    registerWikiCli(program, { config });
+
+    await expect(
+      program.parseAsync(["wiki", "search", "alpha", "--backend", "bogus"], { from: "user" }),
+    ).rejects.toMatchObject({
+      name: "CommanderError",
+      code: "commander.invalidArgument",
+      exitCode: 1,
+    });
+    expect(writeErr.mock.calls.map(([chunk]) => chunk).join("")).toBe(
+      "error: option '--backend <backend>' argument 'bogus' is invalid. Invalid backend: bogus. Expected one of: shared, local\n",
+    );
+    expect(callGatewayFromCliMock).not.toHaveBeenCalled();
   });
 
   it("accepts signed and zero-padded wiki get line options", async () => {

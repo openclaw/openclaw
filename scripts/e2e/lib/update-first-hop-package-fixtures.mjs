@@ -21,7 +21,6 @@ export const LEGACY_UPDATE_COMPAT_CHUNKS = [
   "shared-Y6bNiw2w.js",
   "shared-DFJEouXv.js",
 ];
-const FUTURE_FIXTURE_VERSION = "2026.9.99-first-hop.0";
 
 function readFirstHopReleases(packageRoot) {
   const inventoryPath = path.join(packageRoot, "dist", "update-compat-inventory.json");
@@ -215,14 +214,22 @@ export function removeLegacyUpdateCompatChunks(packageRoot, expectedMissingChunk
   return removed;
 }
 
-function futureFixtureVersion(sequence) {
+function futureFixtureVersion(sourceVersion, sequence) {
   if (!Number.isSafeInteger(sequence) || sequence < 0 || sequence > 9) {
     throw new Error("future fixture sequence must be an integer from 0 to 9");
   }
-  return FUTURE_FIXTURE_VERSION.replace(/0$/, String(sequence));
+  const firstHop = /^(\d{4})\.(\d+)\.(\d+)-first-hop\.\d+$/u.exec(sourceVersion);
+  if (firstHop) {
+    return `${firstHop[1]}.${firstHop[2]}.${firstHop[3]}-first-hop.${sequence}`;
+  }
+  const release = /^(\d{4})\.(\d+)\.(\d+)(?:-[a-z0-9]+(?:[.-][a-z0-9]+)*)?$/iu.exec(sourceVersion);
+  if (!release) {
+    throw new Error("future fixture requires a calendar-version source package");
+  }
+  return `${release[1]}.${release[2]}.${Number(release[3]) + 1}-first-hop.${sequence}`;
 }
 
-function stampFixtureVersion(packageRoot, version) {
+export function stampFixtureVersion(packageRoot, version) {
   const paths = resolveFixturePaths(packageRoot);
   const packageJson = readJson(paths.packageJson);
   const buildInfo = readJson(paths.buildInfo);
@@ -246,7 +253,10 @@ function stampFixtureVersion(packageRoot, version) {
 }
 
 export function markFutureUpdateFixture(packageRoot, sequence = 0) {
-  const version = futureFixtureVersion(sequence);
+  const version = futureFixtureVersion(
+    readJson(path.join(packageRoot, "package.json")).version,
+    sequence,
+  );
   const removedCompatibilityChunks = removeLegacyUpdateCompatChunks(packageRoot);
   stampFixtureVersion(packageRoot, version);
   return {
@@ -291,7 +301,7 @@ function packTransformedFixture(candidateTarball, outputTarball, transform) {
     const packageRoot = path.join(root, "package");
     const sourceVersion = readJson(path.join(packageRoot, "package.json")).version;
     const before = packageMembers(packageRoot);
-    const details = transform(packageRoot);
+    const details = transform(packageRoot, sourceVersion);
     const after = packageMembers(packageRoot);
     execFileSync("tar", ["-czf", output, "-C", root, "package"], {
       env: { ...process.env, COPYFILE_DISABLE: "1" },
@@ -325,11 +335,10 @@ function packTransformedFixture(candidateTarball, outputTarball, transform) {
 }
 
 export function packFirstHopUpdateFixture(candidateTarball, outputTarball, sequence = 0) {
-  const version = futureFixtureVersion(sequence);
   return {
     method: "candidate-same-schema-first-hop-fixture",
-    ...packTransformedFixture(candidateTarball, outputTarball, (root) => {
-      stampFixtureVersion(root, version);
+    ...packTransformedFixture(candidateTarball, outputTarball, (root, sourceVersion) => {
+      stampFixtureVersion(root, futureFixtureVersion(sourceVersion, sequence));
     }),
   };
 }
@@ -346,16 +355,16 @@ function packNegativeUpdateFixture(candidateTarball, outputTarball, expectedMiss
 export function packFutureUpdateFixture(candidateTarball, outputTarball, sequence = 0) {
   return {
     method: "candidate-same-schema-self-update-fixture",
-    ...packTransformedFixture(candidateTarball, outputTarball, (root) => {
-      return markFutureUpdateFixture(root, sequence);
-    }),
+    ...packTransformedFixture(candidateTarball, outputTarball, (root) =>
+      markFutureUpdateFixture(root, sequence),
+    ),
   };
 }
 
 export function packUnsupportedAdmissionFixture(candidateTarball, outputTarball, sequence = 0) {
   return {
     method: "candidate-without-admission-marker-fixture",
-    ...packTransformedFixture(candidateTarball, outputTarball, (root) => {
+    ...packTransformedFixture(candidateTarball, outputTarball, (root, sourceVersion) => {
       const manifestPath = path.join(root, "package.json");
       const manifest = readJson(manifestPath);
       if (manifest.openclaw?.updateAdmissionProtocol !== 1) {
@@ -363,17 +372,17 @@ export function packUnsupportedAdmissionFixture(candidateTarball, outputTarball,
       }
       delete manifest.openclaw.updateAdmissionProtocol;
       writeJson(manifestPath, manifest);
-      stampFixtureVersion(root, futureFixtureVersion(sequence));
+      stampFixtureVersion(root, futureFixtureVersion(sourceVersion, sequence));
     }),
   };
 }
 
 function packFutureRuntimeFixture(candidateTarball, outputTarball, sequence = 0) {
-  const version = futureFixtureVersion(sequence);
   return {
     method: "candidate-same-schema-runtime-fixture",
     name: "@openclaw/codex",
-    ...packTransformedFixture(candidateTarball, outputTarball, (root) => {
+    ...packTransformedFixture(candidateTarball, outputTarball, (root, sourceVersion) => {
+      const version = futureFixtureVersion(sourceVersion, sequence);
       const manifestPath = path.join(root, "package.json");
       const manifest = readJson(manifestPath);
       if (manifest.name !== "@openclaw/codex") {
@@ -434,22 +443,14 @@ function main() {
     );
     return;
   }
-  if (
-    (mode === "first-hop-tarball" ||
-      mode === "negative-tarball" ||
-      mode === "future-tarball" ||
-      mode === "unsupported-admission-tarball" ||
-      mode === "future-runtime-tarball") &&
-    packageRoot &&
-    outputTarball
-  ) {
-    const pack = {
-      "first-hop-tarball": packFirstHopUpdateFixture,
-      "negative-tarball": packNegativeUpdateFixture,
-      "future-tarball": packFutureUpdateFixture,
-      "unsupported-admission-tarball": packUnsupportedAdmissionFixture,
-      "future-runtime-tarball": packFutureRuntimeFixture,
-    }[mode];
+  const packers = {
+    "first-hop-tarball": packFirstHopUpdateFixture,
+    "negative-tarball": packNegativeUpdateFixture,
+    "future-tarball": packFutureUpdateFixture,
+    "unsupported-admission-tarball": packUnsupportedAdmissionFixture,
+    "future-runtime-tarball": packFutureRuntimeFixture,
+  };
+  if (Object.hasOwn(packers, mode) && packageRoot && outputTarball) {
     const fixtureArg =
       mode === "negative-tarball"
         ? (sequence ?? "")
@@ -457,7 +458,7 @@ function main() {
           ? 0
           : Number(sequence);
     process.stdout.write(
-      `${JSON.stringify(pack(packageRoot, outputTarball, fixtureArg), null, 2)}\n`,
+      `${JSON.stringify(packers[mode](packageRoot, outputTarball, fixtureArg), null, 2)}\n`,
     );
     return;
   }

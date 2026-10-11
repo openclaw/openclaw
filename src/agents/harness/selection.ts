@@ -39,8 +39,7 @@ import { normalizeToolPolicyName } from "../tool-policy.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { copyCoreTtsAttemptResultProvenance } from "../tools/tts-tool-result-provenance.js";
 import { createOpenClawAgentHarness, isBuiltInOpenClawAgentHarness } from "./builtin-openclaw.js";
-import { selectContextEngineForTranscriptHost } from "./context-engine-logical-turn.js";
-import { drainPendingContextEngineTurnsBeforeRun } from "./context-engine-turn-attempt.js";
+import { beginContextEngineLogicalTurn } from "./context-engine-turn-begin.js";
 import { AgentHarnessPreflightError } from "./errors.js";
 import {
   assertAgentHarnessExecutionEnvironment,
@@ -265,24 +264,17 @@ export async function runAgentHarnessAttempt(
     );
   }
   if (internalParams.contextEngineLogicalTurnLease) {
-    selectContextEngineForTranscriptHost({
+    const effective = await beginContextEngineLogicalTurn({
       lease: internalParams.contextEngineLogicalTurnLease,
       host: {
         id: `agent-harness:${harness.id}`,
         label: `agent harness "${harness.id}"`,
         capabilities: harness.contextEngineHostCapabilities ?? [],
       },
-      operation: "agent-run",
       recorder: internalParams.userTurnTranscriptRecorder,
-    });
-    await drainPendingContextEngineTurnsBeforeRun({
-      admission: internalParams.userTurnTranscriptRecorder?.getAdmissionReceipt(),
       isHeartbeat: isHeartbeatLifecycleRunKind(internalParams.bootstrapContextRunKind),
-      lease: internalParams.contextEngineLogicalTurnLease,
-      recorder: internalParams.userTurnTranscriptRecorder,
       sessionTarget: internalParams.sessionTarget,
     });
-    const effective = internalParams.contextEngineLogicalTurnLease.begin();
     internalParams = {
       ...internalParams,
       contextEngine: effective.engine.info.id === "legacy" ? undefined : effective.engine,
@@ -320,7 +312,11 @@ export async function runAgentHarnessAttempt(
   if (nativeSessionRuntime) {
     await nativeSessionRuntime.assertCurrent();
   }
-  const attemptParams = withoutHarnessSetupAuthority(internalParams);
+  const {
+    contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,
+    systemAgentTool: _systemAgentTool,
+    ...attemptParams
+  } = internalParams;
   const pluginAttempt = withoutInternalHarnessAuthority(
     attemptParams,
     harness,
@@ -503,36 +499,24 @@ async function runAgentHarnessOperation<T>(
   const harnessTrace = freezeDiagnosticTraceContext(
     activeTrace ? createChildDiagnosticTraceContext(activeTrace) : createDiagnosticTraceContext(),
   );
-  if (isBuiltInOpenClawAgentHarness(harness)) {
-    return await runWithDiagnosticTraceContext(harnessTrace, execute);
-  }
-
+  const builtIn = isBuiltInOpenClawAgentHarness(harness);
   try {
     return await runWithDiagnosticTraceContext(harnessTrace, execute);
   } catch (error) {
-    log.warn(`${harness.label} failed; not falling back to embedded OpenClaw backend`, {
-      harnessId: harness.id,
-      provider: params.provider,
-      modelId: params.modelId,
-      error: formatErrorMessage(error),
-    });
+    if (!builtIn) {
+      log.warn(`${harness.label} failed; not falling back to embedded OpenClaw backend`, {
+        harnessId: harness.id,
+        provider: params.provider,
+        modelId: params.modelId,
+        error: formatErrorMessage(error),
+      });
+    }
     throw error;
   }
 }
 
 function isSystemAgentOnlyAllowlist(toolsAllow: readonly string[] | undefined): boolean {
   return toolsAllow?.length === 1 && normalizeToolPolicyName(toolsAllow[0] ?? "") === "openclaw";
-}
-
-function withoutHarnessSetupAuthority(
-  params: EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions },
-): EmbeddedRunAttemptParams {
-  const {
-    contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,
-    systemAgentTool: _systemAgentTool,
-    ...attemptParams
-  } = params;
-  return attemptParams;
 }
 
 function withoutInternalHarnessAuthority(
@@ -614,6 +598,7 @@ function withoutPluginHarnessPrivateState(
     assistantErrorTranscript: _assistantErrorTranscript,
     compactionCountOwner: _compactionCountOwner,
     completionCheck: _completionCheck,
+    preparedSessionTarget: _preparedSessionTarget,
     onContextAccountingEvent: _onContextAccountingEvent,
     onCompactionRequestBudget: _onCompactionRequestBudget,
     contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,
@@ -652,6 +637,10 @@ function preparePluginHarnessParams(
       : undefined,
     harness.conversationToolPolicyNativeTools,
   );
+  if (policies.requiresLiveToolAuthority) {
+    // Native-runtime consent does not waive a separate revocable delegation grant.
+    assertPluginHarnessConversationToolPolicySupport(harness, true);
+  }
   const policyParams = {
     ...preparedParams,
     pluginHarnessToolPolicySafeDeniedTools:

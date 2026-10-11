@@ -26,7 +26,10 @@ import {
 } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
-import { startPluginServices, type PluginServicesHandle } from "../plugins/services.js";
+import {
+  startPluginServices,
+  type PluginServicesHandle,
+} from "../plugins/services.test-support.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import type { OpenClawPluginApi } from "../plugins/types.js";
 import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
@@ -290,6 +293,7 @@ export async function createPluginReloadRecoveryFixture(
     nextConfig = config,
     pluginIds: readonly string[] = ["first"],
     changedPaths: string[] = [],
+    ownership?: Pick<Parameters<typeof reloadGatewayPlugins>[1], "checkpoint" | "isAborted">,
   ) => {
     aborted = false;
     return withPluginRuntimeRegistryScope(registryOwner.registry, () =>
@@ -324,7 +328,7 @@ export async function createPluginReloadRecoveryFixture(
           nextConfig,
           sourceConfig: nextConfig,
           changedPaths,
-          checkpoint: options.checkpoint,
+          checkpoint: ownership?.checkpoint ?? options.checkpoint,
           prepareConfigEffects:
             options.prepareConfigEffects ??
             (() => ({ retire: () => {}, rollback: rollbackConfigEffects })),
@@ -344,7 +348,7 @@ export async function createPluginReloadRecoveryFixture(
             await options.afterPublish?.();
           },
           env: options.env ?? {},
-          isAborted: () => aborted,
+          isAborted: () => aborted || ownership?.isAborted?.() === true,
           assertInvokerOwned: options.assertInvokerOwned,
         },
       ),

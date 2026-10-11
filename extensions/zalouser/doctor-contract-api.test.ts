@@ -2,9 +2,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  OpenAsyncKeyedStoreOptions,
+  PluginStateActionAuthority,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -33,6 +38,10 @@ import {
   ZALOUSER_CREDENTIALS_NAMESPACE,
   type StoredZaloCredentials,
 } from "./src/session-state.js";
+
+type AuthoredAgents = NonNullable<OpenClawConfig["agents"]>;
+// Doctor state migrations receive raw pre-migration config, including retired rosters.
+type RawLegacyDoctorAgents = AuthoredAgents & { list?: Array<{ id: string }> };
 
 function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
   return {
@@ -136,11 +145,15 @@ describe("zalouser doctor state migration", () => {
       }),
     );
     const runtime = createPluginRuntimeMock();
-    runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
-      createPluginStateKeyedStoreForTests<T>("zalouser", {
-        ...options,
-        env: options.env ?? env,
-      });
+    runtime.state.openKeyedStoreV2 = <T>(
+      options: OpenAsyncKeyedStoreOptions,
+      authority?: PluginStateActionAuthority,
+    ) =>
+      createPluginStateKeyedStoreV2ForTests<T>(
+        "zalouser",
+        { ...options, env: options.env ?? env },
+        authority ?? { assertCurrent() {} },
+      );
     setZalouserRuntime(runtime);
     await clearStoredZaloCredentials(profile, env);
     const context = createDoctorContext(env);
@@ -166,7 +179,7 @@ describe("zalouser doctor state migration", () => {
   it("does not inspect agent session stores when zalouser has never been configured", async () => {
     const migration = findMigration("zalouser-direct-session-keys");
     const context = createDoctorContext(env);
-    const config = { agents: { list: [{ id: "worker-1" }] } };
+    const config = { agents: { entries: { "worker-1": {} } } };
 
     await expect(
       migration.detectLegacyState({ config, env, stateDir, oauthDir: stateDir, context }),
@@ -178,7 +191,7 @@ describe("zalouser doctor state migration", () => {
     }
   });
 
-  it.each([
+  it.each<{ roster: string; agentId: string; agents: RawLegacyDoctorAgents }>([
     { roster: "implicit main", agentId: "main", agents: {} },
     {
       roster: "legacy list",

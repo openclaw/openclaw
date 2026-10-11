@@ -5,11 +5,13 @@ import type {
   NodeWorkerLaunchInput,
   NodeWorkerSupervisorIdentity,
 } from "../worker/node-supervisor-protocol.js";
+import type { NodeWorkerProcessInput } from "../worker/worker-process-observation.js";
 import {
   buildWorkerProcessTurn,
   type WorkerProcessMessage,
 } from "../worker/worker-process-protocol.js";
 import type { NodeWorkerCapacity } from "./node-worker-capacity.js";
+import { nodeWorkerLaunchSecrets } from "./node-worker-child-secrets.js";
 import type { NodeWorkerContainerEngine } from "./node-worker-container-engine.js";
 import type { NodeWorkerContainerLifecycle } from "./node-worker-container-lifecycle.js";
 import type { NodeWorkerLaunchClaim } from "./node-worker-journal.types.js";
@@ -29,6 +31,10 @@ import {
   type NodeWorkerChildAdapter,
 } from "./node-worker-launch-transport.js";
 import {
+  resolveNodeWorkerNativeInferenceWorkspace,
+  type NodeWorkerNativeInferenceSnapshot,
+} from "./node-worker-native-inference.js";
+import {
   createNodeWorkerCredentialScrubber,
   sanitizeNodeWorkerDiagnostic,
 } from "./node-worker-output.js";
@@ -37,6 +43,7 @@ import {
   requireNodeWorkerProcessIdentity,
   type NodeWorkerProcessIdentity,
 } from "./node-worker-process-identity.js";
+import { NodeWorkerProcessObservations } from "./node-worker-process-observation.js";
 import {
   NODE_WORKER_STOP_GRACE_MS,
   NODE_WORKER_FORCE_STOP_WAIT_MS,
@@ -55,7 +62,6 @@ import {
   type createNodeWorkerLaunchRecovery,
 } from "./node-worker-supervisor-recovery.js";
 import { stopOwnedNodeWorkerTree } from "./node-worker-tree-control.js";
-import { nodeWorkerDescriptorSecrets } from "./node-worker-turn-lifecycle.js";
 import type { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
 
 /** Owns physical children and their observed exit, turn settlement, and retained idle lifetime. */
@@ -64,10 +70,31 @@ export class NodeWorkerChildLifecycle {
   readonly active: ReadonlyMap<string, NodeWorkerActiveOwnership> = this.owners;
   readonly reconcileActiveTerminal: ReturnType<typeof createNodeWorkerTerminalReconciliation>;
   private generation = 0;
+  private readonly processObservations = new NodeWorkerProcessObservations();
+
+  observeProcesses(input: NodeWorkerProcessInput, signal?: AbortSignal) {
+    const owner = [...this.owners.values()].find(
+      (entry) =>
+        entry.binding.environmentId === input.environmentId &&
+        entry.binding.gatewayNamespace === input.gatewayNamespace,
+    );
+    if (!owner || owner.state !== "running" || this.options.isClosed()) {
+      throw new Error(
+        "Retained worker process observation unavailable; start a new turn and retry.",
+      );
+    }
+    return this.processObservations.request(
+      owner,
+      input,
+      () => !this.options.isClosed() && this.owners.get(owner.launchId) === owner,
+      signal,
+    );
+  }
 
   constructor(
     private readonly options: {
       bundleRoot: string;
+      nativeInferenceSnapshot?: NodeWorkerNativeInferenceSnapshot;
       engineEnv: NodeJS.ProcessEnv;
       store: NodeWorkerLaunchStore;
       turns: NodeWorkerTurnStore;
@@ -148,13 +175,15 @@ export class NodeWorkerChildLifecycle {
     workerEnv: NodeJS.ProcessEnv;
     input: NodeWorkerLaunchInput;
     descriptor: WorkerLaunchDescriptor;
-    planHash: string;
     supervisor: NodeWorkerProcessIdentity;
     claim: NodeWorkerLaunchClaim;
     signal?: AbortSignal;
     idleGeneration?: number;
   }): Promise<NodeWorkerLaunchReceipt> {
-    const sensitiveValues = nodeWorkerDescriptorSecrets(params.descriptor);
+    const sensitiveValues = nodeWorkerLaunchSecrets(
+      params.descriptor,
+      this.options.nativeInferenceSnapshot,
+    );
     const scrubber = createNodeWorkerCredentialScrubber(sensitiveValues);
     // Turn cancellation can beat the child's admission retry deadline. Retain the
     // producer's latest cause so the durable terminal receipt does not become generic.
@@ -165,7 +194,7 @@ export class NodeWorkerChildLifecycle {
     const finishFailed = (errorText: string) =>
       this.options.capacity.finish({
         launchId: params.input.launchId,
-        planHash: params.planHash,
+        planHash: params.claim.planHash,
         supervisor: params.supervisor,
         worker: null,
         state: "failed",
@@ -179,9 +208,10 @@ export class NodeWorkerChildLifecycle {
         bundleRoot: this.options.bundleRoot,
         workerEnv: params.workerEnv,
         engineEnv: this.options.engineEnv,
+        nativeInferenceSnapshot: this.options.nativeInferenceSnapshot,
         input: params.input,
         descriptor: params.descriptor,
-        planHash: params.planHash,
+        planHash: params.claim.planHash,
         supervisor: params.supervisor,
         connectionFailure,
         scrubber,
@@ -238,7 +268,7 @@ export class NodeWorkerChildLifecycle {
       journalReady,
       gatewayNamespace: params.input.gatewayNamespace,
       launchId: params.input.launchId,
-      planHash: params.planHash,
+      planHash: params.claim.planHash,
       scrubber,
       connectionFailure,
       supervisor: params.supervisor,
@@ -331,6 +361,9 @@ export class NodeWorkerChildLifecycle {
     signal: AbortSignal,
     idleGeneration?: number,
   ): Promise<NodeWorkerLaunchReceipt> {
+    if (descriptor.assignment.inference === "runtime-local") {
+      resolveNodeWorkerNativeInferenceWorkspace(this.options.nativeInferenceSnapshot, descriptor);
+    }
     const isCurrent = () => this.owners.get(active.launchId) === active && !this.options.isClosed();
     const assertCurrent = () => {
       signal.throwIfAborted();
@@ -362,7 +395,7 @@ export class NodeWorkerChildLifecycle {
       await this.stopChild(active, signal.aborted ? "cancelled" : "interrupted");
       return (await this.options.turns.get(claim.launchId)) ?? admitted.receipt;
     }
-    const secrets = nodeWorkerDescriptorSecrets(descriptor);
+    const secrets = nodeWorkerLaunchSecrets(descriptor, this.options.nativeInferenceSnapshot);
     for (const value of secrets) {
       registerSecretValueForRedaction(value);
     }
@@ -496,7 +529,7 @@ export class NodeWorkerChildLifecycle {
       (frame) => this.settleTurn(active, frame),
       () => active.turn?.claim.launchId,
       active.container ? () => this.cleanupChildContainer(active) : undefined,
-    );
+    ).finally(() => this.processObservations.retire(active));
     if (observation.kind === "deferred") {
       active.deferredOutcome = observation.outcome;
       return;
@@ -509,6 +542,10 @@ export class NodeWorkerChildLifecycle {
     active: NodeWorkerRunningChild,
     frame: WorkerProcessMessage,
   ): Promise<void> {
+    if (frame.type === "process-result") {
+      this.processObservations.accept(active, frame);
+      return;
+    }
     if (frame.type === "result") {
       if (active.stopState) {
         return;

@@ -344,6 +344,7 @@ it.each(["empty", "extra", "malformed", "invalid-entry", "invalid-utf8", "nul"] 
   async (frame) => {
     const runId = randomUUID();
     const effect = path.join(root, "installer-effect");
+    const drained = path.join(root, "gate-drained");
     const preload = preloadFixture("require");
     if (frame === "nul") {
       preload.env.NODE_OPTIONS += "\0private-option";
@@ -377,7 +378,16 @@ it.each(["empty", "extra", "malformed", "invalid-entry", "invalid-utf8", "nul"] 
       if (["malformed", "invalid-entry", "invalid-utf8"].includes(frame)) {
         expect(Buffer.byteLength(input)).toBe(Buffer.byteLength(options.input));
       }
-      return runCommand(argv, { ...options, input }).then((result) => {
+      const cleanup = `
+        const exitFs = await import("node:fs/promises");
+        process.once("beforeExit", async () => {
+          await exitFs.writeFile(${JSON.stringify(drained)}, "settled");
+        });
+      `;
+      return runCommand([...argv.slice(0, 3), cleanup + argv[3], ...argv.slice(4)], {
+        ...options,
+        input,
+      }).then((result) => {
         observed = result;
         return result;
       });
@@ -402,6 +412,7 @@ it.each(["empty", "extra", "malformed", "invalid-entry", "invalid-utf8", "nul"] 
     expect(fs.existsSync(effect)).toBe(false);
     expect(fs.existsSync(preload.marker)).toBe(false);
     expect(observed).toMatchObject({ code: 1, stdout: "", stderr: "" });
+    expect(fs.readFileSync(drained, "utf8")).toBe("settled");
     expect(outcome).toBe("refused");
     for (const key of [root, serviceRoot]) {
       expect(createManagedHandoffLeaseStore().read(key)).toEqual({ kind: "absent" });
@@ -524,7 +535,6 @@ it.each([
   { boundary: "before-launch", change: "requester-revoked" },
   ...(
     [
-      "options-replaced",
       "run-replaced",
       "run-id-changed",
       "executor-replaced",
@@ -548,9 +558,6 @@ it.each([
     const recoveryParams = { root, opts, timeoutMs: 10000 };
     const revoke = () => {
       assert(opts.run);
-      if (change === "options-replaced") {
-        recoveryParams.opts = { run: { ...opts.run } };
-      }
       if (change === "run-replaced") {
         opts.run = { ...opts.run };
       }

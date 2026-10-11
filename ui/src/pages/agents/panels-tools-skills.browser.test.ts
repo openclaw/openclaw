@@ -3,11 +3,22 @@ import { render } from "lit";
 import { assert, describe, expect, it, vi } from "vitest";
 import type { ToolsEffectiveResult } from "../../api/types.ts";
 import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
+import type { SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import { installBrowserHistoryIsolation } from "../../test-helpers/browser-history.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createBaseParams } from "./panels-tools-skills.test-support.ts";
 import { renderAgentTools } from "./panels-tools-skills.ts";
 
 installBrowserHistoryIsolation();
+
+async function settleGitHubIdentity(container: HTMLElement) {
+  if (!container.isConnected) {
+    mountSolid(() => container);
+  }
+  const bridge = container.querySelector<SolidBridgeElement<object>>("openclaw-github-identity");
+  assert(bridge, "Missing GitHub identity bridge");
+  await bridge.updateComplete;
+}
 
 const toolPreview: ToolsEffectiveResult = {
   agentId: "main",
@@ -103,7 +114,7 @@ describe("agents tools panel (browser)", () => {
     expect(absent?.querySelectorAll(".agent-tool-summary__fact dd")[1]?.textContent?.trim()).toBe(
       "Not listed",
     );
-    expect(absent?.querySelector<HTMLElement & { checked: boolean }>("wa-switch")?.checked).toBe(
+    expect(absent?.querySelector<HTMLInputElement>("input.settings-toggle__input")?.checked).toBe(
       true,
     );
     expect(container.querySelector(".agent-tools-group__counts")?.textContent).toContain(
@@ -212,7 +223,7 @@ describe("agents tools panel (browser)", () => {
       ),
       container,
     );
-    await Promise.resolve();
+    await settleGitHubIdentity(container);
 
     expect(
       Array.from(container.querySelectorAll(".settings-section__heading")).map((heading) =>
@@ -281,7 +292,7 @@ describe("agents tools panel (browser)", () => {
       effective: nativeIdentity,
     };
     render(renderAgentTools(params), container);
-    await Promise.resolve();
+    await settleGitHubIdentity(container);
 
     const section = Array.from(container.querySelectorAll(".settings-section")).find((candidate) =>
       candidate.querySelector(".settings-section__heading")?.textContent?.includes("GitHub"),
@@ -342,7 +353,7 @@ describe("agents tools panel (browser)", () => {
     await githubIdentity.startAuthorization();
 
     render(renderAgentTools(createBaseParams({ githubIdentity })), container);
-    await Promise.resolve();
+    await settleGitHubIdentity(container);
 
     expect(container.textContent).toContain("ABCD-1234");
     const link = container.querySelector<HTMLAnchorElement>(
@@ -380,7 +391,7 @@ describe("agents tools panel (browser)", () => {
     };
 
     render(renderAgentTools(params), container);
-    await Promise.resolve();
+    await settleGitHubIdentity(container);
 
     expect(container.textContent).toContain("@system-user");
     expect(container.textContent).toContain("System Author · system@example.com");
@@ -412,19 +423,19 @@ describe("agents tools panel (browser)", () => {
     });
 
     render(renderAgentTools(createBaseParams({ githubIdentity })), container);
-    await Promise.resolve();
+    await settleGitHubIdentity(container);
     expect(container.querySelector(".settings-secret input")).toBeNull();
     expect(container.textContent).toContain("Use a PAT instead");
 
     githubIdentity.showPatFallback();
     render(renderAgentTools(createBaseParams({ githubIdentity })), container);
-    await Promise.resolve();
+    await settleGitHubIdentity(container);
     expect(container.querySelector(".settings-secret input")).not.toBeNull();
     expect(container.textContent).not.toContain("Continue with GitHub");
 
     githubIdentity.busy = true;
     render(renderAgentTools(createBaseParams({ githubIdentity })), container);
-    await Promise.resolve();
+    await settleGitHubIdentity(container);
     const cancel = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
       (button) => button.textContent?.trim() === "Cancel",
     );
@@ -472,7 +483,7 @@ describe("agents tools panel (browser)", () => {
     const card = Array.from(container.querySelectorAll(".agent-tool-card")).find(
       (entry) => entry.querySelector(".agent-tool-title")?.textContent?.trim() === "openclaw",
     );
-    const toggle = card?.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+    const toggle = card?.querySelector<HTMLInputElement>("input.settings-toggle__input");
     assert(toggle, "Missing setup helper switch");
     expect(toggle.checked).toBe(false);
     toggle.checked = true;
@@ -606,7 +617,7 @@ describe("agents tools panel (browser)", () => {
 
     const tool = container.querySelector<HTMLDetailsElement>(".agent-tool-card");
     const summary = container.querySelector<HTMLElement>(".agent-tool-summary");
-    const toggle = container.querySelector(".agent-tool-toggle wa-switch");
+    const toggle = container.querySelector(".agent-tool-toggle input.settings-toggle__input");
 
     expect(tool?.open).toBe(false);
     expect(toggle?.closest(".agent-tool-summary")).toBe(summary);
@@ -848,7 +859,7 @@ describe("agents tools panel (browser)", () => {
       const card = Array.from(container.querySelectorAll(".agent-tool-card")).find(
         (entry) => entry.querySelector(".agent-tool-title")?.textContent?.trim() === testCase.tool,
       );
-      const toggle = card?.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+      const toggle = card?.querySelector<HTMLInputElement>("input.settings-toggle__input");
       assert(toggle, `Missing tool switch: ${testCase.tool}`);
       expect(toggle.checked).toBe(!testCase.enabled);
       toggle.checked = testCase.enabled;
@@ -922,7 +933,7 @@ describe("agents tools panel (browser)", () => {
       renderAgentTools(
         createBaseParams({
           configForm: {
-            agents: { entries: { main: { default: true, tools } } },
+            agents: { entries: { main: { tools } } },
           },
           toolsCatalogResult: {
             agentId: "main",
@@ -952,7 +963,7 @@ describe("agents tools panel (browser)", () => {
       Object.fromEntries(
         Array.from(container.querySelectorAll(".agent-tool-card"), (card) => [
           card.querySelector(".agent-tool-title")?.textContent?.trim(),
-          card.querySelector<HTMLElement & { checked: boolean }>("wa-switch")?.checked,
+          card.querySelector<HTMLInputElement>("input.settings-toggle__input")?.checked,
         ]),
       ),
     ).toEqual(expected);

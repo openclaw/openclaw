@@ -1,7 +1,7 @@
 import "../src/test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createCanonicalAgentConfigFixture, withTempHome } from "openclaw/plugin-sdk/test-env";
+import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { runBuiltCli } from "./cli-json-stdout.test-support.js";
 
@@ -184,20 +184,18 @@ describe("cli json stdout contract", () => {
     await withTempHome(
       async (tempHome) => {
         const configPath = path.join(tempHome, "openclaw.json");
-        const existingConfig = `${JSON.stringify(
-          createCanonicalAgentConfigFixture({
-            agents: {
-              ownership: "explicit",
-              list: [
-                { id: "main", workspace: path.join(tempHome, "main") },
-                { id: "ops", workspace: path.join(tempHome, "ops") },
-              ],
+        const existingConfig = `${JSON.stringify({
+          agents: {
+            ownership: "explicit",
+            entries: {
+              main: { workspace: path.join(tempHome, "main") },
+              ops: { workspace: path.join(tempHome, "ops") },
             },
-            bindings: [
-              { type: "route", agentId: "ops", match: { channel: "telegram", accountId: "work" } },
-            ],
-          }).config,
-        )}\n`;
+          },
+          bindings: [
+            { type: "route", agentId: "ops", match: { channel: "telegram", accountId: "work" } },
+          ],
+        })}\n`;
         if ("conflict" in testCase) {
           await fs.writeFile(configPath, existingConfig, "utf8");
         }

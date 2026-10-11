@@ -7,10 +7,14 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { registerDevicesCli } from "../../cli/devices-cli.js";
 import * as gatewayRpc from "../../cli/gateway-rpc.js";
 import * as devicePairingJoinCode from "../../infra/device-pairing-join-code.js";
+import type * as updateCheckLifecycle from "../../infra/update-check-lifecycle.js";
 import { defaultRuntime } from "../../runtime.js";
+import { useMockHttp } from "../../test-utils/mock-http.js";
+import type * as versionModule from "../../version.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -19,6 +23,8 @@ const mocks = vi.hoisted(() => ({
   renderQrPngDataUrl: vi.fn(),
   runCommandWithTimeout: vi.fn(),
   readDevicePairSetupCompletion: vi.fn(),
+  readInstallStatus: vi.fn(),
+  version: "2026.9.9",
 }));
 
 vi.mock("../../pairing/setup-code.js", async (importOriginal) => ({
@@ -35,6 +41,18 @@ vi.mock("../../process/exec.js", () => ({
 vi.mock("../../infra/device-bootstrap.js", () => ({
   readDevicePairSetupCompletion: mocks.readDevicePairSetupCompletion,
 }));
+vi.mock("../../infra/update-check-lifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof updateCheckLifecycle>()),
+  currentUpdateCheckLifecycle: () => ({ installStatus: mocks.readInstallStatus() }),
+}));
+vi.mock("../../version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof versionModule>()),
+  get VERSION() {
+    return mocks.version;
+  },
+}));
+
+const mockHttp = useMockHttp();
 
 import { devicePairSetupHandlers } from "./device-pair-setup.js";
 
@@ -91,6 +109,10 @@ describe("device.pair.setupCode", () => {
     mocks.renderQrPngDataUrl.mockReset();
     mocks.runCommandWithTimeout.mockReset();
     mocks.readDevicePairSetupCompletion.mockReset();
+    mocks.version = "2026.9.9";
+    mocks.readInstallStatus.mockReturnValue({
+      status: { installKind: "package", packageManager: "npm" },
+    });
   });
 
   afterEach(() => {
@@ -295,7 +317,7 @@ describe("device.pair.setupCode", () => {
     // with the real mint/redeem test, where a leaked module mock creates unbacked codes.
     const registerDevicePairingJoinCode = vi
       .spyOn(devicePairingJoinCode, "registerDevicePairingJoinCode")
-      .mockReturnValue("a".repeat(22));
+      .mockResolvedValue("a".repeat(22));
 
     const respond = await runSetupCode({ includeQr: false, joinUrl: true });
 
@@ -306,10 +328,49 @@ describe("device.pair.setupCode", () => {
     expect(registerDevicePairingJoinCode).toHaveBeenCalledWith({
       payload: resolution.payload,
       expiresAtMs: resolution.expiresAtMs,
+      context: expect.objectContaining({ admission: expect.any(Object) }),
+      assertCurrent: expect.any(Function),
     });
     expect(respond.mock.calls[0]?.[1]).toMatchObject({
       joinUrl: `https://gateway.tailnet.example/public-gateway/j/${"a".repeat(22)}`,
     });
+  });
+
+  it("retains the original requester authority while resolving a join setup", async () => {
+    const entered = createDeferred();
+    const release = createDeferred();
+    let current = true;
+    const { options, respond } = createOptions({ includeQr: false, joinUrl: true });
+    options.hasCurrentClientAuthority = () => current;
+    mocks.resolvePairingSetupFromConfig.mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      return okResolution;
+    });
+    const register = vi
+      .spyOn(devicePairingJoinCode, "registerDevicePairingJoinCode")
+      .mockResolvedValue("a".repeat(22));
+    const pending = Promise.resolve(
+      expectDefined(
+        devicePairSetupHandlers["device.pair.setupCode"],
+        "device pairing handler is registered",
+      )(options),
+    );
+    try {
+      await awaitGateBeforeSettlement(entered.promise, pending, "setup resolution was not reached");
+      current = false;
+      options.hasCurrentClientAuthority = () => true;
+    } finally {
+      release.resolve();
+      await pending;
+    }
+
+    expect(register).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("requester authority changed") }),
+    );
   });
 
   it.each([
@@ -326,7 +387,7 @@ describe("device.pair.setupCode", () => {
       }),
     );
     mocks.encodePairingSetupCode.mockImplementation(pairing.encodePairingSetupCode);
-    vi.spyOn(devicePairingJoinCode, "registerDevicePairingJoinCode").mockReturnValue(
+    vi.spyOn(devicePairingJoinCode, "registerDevicePairingJoinCode").mockResolvedValue(
       "a".repeat(22),
     );
     vi.spyOn(gatewayRpc, "callGatewayFromCliWithTransport").mockImplementation(
@@ -356,7 +417,95 @@ describe("device.pair.setupCode", () => {
     await program.parseAsync(["devices", "join-code", "--json"], { from: "user" });
 
     const joinUrl = `https://pair.example${basePath}/j/${"a".repeat(22)}`;
-    expect(writeJson).toHaveBeenCalledWith({ joinUrl, command: `npx openclaw connect ${joinUrl}` });
+    expect(writeJson).toHaveBeenCalledWith({
+      joinUrl,
+      command: `npx -y openclaw connect ${joinUrl} --service --session-host`,
+      serviceCommand: `npx -y openclaw connect ${joinUrl} --service`,
+      installedCommand: `openclaw connect ${joinUrl} --service --session-host`,
+      versionNote: expect.stringContaining("matching Gateway build"),
+    });
+  });
+
+  it.each([
+    {
+      name: "published release",
+      kind: "package",
+      version: "2026.9.9",
+      exact: true,
+      tag: false,
+      spec: "openclaw@2026.9.9",
+    },
+    {
+      name: "published beta",
+      kind: "package",
+      version: "2026.9.9-beta.1",
+      exact: true,
+      tag: false,
+      spec: "openclaw@2026.9.9-beta.1",
+    },
+    {
+      name: "unpublished beta",
+      kind: "package",
+      version: "2026.9.9-beta.1",
+      exact: false,
+      tag: true,
+      spec: "openclaw@beta",
+    },
+    {
+      name: "unpublished release",
+      kind: "package",
+      version: "2026.9.9",
+      exact: false,
+      tag: true,
+      spec: "openclaw@latest",
+    },
+    {
+      name: "source checkout",
+      kind: "git",
+      version: "2026.9.9",
+      exact: false,
+      tag: true,
+      spec: "openclaw@dev",
+    },
+    {
+      name: "offline registry",
+      kind: "package",
+      version: "2026.9.9",
+      exact: false,
+      tag: false,
+      spec: "openclaw",
+    },
+  ])("mints Gateway-owned join commands for $name", async ({ kind, version, exact, tag, spec }) => {
+    mocks.version = version;
+    mocks.readInstallStatus.mockReturnValue({ status: { installKind: kind } });
+    mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
+    mocks.encodePairingSetupCode.mockReturnValue("SETUP");
+    vi.spyOn(devicePairingJoinCode, "registerDevicePairingJoinCode").mockResolvedValue(
+      "a".repeat(22),
+    );
+    if (kind === "package") {
+      mockHttp.intercept({
+        url: `https://registry.npmjs.org/openclaw/${version}`,
+        reply: exact ? { json: { version } } : { status: 404, json: {} },
+      });
+    }
+    if (!exact) {
+      mockHttp.intercept({
+        url: `https://registry.npmjs.org/openclaw/${kind === "git" ? "dev" : version.includes("beta") ? "beta" : "latest"}`,
+        reply: tag ? { json: { version: "2026.9.9" } } : { status: 404, json: {} },
+      });
+    }
+    const respond = await runSetupCode({ joinUrl: true, includeQr: false });
+    const joinUrl = `https://gw.example:8443/j/${"a".repeat(22)}`;
+    expect(respond.mock.calls[0]?.[1]).toMatchObject({
+      command: `npx -y ${spec} connect ${joinUrl} --service --session-host`,
+      serviceCommand: `npx -y ${spec} connect ${joinUrl} --service`,
+      installedCommand: `openclaw connect ${joinUrl} --service --session-host`,
+      ...(exact ? {} : { versionNote: expect.stringContaining("matching Gateway build") }),
+    });
+    if (exact) {
+      expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("versionNote");
+    }
   });
 
   it.each(["limited", "voice-node"])(

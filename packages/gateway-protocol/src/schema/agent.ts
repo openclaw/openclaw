@@ -66,6 +66,11 @@ export const AgentEventSchema = closedObject({
   spawnedBy: Type.Optional(NonEmptyString),
   isHeartbeat: Type.Optional(Type.Boolean()),
   data: Type.Record(Type.String(), Type.Unknown()),
+  preamble: Type.Optional(
+    closedObject({
+      retainedText: Type.Optional(Type.String()),
+    }),
+  ),
 });
 
 const MessageActionReplyModeSchema = Type.Union([

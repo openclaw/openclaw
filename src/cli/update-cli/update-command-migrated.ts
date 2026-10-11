@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV } from "../../commands/doctor/shared/update-phase.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -68,10 +69,18 @@ export async function inspectActivatedUpdateState(
     });
     const shared = current.find((entry) => entry.path === resolveOpenClawStateSqlitePath(env));
     const sharedVersion = shared ? resolveUpdateStateContentVersion(shared) : undefined;
+    const incompleteAgents = candidateSchemaVersions
+      ? current.filter(
+          (entry) =>
+            entry !== shared &&
+            entry.userVersion !== null &&
+            entry.userVersion !== candidateSchemaVersions.agent,
+        )
+      : [];
     if (
       result.status === "ok" &&
       candidateSchemaVersions &&
-      sharedVersion !== candidateSchemaVersions.state
+      (sharedVersion !== candidateSchemaVersions.state || incompleteAgents.length > 0)
     ) {
       // Doctor can warn without failing. Require applied content so startup
       // cannot migrate late; deferred publication alone is already ready.
@@ -83,7 +92,17 @@ export async function inspectActivatedUpdateState(
         cwd: result.root ?? root,
         durationMs: 0,
         exitCode: 1,
-        stderrTail: `Shared state migration did not finish: expected schema ${candidateSchemaVersions.state}, found ${sharedVersion ?? "missing"}.`,
+        stderrTail: [
+          ...(sharedVersion !== candidateSchemaVersions.state
+            ? [
+                `Shared state migration did not finish: expected schema ${candidateSchemaVersions.state}, found ${sharedVersion ?? "missing"}.`,
+              ]
+            : []),
+          ...incompleteAgents.map(
+            (entry) =>
+              `Agent database migration did not finish: ${entry.path}; expected schema ${candidateSchemaVersions.agent}, found ${entry.userVersion}.`,
+          ),
+        ].join("\n"),
       });
     }
     return updateStateSchemaVersionsMatch(schemaVersions, current, {
@@ -138,16 +157,25 @@ export async function continueMigratedUpdateInFreshProcess(
       params.packageUpdateNodeRunner ?? resolveNodeRunner(),
       path.join(root, "dist", runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath),
     ];
-    const workerEnv = {
-      ...stripGatewayServiceMarkerEnv(
-        resolveUpdatedInstallCommandEnv({
-          processEnv: params.ownedManagedUpdateEnv ?? run.env,
-        }),
-      ),
-      OPENCLAW_UPDATE_IN_PROGRESS: "1",
-      TMPDIR: scratchDir,
-      TMP: scratchDir,
-      TEMP: scratchDir,
+    const workerOptions = {
+      cwd: root,
+      baseEnv: {},
+      env: {
+        ...stripGatewayServiceMarkerEnv(
+          resolveUpdatedInstallCommandEnv({
+            processEnv: params.ownedManagedUpdateEnv ?? run.env,
+          }),
+        ),
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        // This worker finishes the run, including the deferred post-activation inspections.
+        [UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV]: params.shouldRestart ? "1" : "0",
+        TMPDIR: scratchDir,
+        TMP: scratchDir,
+        TEMP: scratchDir,
+      },
+      killProcessTree: true,
+      requireProcessTreeExtinction: true,
+      killGraceMs: 500,
     };
     if (run.executorFence || run.completionOwner) {
       assertCurrent();
@@ -157,13 +185,8 @@ export async function continueMigratedUpdateInFreshProcess(
       // Compatibility only, never authority. An older installed worker ignores
       // new JSON fields, so refuse before exposing any continuation input.
       const check = await runUtf8CommandWithTimeout([...workerCommand, "--check"], {
-        cwd: root,
-        baseEnv: {},
-        env: workerEnv,
+        ...workerOptions,
         timeoutMs: params.updateStepTimeoutMs,
-        killProcessTree: true,
-        requireProcessTreeExtinction: true,
-        killGraceMs: 500,
         maxOutputBytes: 64 * 1024,
       });
       assertCurrent();
@@ -262,17 +285,12 @@ export async function continueMigratedUpdateInFreshProcess(
       bindChild?: (pid: number, argv?: readonly string[]) => void,
     ) =>
       runUtf8CommandWithTimeout(workerCommand, {
-        cwd: root,
-        baseEnv: {},
-        env: workerEnv,
+        ...workerOptions,
         input: JSON.stringify({ ...input, ...(grant ? { executor: grant } : {}) }),
         beforeInput: bindChild,
         // Only an operator deadline bounds forward finalization. Probes and
         // cancellation settlement keep their separate finite allowances.
         timeoutMs: run.activationTimeoutMs,
-        killProcessTree: true,
-        requireProcessTreeExtinction: true,
-        killGraceMs: 500,
         maxOutputBytes: 1024 * 1024,
       });
     await releaseLegacySourceLock(root, run.sourceArtifactLock);

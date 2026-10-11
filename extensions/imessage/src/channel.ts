@@ -29,7 +29,7 @@ import {
   shouldSuppressLocalIMessageExecApprovalPrompt,
 } from "./approval-native.js";
 import { resolveIMessageDirectChatService } from "./chat-context.js";
-import { createIMessageConversationBindingManager } from "./conversation-bindings.js";
+import { createIMessageConversationBindingManagerV2 } from "./conversation-bindings.js";
 import {
   matchIMessageAcpConversation,
   normalizeIMessageAcpConversationId,
@@ -249,8 +249,8 @@ function resolveIMessageOutboundSessionRoute(params: {
   };
 }
 
-export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProbe> =
-  createChatChannelPlugin<ResolvedIMessageAccount, IMessageProbe>({
+export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProbe, unknown, 2> =
+  createChatChannelPlugin<ResolvedIMessageAccount, IMessageProbe, unknown, 2>({
     base: {
       ...createIMessagePluginBase({
         setupWizard: imessageSetupWizard,
@@ -279,7 +279,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
         supportsCurrentConversationBinding: true,
         bindingStore: "adapter",
         createManager: ({ cfg, accountId }) =>
-          createIMessageConversationBindingManager({
+          createIMessageConversationBindingManagerV2({
             cfg,
             accountId: accountId ?? undefined,
           }),
@@ -303,7 +303,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
       messaging: {
         normalizeTarget: normalizeIMessageMessagingTarget,
         inferTargetChatType: ({ to }) => inferIMessageTargetChatType(to),
-        resolveOutboundSessionRoute: (params) => resolveIMessageOutboundSessionRoute(params),
+        resolveOutboundSessionRoute: resolveIMessageOutboundSessionRoute,
         targetResolver: {
           looksLikeId: looksLikeIMessageExplicitTargetId,
           hint: "<phone|email|chat_id:ID|auto:contact|imessage:contact|sms:contact>",
@@ -364,8 +364,9 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
         resolveAccountState: ({ enabled }) => (enabled ? "enabled" : "disabled"),
       }),
       gateway: {
+        apiVersion: 2,
         startAccount: async (ctx) => {
-          const conversationBindings = createIMessageConversationBindingManager({
+          const conversationBindings = createIMessageConversationBindingManagerV2({
             cfg: ctx.cfg,
             accountId: ctx.accountId,
           });

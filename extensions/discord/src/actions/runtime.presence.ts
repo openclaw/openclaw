@@ -91,14 +91,12 @@ export async function handleDiscordPresenceAction(
     activities.push(activity);
   }
 
-  const presenceData: UpdatePresenceData = {
+  gateway.updatePresence({
     since: null,
     activities,
     status,
     afk: false,
-  };
-
-  gateway.updatePresence(presenceData);
+  });
 
   return jsonResult({
     ok: true,

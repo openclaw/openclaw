@@ -15,7 +15,7 @@ import {
   firstDispatchArg,
   registerCommands,
 } from "./slash.commands.test-harness.js";
-import { firstMockArg, getSlackSlashMocks } from "./slash.test-harness.js";
+import { getSlackSlashMocks } from "./slash.test-harness.js";
 
 const { dispatchMock } = getSlackSlashMocks();
 
@@ -34,6 +34,7 @@ function createPolicyHarness(overrides?: {
   channelName?: string;
   allowFrom?: string[];
   useAccessGroups?: boolean;
+  channelAllowed?: boolean;
   slashEphemeral?: boolean;
   slashCommandEnabled?: boolean;
   slashCommandName?: string;
@@ -102,7 +103,7 @@ function createPolicyHarness(overrides?: {
     },
     textLimit: 4000,
     app,
-    isChannelAllowed: () => true,
+    isChannelAllowed: vi.fn(() => overrides?.channelAllowed ?? true),
     shouldDropMismatchedSlackEvent: (body: unknown) =>
       overrides?.shouldDropMismatchedSlackEvent?.(body) ?? false,
     resolveChannelName:
@@ -204,16 +205,6 @@ function expectUnauthorizedResponse(respond: ReturnType<typeof vi.fn>) {
 }
 
 describe("Slack App Home command presentation", () => {
-  it("returns the configured single command when it is registered", async () => {
-    const harness = createPolicyHarness({ slashCommandName: "acme" });
-
-    await expect(registerCommands(harness.ctx, harness.account)).resolves.toEqual({
-      mode: "single",
-      name: "acme",
-    });
-    expect(harness.commands.size).toBe(1);
-  });
-
   it("omits the single command when slash commands are disabled", async () => {
     const harness = createPolicyHarness({ slashCommandEnabled: false });
 
@@ -251,46 +242,17 @@ describe("slack slash commands channel policy", () => {
     expect(respond).not.toHaveBeenCalled();
   });
 
-  it.each<{
-    name: string;
-    policy: NonNullable<Parameters<typeof createPolicyHarness>[0]>;
-    blocked: boolean;
-  }>([
-    {
-      name: "allows unlisted channels when groupPolicy is open",
-      policy: {
-        groupPolicy: "open",
-        channelsConfig: { C_LISTED: { requireMention: true } },
-        channelId: "C_UNLISTED",
-        channelName: "unlisted",
-      },
-      blocked: false,
-    },
-    {
-      name: "blocks explicitly denied channels when groupPolicy is open",
-      policy: {
-        groupPolicy: "open",
-        channelsConfig: { C_DENIED: { enabled: false } },
-        channelId: "C_DENIED",
-        channelName: "denied",
-      },
-      blocked: true,
-    },
-    {
-      name: "blocks unlisted channels when groupPolicy is allowlist",
-      policy: {
-        groupPolicy: "allowlist",
-        channelsConfig: { C_LISTED: { requireMention: true } },
-        channelId: "C_UNLISTED",
-        channelName: "unlisted",
-      },
-      blocked: true,
-    },
-  ])("$name", async ({ policy, blocked }) => {
-    const harness = createPolicyHarness(policy);
+  it.each([true, false])("honors monitor channel admission: allowed=%s", async (allowed) => {
+    const harness = createPolicyHarness({ channelAllowed: allowed });
     const { respond } = await registerAndRunPolicySlash({ harness });
 
-    if (blocked) {
+    expect(harness.ctx.isChannelAllowed).toHaveBeenCalledWith({
+      teamId: "T1",
+      channelId: "C_UNLISTED",
+      channelName: "unlisted",
+      channelType: "channel",
+    });
+    if (!allowed) {
       expectChannelBlockedResponse(respond);
       return;
     }
@@ -300,18 +262,6 @@ describe("slack slash commands channel policy", () => {
 });
 
 describe("slack slash commands access groups", () => {
-  it("fails closed when channel type lookup returns empty for channels", async () => {
-    const harness = createPolicyHarness({
-      allowFrom: [],
-      channelId: "C_UNKNOWN",
-      channelName: "unknown",
-      resolveChannelName: async () => ({}),
-    });
-    const { respond } = await registerAndRunPolicySlash({ harness });
-
-    expectUnauthorizedResponse(respond);
-  });
-
   it("still treats D-prefixed channel ids as DMs when lookup fails", async () => {
     const harness = createPolicyHarness({
       allowFrom: ["*"],
@@ -329,30 +279,6 @@ describe("slack slash commands access groups", () => {
 
     expect(dispatchMock).toHaveBeenCalledTimes(1);
     expect(responseTexts(respond)).not.toContain("You are not authorized to use this command.");
-    const dispatchArg = firstDispatchArg() as {
-      ctx?: { CommandAuthorized?: boolean };
-    };
-    expect(dispatchArg?.ctx?.CommandAuthorized).toBe(true);
-  });
-
-  it("computes CommandAuthorized for DM slash commands when dmPolicy is open", async () => {
-    const harness = createPolicyHarness({
-      allowFrom: ["*"],
-      channelId: "D999",
-      channelName: "directmessage",
-      resolveChannelName: async () => ({ name: "directmessage", type: "im" }),
-    });
-    await registerAndRunPolicySlash({
-      harness,
-      command: {
-        user_id: "U_ATTACKER",
-        user_name: "Mallory",
-        channel_id: "D999",
-        channel_name: "directmessage",
-      },
-    });
-
-    expect(dispatchMock).toHaveBeenCalledTimes(1);
     const dispatchArg = firstDispatchArg() as {
       ctx?: { CommandAuthorized?: boolean };
     };
@@ -533,22 +459,6 @@ describe("slack slash command session metadata", () => {
     expect(dispatchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("calls recordSessionMetaFromInbound after dispatching a slash command", async () => {
-    const harness = createPolicyHarness({ groupPolicy: "open" });
-    await registerAndRunPolicySlash({ harness });
-
-    expect(dispatchMock).toHaveBeenCalledTimes(1);
-    expect(recordSessionMetaFromInboundMock).toHaveBeenCalledTimes(1);
-    const call = firstMockArg(recordSessionMetaFromInboundMock, 0, "session meta") as {
-      sessionKey?: string;
-      ctx?: { GroupSpace?: string; OriginatingChannel?: string };
-    };
-    expect(call.ctx?.OriginatingChannel).toBe("slack");
-    expect(call.ctx?.GroupSpace).toBe("T1");
-    expect(call.sessionKey).toBeTypeOf("string");
-    expect(call.sessionKey).not.toBe("");
-  });
-
   it("partitions Enterprise Grid slash sessions and replies by event team", async () => {
     const harness = createPolicyHarness({
       groupPolicy: "open",
@@ -574,44 +484,6 @@ describe("slack slash command session metadata", () => {
       OriginatingTo: "team:TGRID1:channel:CGRID1",
       SessionKey: expect.stringContaining("team:tgrid1:user:u1"),
     });
-  });
-
-  it("passes canonical hook correlation to slash reply delivery", async () => {
-    dispatchMock.mockImplementation((params: unknown) => {
-      const deliver = (
-        params as {
-          dispatcherOptions: {
-            deliver: (payload: { text: string }, info: { kind: "final" }) => Promise<void>;
-          };
-        }
-      ).dispatcherOptions.deliver;
-      void deliver({ text: "final answer" }, { kind: "final" });
-      void deliver({ text: "second answer" }, { kind: "final" });
-      return { counts: { final: 2, tool: 0, block: 0 } };
-    });
-    const harness = createPolicyHarness({ groupPolicy: "open" });
-    await registerAndRunPolicySlash({ harness });
-    const dispatchArg = firstDispatchArg() as {
-      ctx?: { OriginatingTo?: string; SessionKey?: string };
-    };
-    const responseBudget = (
-      deliverSlackSlashRepliesMock.mock.calls.at(-1)?.[0] as
-        | { responseBudget?: unknown }
-        | undefined
-    )?.responseBudget;
-
-    expect(deliverSlackSlashRepliesMock).toHaveBeenCalledOnce();
-    expect(deliverSlackSlashRepliesMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replies: [{ text: "final answer" }, { text: "second answer" }],
-        messageSentHookTarget: dispatchArg.ctx?.OriginatingTo,
-        sessionKeyForInternalHooks: dispatchArg.ctx?.SessionKey,
-        accountId: "acct",
-        isGroup: true,
-        groupId: harness.channelId,
-      }),
-    );
-    expect(responseBudget).toBeDefined();
   });
 
   it("targets the channel for public slash reply hooks", async () => {

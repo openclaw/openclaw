@@ -1,7 +1,7 @@
-// Matrix plugin module owns SQLite-backed crypto state sidecars.
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { asSafeIntegerInRange } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMatrixRuntime } from "../runtime.js";
@@ -11,7 +11,7 @@ import {
   writeMatrixStateChunks,
 } from "./chunked-state.js";
 import type { MatrixStoredRecoveryKey } from "./sdk/types.js";
-import { resolveMatrixSqliteStateEnv } from "./sqlite-state.js";
+import { resolveMatrixSqliteStateEnv, updateMatrixKeyedState } from "./sqlite-state.js";
 
 const STATE_KEY = "current";
 const RECOVERY_KEY_NAMESPACE = "recovery-key";
@@ -24,27 +24,6 @@ const IDB_SNAPSHOT_CHUNK_BYTES = 24_000;
 
 export const MATRIX_RECOVERY_KEY_FILENAME = "recovery-key.json";
 export const MATRIX_IDB_SNAPSHOT_FILENAME = "crypto-idb-snapshot.json";
-
-type MatrixLegacyCryptoCounts = {
-  total: number;
-  backedUp: number;
-};
-
-type MatrixLegacyCryptoMigrationState = {
-  version: 1;
-  source?: "matrix-bot-sdk-rust";
-  accountId: string;
-  deviceId?: string | null;
-  roomKeyCounts: MatrixLegacyCryptoCounts | null;
-  backupVersion?: string | null;
-  decryptionKeyImported?: boolean;
-  restoreStatus: "pending" | "completed" | "manual-action-required";
-  detectedAt?: string;
-  restoredAt?: string;
-  importedCount?: number;
-  totalCount?: number;
-  lastError?: string | null;
-};
 
 type MatrixIdbSnapshotMeta = {
   kind: "meta";
@@ -64,7 +43,7 @@ type MatrixIdbSnapshotChunk = {
 
 type MatrixIdbSnapshotRecord = MatrixIdbSnapshotMeta | MatrixIdbSnapshotChunk;
 
-export type MatrixSnapshotStateRuntime = Pick<PluginRuntime["state"], "openKeyedStore">;
+export type MatrixSnapshotStateRuntime = Pick<PluginRuntime["state"], "openKeyedStoreV2">;
 
 export function openMatrixRecoveryKeyStoreOptions(storageRootDir: string) {
   return {
@@ -94,7 +73,7 @@ export async function readMatrixRecoveryKeyStateForPathAsync(
   recoveryKeyPath: string,
   stateRuntime: MatrixSnapshotStateRuntime,
 ): Promise<MatrixStoredRecoveryKey | null> {
-  const store = stateRuntime.openKeyedStore<MatrixStoredRecoveryKey>(
+  const store = stateRuntime.openKeyedStoreV2<MatrixStoredRecoveryKey>(
     openMatrixRecoveryKeyStoreOptions(path.dirname(recoveryKeyPath)),
   );
   return normalizeMatrixStoredRecoveryKey(
@@ -112,74 +91,27 @@ export async function writeMatrixRecoveryKeyStateForPathAsync(params: {
   if (!payload) {
     throw new Error("Invalid Matrix recovery key state");
   }
-  if (params.preserveEncodedPrivateKey) {
-    await updateMatrixRecoveryKeyState(
-      params,
-      (current) =>
-        normalizeMatrixStoredRecoveryKey({
-          ...payload,
-          encodedPrivateKey: normalizeMatrixStoredRecoveryKey(current)?.encodedPrivateKey,
-        }) ?? undefined,
-    );
-    return;
-  }
-  await params.stateRuntime
-    .openKeyedStore<MatrixStoredRecoveryKey>(
-      openMatrixRecoveryKeyStoreOptions(path.dirname(params.recoveryKeyPath)),
-    )
-    .register(resolveRecoveryKeyStateKeyForPath(params.recoveryKeyPath), payload);
-}
-
-async function updateMatrixRecoveryKeyState(
-  params: { recoveryKeyPath: string; stateRuntime: MatrixSnapshotStateRuntime },
-  update: (current: MatrixStoredRecoveryKey | undefined) => MatrixStoredRecoveryKey | undefined,
-): Promise<void> {
-  const store = params.stateRuntime.openKeyedStore<MatrixStoredRecoveryKey>(
+  const store = params.stateRuntime.openKeyedStoreV2<MatrixStoredRecoveryKey>(
     openMatrixRecoveryKeyStoreOptions(path.dirname(params.recoveryKeyPath)),
   );
   const key = resolveRecoveryKeyStateKeyForPath(params.recoveryKeyPath);
-  if (!store.observe || !store.compareAndApply) {
-    // The published >=2026.9.4 host floor supplies callback updates, before data-only CAS.
-    if (!store.update) {
-      throw new Error("Matrix recovery key store does not support atomic updates");
-    }
-    await store.update(key, update);
+  if (params.preserveEncodedPrivateKey) {
+    const update = (current: MatrixStoredRecoveryKey | undefined) =>
+      normalizeMatrixStoredRecoveryKey({
+        ...payload,
+        encodedPrivateKey: normalizeMatrixStoredRecoveryKey(current)?.encodedPrivateKey,
+      }) ?? undefined;
+    await updateMatrixKeyedState(store, key, update);
     return;
   }
-  let observation = await store.observe(key);
-  for (;;) {
-    const value = update(observation.value);
-    const result = await store.compareAndApply(
-      key,
-      observation.comparison,
-      value === undefined
-        ? { operation: "update", action: "keep" }
-        : { operation: "update", action: "set", value },
-    );
-    if (result.status !== "conflict") {
-      return;
-    }
-    observation = result.current;
-  }
-}
-
-async function readMatrixLegacyCryptoMigrationState(
-  storageRootDir: string,
-): Promise<MatrixLegacyCryptoMigrationState | null> {
-  return normalizeMatrixLegacyCryptoMigrationState(
-    await getMatrixRuntime()
-      .state.openKeyedStore<MatrixLegacyCryptoMigrationState>(
-        openMatrixLegacyCryptoMigrationStoreOptions(storageRootDir),
-      )
-      .lookup(STATE_KEY),
-  );
+  await store.register(key, payload);
 }
 
 export async function readMatrixIdbSnapshotJson(
   storageRootDir: string,
   stateRuntime: MatrixSnapshotStateRuntime = getMatrixRuntime().state,
 ): Promise<string | null> {
-  const store = stateRuntime.openKeyedStore<MatrixIdbSnapshotRecord>(
+  const store = stateRuntime.openKeyedStoreV2<MatrixIdbSnapshotRecord>(
     openMatrixIdbSnapshotStoreOptions(storageRootDir),
   );
   const meta = await store.lookup(idbMetaKey());
@@ -201,7 +133,7 @@ export async function readMatrixIdbSnapshotJson(
 async function hasMatrixIdbSnapshotState(storageRootDir: string): Promise<boolean> {
   return isIdbSnapshotMeta(
     await getMatrixRuntime()
-      .state.openKeyedStore<MatrixIdbSnapshotRecord>(
+      .state.openKeyedStoreV2<MatrixIdbSnapshotRecord>(
         openMatrixIdbSnapshotStoreOptions(storageRootDir),
       )
       .lookup(idbMetaKey()),
@@ -216,7 +148,7 @@ export async function writeMatrixIdbSnapshotJson(params: {
 }): Promise<void> {
   const store = (
     params.stateRuntime ?? getMatrixRuntime().state
-  ).openKeyedStore<MatrixIdbSnapshotRecord>(
+  ).openKeyedStoreV2<MatrixIdbSnapshotRecord>(
     openMatrixIdbSnapshotStoreOptions(params.storageRootDir),
   );
   const rows = buildIdbSnapshotRows(params.snapshotJson, params.databaseCount);
@@ -229,7 +161,17 @@ export async function scoreMatrixCryptoStateInStore(storageRootDir: string): Pro
   }
   let score = 0;
   try {
-    if (await readMatrixLegacyCryptoMigrationState(storageRootDir)) {
+    const migration = await getMatrixRuntime()
+      .state.openKeyedStoreV2(openMatrixLegacyCryptoMigrationStoreOptions(storageRootDir))
+      .lookup(STATE_KEY);
+    if (
+      isRecord(migration) &&
+      migration.version === 1 &&
+      typeof migration.accountId === "string" &&
+      (migration.restoreStatus === "pending" ||
+        migration.restoreStatus === "completed" ||
+        migration.restoreStatus === "manual-action-required")
+    ) {
       score += 3;
     }
   } catch {
@@ -300,60 +242,12 @@ function normalizeMatrixStoredRecoveryKey(value: unknown): MatrixStoredRecoveryK
   };
 }
 
-function normalizeMatrixLegacyCryptoMigrationState(
-  value: unknown,
-): MatrixLegacyCryptoMigrationState | null {
-  if (!isRecord(value) || value.version !== 1 || typeof value.accountId !== "string") {
-    return null;
-  }
-  if (
-    value.restoreStatus !== "pending" &&
-    value.restoreStatus !== "completed" &&
-    value.restoreStatus !== "manual-action-required"
-  ) {
-    return null;
-  }
-  const roomKeyCounts =
-    isRecord(value.roomKeyCounts) &&
-    typeof value.roomKeyCounts.total === "number" &&
-    typeof value.roomKeyCounts.backedUp === "number"
-      ? {
-          total: value.roomKeyCounts.total,
-          backedUp: value.roomKeyCounts.backedUp,
-        }
-      : null;
-  return {
-    version: 1,
-    ...(value.source === "matrix-bot-sdk-rust" ? { source: value.source } : {}),
-    accountId: value.accountId,
-    ...(typeof value.deviceId === "string" || value.deviceId === null
-      ? { deviceId: value.deviceId }
-      : {}),
-    roomKeyCounts,
-    ...(typeof value.backupVersion === "string" || value.backupVersion === null
-      ? { backupVersion: value.backupVersion }
-      : {}),
-    ...(typeof value.decryptionKeyImported === "boolean"
-      ? { decryptionKeyImported: value.decryptionKeyImported }
-      : {}),
-    restoreStatus: value.restoreStatus,
-    ...(typeof value.detectedAt === "string" ? { detectedAt: value.detectedAt } : {}),
-    ...(typeof value.restoredAt === "string" ? { restoredAt: value.restoredAt } : {}),
-    ...(typeof value.importedCount === "number" ? { importedCount: value.importedCount } : {}),
-    ...(typeof value.totalCount === "number" ? { totalCount: value.totalCount } : {}),
-    ...(typeof value.lastError === "string" || value.lastError === null
-      ? { lastError: value.lastError }
-      : {}),
-  };
-}
-
 function buildIdbSnapshotRows(
   snapshotJson: string,
   databaseCount: number,
 ): {
   meta: { key: string; value: MatrixIdbSnapshotMeta };
   chunks: { key: string; value: MatrixIdbSnapshotChunk }[];
-  nextChunkKeys: Set<string>;
 } {
   const generation = randomUUID().replaceAll("-", "");
   const chunks = chunkMatrixStateJson(
@@ -371,7 +265,6 @@ function buildIdbSnapshotRows(
   }));
   return {
     chunks,
-    nextChunkKeys: new Set(chunks.map((chunk) => chunk.key)),
     meta: {
       key: idbMetaKey(),
       value: {
@@ -410,14 +303,10 @@ function isIdbSnapshotMeta(value: unknown): value is MatrixIdbSnapshotMeta {
     value.version === 1 &&
     typeof value.generation === "string" &&
     value.generation.trim() !== "" &&
-    typeof value.chunkCount === "number" &&
-    Number.isSafeInteger(value.chunkCount) &&
-    value.chunkCount >= 0 &&
-    value.chunkCount <= IDB_SNAPSHOT_MAX_CHUNKS &&
+    asSafeIntegerInRange(value.chunkCount, { min: 0, max: IDB_SNAPSHOT_MAX_CHUNKS }) !==
+      undefined &&
     typeof value.digest === "string" &&
-    typeof value.databaseCount === "number" &&
-    Number.isSafeInteger(value.databaseCount) &&
-    value.databaseCount >= 0 &&
+    asSafeIntegerInRange(value.databaseCount, { min: 0 }) !== undefined &&
     typeof value.persistedAt === "string"
   );
 }

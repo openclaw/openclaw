@@ -7,12 +7,17 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { prepareProviderPrompt, type ProviderPromptTask } from "./provider-prompt-serialization.js";
+import {
+  prepareProviderPrompt,
+  type ProviderPromptCachePrefix,
+  type ProviderPromptTask,
+} from "./provider-prompt-serialization.js";
 
 type ProviderPromptSnapshot = {
   scopeDigest: string;
   digest: string;
   byteWeight: number;
+  cachePrefix?: ProviderPromptCachePrefix;
 };
 
 export type ProviderPromptState = {
@@ -42,7 +47,7 @@ const promptHashPool = resolveGlobalSingleton(
   () =>
     new WorkerTaskPool<ProviderPromptTask, ReturnType<typeof prepareProviderPrompt>>({
       workerUrl: resolveRuntimeProcessEntrypointUrl("providerPromptState"),
-      maxWorkers: 1,
+      workerClass: "compute",
       sharedCompute: true,
     }),
 );
@@ -96,7 +101,8 @@ function providerPromptWorkerBytes(
 }
 
 /** Captures the final provider request identity without retaining payload content. */
-async function snapshotProviderPrompt(params: {
+async function recordProviderPrompt(params: {
+  state: ProviderPromptState;
   model: Model;
   payload: unknown;
   signal?: AbortSignal;
@@ -126,26 +132,21 @@ async function snapshotProviderPrompt(params: {
             return prepareProviderPrompt(task);
           })
       : prepareProviderPrompt(task);
-  return {
+  const snapshot = {
     scopeDigest: sha256Hex(scope),
     digest: payload.digest,
     byteWeight: payload.byteWeight,
-    encoded: payload.encoded,
+    ...(payload.cachePrefix ? { cachePrefix: payload.cachePrefix } : {}),
   };
-}
-
-/** Rejects only an exact replay of the last provider-rejected request body. */
-function assertProviderPromptRetryProgress(
-  state: ProviderPromptState,
-  candidate: ProviderPromptSnapshot,
-): void {
-  const rejected = state.lastRejected;
-  if (rejected?.scopeDigest === candidate.scopeDigest && rejected.digest === candidate.digest) {
+  const rejected = params.state.lastRejected;
+  if (rejected?.scopeDigest === snapshot.scopeDigest && rejected.digest === snapshot.digest) {
     throw new Error(
       "Context overflow: refusing to resend the byte-identical provider payload after a " +
-        `context rejection (payloadBytes=${candidate.byteWeight}).`,
+        `context rejection (payloadBytes=${snapshot.byteWeight}).`,
     );
   }
+  params.state.lastAttempt = snapshot;
+  return payload.encoded;
 }
 
 export function markLastProviderPromptContextRejected(
@@ -176,27 +177,25 @@ export function wrapStreamFnWithProviderPromptState(params: {
         if (modelRequestBodyState(observedOptions).enabled) {
           return finalPayload;
         }
-        const { encoded: _encoded, ...snapshot } = await snapshotProviderPrompt({
+        await recordProviderPrompt({
+          state: params.state,
           model: payloadModel,
           payload: finalPayload,
           signal: options?.signal,
           effectiveContextTokenBudget: params.effectiveContextTokenBudget,
         });
-        assertProviderPromptRetryProgress(params.state, snapshot);
-        params.state.lastAttempt = snapshot;
         return finalPayload;
       },
     };
     modelRequestBodyState(observedOptions).encode = async (payload) => {
-      const { encoded, ...snapshot } = await snapshotProviderPrompt({
+      const encoded = await recordProviderPrompt({
+        state: params.state,
         model,
         payload,
         signal: options?.signal,
         effectiveContextTokenBudget: params.effectiveContextTokenBudget,
         encode: true,
       });
-      assertProviderPromptRetryProgress(params.state, snapshot);
-      params.state.lastAttempt = snapshot;
       return encoded!;
     };
     if (params.recordEvent) {

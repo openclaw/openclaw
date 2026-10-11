@@ -5,6 +5,7 @@ import path from "node:path";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import * as outputFiles from "./output-files.js";
+import { observeOutputWriteSettlement } from "./output-files.test-support.js";
 import { createDownloadCaptureForPage } from "./pw-download-capture.js";
 
 describe("Playwright download capture cancellation", () => {
@@ -150,18 +151,7 @@ describe("Playwright download capture cancellation", () => {
   it("cancels an in-progress download without publishing staged output", async ({ signal }) => {
     const outputRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-download-cancel-"));
     const outputPath = path.join(outputRoot, "cancelled.bin");
-    const writeSettled = Promise.withResolvers<void>();
-    const writeOutput = outputFiles.writeExternalFileWithinOutputRoot;
-    const write = vi
-      .spyOn(outputFiles, "writeExternalFileWithinOutputRoot")
-      .mockImplementation((params) => {
-        const pending = writeOutput(params);
-        void pending.then(
-          () => writeSettled.resolve(),
-          () => writeSettled.resolve(),
-        );
-        return pending;
-      });
+    const { write, writeSettled } = observeOutputWriteSettlement(outputFiles);
     const page = new EventEmitter();
     const state = { downloadWaiterDepth: 0 };
     const controller = new AbortController();
@@ -227,18 +217,7 @@ describe("Playwright download capture cancellation", () => {
   }) => {
     const outputRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-download-timeout-"));
     const outputPath = path.join(outputRoot, "timed-out.bin");
-    const writeSettled = Promise.withResolvers<void>();
-    const writeOutput = outputFiles.writeExternalFileWithinOutputRoot;
-    const write = vi
-      .spyOn(outputFiles, "writeExternalFileWithinOutputRoot")
-      .mockImplementation((params) => {
-        const pending = writeOutput(params);
-        void pending.then(
-          () => writeSettled.resolve(),
-          () => writeSettled.resolve(),
-        );
-        return pending;
-      });
+    const { write, writeSettled } = observeOutputWriteSettlement(outputFiles);
     vi.useFakeTimers();
     const page = new EventEmitter();
     const state = { downloadWaiterDepth: 0 };

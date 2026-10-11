@@ -1,4 +1,4 @@
-/** Resolves the effective parent for a transcript message append inside the write transaction. */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql } from "kysely";
 import {
   executeSqliteQueryTakeFirstSync,
@@ -11,6 +11,7 @@ import type {
   TranscriptMessageAppendOptions,
 } from "./session-accessor.sqlite-contract.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import { projectTranscriptNavigationSql } from "./session-model-context-projection.js";
 import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
@@ -23,10 +24,6 @@ import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
-import {
-  isTranscriptEntryOnVisiblePath,
-  resolveVisibleTranscriptAppendParentId,
-} from "./transcript-visible-events.js";
 
 // Stamped by the Talk voice writer in src/talk/client-voice-session.ts.
 const REALTIME_VOICE_PROVENANCE = { kind: "realtime_voice", sourceChannel: "talk" } as const;
@@ -205,13 +202,7 @@ export function resolveTranscriptEventAppendParent(
   event: TranscriptEvent,
   options: TranscriptEventAppendOptions,
 ): TranscriptEvent {
-  if (
-    options.appendIntent !== "active-branch" ||
-    !event ||
-    typeof event !== "object" ||
-    Array.isArray(event) ||
-    !("parentId" in event)
-  ) {
+  if (options.appendIntent !== "active-branch" || !isRecord(event) || !("parentId" in event)) {
     return event;
   }
   const parentId = event.parentId;
@@ -250,9 +241,9 @@ export function isTranscriptEntryOnActivePathInTransaction(
   sessionId: string,
   entryId: string,
 ): boolean {
-  return isTranscriptEntryOnVisiblePath(
-    readTranscriptNavigationEvents(database, sessionId),
-    entryId,
+  const tree = scanSessionTranscriptTree(readTranscriptNavigationEvents(database, sessionId));
+  return selectSessionTranscriptTreePathNodes(tree, tree.leafId).some(
+    (node) => node.id === entryId,
   );
 }
 
@@ -262,6 +253,18 @@ function transcriptEntryIsAncestor(
   leafId: string,
   candidateId: string | null,
 ): boolean {
+  const actor = readSessionActorTransactionState(database, { sessionId });
+  if (actor) {
+    let current = actor.transcript.identities.get(leafId);
+    for (let depth = 0; current && depth < PREPARED_ASSISTANT_MAX_ANCESTORS; depth++) {
+      if (current.parent_id === candidateId) {
+        return true;
+      }
+      current =
+        current.parent_id === null ? undefined : actor.transcript.identities.get(current.parent_id);
+    }
+    return false;
+  }
   const db = getSessionKysely(database.db);
   // Bound ancestry work even for malformed cycles or very deep metadata chains.
   // Keep dangling and null parents in the walk: they can be the requested ancestor.
@@ -305,6 +308,11 @@ export function readTranscriptVisibleTailEntryIdInTransaction(
   sessionId: string,
   messageId: string,
 ): string | null {
+  const actor = readSessionActorTransactionState(database, { sessionId });
+  if (actor) {
+    const tree = scanSessionTranscriptTree(actor.transcript.navigation);
+    return selectSessionTranscriptTreePathNodes(tree, tree.leafId).at(-1)?.id ?? null;
+  }
   const db = getSessionKysely(database.db);
   const resolveFromNavigation = () => {
     const tree = scanSessionTranscriptTree(readTranscriptNavigationEvents(database, sessionId));
@@ -373,6 +381,10 @@ function readActiveTranscriptAppendParentId(
   database: Pick<OpenClawAgentDatabase, "db" | "path">,
   sessionId: string,
 ): string | null {
+  const actor = readSessionActorTransactionState(database, { sessionId });
+  if (actor) {
+    return scanSessionTranscriptTree(actor.transcript.navigation).appendParentId;
+  }
   const db = getSessionKysely(database.db);
   const latest = executeSqliteQueryTakeFirstSync(
     database.db,
@@ -390,7 +402,7 @@ function readActiveTranscriptAppendParentId(
       .limit(1),
   );
   const resolveFromNavigation = () =>
-    resolveVisibleTranscriptAppendParentId(readTranscriptNavigationEvents(database, sessionId));
+    scanSessionTranscriptTree(readTranscriptNavigationEvents(database, sessionId)).appendParentId;
   if (!latest) {
     // Exact imports captured the append cursor while rebuilding their projection,
     // even though they did not transfer identity or idempotency ownership.
@@ -456,6 +468,10 @@ function readTranscriptNavigationEvents(
   database: Pick<OpenClawAgentDatabase, "db" | "path">,
   sessionId: string,
 ): unknown[] {
+  const actor = readSessionActorTransactionState(database, { sessionId });
+  if (actor) {
+    return structuredClone(actor.transcript.navigation);
+  }
   const db = getSessionKysely(database.db);
   return Array.from(
     iterateSqliteQuerySync(
@@ -475,6 +491,11 @@ function readTranscriptIdentityInTransaction(
   sessionId: string,
   eventId: string,
 ): { eventId: string; parentId: string | null; seq: number } | undefined {
+  const actor = readSessionActorTransactionState(database, { sessionId });
+  if (actor) {
+    const row = actor.transcript.identities.get(eventId);
+    return row ? { eventId: row.event_id, parentId: row.parent_id, seq: row.seq } : undefined;
+  }
   const db = getSessionKysely(database.db);
   const row = executeSqliteQueryTakeFirstSync(
     database.db,

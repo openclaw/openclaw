@@ -14,7 +14,7 @@ import {
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
 type ControlledWorker = EventEmitter & {
-  data: LeaseHeartbeatWorkerData;
+  data: LeaseHeartbeatWorkerData & { completedRequest: SharedArrayBuffer };
   shared: BigInt64Array;
   messages: (LeaseHeartbeatRequest | null)[];
   finishExit: () => void;
@@ -31,7 +31,10 @@ const controls = vi.hoisted(() => {
   };
 });
 
-vi.mock("../infra/sqlite-worker-identity.js", () => ({
+vi.mock("../infra/sqlite-worker-identity.js", async () => ({
+  ...(await vi.importActual<typeof import("../infra/sqlite-worker-identity.js")>(
+    "../infra/sqlite-worker-identity.js",
+  )),
   readDatabasePathIdentitySync: (canonicalPath: string) => ({ key: "file:12:34", canonicalPath }),
 }));
 
@@ -57,7 +60,7 @@ vi.mock("node:worker_threads", async (importOriginal) => {
   return {
     ...(await importOriginal<typeof import("node:worker_threads")>()),
     Worker: class extends EventEmitter implements ControlledWorker {
-      data: LeaseHeartbeatWorkerData;
+      data: LeaseHeartbeatWorkerData & { completedRequest: SharedArrayBuffer };
       shared: BigInt64Array;
       messages: (LeaseHeartbeatRequest | null)[] = [];
       activation = createDeferredCore();
@@ -72,7 +75,13 @@ vi.mock("node:worker_threads", async (importOriginal) => {
         if (controls.constructorError) {
           throw controls.constructorError;
         }
-        this.data = structuredClone(workerOptions.workerData);
+        const { databaseAdmissionPort, ...data } = workerOptions.workerData;
+        this.data = {
+          ...structuredClone(data),
+          databaseAdmissionPort,
+          completedRequest:
+            data.completedRequest ?? new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT),
+        };
         // Keep the same behavioral fixture runnable against the pre-repair payload.
         this.data.renewalProgress ??= new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT);
         this.shared = new BigInt64Array(this.data.shared);
@@ -285,25 +294,7 @@ describe("state lease heartbeat lifetime", () => {
     expect(controls.events.filter((event) => event === "construct")).toHaveLength(1);
   });
 
-  it("cancels an idle async lease at its worker-observed durable expiry", async () => {
-    const params = options();
-    const heartbeat = startOpenClawStateLeaseHeartbeat(params);
-    const worker = await constructedWorker(Date.now() + 100);
-    try {
-      await heartbeat.ready;
-      await vi.advanceTimersByTimeAsync(99);
-      expect(params.onLost).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(params.onLost).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ message: "state lease heartbeat lease expired" }),
-      );
-      expect(() => heartbeat.assertRunning()).toThrow("not running");
-    } finally {
-      await finish(heartbeat, worker);
-    }
-  });
-
-  it("observes renewal without a parent message before deciding expiry", async () => {
+  it("expires an idle lease after shared renewal", async () => {
     const params = options();
     const heartbeat = startOpenClawStateLeaseHeartbeat(params);
     const worker = await constructedWorker(Date.now() + 100);
@@ -315,7 +306,10 @@ describe("state lease heartbeat lifetime", () => {
       expect(params.onLost).not.toHaveBeenCalled();
       heartbeat.assertRunning();
       await vi.advanceTimersByTimeAsync(1);
-      expect(params.onLost).toHaveBeenCalledOnce();
+      expect(params.onLost).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ message: "state lease heartbeat lease expired" }),
+      );
+      expect(() => heartbeat.assertRunning()).toThrow("not running");
     } finally {
       await finish(heartbeat, worker);
     }
@@ -340,71 +334,164 @@ describe("state lease heartbeat lifetime", () => {
     }
   });
 
-  it.each([false, true])(
-    "preserves raw worker errors with received loss diagnostics=%s",
-    async (receivedLoss) => {
-      const params = options();
-      const heartbeat = startOpenClawStateLeaseHeartbeat(params);
-      const outcome = heartbeat.ready.catch((error: unknown) => error);
-      const worker = controls.workers[0];
-      assert(worker);
-      const cause = new Error("synthetic storage failure");
-      const error = Object.assign(new Error("worker activation failed", { cause }), {
+  it("preserves raw worker errors with received loss diagnostics", async () => {
+    const params = options();
+    const heartbeat = startOpenClawStateLeaseHeartbeat(params);
+    const outcome = heartbeat.ready.catch((error: unknown) => error);
+    const worker = controls.workers[0];
+    assert(worker);
+    const cause = new Error("synthetic storage failure");
+    const error = Object.assign(new Error("worker activation failed", { cause }), {
+      code: "ERR_SQLITE_ERROR",
+      errcode: 266,
+    });
+    try {
+      Atomics.store(worker.shared, state.status, state.lost);
+      worker.emit("message", { loss: { path: "activation", outcome: "operation-error" } });
+      expect(params.onLost).not.toHaveBeenCalled();
+      worker.emit("error", error);
+      worker.finishExit();
+      expect(params.onLost).toHaveBeenCalledExactlyOnceWith(error);
+      expect(await outcome).toBe(error);
+      expect(error).toMatchObject({
+        message: "worker activation failed (lossPath=activation, lossOutcome=operation-error)",
         code: "ERR_SQLITE_ERROR",
         errcode: 266,
       });
-      try {
-        if (receivedLoss) {
-          Atomics.store(worker.shared, state.status, state.lost);
-          worker.emit("message", { loss: { path: "activation", outcome: "operation-error" } });
-        }
+      expect(error.cause).toBe(cause);
+    } finally {
+      await finish(heartbeat, worker);
+    }
+  });
+
+  it.each(["late", "renewed"] as const)("checks the deadline of a %s reply", async (ending) => {
+    const params = options();
+    const heartbeat = startOpenClawStateLeaseHeartbeat(params);
+    const worker = await constructedWorker(Date.now() + (ending === "late" ? 60_000 : 100));
+    try {
+      await heartbeat.ready;
+      const result = ending === "late" ? heartbeat.verify() : heartbeat.renew();
+      const outcome = result.catch((error: unknown) => error);
+      await Promise.resolve();
+      const request = worker.messages[0];
+      assert(request);
+      let expiry = Date.now() + 60_000;
+      if (ending === "late") {
+        vi.spyOn(performance, "now").mockReturnValue(1_001);
+      } else {
+        await vi.advanceTimersByTimeAsync(50);
+        expiry = Date.now() + 500;
+        Atomics.store(worker.shared, state.expiresAt, BigInt(expiry));
+        await vi.advanceTimersByTimeAsync(100);
         expect(params.onLost).not.toHaveBeenCalled();
-        worker.emit("error", error);
-        worker.finishExit();
-        expect(params.onLost).toHaveBeenCalledExactlyOnceWith(error);
-        expect(await outcome).toBe(error);
-        expect(error).toMatchObject({
-          message: receivedLoss
-            ? "worker activation failed (lossPath=activation, lossOutcome=operation-error)"
-            : "worker activation failed",
-          code: "ERR_SQLITE_ERROR",
-          errcode: 266,
-        });
-        expect(error.cause).toBe(cause);
+      }
+      worker.emit("message", { id: request.id, ok: true, expiresAt: expiry });
+      if (ending === "late") {
+        expect(await outcome).toEqual(new Error("state lease heartbeat is not responsive"));
+      } else {
+        await expect(result).resolves.toBe(expiry);
+      }
+    } finally {
+      await finish(heartbeat, worker);
+    }
+  });
+
+  it.each([
+    { operation: "verify", delivery: "reply-first" },
+    { operation: "verify", delivery: "deadline-first" },
+    { operation: "renew", delivery: "reply-first" },
+    { operation: "renew", delivery: "deadline-first" },
+  ] as const)(
+    "accepts a completed $operation with delayed $delivery delivery",
+    async ({ operation, delivery }) => {
+      const params = options();
+      const heartbeat = startOpenClawStateLeaseHeartbeat(params);
+      const worker = await constructedWorker();
+      try {
+        await heartbeat.ready;
+        const result = heartbeat[operation]();
+        const outcome = result.catch((error: unknown) => error);
+        await Promise.resolve();
+        const request = worker.messages[0];
+        assert(request);
+        const expiresAt = Number(Atomics.load(worker.shared, state.expiresAt));
+        Atomics.store(new BigInt64Array(worker.data.completedRequest), 0, BigInt(request.id));
+        if (delivery === "reply-first") {
+          vi.spyOn(performance, "now").mockReturnValue(1_500);
+          vi.setSystemTime(Date.now() + 1_500);
+        } else {
+          await vi.advanceTimersByTimeAsync(1_500);
+        }
+        worker.emit("message", { id: request.id, ok: true, expiresAt });
+        expect(await outcome).toBe(expiresAt);
+        expect(params.onLost).not.toHaveBeenCalled();
       } finally {
         await finish(heartbeat, worker);
       }
     },
   );
 
-  it("bounds an unanswered command even when the worker keeps renewing", async () => {
+  it.each(["expired", "lost"] as const)(
+    "rejects a completed reply when its lease is %s after delayed delivery",
+    async (ending) => {
+      const params = options();
+      const heartbeat = startOpenClawStateLeaseHeartbeat(params);
+      const worker = await constructedWorker();
+      try {
+        await heartbeat.ready;
+        const result = heartbeat.verify();
+        const outcome = result.catch((error: unknown) => error);
+        await Promise.resolve();
+        const request = worker.messages[0];
+        assert(request);
+        Atomics.store(new BigInt64Array(worker.data.completedRequest), 0, BigInt(request.id));
+        vi.spyOn(performance, "now").mockReturnValue(1_500);
+        vi.setSystemTime(Date.now() + 1_500);
+        if (ending === "lost") {
+          Atomics.store(worker.shared, state.status, state.lost);
+        }
+        worker.emit("message", {
+          id: request.id,
+          ok: true,
+          expiresAt: Date.now() + (ending === "expired" ? -1 : 60_000),
+        });
+        expect(await outcome).toEqual(
+          new Error(`state lease heartbeat is not ${ending === "lost" ? "running" : "responsive"}`),
+        );
+      } finally {
+        await finish(heartbeat, worker);
+      }
+    },
+  );
+
+  it("does not let a completed request satisfy the next verification", async () => {
     const params = options();
     const heartbeat = startOpenClawStateLeaseHeartbeat(params);
     const worker = await constructedWorker();
     try {
       await heartbeat.ready;
-      const outcomes: unknown[] = [];
-      const result = heartbeat.verify().then(
-        (value) => outcomes.push(value),
-        (error: unknown) => outcomes.push(error),
-      );
+      const first = heartbeat.verify();
       await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(500);
-      Atomics.store(worker.shared, state.expiresAt, BigInt(Date.now() + 120_000));
-      await vi.advanceTimersByTimeAsync(499);
-      expect(outcomes).toEqual([]);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(outcomes).toEqual([new Error("state lease heartbeat is not responsive")]);
-      await result;
+      const request = worker.messages[0];
+      assert(request);
+      const expiresAt = Number(Atomics.load(worker.shared, state.expiresAt));
+      Atomics.store(new BigInt64Array(worker.data.completedRequest), 0, BigInt(request.id));
+      worker.emit("message", { id: request.id, ok: true, expiresAt });
+      await expect(first).resolves.toBe(expiresAt);
+      const next = heartbeat.verify();
+      const outcome = next.catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await outcome).toEqual(new Error("state lease heartbeat is not responsive"));
       expect(params.onLost).toHaveBeenCalledOnce();
     } finally {
       await finish(heartbeat, worker);
     }
   });
 
-  it("rejects a late successful reply before its delayed timeout callback", async () => {
-    const heartbeat = startOpenClawStateLeaseHeartbeat(options());
-    const worker = await constructedWorker();
+  it("bounds a completed request whose reply is never delivered", async () => {
+    const params = { ...options(), leaseMs: 3_000, expiresAt: Date.now() + 3_000 };
+    const heartbeat = startOpenClawStateLeaseHeartbeat(params);
+    const worker = await constructedWorker(params.expiresAt);
     try {
       await heartbeat.ready;
       const result = heartbeat.verify();
@@ -412,90 +499,87 @@ describe("state lease heartbeat lifetime", () => {
       await Promise.resolve();
       const request = worker.messages[0];
       assert(request);
-      vi.spyOn(performance, "now").mockReturnValue(1_001);
-      worker.emit("message", { id: request.id, ok: true, expiresAt: Date.now() + 60_000 });
+      Atomics.store(new BigInt64Array(worker.data.completedRequest), 0, BigInt(request.id));
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(params.onLost).not.toHaveBeenCalled();
+      Atomics.store(worker.shared, state.expiresAt, BigInt(Date.now() + params.leaseMs));
+      await vi.advanceTimersByTimeAsync(1_500);
       expect(await outcome).toEqual(new Error("state lease heartbeat is not responsive"));
+      expect(params.onLost).toHaveBeenCalledOnce();
     } finally {
       await finish(heartbeat, worker);
     }
   });
 
-  it("accepts a timely reply after shared renewal extends the initial expiry", async () => {
+  it("waits for a fresh verify reply while native renewal occupies the worker", async () => {
     const params = options();
     const heartbeat = startOpenClawStateLeaseHeartbeat(params);
-    const worker = await constructedWorker(Date.now() + 100);
+    const worker = await constructedWorker();
+    const progress = new BigInt64Array(worker.data.renewalProgress);
     try {
       await heartbeat.ready;
-      const result = heartbeat.renew();
-      await Promise.resolve();
+      Atomics.store(progress, 0, 1n);
+      const outcomes: unknown[] = [];
+      const result = heartbeat.verify().then(
+        (value) => outcomes.push(value),
+        (error: unknown) => outcomes.push(error),
+      );
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(outcomes).toEqual([]);
+      expect(params.onLost).not.toHaveBeenCalled();
       const request = worker.messages[0];
       assert(request);
-      await vi.advanceTimersByTimeAsync(50);
-      const expiry = Date.now() + 500;
-      Atomics.store(worker.shared, state.expiresAt, BigInt(expiry));
-      await vi.advanceTimersByTimeAsync(100);
-      expect(params.onLost).not.toHaveBeenCalled();
-      worker.emit("message", { id: request.id, ok: true, expiresAt: expiry });
-      await expect(result).resolves.toBe(expiry);
+      const expiresAt = Date.now() + params.leaseMs;
+      Atomics.store(progress, 0, 2n);
+      worker.emit("message", { id: request.id, ok: true, expiresAt });
+      await result;
+      expect(outcomes).toEqual([expiresAt]);
     } finally {
       await finish(heartbeat, worker);
     }
   });
 
-  it.each(["verify", "renew"] as const)(
-    "waits for a fresh %s reply while native renewal occupies the worker",
-    async (operation) => {
-      const params = options();
+  it.each([
+    { operation: "verify", progress: "idle" },
+    { operation: "verify", progress: "finished" },
+    { operation: "verify", progress: "continuing" },
+  ] as const)(
+    "bounds an unanswered $operation with $progress renewal",
+    async ({ operation, progress: mode }) => {
+      const params = { ...options(), leaseMs: mode === "continuing" ? 3_000 : 60_000 };
       const heartbeat = startOpenClawStateLeaseHeartbeat(params);
       const worker = await constructedWorker();
       const progress = new BigInt64Array(worker.data.renewalProgress);
       try {
         await heartbeat.ready;
-        Atomics.store(progress, 0, 1n);
+        if (mode !== "idle") {
+          Atomics.store(progress, 0, 1n);
+        }
         const outcomes: unknown[] = [];
         const result = heartbeat[operation]().then(
           (value) => outcomes.push(value),
           (error: unknown) => outcomes.push(error),
         );
-        await vi.advanceTimersByTimeAsync(1_500);
+        if (mode === "idle") {
+          await Promise.resolve();
+          await vi.advanceTimersByTimeAsync(500);
+          Atomics.store(worker.shared, state.expiresAt, BigInt(Date.now() + 120_000));
+          await vi.advanceTimersByTimeAsync(499);
+        } else {
+          await vi.advanceTimersByTimeAsync(1_500);
+          Atomics.store(progress, 0, mode === "finished" ? 2n : 3n);
+          if (mode === "continuing") {
+            Atomics.store(worker.shared, state.expiresAt, BigInt(Date.now() + 60_000));
+          }
+        }
         expect(outcomes).toEqual([]);
         expect(params.onLost).not.toHaveBeenCalled();
-        const request = worker.messages[0];
-        assert(request);
-        const expiresAt = Date.now() + params.leaseMs;
-        Atomics.store(progress, 0, 2n);
-        worker.emit("message", { id: request.id, ok: true, expiresAt });
+        await vi.advanceTimersByTimeAsync(
+          mode === "idle" ? 1 : mode === "finished" ? 2_000 : 1_500,
+        );
         await result;
-        expect(outcomes).toEqual([expiresAt]);
-      } finally {
-        await finish(heartbeat, worker);
-      }
-    },
-  );
-
-  it.each(["verify", "renew"] as const)(
-    "rejects an unanswered %s after native renewal finishes",
-    async (operation) => {
-      const params = options();
-      const heartbeat = startOpenClawStateLeaseHeartbeat(params);
-      const worker = await constructedWorker();
-      const progress = new BigInt64Array(worker.data.renewalProgress);
-      try {
-        await heartbeat.ready;
-        Atomics.store(progress, 0, 1n);
-        const outcomes: unknown[] = [];
-        const result = heartbeat[operation]().then(
-          (value) => outcomes.push(value),
-          (error: unknown) => outcomes.push(error),
-        );
-        await vi.advanceTimersByTimeAsync(1_500);
-        expect(outcomes).toEqual([]);
-        expect(params.onLost).not.toHaveBeenCalled();
-        Atomics.store(progress, 0, 2n);
-        await vi.advanceTimersByTimeAsync(2_000);
-        expect([...outcomes]).toEqual([new Error("state lease heartbeat is not responsive")]);
+        expect(outcomes).toEqual([new Error("state lease heartbeat is not responsive")]);
         expect(params.onLost).toHaveBeenCalledOnce();
-        await result;
       } finally {
         await finish(heartbeat, worker);
       }
@@ -544,24 +628,45 @@ describe("state lease heartbeat lifetime", () => {
     },
   );
 
-  it("bounds an unanswered request despite continuing renewal progress", async () => {
-    const params = { ...options(), leaseMs: 3_000 };
-    const heartbeat = startOpenClawStateLeaseHeartbeat(params);
-    const worker = await constructedWorker();
-    const progress = new BigInt64Array(worker.data.renewalProgress);
-    try {
-      await heartbeat.ready;
-      Atomics.store(progress, 0, 1n);
-      const result = heartbeat.verify().catch((error: unknown) => error);
-      await vi.advanceTimersByTimeAsync(1_500);
-      expect(params.onLost).not.toHaveBeenCalled();
-      Atomics.store(progress, 0, 3n);
-      Atomics.store(worker.shared, state.expiresAt, BigInt(Date.now() + 60_000));
-      await vi.advanceTimersByTimeAsync(1_500);
-      expect(await result).toEqual(new Error("state lease heartbeat is not responsive"));
-      expect(params.onLost).toHaveBeenCalledOnce();
-    } finally {
-      await finish(heartbeat, worker);
-    }
-  });
+  it.each(["current", "stale", "expired"] as const)(
+    "validates %s acknowledgment after a delayed synchronous wake",
+    async (ending) => {
+      const params = options();
+      const heartbeat = startOpenClawStateLeaseHeartbeat(params);
+      const worker = await constructedWorker();
+      try {
+        await heartbeat.ready;
+        const now = Date.now();
+        let elapsed = 0;
+        vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+        vi.spyOn(Date, "now").mockImplementation(() => now + elapsed);
+        Atomics.store(worker.shared, state.request, 4n);
+        Atomics.store(worker.shared, state.ack, 4n);
+        let waits = 0;
+        vi.spyOn(Atomics, "wait").mockImplementation(() => {
+          if (++waits !== 1) {
+            throw new Error("Unexpected additional synchronous wait");
+          }
+          if (ending !== "stale") {
+            Atomics.store(worker.shared, state.ack, Atomics.load(worker.shared, state.request));
+          }
+          // The worker answered before the parent resumed from its synchronous wait.
+          elapsed = 1_500;
+          return "ok";
+        });
+        const check = () =>
+          heartbeat.assertResponsive(now + (ending === "expired" ? 1_000 : 60_000));
+        if (ending === "current") {
+          expect(check).not.toThrow();
+          expect(params.onLost).not.toHaveBeenCalled();
+        } else {
+          expect(check).toThrow("not responsive");
+          expect(params.onLost).toHaveBeenCalledOnce();
+        }
+        expect(waits).toBe(1);
+      } finally {
+        await finish(heartbeat, worker);
+      }
+    },
+  );
 });

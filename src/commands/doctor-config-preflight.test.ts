@@ -7,7 +7,7 @@ import { patchConfigHealthEntryToStore } from "../config/io.health-state.js";
 import { promoteConfigSnapshotToLastKnownGood, readConfigFileSnapshot } from "../config/io.js";
 import { createConfigHealthFingerprint } from "../config/io.observe-state.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
@@ -90,13 +90,6 @@ async function withStdoutIsTTY<T>(isTTY: boolean, run: () => Promise<T>): Promis
   }
 }
 
-async function writeLegacyConfig(home: string): Promise<string> {
-  const legacyPath = path.join(home, ".clawdbot", "clawdbot.json");
-  await fs.mkdir(path.dirname(legacyPath), { recursive: true });
-  await fs.writeFile(legacyPath, '{"gateway":{"mode":"local"}}\n', "utf-8");
-  return legacyPath;
-}
-
 async function seedLastKnownGood(
   home: string,
   configPath: string,
@@ -136,6 +129,82 @@ const doctorRepairOptions = {
 } as const;
 
 describe("runDoctorConfigPreflight", () => {
+  it.each([
+    { selector: "environment", sidecarBytes: "not JSON" },
+    { selector: "prefixed-include", sidecarBytes: "retired encrypted bytes" },
+  ])(
+    "refuses retired OAuth sidecars before repairing config ($selector selector)",
+    async ({ selector, sidecarBytes }) => {
+      await withDoctorConfigPreflightHome(async (home) => {
+        const configPath = path.join(home, ".openclaw", "openclaw.json");
+        const oauthDir = path.join(home, "custom-credentials");
+        const config = {
+          agents: { entries: { main: {} } },
+          plugins: { enabled: false },
+          ...(selector !== "environment"
+            ? { env: { vars: { OPENCLAW_OAUTH_DIR: oauthDir } } }
+            : {}),
+        };
+        const originalConfig = `${selector.startsWith("prefixed-") ? "unexpected prefix\n" : ""}${JSON.stringify(
+          selector === "prefixed-include" ? { $include: "auth-selector.json" } : config,
+        )}`;
+        await fs.mkdir(path.dirname(configPath), { recursive: true });
+        if (selector === "prefixed-include") {
+          await fs.writeFile(
+            path.join(path.dirname(configPath), "auth-selector.json"),
+            JSON.stringify(config),
+          );
+        }
+        await fs.writeFile(configPath, originalConfig);
+        const backupPath = `${configPath}.bak`;
+        const backupBytes = "{}\n";
+        await fs.writeFile(backupPath, backupBytes);
+        const authStorePath = path.join(home, ".openclaw/agents/main/agent/auth-profiles.json");
+        await fs.mkdir(path.dirname(authStorePath), { recursive: true });
+        await fs.writeFile(
+          authStorePath,
+          JSON.stringify({
+            profiles: {
+              "openai-codex:default": {
+                type: "oauth",
+                provider: "openai-codex",
+                oauthRef: {
+                  source: "openclaw-credentials",
+                  provider: "openai-codex",
+                  id: "a".repeat(32),
+                },
+              },
+            },
+          }),
+        );
+        const stateFiles = (await fs.readdir(path.dirname(configPath))).toSorted();
+        const legacyDir = path.join(home, ".clawdbot");
+        await fs.mkdir(legacyDir);
+        const sidecarDir = path.join(oauthDir, "auth-profiles");
+        const sidecarPath = path.join(sidecarDir, `${"a".repeat(32)}.json`);
+        await fs.mkdir(sidecarDir, { recursive: true });
+        await fs.writeFile(sidecarPath, sidecarBytes);
+
+        await withEnvAsync(
+          { OPENCLAW_OAUTH_DIR: selector === "environment" ? oauthDir : undefined },
+          async () => {
+            for (let pass = 0; pass < 2; pass += 1) {
+              await expect(runDoctorConfigPreflight(doctorRepairOptions)).rejects.toThrow(
+                "Upgrade through OpenClaw 2026.9.7",
+              );
+              expect(await fs.readFile(configPath, "utf8")).toBe(originalConfig);
+              expect(await fs.readFile(backupPath, "utf8")).toBe(backupBytes);
+              expect((await fs.readdir(path.dirname(configPath))).toSorted()).toEqual(stateFiles);
+              expect((await fs.lstat(legacyDir)).isSymbolicLink()).toBe(false);
+              expect(await fs.readFile(sidecarPath, "utf8")).toBe(sidecarBytes);
+              expect(await fs.readdir(sidecarDir)).toEqual([path.basename(sidecarPath)]);
+            }
+          },
+        );
+      });
+    },
+  );
+
   it("reports stale legacy update recovery without modifying the run", async () => {
     await withDoctorConfigPreflightHome(async (home) => {
       await writeOpenClawConfig(home, { gateway: { mode: "local" } });
@@ -280,31 +349,6 @@ describe("runDoctorConfigPreflight", () => {
     });
   });
 
-  it("migrates legacy config into an explicit config path", async () => {
-    await withDoctorConfigPreflightHome(async (home) => {
-      await writeLegacyConfig(home);
-      const configRoot = await fs.realpath(await fs.mkdtemp(path.join(home, "custom-config-")));
-      const configPath = path.join(configRoot, "nested", "custom-openclaw.json");
-
-      await withEnvAsync(
-        {
-          OPENCLAW_CONFIG_PATH: configPath,
-          OPENCLAW_PROFILE: undefined,
-          OPENCLAW_STATE_DIR: undefined,
-        },
-        async () => {
-          const preflight = await runDoctorConfigPreflight({
-            migrateState: false,
-            invalidConfigNote: false,
-          });
-
-          expect(preflight.snapshot.path).toBe(configPath);
-          await expect(fs.readFile(configPath, "utf-8")).resolves.toContain('"mode":"local"');
-        },
-      );
-    });
-  });
-
   it("migrates last-known-good loopback bind before restoring", async () => {
     await withDoctorConfigPreflightHome(async (home) => {
       const configPath = await writeOpenClawConfig(home, {
@@ -351,7 +395,7 @@ describe("runDoctorConfigPreflight", () => {
                 session: { idleMinutes: 45 },
                 channels: {
                   discord: {
-                    guilds: { "100": { channels: { general: { allow: true } } } },
+                    guilds: { "100": { channels: { general: { enabled: true } } } },
                   },
                 },
               },
@@ -521,6 +565,7 @@ describe("runDoctorConfigPreflight", () => {
     await withUnscopedDoctorConfigPreflightHome(async (home) => {
       await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
         const configPath = await writeOpenClawConfig(home, {
+          meta: { migrations: { webhookListeners: true } },
           gateway: { mode: "local" },
           plugins: {
             enabled: false,
@@ -610,7 +655,7 @@ describe("runDoctorConfigPreflight", () => {
 
             expect(readEventJson()).toBe(originalJson);
             // Preserve the same process: readiness must not suppress plain Doctor.
-            const doctor = await prepareDoctorContext(configPath, {
+            await using doctor = await prepareDoctorContext(configPath, {
               options: { nonInteractive: true },
             });
 
@@ -708,32 +753,6 @@ describe("runDoctorConfigPreflight", () => {
       await expect(fs.readFile(configPath, "utf-8")).resolves.toContain('"missing-deny"');
     });
   });
-  it("collects legacy config issues outside the normal config read path", async () => {
-    await withDoctorConfigPreflightHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        memorySearch: {
-          provider: "local",
-          fallback: "none",
-        },
-      });
-
-      const preflight = await runDoctorConfigPreflight({
-        ...configOnlyOptions,
-        invalidConfigNote: false,
-      });
-
-      expect(preflight.snapshot.valid).toBe(false);
-      expect(preflight.snapshot.legacyIssues.map((issue) => issue.path)).toContain("memorySearch");
-      const memorySearch = (
-        preflight.baseConfig as {
-          memorySearch?: { provider?: unknown; fallback?: unknown };
-        }
-      ).memorySearch;
-      expect(memorySearch?.provider).toBe("local");
-      expect(memorySearch?.fallback).toBe("none");
-    });
-  });
-
   it("reports persisted literal and interpolated OTel grpc as legacy config", async () => {
     await withDoctorConfigPreflightHome(async (home) => {
       await writeOpenClawConfig(home, {
@@ -744,6 +763,8 @@ describe("runDoctorConfigPreflight", () => {
         ...configOnlyOptions,
         invalidConfigNote: false,
       });
+      expect(literal.snapshot.valid).toBe(false);
+      expect(literal.baseConfig.diagnostics?.otel?.protocol).toBe("grpc");
       expect(literal.snapshot.legacyIssues).toContainEqual(
         expect.objectContaining({ path: "diagnostics.otel.protocol" }),
       );

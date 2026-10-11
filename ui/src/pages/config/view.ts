@@ -35,7 +35,7 @@ import {
   resetConfigEphemeralState,
   toggleSensitivePathReveal,
 } from "./view-state.ts";
-import type { ConfigProps } from "./view-types.ts";
+import type { ConfigDiffEntry, ConfigProps } from "./view-types.ts";
 
 registerSettingsEnglish();
 
@@ -51,15 +51,12 @@ export function renderConfig(props: ConfigProps) {
   const viewState = props.viewState;
   const showModeToggle = props.showModeToggle ?? false;
   const showRootTab = props.showRootTab ?? true;
-  const validity = props.valid == null ? "unknown" : props.valid ? "valid" : "invalid";
   const includeVirtualSections = props.includeVirtualSections ?? true;
   const include = props.includeSections?.length ? new Set(props.includeSections) : null;
   const exclude = props.excludeSections?.length ? new Set(props.excludeSections) : null;
   const analysis = getConfigSchemaAnalysis(
     viewState,
     asConfigSchema(props.schema),
-    props.includeSections,
-    props.excludeSections,
     include,
     exclude,
   );
@@ -81,7 +78,6 @@ export function renderConfig(props: ConfigProps) {
   const displayFormMode = showModeToggle && rawAvailable ? props.formMode : "form";
   const formMode = rawDraftPending ? "raw" : displayFormMode;
   const requestUpdate = props.onViewStateChange;
-  // Scroll helper: target-based (nav clicks) with global fallback (form/raw toggle)
   const resetContentScroll = (target: EventTarget | null) => {
     queueMicrotask(() => {
       // Flat layout: the settings shell owns the scroll viewport; the sibling
@@ -217,6 +213,8 @@ export function renderConfig(props: ConfigProps) {
   // Includes the app updater: writes are suspended while it runs, so raw
   // Save/Discard must read busy instead of silently no-opping.
   const configBusy = props.loading || props.saving || props.applying || props.updating;
+  const formBusy = configBusy || props.schemaLoading;
+  const showSchemaLoading = props.schemaLoading && !analysis.schema;
   const mutationAllowed = props.mutationAllowed !== false;
   const canRawSave = props.connected && mutationAllowed && !configBusy && hasRawChanges;
   const showAppearanceOnRoot =
@@ -224,6 +222,9 @@ export function renderConfig(props: ConfigProps) {
     formMode === "form" &&
     props.activeSection === null &&
     Boolean(include?.has("__appearance__"));
+
+  const renderDiffValue = (change: ConfigDiffEntry, side: "from" | "to") =>
+    renderRawDiffValue(change.path, change[side], props.uiHints, viewState.rawRevealed);
 
   const rawDiffPanel = hasRawChanges
     ? html`<details
@@ -260,23 +261,9 @@ export function renderConfig(props: ConfigProps) {
                   (change) => html`<div class="config-diff__item">
                     <div class="config-diff__path">${formatConfigDiffPath(change.path)}</div>
                     <div class="config-diff__values">
-                      <span class="config-diff__from"
-                        >${renderRawDiffValue(
-                          change.path,
-                          change.from,
-                          props.uiHints,
-                          viewState.rawRevealed,
-                        )}</span
-                      >
+                      <span class="config-diff__from">${renderDiffValue(change, "from")}</span>
                       <span class="config-diff__arrow">→</span>
-                      <span class="config-diff__to"
-                        >${renderRawDiffValue(
-                          change.path,
-                          change.to,
-                          props.uiHints,
-                          viewState.rawRevealed,
-                        )}</span
-                      >
+                      <span class="config-diff__to">${renderDiffValue(change, "to")}</span>
                     </div>
                   </div>`,
                 )
@@ -299,7 +286,7 @@ export function renderConfig(props: ConfigProps) {
       })
     : nothing;
   const showToolbar = showModeToggle || showSectionTabs;
-  const showValidityWarning = validity === "invalid" && !viewState.validityDismissed;
+  const showValidityWarning = props.valid === false && !viewState.validityDismissed;
   const showLead =
     showToolbar || settingsLayout === "accordion" || showValidityWarning || Boolean(channelGroup);
 
@@ -413,6 +400,7 @@ export function renderConfig(props: ConfigProps) {
       id="config-section-panel"
       class="config-content"
       role=${showSectionTabs ? "tabpanel" : "region"}
+      aria-busy=${formMode === "form" && props.schemaLoading ? "true" : nothing}
       aria-labelledby=${
         showSectionTabs ? `config-sections-tab-${props.activeSection ?? "root"}` : nothing
       }
@@ -447,7 +435,7 @@ export function renderConfig(props: ConfigProps) {
                   }
                   ${showAppearanceOnRoot ? renderAppearanceSection(props) : nothing}
                   ${
-                    props.schemaLoading
+                    showSchemaLoading
                       ? html`<div class="config-loading">
                           <div class="config-loading__spinner"></div>
                           <span>${t("configView.loadingSchema")}</span>
@@ -459,7 +447,7 @@ export function renderConfig(props: ConfigProps) {
                             value: props.formValue,
                             embedded: props.embeddedEditor === true || Boolean(showSetup),
                             rawAvailable,
-                            disabled: configBusy || !props.formValue || !mutationAllowed,
+                            disabled: formBusy || !props.formValue || !mutationAllowed,
                             unsupportedPaths: analysis.unsupportedPaths,
                             onPatch: props.onFormPatch,
                             onRemove: props.onFormRemove,
@@ -467,10 +455,11 @@ export function renderConfig(props: ConfigProps) {
                             activeSubsection: null,
                             showAdvanced: effectiveShowAdvanced,
                             forceAdvancedSection: props.forceAdvancedSection,
-                            onShowAdvanced: () => props.setShowAdvancedSettings(true),
+                            onShowAdvanced: () =>
+                              props.onAppearanceChange({ showAdvancedSettings: true }),
                             onHideAdvanced: props.forceShowAdvanced
                               ? undefined
-                              : () => props.setShowAdvancedSettings(false),
+                              : () => props.onAppearanceChange({ showAdvancedSettings: false }),
                             sectionActions:
                               props.activeSection === "env"
                                 ? html`<button
@@ -494,6 +483,7 @@ export function renderConfig(props: ConfigProps) {
                             sectionPrelude: props.sectionPrelude,
                             revealSensitive:
                               props.activeSection === "env" ? envSensitiveVisible : false,
+                            maskSensitive: true,
                             isSensitivePathRevealed: (path) =>
                               isSensitivePathRevealed(viewState, path),
                             onToggleSensitivePath: (path) => {
@@ -504,11 +494,11 @@ export function renderConfig(props: ConfigProps) {
                         )
                   }
                   ${
-                    showSetup && !props.schemaLoading
+                    showSetup && !showSchemaLoading
                       ? renderSetupSection(
                           setupSchema,
                           props,
-                          configBusy || !props.formValue || !mutationAllowed,
+                          formBusy || !props.formValue || !mutationAllowed,
                         )
                       : nothing
                   }

@@ -19,12 +19,6 @@ export const defaultCliWatchdogClock: CliWatchdogClock = {
   },
 };
 
-type CliPluginWatchdog = {
-  noteOutput: () => void;
-  reset: () => void;
-  dispose: () => void;
-};
-
 export function createCliPluginWatchdog(
   params: {
     provider: string;
@@ -44,7 +38,7 @@ export function createCliPluginWatchdog(
     onOverallTimeout: () => void;
   },
   clock: CliWatchdogClock = defaultCliWatchdogClock,
-): CliPluginWatchdog {
+) {
   const noOutputTimeoutMs = params.noOutputTimeoutMs;
   const overallTimeoutMs = params.overallTimeoutMs;
   let lastOutputAtMs = clock.now();

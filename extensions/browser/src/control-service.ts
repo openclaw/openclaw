@@ -59,7 +59,6 @@ async function startBrowserControlServiceUnlocked(): Promise<BrowserServerState 
     server: null,
     port: resolved.controlPort,
     resolved,
-    owner: "service",
   });
 
   // Extension relays listen from service start so the Chrome extension can
@@ -83,7 +82,6 @@ export async function startBrowserControlServiceFromConfig(): Promise<BrowserSer
   return await withBrowserControlStart(startBrowserControlServiceUnlocked);
 }
 
-/** Stops the in-process Browser control service runtime. */
 export async function stopBrowserControlService(): Promise<void> {
   try {
     await stopBrowserControlRuntime({

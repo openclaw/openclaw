@@ -30,12 +30,15 @@ describe("explicit human mention Markdown", () => {
     expect(fragment.querySelector("strong")?.textContent).toBe("Hello");
   });
 
-  it("keeps selected names literal even when they contain Markdown or HTML syntax", () => {
-    const label = '@Ada_One & <img src=x onerror="alert(1)">';
-    const source = "Hello " + label;
+  it.each([
+    { label: '@Ada_One & <img src=x onerror="alert(1)">', prefix: "Hello ", suffix: "" },
+    { label: "@Ada `One`", prefix: "Hello ", suffix: "" },
+    { label: "@Ada", prefix: "[Hello ", suffix: "]" },
+  ])("keeps selected labels literal: $label", ({ label, prefix, suffix }) => {
+    const source = prefix + label + suffix;
     const fragment = render(source, [selected(source, label)]);
     expect(fragment.querySelector("openclaw-person-reference")?.textContent).toBe(label);
-    expect(fragment.querySelector("img,script,em,[onerror]")).toBeNull();
+    expect(fragment.querySelector("img,script,em,code,[onerror]")).toBeNull();
     expect(fragment.textContent?.trim()).toBe(source);
   });
 
@@ -61,63 +64,43 @@ describe("explicit human mention Markdown", () => {
     expect(rendered).toContain("@Ada");
   });
 
-  it("restores replacement metacharacters literally inside an existing Markdown link", () => {
-    const label = "@Ada $&";
-    const source = "Before [" + label + "](https://example.test) after";
-    const rendered = toSanitizedMarkdownHtml(source, {
-      humanMentions: [selected(source, label)],
-    });
-    const fragment = htmlFragment(rendered);
-    expect(fragment.querySelector("a")?.textContent).toBe(label);
-    expect(fragment.textContent?.trim()).toBe("Before " + label + " after");
-    expect(rendered).not.toContain("openclawhumanmention");
-  });
-
-  it("preserves backticks contained entirely in a selected person label", () => {
-    const label = "@Ada `One`";
-    const source = "Hello " + label;
-    const fragment = render(source, [selected(source, label)]);
-    expect(fragment.querySelector("openclaw-person-reference")?.textContent).toBe(label);
-    expect(fragment.querySelector("code")).toBeNull();
-    expect(fragment.textContent?.trim()).toBe(source);
-  });
-
   it.each([
-    ["[@Ada]\n\n[@Ada]: /person", 0],
-    ["[@Ada][]\n\n[@Ada]: /person", 0],
-    ["[label][@Ada]\n\n[@Ada]: /person", 0],
-    ["[@Ada]\n\n[@Ada]: /person\n[@Ada]: /other", 1],
+    [
+      "Before [@Ada $&](https://example.test) after",
+      0,
+      ["@Ada $&"],
+      "https://example.test",
+      "@Ada $&",
+      "Before @Ada $& after",
+    ],
+    ["[@Ada]\n\n[@Ada]: /person", 0, ["@Ada"], "/person", "@Ada"],
+    ["[@Ada][]\n\n[@Ada]: /person", 0, ["@Ada"], "/person", "@Ada"],
+    ["[label][@Ada]\n\n[@Ada]: /person", 0, ["@Ada"], "/person", "label"],
+    ["[@Ada]\n\n[@Ada]: /person\n[@Ada]: /other", 1, ["@Ada"], "/person", "@Ada"],
+    ["[@Ada @Bob][]\n\n[@Ada @Bob]: /people", 0, ["@Ada", "@Bob"], "/people", "@Ada @Bob"],
   ] as const)(
-    "preserves reference links when a selected span masks a label: %s (%s)",
-    (source, occurrence) => {
-      const start =
-        occurrence === 0
-          ? source.indexOf("@Ada")
-          : source.indexOf("@Ada", source.indexOf("@Ada") + 1);
-      const fragment = render(source, [selected(source, "@Ada", "profile-ada", start)]);
-      expect(fragment.querySelector("a")?.getAttribute("href")).toBe("/person");
+    "restores selected labels inside links: %s",
+    (source, occurrence, labels, href, text, content?: string) => {
+      const mentions = labels.map((label) =>
+        selected(
+          source,
+          label,
+          "profile-" + label,
+          occurrence ? source.indexOf(label, source.indexOf(label) + 1) : source.indexOf(label),
+        ),
+      );
+      const rendered = toSanitizedMarkdownHtml(source, { humanMentions: mentions });
+      const fragment = htmlFragment(rendered);
+      expect(rendered).not.toContain("openclawhumanmention");
+      if (content !== undefined) {
+        expect(fragment.textContent?.trim()).toBe(content);
+      }
+      expect(fragment.querySelector("a")?.getAttribute("href")).toBe(href);
+      expect(fragment.querySelector("a")?.textContent).toBe(text);
       expect(fragment.querySelector("openclaw-person-reference")).toBeNull();
       expect(fragment.textContent).not.toContain("openclawhumanmention");
     },
   );
-
-  it("resolves a reference label containing multiple selected people", () => {
-    const source = "[@Ada @Bob][]\n\n[@Ada @Bob]: /people";
-    const fragment = render(source, [
-      selected(source, "@Ada"),
-      selected(source, "@Bob", "profile-bob"),
-    ]);
-    expect(fragment.querySelector("a")?.getAttribute("href")).toBe("/people");
-    expect(fragment.querySelector("a")?.textContent).toBe("@Ada @Bob");
-    expect(fragment.querySelector("openclaw-person-reference")).toBeNull();
-  });
-
-  it("keeps a selected person control inside brackets that are not a reference link", () => {
-    const source = "[Hello @Ada]";
-    const fragment = render(source, [selected(source, "@Ada")]);
-    expect(fragment.querySelector("openclaw-person-reference")?.textContent).toBe("@Ada");
-    expect(fragment.textContent?.trim()).toBe(source);
-  });
 
   it("preserves reference-style images", () => {
     const source = "![@Ada][]\n\n[@Ada]: https://example.test/person.png";
@@ -137,23 +120,27 @@ describe("explicit human mention Markdown", () => {
     expect(fragment.querySelectorAll("openclaw-person-reference")).toHaveLength(1);
   });
 
-  it("does not trust raw custom element markup or infer identity from plain names", () => {
-    const source =
-      '@Ada <openclaw-person-reference profile-id="secret" label="@Ada">@Ada</openclaw-person-reference>';
-    const fragment = render(source);
-    expect(fragment.querySelector("openclaw-person-reference")).toBeNull();
-    expect(fragment.textContent?.trim()).toBe(source);
-  });
-
-  it("leaves overlapping persisted spans unformatted", () => {
-    const humanMentions = [
-      { profileId: "one", start: 0, end: 4 },
-      { profileId: "two", start: 0, end: 4 },
-    ];
-    const fragment = render("@Ada", humanMentions);
-    expect(fragment.querySelector("openclaw-person-reference")).toBeNull();
-    expect(fragment.textContent?.trim()).toBe("@Ada");
-  });
+  it.each([
+    {
+      source:
+        '@Ada <openclaw-person-reference profile-id="secret" label="@Ada">@Ada</openclaw-person-reference>',
+      mentions: [],
+    },
+    {
+      source: "@Ada",
+      mentions: [
+        { profileId: "one", start: 0, end: 4 },
+        { profileId: "two", start: 0, end: 4 },
+      ],
+    },
+  ])(
+    "does not invent identity for untrusted or overlapping selections: $source",
+    ({ source, mentions }) => {
+      const fragment = render(source, mentions);
+      expect(fragment.querySelector("openclaw-person-reference")).toBeNull();
+      expect(fragment.textContent?.trim()).toBe(source);
+    },
+  );
 
   it("keys cached rendering by explicit identity, including the absence of a selection", () => {
     for (const id of ["first", "second", null, "first"]) {

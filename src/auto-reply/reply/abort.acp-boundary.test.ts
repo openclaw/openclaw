@@ -1,3 +1,4 @@
+import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 /** Channel Stop initiates native and ACP cancellation independently of either drain. */
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
@@ -11,7 +12,7 @@ import {
   registerAcpRuntimeBackend,
   unregisterAcpRuntimeBackend,
 } from "../../acp/runtime/registry.js";
-import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
+import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -50,11 +51,11 @@ import { buildTestCtx } from "./test-ctx.js";
 
 const fixture = useChatAbortRegistryFixture();
 
-it.each(
-  ["idle", "active", "native failure"].flatMap((scenario) =>
-    ["resolve", "reject"].map((completion) => ({ scenario, completion })),
-  ),
-)(
+it.each([
+  { scenario: "idle", completion: "resolve" },
+  { scenario: "active", completion: "reject" },
+  { scenario: "native failure", completion: "reject" },
+])(
   "native and bound ACP cancellation initiate before either drain ($scenario, $completion)",
   async ({ scenario, completion }) => {
     const active = scenario !== "idle";
@@ -188,8 +189,8 @@ it.each(
             ["queued", queuedKey],
           ] as const
         ).every(([runId, key]) => {
-          const entry = getSubagentRunByChildSessionKey(key);
-          return entry?.runId === runId && entry.endedReason === "subagent-killed";
+          const entry = subagentRuns.get(runId);
+          return entry?.childSessionKey === key && entry.endedReason === "subagent-killed";
         })
       ) {
         nativeTerminal.resolve();
@@ -333,7 +334,7 @@ it.each(
       expect(selectedDispatch).not.toHaveBeenCalled();
       await nativeTerminal.promise;
       for (const key of [runningKey, queuedKey]) {
-        expect(getSubagentRunByChildSessionKey(key)?.endedReason).toBe("subagent-killed");
+        expect((await getSubagentRunByChildSessionKey(key))?.endedReason).toBe("subagent-killed");
       }
       await vi.waitFor(() =>
         expect(loadExactSessionEntryReadOnly({ sessionKey: sourceKey })?.entry).toMatchObject({
@@ -362,7 +363,7 @@ it.each(
         reason: "fast-abort",
       });
       await turn;
-      expect(readAcpSessionMeta({ cfg, sessionKey: acpKey })?.state).toBe(
+      expect(readAcpSessionEntry({ cfg, sessionKey: acpKey })?.acp?.state).toBe(
         !active && completion === "reject" ? "error" : "idle",
       );
     } finally {

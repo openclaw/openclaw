@@ -149,17 +149,21 @@ export const writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock: Mock
   vi.fn<WritePersistedInstalledPluginIndexInstallRecordsWithLeaseFn>(
     writeMockInstalledIndexWithLease,
   );
+const restoreMockInstalledIndexIfCurrent: RestorePersistedInstalledPluginIndexIfCurrentFn = async (
+  index,
+  expectedRevision,
+) => {
+  if (mockInstalledPluginIndexRevision !== expectedRevision) {
+    return false;
+  }
+  mockInstalledPluginIndexInstallRecords = clonePluginInstallRecords(
+    (index?.installRecords ?? {}) as PluginInstallRecordMap,
+  );
+  mockInstalledPluginIndexRevision += 1;
+  return true;
+};
 export const restorePersistedInstalledPluginIndexIfCurrentMock: Mock<RestorePersistedInstalledPluginIndexIfCurrentFn> =
-  vi.fn<RestorePersistedInstalledPluginIndexIfCurrentFn>(async (index, expectedRevision) => {
-    if (mockInstalledPluginIndexRevision !== expectedRevision) {
-      return false;
-    }
-    mockInstalledPluginIndexInstallRecords = clonePluginInstallRecords(
-      (index?.installRecords ?? {}) as PluginInstallRecordMap,
-    );
-    mockInstalledPluginIndexRevision += 1;
-    return true;
-  });
+  vi.fn<RestorePersistedInstalledPluginIndexIfCurrentFn>(restoreMockInstalledIndexIfCurrent);
 export const loadPluginManifestRegistryMock: UnknownMock = vi.fn();
 export const loadPluginMetadataSnapshotMock = vi.fn(createPluginsCliMetadataSnapshot);
 export const buildPluginSnapshotReportMock: UnknownMock = vi.fn();
@@ -531,7 +535,11 @@ vi.mock("../plugins/manifest-registry.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: CLI report fixtures own registry leases and cleanup without activating installed plugins.
 vi.mock("../plugins/status.js", () => ({
+  buildPluginSnapshotReportAsync: async (
+    ...args: Parameters<(typeof import("../plugins/status.js"))["buildPluginSnapshotReport"]>
+  ) => buildPluginSnapshotReportMock(...args),
   withPluginDiagnosticsReportForInspection: async (
     ...args: Parameters<typeof withPluginDiagnosticsReportForInspectionMock>
   ) => {
@@ -1015,16 +1023,7 @@ export function resetPluginsCliTestState() {
     writeMockInstalledIndexWithLease,
   );
   restorePersistedInstalledPluginIndexIfCurrentMock.mockImplementation(
-    async (index, expectedRevision) => {
-      if (mockInstalledPluginIndexRevision !== expectedRevision) {
-        return false;
-      }
-      mockInstalledPluginIndexInstallRecords = clonePluginInstallRecords(
-        (index?.installRecords ?? {}) as PluginInstallRecordMap,
-      );
-      mockInstalledPluginIndexRevision += 1;
-      return true;
-    },
+    restoreMockInstalledIndexIfCurrent,
   );
   loadPluginManifestRegistryMock.mockImplementation((input: unknown) => {
     const installRecords =
@@ -1081,10 +1080,9 @@ export function resetPluginsCliTestState() {
     current: defaultRegistryIndex,
   });
   refreshPluginRegistryMock.mockResolvedValue(defaultRegistryIndex);
-  applyExclusiveSlotSelectionMock.mockImplementation((({ config }: { config: OpenClawConfig }) => ({
-    config,
-    warnings: [],
-  })) as (...args: unknown[]) => unknown);
+  applyExclusiveSlotSelectionMock.mockImplementation(
+    (({ config }: { config: OpenClawConfig }) => config) as (...args: unknown[]) => unknown,
+  );
   planPluginUninstallMock.mockImplementation(({ config, pluginId }) => ({
     ok: true,
     config,

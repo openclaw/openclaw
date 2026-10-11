@@ -19,7 +19,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
-import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { getSessionColdStorageStatus } from "./session-cold-storage-status.js";
 import { runSessionColdStorageMaintenance } from "./session-cold-storage.js";
 import {
@@ -27,7 +27,7 @@ import {
   historicalId,
   maintenanceConfig,
 } from "./session-cold-storage.test-support.js";
-import { historyLane } from "./session-transcript-worker-resources.js";
+import { historyLane, targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 
 let state: OpenClawTestState;
 let fixture: Awaited<ReturnType<typeof createSessionColdStorageFixture>>;
@@ -60,49 +60,79 @@ afterAll(async () => {
   await state.cleanup();
 });
 
-it("reports configured shared and missing stores without parent SQLite", async () => {
-  const missing = state.statePath("missing", "openclaw-agent.sqlite");
-  const observer = observeParentSqlite();
-  try {
-    const config = maintenanceConfig(fixture.scope.storePath);
-    config.agents = { list: [{ id: "main" }, { id: "other" }] };
-    const result = await getSessionColdStorageStatus(config);
-    expect(result).toEqual([
-      {
-        agentId: "main",
-        storePath: fixture.scope.storePath,
-        hotTranscripts: 1,
-        coldTranscripts: 1,
-        embeddedArchiveBytes: embeddedBytes,
-        archiveBytes: embeddedBytes,
-        databaseBytes: expect.any(Number),
-        walBytes: expect.any(Number),
-      },
-    ]);
-    expect(result[0]!.databaseBytes).toBeGreaterThan(0);
-    expect(await getSessionColdStorageStatus(maintenanceConfig(missing))).toEqual([
-      {
-        agentId: "main",
-        storePath: missing,
-        hotTranscripts: 0,
-        coldTranscripts: 0,
-        embeddedArchiveBytes: 0,
-        archiveBytes: 0,
-        databaseBytes: 0,
-        walBytes: 0,
-      },
-    ]);
-    expect(observer.counts).toEqual(emptySqliteCounts());
-    await expect(fs.stat(missing)).rejects.toMatchObject({ code: "ENOENT" });
-  } finally {
-    observer.restore();
-  }
-});
+it.each(["sqlite", "file"] as const)(
+  "reports current %s archive storage without parent SQLite",
+  async (storage) => {
+    const missing = state.statePath("missing", "openclaw-agent.sqlite");
+    const foreign =
+      storage === "file" ? openNodeSqliteDatabase(fixture.scope.storePath) : undefined;
+    foreign
+      ?.prepare(
+        "UPDATE session_transcript_cold_archives SET storage = 'file', archive_blob = NULL WHERE session_id = ?",
+      )
+      .run(historicalId);
+    const observer = observeParentSqlite();
+    try {
+      const config = maintenanceConfig(fixture.scope.storePath);
+      if (storage === "sqlite") {
+        config.agents = {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "main" } },
+          entries: { main: {}, other: {} },
+        };
+      }
+      const result = await getSessionColdStorageStatus(config);
+      expect(result).toEqual([
+        {
+          agentId: "main",
+          storePath: fixture.scope.storePath,
+          hotTranscripts: 1,
+          coldTranscripts: 1,
+          embeddedArchiveBytes: storage === "sqlite" ? embeddedBytes : 0,
+          archiveBytes: embeddedBytes,
+          databaseBytes: expect.any(Number),
+          walBytes: expect.any(Number),
+        },
+      ]);
+      expect(result[0]!.databaseBytes).toBeGreaterThan(0);
+      if (storage === "sqlite") {
+        expect(await getSessionColdStorageStatus(maintenanceConfig(missing))).toEqual([
+          {
+            agentId: "main",
+            storePath: missing,
+            hotTranscripts: 0,
+            coldTranscripts: 0,
+            embeddedArchiveBytes: 0,
+            archiveBytes: 0,
+            databaseBytes: 0,
+            walBytes: 0,
+          },
+        ]);
+        await expect(fs.stat(missing)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      expect(observer.counts).toEqual(emptySqliteCounts());
+    } finally {
+      observer.restore();
+      if (foreign) {
+        foreign
+          .prepare(
+            "UPDATE session_transcript_cold_archives SET storage = 'sqlite', archive_blob = ? WHERE session_id = ?",
+          )
+          .run(embeddedBlob, historicalId);
+        foreign.close();
+      }
+    }
+  },
+);
 
 it("counts a configured incognito store through its existing native owner without creating a file", async () => {
   const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
   const config = maintenanceConfig(storePath);
-  config.agents = { list: [{ id: "main" }, { id: "other" }] };
+  config.agents = {
+    ownership: "explicit",
+    defaults: { sessionStore: { agentId: "main" } },
+    entries: { main: {}, other: {} },
+  };
   const empty = {
     agentId: "main",
     storePath,
@@ -146,34 +176,13 @@ it("counts a configured incognito store through its existing native owner withou
   }
 });
 
-it("observes a foreign externalization on the next worker inventory", async () => {
-  const foreign = openNodeSqliteDatabase(fixture.scope.storePath);
-  try {
-    foreign
-      .prepare(
-        "UPDATE session_transcript_cold_archives SET storage = 'file', archive_blob = NULL WHERE session_id = ?",
-      )
-      .run(historicalId);
-    expect(
-      await getSessionColdStorageStatus(maintenanceConfig(fixture.scope.storePath)),
-    ).toMatchObject([{ hotTranscripts: 1, coldTranscripts: 1, embeddedArchiveBytes: 0 }]);
-  } finally {
-    foreign
-      .prepare(
-        "UPDATE session_transcript_cold_archives SET storage = 'sqlite', archive_blob = ? WHERE session_id = ?",
-      )
-      .run(embeddedBlob, historicalId);
-    foreign.close();
-  }
-});
-
 it("refuses a replaced source while its worker inventory is delayed", async () => {
   const missing = state.statePath("delayed", "openclaw-agent.sqlite");
   await fs.mkdir(path.dirname(missing), { recursive: true });
   const entered = createDeferredCore();
   const release = createDeferredCore();
-  const run = historyLane.pool.run.bind(historyLane.pool);
-  vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+  const run = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
+  vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
     const reply = await run(...args);
     if (
       reply.ok &&

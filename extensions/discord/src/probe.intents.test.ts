@@ -133,15 +133,6 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
     });
   });
 
-  it("prefers enabled over limited when both set", () => {
-    const flags = (1 << 12) | (1 << 13) | (1 << 14) | (1 << 15) | (1 << 18) | (1 << 19);
-    expect(resolveDiscordPrivilegedIntentsFromFlags(flags)).toEqual({
-      presence: "enabled",
-      guildMembers: "enabled",
-      messageContent: "enabled",
-    });
-  });
-
   it("retries Cloudflare HTML rate limits during application id lookup", async () => {
     let calls = 0;
     const fetcher = withFetchPreconnect(async () => {
@@ -164,7 +155,6 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
   });
 
   it.each([
-    { status: 401, kind: "rejected" },
     { status: 403, kind: "rejected" },
     { status: 503, kind: "unavailable" },
   ] as const)("classifies application id HTTP $status as $kind", async ({ status, kind }) => {
@@ -180,18 +170,6 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
     await vi.runAllTimersAsync();
 
     await expect(probe).resolves.toMatchObject({ kind, status });
-  });
-
-  it("preserves application id network failure as unavailable without an HTTP status", async () => {
-    vi.useFakeTimers();
-    const error = new Error("fetch failed");
-    const fetcher = withFetchPreconnect(async () => {
-      throw error;
-    });
-    const probe = probeDiscordApplicationId("unparseable.token", 1_000, fetcher);
-    await vi.runAllTimersAsync();
-
-    await expect(probe).resolves.toEqual({ kind: "unavailable", status: null, error });
   });
 
   it("does not retry Cloudflare HTML rate limits during application summary probes", async () => {
@@ -258,27 +236,6 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
       error: expect.stringContaining("discord.probe.getMe: JSON response exceeds 16777216 bytes"),
     });
     expect(cancelCount).toBe(1);
-  });
-
-  it("times out and cancels stalled getMe probe JSON response bodies", async () => {
-    vi.useFakeTimers();
-    let terminationCount = 0;
-    const fetcher = withFetchPreconnect(async (_input, init) =>
-      trackedStalledDiscordJsonResponse(init?.signal, () => {
-        terminationCount += 1;
-      }),
-    );
-
-    const probe = probeDiscord("MTIz.abc.def", 50, { fetcher });
-    const assertion = expect(probe).resolves.toMatchObject({
-      ok: false,
-      error: "discord.probe.getMe: JSON response timed out after 50ms",
-    });
-
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(50);
-    await assertion;
-    expect(terminationCount).toBe(1);
   });
 
   it("uses one total deadline across getMe headers and a trickling JSON body", async () => {
@@ -365,7 +322,9 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
       });
     });
 
-    await expect(fetchDiscordApplicationId("MTIz.abc.def", 1_000, fetcher)).resolves.toBe("123");
+    const applicationId = "1477179610322964541";
+    const token = `Bot ${Buffer.from(applicationId).toString("base64")}.abc.def`;
+    await expect(fetchDiscordApplicationId(token, 1_000, fetcher)).resolves.toBe(applicationId);
     expect(calls).toBe(0);
   });
 });

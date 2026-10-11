@@ -1,7 +1,8 @@
-import { writeFile } from "node:fs/promises";
+import { mkdir, realpath, symlink, unlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it } from "vitest";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
@@ -35,15 +36,20 @@ describe("resolveCurrentOpenClawCliInvocation", () => {
     ).toEqual(["--import", "/loader.mjs", "--trace-warnings"]);
   });
 
-  it.each([{ tsxArgs: ["--import", "tsx"] }, { tsxArgs: ["--import=tsx"] }])(
-    "pins the source parent's TSX import while preserving other runtime hooks: $tsxArgs",
-    ({ tsxArgs }) => {
+  it.each([
+    { execPath: resolveTestNodeExecPath(), tsxArgs: ["--import", "tsx"] },
+    { execPath: resolveTestNodeExecPath(), tsxArgs: ["--import=tsx"] },
+    { execPath: "/usr/local/bin/bun", tsxArgs: ["--import", "tsx"] },
+    { execPath: "/usr/local/bin/bun", tsxArgs: ["--import=tsx"] },
+  ])(
+    "pins the source parent's TSX import while preserving other runtime hooks: $execPath $tsxArgs",
+    ({ execPath, tsxArgs }) => {
       const runtimeArgs = ["--trace-warnings", "--import", "/other-loader.mjs"];
       const invocation = resolveCurrentOpenClawCliInvocation(commandArgs, {
         argv1: repoSourceEntry,
         cwd: repoRoot,
         execArgv: [...runtimeArgs, ...tsxArgs],
-        execPath: resolveTestNodeExecPath(),
+        execPath,
       });
       expect(invocation.args).toEqual([
         ...runtimeArgs,
@@ -117,6 +123,44 @@ describe("resolveCurrentOpenClawCliInvocation", () => {
       cwd: repoRoot,
     });
   });
+
+  it.each(["openclaw.mjs", path.join("dist", "index.js")])(
+    "pins a prepared %s invocation across an installation switch",
+    async (entryName) => {
+      await withTempDir("openclaw-cli-release-switch-", async (root) => {
+        const releaseA = path.join(await realpath(root), "release-a");
+        const releaseB = path.join(await realpath(root), "release-b");
+        for (const release of [releaseA, releaseB]) {
+          await mkdir(path.join(release, "dist"), { recursive: true });
+          await writeFile(path.join(release, "package.json"), '{"name":"openclaw"}');
+          await writeFile(path.join(release, "openclaw.mjs"), "export {};\n");
+          await writeFile(path.join(release, "dist", "index.js"), "export {};\n");
+        }
+        const current = path.join(root, "current");
+        await symlink(releaseA, current, "junction");
+        const options = {
+          argv1: path.join(current, entryName),
+          cwd: root,
+          execPath: resolveTestNodeExecPath(),
+          execArgv: [],
+        };
+        const prepared = resolveCurrentOpenClawCliInvocation(["--version"], options);
+
+        await unlink(current);
+        await symlink(releaseB, current, "junction");
+
+        expect(await realpath(expectDefined(prepared.args[0], "prepared CLI entry"))).toBe(
+          path.join(releaseA, entryName),
+        );
+        expect(prepared.cwd).toBe(releaseA);
+        const fresh = resolveCurrentOpenClawCliInvocation(["--version"], options);
+        expect(await realpath(expectDefined(fresh.args[0], "fresh CLI entry"))).toBe(
+          path.join(releaseB, entryName),
+        );
+        expect(fresh.cwd).toBe(releaseB);
+      });
+    },
+  );
 
   it.each(["/usr/bin/node", "/usr/bin/bun"])(
     "uses the installed wrapper under %s and canonical package cwd",

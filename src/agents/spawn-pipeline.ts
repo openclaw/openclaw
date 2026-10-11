@@ -1,3 +1,4 @@
+import { readExecRequestOwners, withExecRequestOwners } from "../infra/exec-request-context.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { registerSubagentRun } from "./subagents/registry/subagent-registry.js";
 import type { SubagentRegistrationScope } from "./subagents/registry/subagent-registry.types.js";
@@ -6,6 +7,7 @@ type SpawnPipelinePhase = "initialize" | "dispatch" | "register";
 
 export type SpawnBackendAdapter<TState> = {
   initialize(): Promise<TState>;
+  retainRegistrationScope?(scope: SubagentRegistrationScope): void;
   dispatchTurn(state: TState): Promise<{ runId: string }>;
   cleanupOnFailure(params: {
     phase: SpawnPipelinePhase;
@@ -73,12 +75,19 @@ export async function runSpawnPipeline<TState>(
       phase = "register";
       params.assertActive?.();
       registration = params.buildRegistration(state, runId);
-      await registerSubagentRun(registration, {
-        assertCurrent: params.assertActive,
-        retainOwnership: (scope) => {
-          registrationScope = scope;
-        },
-      });
+      await registerSubagentRun(
+        registration,
+        withExecRequestOwners(
+          {
+            assertCurrent: params.assertActive,
+            retainOwnership: (scope) => {
+              registrationScope = scope;
+              params.adapter.retainRegistrationScope?.(scope);
+            },
+          },
+          readExecRequestOwners(params),
+        ),
+      );
       // Release launch admission only after any authority preparation and registry acknowledgement.
       params.admissionReservation?.release();
     } catch (error) {

@@ -24,7 +24,10 @@ import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js"
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { resolveSessionResourceToolPolicy } from "./session-resource-tool-policy.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
-import { resolveSessionSelectedModelRef } from "./session-utils-model-selection.js";
+import {
+  resolveSessionSelectedModelRef,
+  resolveSessionSelectedModelRefAsync,
+} from "./session-utils-model-selection.js";
 
 function runtimeSelection(
   entry: SessionEntry,
@@ -64,17 +67,20 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
   if (cfg.mcp?.apps?.enabled !== true) {
     throw new Error("MCP Apps are disabled");
   }
-  const selectRuntime = (entry: SessionEntry) => {
-    const model = resolveSessionSelectedModelRef({
-      cfg,
-      agentId,
-      sessionKey,
-      source: {
-        entry,
-        readSourceEntry: (key) => projection.sharingTarget({ agentId, key })?.entry,
-      },
-      manifestPlugins: getGatewayPluginMetadataSnapshot() ?? [],
-    });
+  const modelParams = (entry: SessionEntry) => ({
+    cfg,
+    agentId,
+    sessionKey,
+    source: {
+      entry,
+      readSourceEntry: (key: string) => projection.sharingTarget({ agentId, key })?.entry,
+    },
+    manifestPlugins: getGatewayPluginMetadataSnapshot() ?? [],
+  });
+  const selectRuntime = (
+    entry: SessionEntry,
+    model = resolveSessionSelectedModelRef(modelParams(entry)),
+  ) => {
     const harnessId = resolveEffectiveAgentRuntime({
       cfg,
       provider: model.provider,
@@ -87,8 +93,13 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
   };
   // Last-turn model/harness observations do not change the selected owner.
   // Resolve inherited choices from the same prepared facts used at launch.
-  const selected = selectRuntime(initial.entry);
-  const expectedRuntimeSelection = selected.fingerprint;
+  const selected = selectRuntime(
+    initial.entry,
+    await resolveSessionSelectedModelRefAsync({
+      ...modelParams(initial.entry),
+      assertCurrent: access.assertCurrent,
+    }),
+  );
   const current = (assertAccess = access.assertCurrent) => {
     assertAccess();
     if (options.context.getRuntimeConfig() !== cfg) {
@@ -98,7 +109,7 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
     if (!target || target.entry.sessionId !== sessionId) {
       throw new Error("MCP App session changed");
     }
-    if (selectRuntime(target.entry).fingerprint !== expectedRuntimeSelection) {
+    if (selectRuntime(target.entry).fingerprint !== selected.fingerprint) {
       throw new Error("MCP App session runtime selection changed; reopen the App");
     }
     return target;
@@ -167,7 +178,6 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
         preparationOwner.source = source;
         assertPreparationCurrent();
         const live = current();
-        const model = selectedModel;
         const { prepareAgentHarnessSessionRuntime } =
           await import("../agents/harness/session-preparation.js");
         const setup = await prepareAgentHarnessSessionRuntime({
@@ -182,8 +192,8 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
             sessionId,
             sessionKey,
             workspaceDir,
-            provider: model.provider,
-            modelId: model.model,
+            provider: selectedModel.provider,
+            modelId: selectedModel.model,
             authProfileId: live.entry.authProfileOverride,
             authProfileIdSource:
               live.entry.authProfileOverrideSource === "auto"
@@ -375,7 +385,8 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
           assertTool(tool, false, retained.assertCurrent);
         };
         assertCurrent();
-        if (assertTool(tool, true, retained.assertCurrent)) {
+        const approvalRequired = assertTool(tool, true, retained.assertCurrent);
+        if (approvalRequired) {
           await requestMcpAppToolApproval({
             options: request.options,
             agentId,
@@ -383,13 +394,22 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
             serverName: tool.serverName,
             toolName: tool.toolName,
             input: request.input,
+            view: request.view,
+            requesterId: resolveMcpAppRequesterId(request.options.client),
             assertCurrent,
             signal: request.signal
               ? AbortSignal.any([retained.signal, request.signal])
               : retained.signal,
           });
         }
-        assertCurrent();
+        const assertExecutionCurrent = () => {
+          assertCurrent();
+          if (assertTool(tool, true, retained.assertCurrent) && !approvalRequired) {
+            throw new Error("MCP App approval policy changed before execution");
+          }
+        };
+        assertExecutionCurrent();
+        return assertExecutionCurrent;
       };
       return {
         ...retained,

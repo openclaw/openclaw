@@ -70,7 +70,13 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await catalog.getByRole("searchbox", { name: "Search plugins" }).fill("matrix");
       await gateway.resolveDeferred("plugins.catalog.browse", { items: [matrixDiscoveryPlugin] });
       const cards = catalog.locator(".plugin-catalog-grid--results .plugin-catalog-card");
-      await expect.poll(() => cards.count()).toBe(1);
+      // The older category response must not replace loading for the newer search intent.
+      const loading = catalog.getByRole("status", {
+        name: "Loading ClawHub plugins…",
+        exact: true,
+      });
+      await loading.waitFor();
+      expect(await cards.count()).toBe(0);
       expect(await gateway.getRequests("plugins.catalog.browse", { query: "matrix" })).toEqual([]);
       const duringDebounce = await labels();
       await page.clock.runFor(250);
@@ -83,6 +89,8 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         pageSize: 100,
         searchSource: "openclaw-control-ui",
       });
+      expect(await loading.isVisible()).toBe(true);
+      expect(await labels()).toEqual(categories);
       await gateway.resolveDeferred("plugins.catalog.browse", {
         items: [
           {
@@ -92,6 +100,8 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         ],
       });
       await catalog.getByRole("link", { name: "Matrix search result", exact: true }).waitFor();
+      expect(await cards.count()).toBe(1);
+      expect(await loading.count()).toBe(0);
       if (proofDir) {
         expect(await page.locator(".community-invite-card").count()).toBe(0);
         await page.screenshot({

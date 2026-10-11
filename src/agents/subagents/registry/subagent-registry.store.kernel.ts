@@ -1,6 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { Updateable } from "kysely";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../infra/kysely-sync.js";
+import { toUSVString } from "node:util";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  sqliteStringSet,
+} from "../../../infra/kysely-sync.js";
 import { parseSqliteTableDefinition } from "../../../infra/sqlite-schema-contract-assembly.js";
 import {
   getAdmittedSqliteSchemaFacts,
@@ -13,13 +17,13 @@ import { ensureColumn } from "../../../state/openclaw-state-db-schema-helpers.js
 import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
 import { subagentRunRowVersion, type SubagentRunSqliteRow } from "./subagent-registry.store.row.js";
 
-type SubagentRunsTable = OpenClawStateKyselyDatabase["subagent_runs"];
 type SubagentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "subagent_runs">;
-export type BoundSubagentRunRecord = SubagentRunSqliteRow;
+// Eight bound columns per row keep each statement within 1,024 parameters.
+const MAX_SUBAGENT_UPSERT_ROWS = 128;
 
 export type SubagentRegistryWrite = {
   writeId: string;
-  values: readonly BoundSubagentRunRecord[];
+  values: readonly SubagentRunSqliteRow[];
   deleteRunIds: readonly string[];
   versions: readonly { runId: string; version: string | null }[];
   terminalEvents?: readonly Pick<
@@ -37,14 +41,21 @@ export function conflictingSubagentRunVersions(
   database: OpenClawStateDatabase,
   versions: SubagentRegistryWrite["versions"],
 ): string[] {
+  if (versions.length === 0) {
+    return [];
+  }
   const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(database.db);
-  return versions.flatMap(({ runId, version }) => {
-    const row = executeSqliteQuerySync(
-      database.db,
-      stateDb.selectFrom("subagent_runs").selectAll().where("run_id", "=", runId),
-    ).rows[0];
-    return subagentRunRowVersion(row) === version ? [] : [runId];
-  });
+  const rows = executeSqliteQuerySync(
+    database.db,
+    stateDb
+      .selectFrom("subagent_runs")
+      .selectAll()
+      .where("run_id", "in", sqliteStringSet(versions.map(({ runId }) => runId))),
+  ).rows;
+  const current = new Map(rows.map((row) => [row.run_id, subagentRunRowVersion(row)]));
+  return versions.flatMap(({ runId, version }) =>
+    (current.get(toUSVString(runId)) ?? null) === version ? [] : [runId],
+  );
 }
 
 const parentStoreSchemas = new WeakMap<SqliteSchemaFacts, boolean>();
@@ -64,57 +75,36 @@ export function hasParentStoreColumns(db: DatabaseSync): boolean {
   return present;
 }
 
-/** Upserts a prebound run on the exact supplied shared-state handle. */
-export function upsertSubagentRunRowInDatabase(
-  database: OpenClawStateDatabase,
-  row: BoundSubagentRunRecord,
-): void {
-  if (!hasParentStoreColumns(database.db)) {
-    ensureColumn(database.db, "subagent_runs", "requester_store_path TEXT");
-    ensureColumn(database.db, "subagent_runs", "controller_store_path TEXT");
-  }
-  const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(database.db);
-  executeSqliteQuerySync(
-    database.db,
-    stateDb
-      .insertInto("subagent_runs")
-      .values(row)
-      .onConflict((conflict) =>
-        conflict.column("run_id").doUpdateSet(subagentRunRecordToSqliteUpdate(row)),
-      ),
-  );
-}
-
-/** Deletes one run on the exact supplied shared-state handle. */
-export function deleteSubagentRunRowInDatabase(
-  database: OpenClawStateDatabase,
-  runId: string,
-): void {
-  executeSqliteQuerySync(
-    database.db,
-    getNodeSqliteKysely<SubagentRegistryDatabase>(database.db)
-      .deleteFrom("subagent_runs")
-      .where("run_id", "=", runId),
-  );
-}
-
-function subagentRunRecordToSqliteUpdate(
-  values: BoundSubagentRunRecord,
-): Updateable<SubagentRunsTable> {
-  const { run_id: _runId, ...update } = values;
-  return update;
-}
-
 /** Applies selected row changes inside the caller's transaction. */
 export function writeSubagentRunValuesInDatabase(
   database: OpenClawStateDatabase,
-  values: readonly BoundSubagentRunRecord[],
+  values: readonly SubagentRunSqliteRow[],
   deleteRunIds: readonly string[],
 ): void {
   const { db } = database;
   const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);
-  for (const row of values) {
-    upsertSubagentRunRowInDatabase(database, row);
+  if (values.length > 0 && !hasParentStoreColumns(db)) {
+    ensureColumn(db, "subagent_runs", "requester_store_path TEXT");
+    ensureColumn(db, "subagent_runs", "controller_store_path TEXT");
+  }
+  for (let offset = 0; offset < values.length; offset += MAX_SUBAGENT_UPSERT_ROWS) {
+    executeSqliteQuerySync(
+      db,
+      stateDb
+        .insertInto("subagent_runs")
+        .values(values.slice(offset, offset + MAX_SUBAGENT_UPSERT_ROWS))
+        .onConflict((conflict) =>
+          conflict.column("run_id").doUpdateSet((eb) => ({
+            child_session_key: eb.ref("excluded.child_session_key"),
+            controller_session_key: eb.ref("excluded.controller_session_key"),
+            requester_session_key: eb.ref("excluded.requester_session_key"),
+            requester_store_path: eb.ref("excluded.requester_store_path"),
+            controller_store_path: eb.ref("excluded.controller_store_path"),
+            created_at: eb.ref("excluded.created_at"),
+            payload_json: eb.ref("excluded.payload_json"),
+          })),
+        ),
+    );
   }
   if (deleteRunIds.length > 0) {
     executeSqliteQuerySync(

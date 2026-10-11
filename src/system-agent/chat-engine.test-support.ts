@@ -105,14 +105,12 @@ const tempDirs: string[] = [];
 
 export const sharedVerifiedInferenceConfig = {
   agents: {
-    list: [
-      {
-        id: "main",
-        default: true,
+    entries: {
+      main: {
         agentDir: "/tmp/openclaw-openclaw-chat-engine-agent",
         model: "openai/gpt-5.5",
       },
-    ],
+    },
   },
   models: {
     providers: {

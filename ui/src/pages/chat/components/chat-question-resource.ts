@@ -1,6 +1,6 @@
 import { consume } from "@lit/context";
 import type { Question } from "@openclaw/gateway-protocol";
-import { html, nothing, type PropertyValues } from "lit";
+import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { isQuestionThumbnail } from "../../../../../packages/gateway-protocol/src/question-media.js";
@@ -36,10 +36,7 @@ class ChatQuestionResource extends OpenClawLightDomElement {
   private identity = "";
   constructor() {
     super();
-    new SubscriptionsController(this).watch(
-      () => this.context?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
-    );
+    new SubscriptionsController(this).watchStore(() => this.context?.gateway);
   }
   private key() {
     return JSON.stringify([
@@ -51,7 +48,7 @@ class ChatQuestionResource extends OpenClawLightDomElement {
       this.context ? gatewayPresentationScope(this.context.gateway).key : -1,
     ]);
   }
-  override willUpdate(_changed: PropertyValues) {
+  override willUpdate() {
     const identity = this.key();
     if (identity !== this.identity || this.disabled) {
       this.operationAbort?.abort();
@@ -200,12 +197,7 @@ class ChatQuestionResource extends OpenClawLightDomElement {
       ) {
         throw new Error(t("chat.questions.resourceUploadTooLarge"));
       }
-      const payload: Array<{
-        name: string;
-        mimeType: string;
-        content: string;
-        relativePath?: string;
-      }> = [];
+      const payload: Extract<QuestionResourceAction, { action: "upload" }>["files"] = [];
       for (const file of files) {
         const bytes = new Uint8Array(await file.arrayBuffer());
         if (!current()) {

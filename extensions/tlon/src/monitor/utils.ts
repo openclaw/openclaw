@@ -172,14 +172,7 @@ export function isGroupInviteAllowed(
   }).allowed;
 }
 
-function renderInlineItem(
-  item: unknown,
-  options?: {
-    linkMode?: "content-or-href" | "href";
-    allowBreak?: boolean;
-    allowBlockquote?: boolean;
-  },
-): string {
+function renderInlineItem(item: unknown, topLevel = false): string {
   if (typeof item === "string") {
     return item;
   }
@@ -200,14 +193,10 @@ function renderInlineItem(
       return "@all";
     }
   }
-  if (options?.allowBreak && "break" in record) {
+  if (topLevel && "break" in record) {
     return "\n";
   }
-  const inlineCode = readStringField(record, "inline-code");
-  if (inlineCode) {
-    return `\`${inlineCode}\``;
-  }
-  const code = readStringField(record, "code");
+  const code = readStringField(record, "inline-code") || readStringField(record, "code");
   if (code) {
     return `\`${code}\``;
   }
@@ -215,7 +204,7 @@ function renderInlineItem(
   const linkHref = link ? readStringField(link, "href") : undefined;
   if (link && linkHref) {
     const linkContent = readStringField(link, "content");
-    return options?.linkMode === "href" ? linkHref : linkContent || linkHref;
+    return topLevel ? linkHref : linkContent || linkHref;
   }
   if (Array.isArray(record.bold)) {
     return `**${extractInlineText(record.bold)}**`;
@@ -226,7 +215,7 @@ function renderInlineItem(
   if (Array.isArray(record.strike)) {
     return `~~${extractInlineText(record.strike)}~~`;
   }
-  if (options?.allowBlockquote && Array.isArray(record.blockquote)) {
+  if (topLevel && Array.isArray(record.blockquote)) {
     return `> ${extractInlineText(record.blockquote)}`;
   }
   return "";
@@ -237,7 +226,7 @@ function extractInlineText(items: readonly unknown[]): string {
 }
 
 export function extractMessageText(content: unknown): string {
-  if (!content || !Array.isArray(content)) {
+  if (!Array.isArray(content)) {
     return "";
   }
 
@@ -249,15 +238,7 @@ export function extractMessageText(content: unknown): string {
       }
 
       if (Array.isArray(verseRecord.inline)) {
-        return verseRecord.inline
-          .map((item) =>
-            renderInlineItem(item, {
-              linkMode: "href",
-              allowBreak: true,
-              allowBlockquote: true,
-            }),
-          )
-          .join("");
+        return verseRecord.inline.map((item) => renderInlineItem(item, true)).join("");
       }
 
       const block = asNullableRecord(verseRecord.block);
@@ -283,8 +264,7 @@ export function extractMessageText(content: unknown): string {
         const header = asNullableRecord(block.header);
         if (header) {
           const headerContent = Array.isArray(header.content) ? header.content : [];
-          const text =
-            headerContent.map((item) => (typeof item === "string" ? item : "")).join("") || "";
+          const text = headerContent.map((item) => (typeof item === "string" ? item : "")).join("");
           return `\n## ${text}\n`;
         }
 
@@ -292,7 +272,6 @@ export function extractMessageText(content: unknown): string {
         if (cite) {
           const chanCite = asNullableRecord(cite.chan);
 
-          // ChanCite - reference to a channel message
           if (chanCite) {
             const nest = readStringField(chanCite, "nest");
             const where = readStringField(chanCite, "where");
@@ -305,13 +284,11 @@ export function extractMessageText(content: unknown): string {
             return `\n> [quoted from ${nest}]\n`;
           }
 
-          // GroupCite - reference to a group
           const group = readStringField(cite, "group");
           if (group) {
             return `\n> [ref: group ${group}]\n`;
           }
 
-          // DeskCite - reference to an app/desk
           const desk = asNullableRecord(cite.desk);
           if (desk) {
             const flag = readStringField(desk, "flag");
@@ -320,7 +297,6 @@ export function extractMessageText(content: unknown): string {
             }
           }
 
-          // BaitCite - reference with group+graph context
           const bait = asNullableRecord(cite.bait);
           if (bait) {
             const graph = readStringField(bait, "graph");

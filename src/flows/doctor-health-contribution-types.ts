@@ -2,6 +2,7 @@ import type { RetiredAuthProfileCleanupPlan } from "../commands/doctor-auth-lega
 import type { probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import type { DoctorConfigReferenceSource } from "../commands/doctor/shared/config-flow-steps.js";
+import type { ProviderRename } from "../commands/doctor/shared/provider-rename.js";
 import type { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
@@ -16,7 +17,6 @@ import type { AgentDatabaseAdmissionRefusal } from "../state/agent-database-admi
 import type { DoctorUpdateBudget, DoctorUpdateWork } from "./doctor-update-budget.js";
 import type { DoctorHealthCheck } from "./health-check-runner-types.js";
 import type { HealthCheckContext } from "./health-checks.js";
-import type { FlowContribution } from "./types.js";
 
 type DoctorConfigResult = {
   cfg: OpenClawConfig;
@@ -49,6 +49,8 @@ type DoctorConfigResult = {
   openAICodexAuthProfileIdMap?: ReadonlyMap<string, string>;
   /** Transient pre-retirement alias/default interpretation; current config owns auth and routes. */
   retiredModelRefConfig?: Pick<OpenClawConfig, "agents" | "models">;
+  /** Matched source providers whose references must move before config publication. */
+  providerRenames?: readonly ProviderRename[];
   runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
   invalidatePluginMetadataSnapshot?: () => void;
   stateMigrationStepReceipts?: LegacyStateMigrationStepReceipt[];
@@ -65,6 +67,8 @@ export type DoctorHealthFlowContext = {
   cfgForPersistence: OpenClawConfig;
   /** The finalized config-flow candidate crossed the atomic writer boundary. */
   configResultWriteCommitted?: boolean;
+  /** External config edits are advisory; dependent cleanup still requires persistence. */
+  externalConfigRepairsPending?: boolean;
   /** The requested config write was refused; later repairs must not consume its candidate. */
   configWriteRefusal?: "validation" | "cron-owner-safety" | "include-ownership" | "config-conflict";
   /** A post-commit failure is terminal for this context; retry needs a fresh inspected snapshot. */
@@ -104,9 +108,9 @@ export type DoctorHealthCheckContext = HealthCheckContext & {
   readonly deferInspectionDisposal?: (dispose: () => Promise<void>) => void;
 };
 
-export type DoctorHealthContribution = FlowContribution & {
-  kind: "core";
-  surface: "health";
+export type DoctorHealthContribution = {
+  id: string;
+  label: string;
   required?: true;
   /** Diagnostics with no update migration or readiness dependency stay in standalone Doctor. */
   updateWork?: DoctorUpdateWork;
@@ -117,6 +121,4 @@ export type DoctorHealthContribution = FlowContribution & {
 
 export type DoctorContributionHealthCheck = Omit<DoctorHealthCheck, "id" | "kind" | "source"> & {
   readonly id?: string;
-  readonly kind?: "core";
-  readonly source?: string;
 };

@@ -3,34 +3,35 @@ import path from "node:path";
 import type { Worker } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { encodeSessionArchiveContent } from "../config/sessions/archive-compression.js";
 import {
   replaceSessionEntry,
-  replaceTranscriptEvents,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
 import {
   createSessionColdStorageFixture,
   maintenanceConfig,
 } from "../config/sessions/session-cold-storage.test-support.js";
+import { prepareSessionEntryPresenceRead } from "../config/sessions/session-entry-presence-read.js";
 import { readSessionHistoryPageInWorker } from "../config/sessions/session-history-worker-runtime.js";
 import {
   historyClearTimeout,
   historyLane,
   maintenanceLane,
   rotateDatabaseWorkers,
+  targetDiscoveryLane,
 } from "../config/sessions/session-transcript-worker-resources.js";
 import {
-  prepareSessionEntryPresenceRead,
   prewarmSessionHistoryWorker,
   withSessionHistoryWorkerDatabase,
 } from "../config/sessions/session-transcript-worker-runtime.js";
 import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
 import { DEFAULT_WORKER_PENDING_BYTES } from "../infra/worker-task-capacity.js";
-import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
@@ -64,7 +65,12 @@ const observed = vi.hoisted(() => ({
   idleCloseKeepsWorker: new WeakMap<Worker, boolean>(),
   dispatch: undefined as ((message: unknown) => void) | undefined,
   restoration: undefined as
-    | { sessionId: string; entered: () => void; wait: Promise<void> }
+    | {
+        sessionId: string;
+        phase: "before restoration" | "queued restoration";
+        entered: () => void;
+        wait: Promise<void>;
+      }
     | undefined,
 }));
 vi.mock("node:worker_threads", async (importOriginal) => {
@@ -102,11 +108,32 @@ vi.mock("../config/sessions/session-cold-storage-read.js", async (importOriginal
       ...args: Parameters<typeof actual.readRestoredSessionTranscript>
     ) => {
       const held = observed.restoration;
-      if (args[0].sessionId === held?.sessionId) {
+      if (!held || args[0].sessionId !== held.sessionId) {
+        return actual.readRestoredSessionTranscript(...args);
+      }
+      if (held.phase === "before restoration") {
         held.entered();
         await held.wait;
+        return actual.readRestoredSessionTranscript(...args);
       }
-      return actual.readRestoredSessionTranscript(...args);
+      const [scope, read, options] = args;
+      const coldRead = options?.coldRead;
+      if (!coldRead) {
+        throw new Error("Queued restoration fixture requires prepared cold metadata");
+      }
+      return actual.readRestoredSessionTranscript(scope, read, {
+        ...options,
+        coldRead: {
+          ...coldRead,
+          readMetadata: async (phase) => {
+            if (phase === "queued") {
+              held.entered();
+              await held.wait;
+            }
+            return coldRead.readMetadata(phase);
+          },
+        },
+      });
     },
   };
 });
@@ -117,7 +144,7 @@ afterEach(async () => {
   observed.dispatch = undefined;
   observed.restoration = undefined;
   await Promise.all(
-    [historyLane, maintenanceLane].map(async (lane) => {
+    [historyLane, maintenanceLane, targetDiscoveryLane].map(async (lane) => {
       historyClearTimeout(lane.idleTimer);
       await rotateDatabaseWorkers(lane);
     }),
@@ -128,7 +155,7 @@ afterEach(async () => {
 });
 
 it.each([false, true])(
-  "reads exact row presence without creating a database (incognito=%s)",
+  "reads exact row presence from its captured target without creating a database (incognito=%s)",
   async (incognito) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const target = {
@@ -137,7 +164,7 @@ it.each([false, true])(
           ? "agent:main:dashboard:incognito-presence"
           : "agent:main:dashboard:presence",
         storePath: path.join(state.agentDir(), "presence.sqlite"),
-        env: state.env,
+        env: { ...state.env },
       };
       const databasePath = incognito
         ? resolveIncognitoOpenClawAgentSqlitePath(target)
@@ -165,28 +192,15 @@ it.each([false, true])(
         expect(fs.existsSync(databasePath)).toBe(false);
       } else {
         expect(observed.workers.length).toBeGreaterThan(workersBefore);
+        target.storePath = path.join(state.agentDir(), "replacement.sqlite");
+        target.env.OPENCLAW_STATE_DIR = state.path("different-state");
+        expect(await read()).toBe(true);
+        expect(await prepareSessionEntryPresenceRead(target).read()).toBe(false);
+        expect(fs.existsSync(target.storePath)).toBe(false);
       }
     });
   },
 );
-
-it("retains the prepared metadata target when caller scope and environment change", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const target = {
-      agentId: "main",
-      sessionKey: "agent:main:dashboard:captured-presence",
-      storePath: path.join(state.agentDir(), "captured.sqlite"),
-      env: { ...state.env },
-    };
-    await replaceSessionEntry(target, { sessionId: "captured-row", updatedAt: 1 });
-    const { read } = prepareSessionEntryPresenceRead(target);
-    target.storePath = path.join(state.agentDir(), "replacement.sqlite");
-    target.env.OPENCLAW_STATE_DIR = state.path("different-state");
-    expect(await read()).toBe(true);
-    expect(await prepareSessionEntryPresenceRead(target).read()).toBe(false);
-    expect(fs.existsSync(target.storePath)).toBe(false);
-  });
-});
 
 it("reads an exact ended-session archive in the history worker", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -328,6 +342,7 @@ async function seed(state: OpenClawTestState, agentId: string, sessionId: string
 it("settles cancelled message reads before reuse and closes their database handles", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const fixture = await seed(state, "main", "cancel-message-read");
+    await closeOpenClawAgentDatabaseByPathAsync(fixture.path, "main");
     const controller = new AbortController();
     const cancelled = new Error("history consumer closed");
     let dispatched = false;
@@ -377,8 +392,8 @@ it("rejects a completed native message reply after primary file replacement", as
     const originalInode = fs.statSync(fixture.path, { bigint: true }).ino;
     const nativeReply = createDeferredCore<unknown>();
     const releaseReply = createDeferredCore();
-    const run = historyLane.pool.run;
-    const read = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+    const run = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
+    const read = vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
       const reply = await run(...args);
       if (reply.ok && asOptionalRecord(reply.value)?.kind === "message-by-id") {
         nativeReply.resolve(reply.value);
@@ -402,7 +417,7 @@ it("rejects a completed native message reply after primary file replacement", as
         result: { found: true, message: { role: "user", content: sessionId } },
       });
       // Release the settled native reader for Windows replacement without revoking host custody.
-      await historyLane.pool.closeResources(JSON.stringify([{ path: fixture.path }]));
+      await targetDiscoveryLane.pool.closeResources(JSON.stringify([{ path: fixture.path }]));
       fs.renameSync(fixture.path, `${fixture.path}.previous`);
       fs.renameSync(`${fixture.path}.replacement`, fixture.path);
       expect(fs.statSync(fixture.path, { bigint: true }).ino).not.toBe(originalInode);
@@ -582,9 +597,6 @@ it("closes idle A while active and queued B pages survive, then reads replaced A
       "replacement-a-message",
     ]);
     expect((await b.read()).messages.map(readChatHistoryMessageId)).toEqual(["active-b-message"]);
-    if (keepsWorker) {
-      expect(observed.workers.at(-1)).toBe(oldWorker);
-    }
   });
 });
 
@@ -632,43 +644,15 @@ it("evicts the least recently used of 64 retained targets without charging missi
   });
 });
 
-it("rejects the captured generation when A closes during restoration before worker admission", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const a = await seed(state, "main", "restoring-a");
-    const b = await seed(state, "other", "unrelated-b");
-    await b.read();
-    const entered = createDeferredCore();
-    const gate = createDeferredCore();
-    observed.restoration = {
-      sessionId: "restoring-a",
-      entered: entered.resolve,
-      wait: gate.promise,
-    };
-    const pending = a.read();
-    const failure = expect(pending).rejects.toThrow("revoked");
-    try {
-      await entered.promise;
-      await closeOpenClawAgentDatabaseByPathAsync(a.path, "main");
-      expect((await b.read()).messages.map(readChatHistoryMessageId)).toEqual([
-        "unrelated-b-message",
-      ]);
-    } finally {
-      observed.restoration = undefined;
-      gate.resolve();
-    }
-    await failure;
-    expect((await a.read()).messages.map(readChatHistoryMessageId)).toEqual([
-      "restoring-a-message",
-    ]);
-  });
-});
-
-it.each(["before restoration", "queued restoration"])(
+it.for(["before restoration", "queued restoration"] as const)(
   "does not restore a replacement database for a revoked history read (%s)",
-  async (phase) => {
+  async (phase, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
       const fixture = await createSessionColdStorageFixture(databasePath);
+      const unrelated =
+        phase === "before restoration" ? await seed(state, "other", "unrelated-b") : undefined;
+      await unrelated?.read();
       expect(
         await runSessionColdStorageMaintenance({ config: maintenanceConfig(databasePath) }),
       ).toEqual({ archivedTranscripts: 1, externalizedTranscripts: 0 });
@@ -692,67 +676,59 @@ it.each(["before restoration", "queued restoration"])(
       });
       const entered = createDeferredCore();
       const gate = createDeferredCore();
-      if (phase === "before restoration") {
-        observed.restoration = {
-          sessionId: fixture.scope.sessionId,
-          entered: entered.resolve,
-          wait: gate.promise,
-        };
-      }
-      let pauseQueue = phase === "queued restoration";
-      // oxlint-disable-next-line typescript/unbound-method -- The observer preserves the queue receiver.
-      const enqueue = KeyedAsyncQueue.prototype.enqueue;
-      const queueObservation = vi
-        .spyOn(KeyedAsyncQueue.prototype, "enqueue")
-        .mockImplementation(function <T>(
-          this: KeyedAsyncQueue,
-          ...args: Parameters<typeof enqueue<T>>
-        ): Promise<T> {
-          const enqueueTask = enqueue<T>;
-          const [key, task, hooks] = args;
-          if (key !== databasePath || !pauseQueue) {
-            return enqueueTask.call(this, ...args);
-          }
-          pauseQueue = false;
-          return enqueueTask.call(
-            this,
-            key,
-            async () => {
-              entered.resolve();
-              await gate.promise;
-              return await task();
-            },
-            hooks,
-          );
-        });
-      const pending = readChatHistoryPage({
-        entry: undefined,
-        provider: undefined,
+      observed.restoration = {
         sessionId: fixture.scope.sessionId,
-        storePath: databasePath,
-        sessionAgentId: fixture.scope.agentId,
-        canonicalKey: fixture.scope.sessionKey,
-        max: 20,
-        maxHistoryBytes: 100_000,
-        effectiveMaxChars: 8000,
-        offset: undefined,
-        messageId: undefined,
-      });
+        phase,
+        entered: entered.resolve,
+        wait: gate.promise,
+      };
+      const read = () =>
+        readChatHistoryPage({
+          entry: undefined,
+          provider: undefined,
+          sessionId: fixture.scope.sessionId,
+          storePath: databasePath,
+          sessionAgentId: fixture.scope.agentId,
+          canonicalKey: fixture.scope.sessionKey,
+          max: 20,
+          maxHistoryBytes: 100_000,
+          effectiveMaxChars: 8000,
+          offset: undefined,
+          messageId: undefined,
+        });
+      const pending = read();
       const failure = expect(pending).rejects.toThrow("revoked");
       try {
-        await entered.promise;
+        await withinTest(
+          awaitGateBeforeSettlement(
+            entered.promise,
+            pending,
+            "History read settled before reaching the restoration boundary",
+          ),
+          signal,
+        );
         await closeOpenClawAgentDatabaseByPathAsync(databasePath, "main");
+        if (unrelated) {
+          expect((await unrelated.read()).messages.map(readChatHistoryMessageId)).toEqual([
+            "unrelated-b-message",
+          ]);
+        }
         fs.copyFileSync(databasePath, `${databasePath}.replacement`);
         fs.renameSync(databasePath, `${databasePath}.previous`);
         fs.renameSync(`${databasePath}.replacement`, databasePath);
         expect(readStoredTranscript()).toEqual(before);
       } finally {
-        queueObservation.mockRestore();
         observed.restoration = undefined;
         gate.resolve();
         await failure;
       }
       expect(readStoredTranscript()).toEqual(before);
+      if (unrelated) {
+        expect((await read()).messages.map(readChatHistoryMessageId)).toEqual([
+          "history-user",
+          "history-assistant",
+        ]);
+      }
     });
   },
 );

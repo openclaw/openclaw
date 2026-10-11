@@ -1,8 +1,7 @@
 package ai.openclaw.app
 
 internal fun String.takeCodePoints(limit: Int): String {
-  val count = codePointCount(0, length)
-  if (count <= limit) return this
+  if (codePointCount(0, length) <= limit) return this
   return substring(0, offsetByCodePoints(0, limit))
 }
 

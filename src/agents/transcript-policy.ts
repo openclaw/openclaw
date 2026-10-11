@@ -4,6 +4,7 @@
  * history sanitization, tool IDs, thinking blocks, and turn validation align.
  */
 import { isDirectAnthropicModel } from "@openclaw/ai/internal/anthropic";
+import { supportsNativeOpenAIResponsesEndpoint } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import { supportsClaudeInHistorySystemMessages } from "@openclaw/llm-core";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -45,21 +46,9 @@ function isOpenAiResponsesCompatibleApi(modelApi?: string | null): boolean {
   );
 }
 
-function isClaudeFamilyModelId(modelId?: string | null): boolean {
-  const id = normalizeLowercaseStringOrEmpty(modelId);
-  return /(?:^|[./:_-])claude(?:$|[./:_-])/.test(id);
-}
-
 function modelDisablesReasoningEffort(model?: ProviderRuntimeModel): boolean {
   const compat = model?.compat as { supportsReasoningEffort?: boolean } | undefined;
   return compat?.supportsReasoningEffort === false;
-}
-
-function shouldPreserveReasoningContentReplay(params: {
-  modelId?: string | null;
-  model?: ProviderRuntimeModel;
-}): boolean {
-  return params.model?.reasoning === true || requiresReasoningContentReplay(params.modelId);
 }
 
 /**
@@ -95,7 +84,8 @@ function buildUnownedProviderTransportReplayFallback(params: {
   }
 
   const modelId = normalizeLowercaseStringOrEmpty(params.modelId);
-  const isClaudeOpenAiResponses = isOpenAiResponses && isClaudeFamilyModelId(modelId);
+  const isClaudeOpenAiResponses =
+    isOpenAiResponses && /(?:^|[./:_-])claude(?:$|[./:_-])/.test(modelId);
   return {
     ...(isGoogle ? { sanitizeMode: "full" as const } : {}),
     sanitizeToolCallIds: true,
@@ -109,7 +99,10 @@ function buildUnownedProviderTransportReplayFallback(params: {
         }
       : {}),
     ...(isStrictOpenAiCompatible
-      ? { dropReasoningFromHistory: !shouldPreserveReasoningContentReplay(params) }
+      ? {
+          dropReasoningFromHistory:
+            params.model?.reasoning !== true && !requiresReasoningContentReplay(params.modelId),
+        }
       : {}),
     ...(isGoogle || isStrictOpenAiCompatible
       ? { applyAssistantFirstOrderingFix: true, validateGeminiTurns: true }
@@ -156,14 +149,14 @@ function requiresReasoningContentReplay(modelId: string | null | undefined): boo
 
 function mergeTranscriptPolicy(
   policy: ProviderReplayPolicy | undefined,
-  basePolicy: TranscriptPolicy = DEFAULT_TRANSCRIPT_POLICY,
+  modelApi: string | null | undefined,
 ): TranscriptPolicy {
-  if (!policy) {
-    return basePolicy;
-  }
-
-  const merged = { ...basePolicy };
-  for (const [key, value] of Object.entries(policy)) {
+  const merged = {
+    ...DEFAULT_TRANSCRIPT_POLICY,
+    // Exact-entry caches need earlier temporal carriers to remain in the request prefix.
+    appendOnlyRuntimeContext: modelApi === "openai-completions" || modelApi === "ollama",
+  };
+  for (const [key, value] of Object.entries(policy ?? {})) {
     if (value != null) {
       Object.assign(merged, {
         [key === "applyAssistantFirstOrderingFix" ? "applyGoogleTurnOrdering" : key]: value,
@@ -174,48 +167,6 @@ function mergeTranscriptPolicy(
 }
 
 const transcriptPolicyCache = new WeakMap<OpenClawConfig, Map<string, TranscriptPolicy>>();
-
-function canCacheTranscriptPolicy(params: {
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): params is { config: OpenClawConfig; env?: NodeJS.ProcessEnv } {
-  if (!params.config) {
-    return false;
-  }
-  return !params.env || params.env === process.env;
-}
-
-function resolveTranscriptPolicyCacheKey(params: {
-  modelApi?: string | null;
-  provider: string;
-  modelId?: string | null;
-  model?: ProviderRuntimeModel;
-  config: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  directApiKey?: boolean;
-}): string {
-  return JSON.stringify({
-    provider: params.provider,
-    directApiKey: params.directApiKey === true,
-    baseUrl:
-      params.model?.baseUrl?.trim() || (params.env ?? process.env).ANTHROPIC_BASE_URL?.trim() || "",
-    modelApi: params.modelApi ?? "",
-    modelId: params.modelId ?? "",
-    canonicalModelId:
-      typeof params.model?.params?.canonicalModelId === "string"
-        ? params.model.params.canonicalModelId
-        : "",
-    dropsThinkingForReasoningCompat: modelDisablesReasoningEffort(params.model),
-    preservesReasoningContentReplay: params.model?.reasoning === true,
-    workspaceDir: params.workspaceDir ?? "",
-    pluginControlPlane: resolvePluginControlPlaneFingerprint({
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-    }),
-  });
-}
 
 /** Resolve and cache the effective replay policy for a provider/model/config tuple. */
 export function resolveTranscriptPolicy(params: {
@@ -230,9 +181,30 @@ export function resolveTranscriptPolicy(params: {
   directApiKey?: boolean;
 }): TranscriptPolicy {
   const provider = normalizeProviderId(params.provider ?? "");
-  const cacheConfig = canCacheTranscriptPolicy(params) ? params.config : undefined;
+  const cacheConfig = !params.env || params.env === process.env ? params.config : undefined;
   const cacheKey = cacheConfig
-    ? resolveTranscriptPolicyCacheKey({ ...params, provider, config: cacheConfig })
+    ? JSON.stringify({
+        provider,
+        directApiKey: params.directApiKey === true,
+        baseUrl:
+          params.model?.baseUrl?.trim() ||
+          (params.env ?? process.env).ANTHROPIC_BASE_URL?.trim() ||
+          "",
+        modelApi: params.modelApi ?? "",
+        modelId: params.modelId ?? "",
+        canonicalModelId:
+          typeof params.model?.params?.canonicalModelId === "string"
+            ? params.model.params.canonicalModelId
+            : "",
+        dropsThinkingForReasoningCompat: modelDisablesReasoningEffort(params.model),
+        preservesReasoningContentReplay: params.model?.reasoning === true,
+        workspaceDir: params.workspaceDir ?? "",
+        pluginControlPlane: resolvePluginControlPlaneFingerprint({
+          config: cacheConfig,
+          workspaceDir: params.workspaceDir,
+          env: params.env,
+        }),
+      })
     : undefined;
   if (cacheConfig && cacheKey) {
     const cached = transcriptPolicyCache.get(cacheConfig)?.get(cacheKey);
@@ -260,28 +232,28 @@ export function resolveTranscriptPolicy(params: {
     modelApi: params.modelApi,
     model: params.model,
     inHistorySystemUpdates:
-      params.directApiKey === true &&
-      params.modelApi === "anthropic-messages" &&
-      isDirectAnthropicModel({ provider, baseUrl: params.model?.baseUrl }, params.env) &&
-      supportsClaudeInHistorySystemMessages({
-        id: params.modelId ?? undefined,
-        params: params.model?.params,
-      }),
+      supportsNativeOpenAIResponsesEndpoint({
+        provider,
+        api: params.modelApi ?? "",
+        baseUrl: params.model?.baseUrl,
+      }) ||
+      (params.directApiKey === true &&
+        params.modelApi === "anthropic-messages" &&
+        isDirectAnthropicModel({ provider, baseUrl: params.model?.baseUrl }, params.env) &&
+        supportsClaudeInHistorySystemMessages({
+          id: params.modelId ?? undefined,
+          params: params.model?.params,
+        })),
   };
 
-  // Once a provider adopts the replay-policy hook, replay policy should come
-  // from the plugin, not from transport-family defaults in core.
+  // Provider hooks replace the fallback and can override the shared retention default.
   const buildReplayPolicy = runtimePlugin?.buildReplayPolicy;
-  const policy = buildReplayPolicy
-    ? mergeTranscriptPolicy(buildReplayPolicy(context) ?? undefined)
-    : mergeTranscriptPolicy(
-        buildUnownedProviderTransportReplayFallback({
-          modelApi: params.modelApi,
-          modelId: params.modelId,
-          model: params.model,
-          inHistorySystemUpdates: context.inHistorySystemUpdates,
-        }),
-      );
+  const policy = mergeTranscriptPolicy(
+    buildReplayPolicy
+      ? (buildReplayPolicy(context) ?? undefined)
+      : buildUnownedProviderTransportReplayFallback(context),
+    params.modelApi,
+  );
   if (policy.inHistorySystemUpdates) {
     policy.inHistorySystemUpdates = context.inHistorySystemUpdates;
     policy.appendOnlyRuntimeContext ||= context.inHistorySystemUpdates;

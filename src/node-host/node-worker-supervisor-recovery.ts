@@ -1,10 +1,14 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { NodeWorkerCapacity } from "./node-worker-capacity.js";
 import type { NodeWorkerContainerLifecycle } from "./node-worker-container-lifecycle.js";
 import type { NodeWorkerLaunchReceipt, NodeWorkerLaunchStore } from "./node-worker-launch-store.js";
-import { inspectNodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
+import {
+  getNodeWorkerBootIdentity,
+  inspectNodeWorkerProcessIdentity,
+} from "./node-worker-process-identity.js";
 import {
   NODE_WORKER_STOP_GRACE_MS,
   NODE_WORKER_FORCE_STOP_WAIT_MS,
@@ -87,23 +91,14 @@ export function createNodeWorkerLaunchRecovery(
     if (awaitCleanup) {
       return await recovery.done;
     }
-    let timer: NodeJS.Timeout | undefined;
-    try {
-      const observed = await Promise.race([
-        recovery.done,
-        new Promise<null>((resolve) => {
-          timer = setTimeout(() => resolve(null), NODE_WORKER_STOP_GRACE_MS);
-          timer.unref?.();
-        }),
-      ]);
-      if (observed !== null) {
-        return observed;
-      }
-      recovery.params.notifyCapacity = true;
-      return (await context.store.get(receipt.launchId)) ?? receipt;
-    } finally {
-      clearTimeout(timer);
+    const observed = await raceWithTimeout(recovery.done, NODE_WORKER_STOP_GRACE_MS, () => null, {
+      ref: false,
+    });
+    if (observed !== null) {
+      return observed;
     }
+    recovery.params.notifyCapacity = true;
+    return (await context.store.get(receipt.launchId)) ?? receipt;
   };
 }
 
@@ -136,7 +131,12 @@ async function recoverNodeWorkerLaunch(params: {
   if ((receipt.state !== "pending" && receipt.state !== "running") || !(await stillOwned())) {
     return latest();
   }
-  const previousSupervisor = inspectNodeWorkerProcessIdentity(receipt.supervisor);
+  const bootId = getNodeWorkerBootIdentity();
+  const rebooted = Boolean(receipt.bootId && bootId && receipt.bootId !== bootId);
+  // A different boot proves native descendants extinct; containers still need their owner.
+  const previousSupervisor = rebooted
+    ? "dead"
+    : inspectNodeWorkerProcessIdentity(receipt.supervisor);
   if (previousSupervisor !== "dead" && previousSupervisor !== "reused") {
     return latest();
   }
@@ -156,22 +156,18 @@ async function recoverNodeWorkerLaunch(params: {
     if (!(await stillOwned())) {
       return latest();
     }
-    if (containerState === "unknown") {
+    if (containerState === "unknown" || containerState === "reused") {
       if (params.state === "cancelled") {
         return latest();
       }
       throw new Error(
-        `node worker container ${receipt.container.containerId} could not be inspected; restore its ${receipt.container.engine} engine before enabling worker hosting`,
+        containerState === "unknown"
+          ? `node worker container ${receipt.container.containerId} could not be inspected; restore its ${receipt.container.engine} engine before enabling worker hosting`
+          : `node worker launch ${receipt.launchId} lost its container ownership`,
       );
     }
-    if (containerState === "reused") {
-      if (params.state === "cancelled") {
-        return latest();
-      }
-      throw new Error(`node worker launch ${receipt.launchId} lost its container ownership`);
-    }
     await params.containerLifecycle.remove(receipt.container, receipt);
-  } else if (receipt.worker && receipt.workerCleanupMode === "linux-subreaper") {
+  } else if (!rebooted && receipt.worker && receipt.workerCleanupMode === "linux-subreaper") {
     // The surviving owner observes its original IPC parent loss and drains its
     // scope. A replacement has neither child wait ownership nor a retained pidfd:
     // never turn a procfs identity check into permission to signal a numeric PID.
@@ -189,7 +185,7 @@ async function recoverNodeWorkerLaunch(params: {
       );
       return latest();
     }
-  } else if (receipt.worker) {
+  } else if (!rebooted && receipt.worker) {
     const worker = receipt.worker;
     let workerState = inspectOwnedNodeWorkerTree(worker);
     if (workerState === "unknown") {
@@ -267,9 +263,11 @@ async function recoverNodeWorkerLaunch(params: {
           errorText:
             state === "cancelled"
               ? "node worker launch cancelled"
-              : receipt.worker
-                ? "node host stopped before the worker launch completed"
-                : "node host stopped before the worker launch started",
+              : rebooted
+                ? "node host rebooted before the worker launch completed"
+                : receipt.worker
+                  ? "node host stopped before the worker launch completed"
+                  : "node host stopped before the worker launch started",
         },
         params.notifyCapacity,
         {

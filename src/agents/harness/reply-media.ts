@@ -1,11 +1,11 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
-import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
+import type { EmbeddedRunAttemptBase } from "../embedded-agent-runner/run/types.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 
 /** Capture policy before plugin invocation; the supplied reader only provides workspace bytes. */
 export function bindHarnessReplyMedia(params: {
-  attempt: Partial<EmbeddedRunAttemptParams>;
+  attempt: Partial<EmbeddedRunAttemptBase>;
   config?: OpenClawConfig;
   assertActive: () => void;
   signal: AbortSignal;

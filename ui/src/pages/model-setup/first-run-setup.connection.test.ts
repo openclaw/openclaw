@@ -18,26 +18,20 @@ function connection() {
 
 it("keeps the admitted owner pending and observes same-agent roster recovery", () => {
   const previous = connection();
-  const pending = reconcileModelSetupConnection(previous, {
+  const unloaded = {
     ...previous,
     agentId: null,
     selectionPending: true,
     connected: false,
-  });
+  };
+  const pending = reconcileModelSetupConnection(previous, unloaded);
   expect(pending.kind).toBe("pending");
   expect(pending.connection.agentId).toBe("writer");
-  expect(
-    reconcileModelSetupConnection(pending.connection, {
-      ...previous,
-      agentId: null,
-      selectionPending: true,
-      connected: false,
-    }).kind,
-  ).toBe("unchanged");
+  expect(reconcileModelSetupConnection(pending.connection, unloaded).kind).toBe("unchanged");
   expect(reconcileModelSetupConnection(pending.connection, previous).kind).toBe("changed");
 });
 
-it.each(["intent", "gateway", "removed-agent"] as const)(
+it.each(["intent", "gateway", "removed-agent", "authority"] as const)(
   "does not preserve the old owner after %s changes",
   (change) => {
     const previous = connection();
@@ -51,20 +45,16 @@ it.each(["intent", "gateway", "removed-agent"] as const)(
     if (change === "removed-agent") {
       next.selectionPending = false;
     }
+    if (change === "authority") {
+      next.connected = true;
+      next.hello = {
+        ...previous.hello,
+        auth: { ...previous.hello.auth, scopes: ["operator.read"] },
+      };
+    }
     expect(reconcileModelSetupConnection(previous, next)).toEqual({
       kind: "changed",
       connection: next,
     });
   },
 );
-
-it("does not preserve an admitted owner after reconnecting without setup authority", () => {
-  const previous = connection();
-  const next = {
-    ...previous,
-    agentId: null,
-    selectionPending: true,
-    hello: { ...previous.hello, auth: { ...previous.hello.auth, scopes: ["operator.read"] } },
-  };
-  expect(reconcileModelSetupConnection(previous, next).kind).toBe("changed");
-});

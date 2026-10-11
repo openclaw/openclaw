@@ -19,6 +19,7 @@ import {
   CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE,
   hasCanonicalCronDeliveryMode,
 } from "../store/delivery-codec.js";
+import { publishCronJobNames } from "../store/job-name.js";
 import { cronStoreKey } from "../store/key.js";
 import { assertCronStoreCanPersist } from "../store/row-codec.js";
 import {
@@ -441,6 +442,12 @@ export async function persistCronJobMutation(params: {
     source.assertCurrent();
     params.assertCurrent?.();
     source.assertCurrent();
+    if (
+      params.agentId !== undefined &&
+      state.deps.isAgentAvailable?.(params.agentId, undefined, { deletionBlocked: false }) === false
+    ) {
+      throw new Error(describeUnavailableCronAgent(params.agentId));
+    }
   };
   await runCronRuntimeMutation({
     context: source.context,
@@ -461,27 +468,23 @@ export async function persistCronJobMutation(params: {
           : undefined,
     }),
     assertCurrent,
-    prepare(facts) {
-      const assertAvailable = () => {
-        assertCurrent();
-        if (
-          params.agentId !== undefined &&
-          (facts.deletionBlocked ||
-            state.deps.isAgentAvailable?.(params.agentId, undefined, facts) === false)
-        ) {
-          throw new Error(describeUnavailableCronAgent(params.agentId));
-        }
-      };
-      assertAvailable();
-      return { value: { nowMs: state.deps.nowMs() }, assertCurrent: assertAvailable };
-    },
-    publish({ store, jobsFingerprint: committedJobs, runtimeFingerprint: committedRuntime }) {
+    // Config availability may change after dispatch; deletion is checked against worker rows.
+    snapshot: { nowMs: state.deps.nowMs() },
+    publish({
+      store,
+      names,
+      jobsFingerprint: committedJobs,
+      runtimeFingerprint: committedRuntime,
+    }) {
       published = true;
       if (changes.changedIds.size > 0) {
         markCommitted?.();
       }
       const unchanged = getCronJobsStoreRevision(source.storeKey) === observedRevision;
       noteCronJobsStoreCommit(source.storeKey);
+      if (unchanged) {
+        publishCronJobNames(source.storeKey, source.context, names);
+      }
       state.store = store;
       state.storeLoadedAtMs = state.deps.nowMs();
       if (quarantine) {

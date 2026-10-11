@@ -1,11 +1,20 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import type {
+  SessionEntryCurrentCheck,
+  SessionEntriesCurrentCheck,
+} from "../../../config/sessions/session-entry-current.types.js";
+import type {
   PluginStateKeyedStore,
   PluginStateSyncKeyedStore,
 } from "../../../plugin-state/plugin-state-store.js";
+import { sleep } from "../../../utils/sleep.js";
+import {
+  combineNativeSessionBindingAuthority,
+  type NativeSessionBindingAuthority,
+} from "./binding-authority.js";
 
-/** Serializes native binding changes across processes without owning backend policy. */
+/** Legacy adapter for released native binding stores. */
 export function createNativeSessionBindingLeases<TRecord extends NativeSessionBindingRecord>(
   state: NativeSessionBindingStateStore<TRecord>,
   options: NativeSessionBindingLeaseConfig<TRecord>,
@@ -13,7 +22,48 @@ export function createNativeSessionBindingLeases<TRecord extends NativeSessionBi
   if (!state.withCurrent) {
     throw new Error(options.errors.atomicUpdatesRequired);
   }
+  const leases = createNativeSessionBindingLeasesV2(
+    {
+      withCurrent: (authority) => state.withCurrent(authority),
+      assertLeaseCurrent(key, token) {
+        const raw = state.lookup(key);
+        const current = options.readRecord(raw);
+        if (raw !== undefined && !current) {
+          throw options.errors.invalidRow(key);
+        }
+        if (current?.lease?.token !== token || current.lease.expiresAt <= Date.now()) {
+          throw options.errors.lostLease(key);
+        }
+      },
+    },
+    options,
+  );
+  return {
+    ...leases,
+    captureLeaseAssertion(key: string) {
+      const assertCurrent = leases.captureLeaseAssertion(key);
+      assertCurrent();
+      return assertCurrent;
+    },
+  };
+}
+
+/** Worker-owned binding mutations; only final effect guards remain synchronous. */
+export function createNativeSessionBindingLeasesV2<TRecord extends NativeSessionBindingRecord>(
+  state: Pick<NativeSessionBindingStateStoreV2<TRecord>, "withCurrent" | "assertLeaseCurrent">,
+  options: NativeSessionBindingLeaseConfig<TRecord>,
+) {
+  if (!state.withCurrent) {
+    throw new Error(options.errors.atomicUpdatesRequired);
+  }
   const context = new AsyncLocalStorage<Map<string, NativeSessionBindingLeaseOwner>>();
+  const unresolved = new Map<string, { error: Error; custody: unknown }>();
+  const assertSettled = (key: string) => {
+    const blocked = unresolved.get(key);
+    if (blocked) {
+      throw blocked.error;
+    }
+  };
 
   // Prepare data outside SQLite; the worker compares the complete observed row
   // and carries this action's authority through transaction and commit admission.
@@ -25,11 +75,15 @@ export function createNativeSessionBindingLeases<TRecord extends NativeSessionBi
       assertCurrent?: () => void;
     },
     assertCurrent?: () => void,
+    authority?: NativeSessionBindingAuthority,
   ): Promise<boolean> => {
     let assertPreparedCurrent: (() => void) | undefined;
+    const mutationAuthority = await authority?.prepareMutation();
     const store = state.withCurrent({
+      sessionEntryCurrent: mutationAuthority?.sessionEntryCurrent,
       assertCurrent: () => {
         assertCurrent?.();
+        mutationAuthority?.assertCurrent();
         assertPreparedCurrent?.();
       },
     });
@@ -67,9 +121,11 @@ export function createNativeSessionBindingLeases<TRecord extends NativeSessionBi
     ) => { next?: TRecord; result: TResult },
     ttlMs?: number | ((next: TRecord) => number | undefined),
     assertCurrent?: () => void,
+    authority?: NativeSessionBindingAuthority,
   ): Promise<TResult> => {
     const deadline = Date.now() + options.lease.waitMs;
     while (true) {
+      assertSettled(key);
       let busy = false;
       let leaseLost = false;
       let result!: TResult;
@@ -84,6 +140,7 @@ export function createNativeSessionBindingLeases<TRecord extends NativeSessionBi
       const assertOwnerCurrent = () => {
         assertCurrent?.();
         owner?.assertCurrent?.();
+        assertSettled(key);
         if (owner && (owner.phase !== "held" || owner.failure)) {
           throw owner.failure ?? options.errors.lostLease(key);
         }
@@ -130,6 +187,9 @@ export function createNativeSessionBindingLeases<TRecord extends NativeSessionBi
           };
         },
         assertOwnerCurrent,
+        authority || owner?.authority
+          ? combineNativeSessionBindingAuthority(authority, owner?.authority)
+          : undefined,
       );
       if (leaseLost) {
         const failure = options.errors.lostLease(key);
@@ -153,6 +213,7 @@ export function createNativeSessionBindingLeases<TRecord extends NativeSessionBi
     run: () => Promise<TResult>,
     acquisition: NativeSessionBindingLeaseOptions<TRecord>,
   ): Promise<TResult> => {
+    assertSettled(key);
     acquisition.assertCurrent?.();
     const owned = context.getStore();
     const existing = owned?.get(key);
@@ -173,41 +234,60 @@ export function createNativeSessionBindingLeases<TRecord extends NativeSessionBi
       return result;
     }
     const token = randomUUID();
-    const acquired = await transact(
-      key,
-      (current) => {
-        const next = acquisition.prepareLease(current, {
-          token,
-          expiresAt: Date.now() + options.lease.staleMs,
-        });
-        return { result: next !== undefined, next };
-      },
-      undefined,
-      acquisition.assertCurrent,
-    );
-    acquisition.assertCurrent?.();
-    if (!acquired) {
-      throw options.errors.acquisitionRejected(key);
-    }
     const owner: NativeSessionBindingLeaseOwner = {
       token,
       phase: "held",
       assertCurrent: acquisition.assertCurrent,
+      authority: acquisition.authority,
+      renewalPending: () => renewal !== undefined,
+      joinRenewal: async () => {
+        await renewal;
+      },
+      quiesce() {
+        if (renewal || owner.phase !== "held" || owner.failure) {
+          throw owner.failure ?? options.errors.lostLease(key);
+        }
+        owner.phase = "settling";
+      },
+      block(error, custody) {
+        owner.phase = "unknown";
+        owner.failure = error;
+        unresolved.set(key, { error, custody });
+      },
     };
-    const nested = new Map(owned);
-    nested.set(key, owner);
-    // Exact-token renewal keeps bounded native requests serialized while a
-    // replaced owner remains fenced, even when the request outlives one lease.
     let renewal: Promise<void> | undefined;
-    const heartbeat = setInterval(() => {
-      if (!renewal) {
-        renewal = renew(key, owner).finally(() => {
-          renewal = undefined;
-        });
-      }
-    }, options.lease.renewIntervalMs);
-    heartbeat.unref();
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    // Admission can write a token and then fail while releasing its reader.
     try {
+      const acquired = await transact(
+        key,
+        (current) => {
+          const next = acquisition.prepareLease(current, {
+            token,
+            expiresAt: Date.now() + options.lease.staleMs,
+          });
+          return { result: next !== undefined, next };
+        },
+        undefined,
+        acquisition.assertCurrent,
+        acquisition.authority,
+      );
+      acquisition.assertCurrent?.();
+      if (!acquired) {
+        throw options.errors.acquisitionRejected(key);
+      }
+      const nested = new Map(owned);
+      nested.set(key, owner);
+      // Exact-token renewal keeps bounded native requests serialized while a
+      // replaced owner remains fenced, even when the request outlives one lease.
+      heartbeat = setInterval(() => {
+        if (!renewal && owner.phase === "held") {
+          renewal = renew(key, owner).finally(() => {
+            renewal = undefined;
+          });
+        }
+      }, options.lease.renewIntervalMs);
+      heartbeat.unref();
       const result = await context.run(nested, run);
       clearInterval(heartbeat);
       await renewal;
@@ -218,15 +298,16 @@ export function createNativeSessionBindingLeases<TRecord extends NativeSessionBi
       return result;
     } finally {
       clearInterval(heartbeat);
-      owner.phase = "closed";
+      const unknown = owner.phase === "unknown";
+      if (!unknown) {
+        owner.phase = "closed";
+      }
       // A queued renewal must settle before release reads its final row. Its
       // admission guard also refuses after deletion or owner closure.
       await renewal;
-      acquisition.assertCurrent?.();
-      try {
-        await update(
-          key,
-          (raw) => {
+      if (!unknown) {
+        try {
+          await update(key, (raw) => {
             const stored = readRecord(key, raw);
             if (stored?.lease?.token !== token) {
               return {};
@@ -236,13 +317,11 @@ export function createNativeSessionBindingLeases<TRecord extends NativeSessionBi
               next: readRecord(key, released),
               ttlMs: options.releaseTtlMs(key, stored),
             };
-          },
-          acquisition.assertCurrent,
-        );
-      } catch (error) {
-        acquisition.assertCurrent?.();
-        // Crashed or unauthorized owners leave their bounded lease to expire.
-        options.onReleaseFailure?.(key, error);
+          });
+        } catch (error) {
+          // Crashed or unauthorized owners leave their bounded lease to expire.
+          options.onReleaseFailure?.(key, error);
+        }
       }
     }
   };
@@ -287,6 +366,7 @@ export function createNativeSessionBindingLeases<TRecord extends NativeSessionBi
             throw owner.failure ?? options.errors.lostLease(key);
           }
         },
+        owner.authority,
       );
       if (!stored && owner.phase === "held") {
         owner.failure = options.errors.lostLease(key);
@@ -300,18 +380,21 @@ export function createNativeSessionBindingLeases<TRecord extends NativeSessionBi
 
   const captureLeaseAssertion = (key: string): (() => void) => {
     const owner = context.getStore()?.get(key);
+    if (!owner || owner.phase !== "held") {
+      throw options.errors.lostLease(key);
+    }
     const assertCurrent = () => {
-      if (!owner || owner.phase !== "held") {
+      if (owner.phase !== "held") {
         throw options.errors.lostLease(key);
       }
-      const lease = readRecord(key, state.lookup(key))?.lease;
-      if (!lease || lease.token !== owner.token || lease.expiresAt <= Date.now()) {
-        throw options.errors.lostLease(key);
+      try {
+        state.assertLeaseCurrent(key, owner.token);
+      } catch (error) {
+        throw owner.failure ?? error;
       }
     };
     // Host retirement can stop renewal before ownership expires. Cleanup must
     // prove the retained lease itself without requiring the retired host run.
-    assertCurrent();
     return assertCurrent;
   };
 
@@ -321,6 +404,10 @@ export function createNativeSessionBindingLeases<TRecord extends NativeSessionBi
     withLease,
     hasLease: (key: string) => context.getStore()?.has(key) === true,
     owner: (key: string) => context.getStore()?.get(key),
+    assertSettled,
+    block(key: string, error: Error, custody: unknown) {
+      unresolved.set(key, { error, custody });
+    },
   };
 }
 
@@ -328,17 +415,31 @@ type NativeSessionBindingLease = { token: string; expiresAt: number };
 
 export type NativeSessionBindingRecord = { lease?: NativeSessionBindingLease };
 
+/**
+ * @deprecated Use NativeSessionBindingStateStoreV2; removed in the next Plugin SDK major.
+ */
 export type NativeSessionBindingStateStore<TRecord extends NativeSessionBindingRecord> = Pick<
   PluginStateSyncKeyedStore<TRecord>,
   "deleteIf" | "lookup" | "registerIfAbsent"
 > & {
   withCurrent(authority: {
     assertCurrent: () => void;
+    sessionEntryCurrent?: SessionEntryCurrentCheck | SessionEntriesCurrentCheck;
   }): Pick<PluginStateKeyedStore<TRecord, 2>, "observe" | "compareAndApply">;
+};
+
+export type NativeSessionBindingStateStoreV2<TRecord extends NativeSessionBindingRecord> = Pick<
+  PluginStateKeyedStore<TRecord, 2>,
+  "lookup"
+> & {
+  /** Revalidate the exact unexpired lease immediately before a native side effect. */
+  assertLeaseCurrent(key: string, token: string): void;
+  withCurrent: NativeSessionBindingStateStore<TRecord>["withCurrent"];
 };
 
 export type NativeSessionBindingLeaseOptions<TRecord extends NativeSessionBindingRecord> = {
   assertCurrent?: () => void;
+  authority?: NativeSessionBindingAuthority;
   /** Undefined refuses acquisition without changing the current row. */
   prepareLease: (
     current: TRecord | undefined,
@@ -362,13 +463,12 @@ export type NativeSessionBindingLeaseConfig<TRecord extends NativeSessionBinding
 
 type NativeSessionBindingLeaseOwner = {
   token: string;
-  phase: "held" | "deleted" | "closed";
+  phase: "held" | "settling" | "deleted" | "unknown" | "closed";
+  renewalPending(): boolean;
+  joinRenewal(): Promise<void>;
+  quiesce(): void;
+  block(error: Error, custody: unknown): void;
   failure?: Error;
   assertCurrent?: () => void;
+  authority?: NativeSessionBindingAuthority;
 };
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}

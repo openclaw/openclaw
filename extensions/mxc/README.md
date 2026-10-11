@@ -38,7 +38,9 @@ readiness behavior to change as MXC host support matures.
 
 - Plugin id: `mxc`
 - Package: `@openclaw/mxc-sandbox`
-- Minimum OpenClaw host: `2026.6.11`
+- Minimum OpenClaw install host: `2026.6.11`
+- Plugin API host requirement: `2026.9.6` or newer. An older host cannot run
+  the current plugin even if the MXC executor is updated.
 
 ## Plugin config
 
@@ -48,7 +50,7 @@ and out-of-range values fail plugin activation with an actionable error
 
 | Field            | Type                              | Default                                | Notes                                                                                                                                                         |
 | ---------------- | --------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `mxcBinaryPath`  | `string`                          | unset                                  | Non-empty override for the `wxc-exec.exe` executor path; see [SDK-only executor discovery](#supported).                                                       |
+| `mxcBinaryPath`  | `string`                          | unset                                  | Non-empty override for a compatible `wxc-exec.exe` supporting `--probe`; see [Host readiness](#host-readiness).                                               |
 | `containment`    | `"process" \| "processcontainer"` | `"process"`                            | Both currently resolve to Windows ProcessContainer.                                                                                                           |
 | `network`        | `"none" \| "default"`             | `"none"`                               | `"default"` allows outbound network via the `internetClient` capability.                                                                                      |
 | `timeoutSeconds` | `number`                          | unset (baseline default `300` applies) | Must be `>= 1` and `<= 2147000` (the largest Node-safe `setTimeout` delay in whole seconds). Capped to the sandbox policy baseline timeout when both are set. |
@@ -86,7 +88,7 @@ help stay in sync with plugin runtime validation.
 - OpenClaw passes per-run command, environment, and filesystem config to the
   plugin's Node launcher through a short-lived local payload file, and deletes
   that file and its temp directory when the launcher or run finishes.
-- `@microsoft/mxc-sdk@0.7.0` then carries the full base64 request envelope on
+- `@microsoft/mxc-sdk@0.8.0` then carries the full base64 request envelope on
   the native `wxc-exec` process argv. A host user with process-inspection rights
   can observe that command, environment, and policy data while the process is
   running. Do not put secrets in MXC command arguments or environment values
@@ -257,8 +259,33 @@ agents may still use them.
 
 ## Host readiness
 
-IsoEnvBroker must be available on the host OS. The plugin checks this before
-registering the sandbox backend.
+Before registering the sandbox backend, the plugin runs the MXC executor's own
+host check (`wxc-exec --probe`) and requires it to select an isolation tier
+(`base-container`, `appcontainer-bfs`, or `appcontainer-dacl`). It checks the
+same executor it launches, including an `mxcBinaryPath` override. MXC's tier
+degradation warnings are logged but do not block activation. To inspect a host,
+run the executor directly:
+
+```powershell
+& node_modules\@microsoft\mxc-sdk\bin\x64\wxc-exec.exe --probe
+```
+
+Use `bin\arm64` on Arm64 hosts.
+
+An existing `mxcBinaryPath` override must point to an MXC 0.8.0-compatible
+executor that supports `--probe`. An older executor stops plugin activation;
+the plugin cannot safely infer readiness from a Windows service name or check a
+different binary. If the override fails, run that exact executable with
+`--probe` to see its error. Update the override to a compatible executor, or
+remove it to use the `@microsoft/mxc-sdk@0.8.0` executor installed with the
+plugin:
+
+```powershell
+openclaw config unset plugins.entries.mxc.config.mxcBinaryPath
+```
+
+Restart the Gateway after changing the override. If the SDK executor also
+fails `--probe`, address the reported host-readiness error before retrying.
 
 Host preparation is advisory. If directory listing inside the sandbox fails with
 `Access is denied`, run this once from an elevated prompt:

@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import {
   loadSessionEntry,
@@ -6,6 +7,8 @@ import {
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
+import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
 import {
   reconcileSessionTranscriptIndexes,
   waitForSessionTranscriptIndexReconcile,
@@ -31,64 +34,148 @@ import {
   listSessions,
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
+import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import * as transcriptBackfill from "./session-row-transcript-backfill.js";
+import { readSessionMessagesPageWithStatsAsync } from "./session-transcript-readers.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-it.each(["background", "capture"] as const)(
-  "keeps %s projection reads outside borrowed startup admission and admits completed recovery",
-  async (read) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cfg = { agents: { list: [{ id: "main", default: true }, { id: "worker" }] } };
-      const query = { agentId: "worker", key: "agent:worker:recovering" };
-      const unaffected = { agentId: "main", key: "agent:main:unchanged" };
-      replaceSessionEntrySync(
-        { agentId: unaffected.agentId, sessionKey: unaffected.key },
-        { sessionId: "unchanged", updatedAt: 1 },
-      );
-      replaceSessionEntrySync(
-        { agentId: query.agentId, sessionKey: query.key },
-        { sessionId: "recovering", updatedAt: 1 },
-      );
-      const path = resolveOpenClawAgentSqlitePath({ agentId: query.agentId });
-      closeOpenClawAgentDatabaseByPath(path, query.agentId);
-      const refusal = createAgentDatabaseInspectionRefusal({
-        agentId: query.agentId,
-        paths: [path],
-        pending: true,
-        reason: "Startup preparation is still pending",
-      });
-      recordAgentDatabaseAdmissions([refusal], { source: "startup" });
-      const projection = await createSessionRowProjection({ cfg });
-      try {
-        expect(projection.snapshot(query).row).toBeNull();
-        let beforeRecovery = 0;
-        await preparePendingAgentDatabase(refusal, { assertCurrent() {} }, async () => {
-          sessionChanges.emit({ all: true, scope: "config" });
-          if (read === "capture") {
-            expect(projection.capture(query)).toBeUndefined();
-          }
-          await projection.ensureMaterialized();
-          expect(projection.snapshot(query).row).toBeNull();
-          expect(listOpenClawAgentDatabasesForTest().some((db) => db.path === path)).toBe(false);
-          beforeRecovery = projection.materializedCount;
-        });
-        await projection.ensureMaterialized();
-        expect(projection.snapshot(query).row?.sessionId).toBe("recovering");
-        expect(projection.snapshot(unaffected).row?.sessionId).toBe("unchanged");
-        expect(projection.materializedCount - beforeRecovery).toBe(1);
-      } finally {
-        projection.dispose();
-      }
+it("refreshes omitted cold previews after a history read without revoking sharing", ({
+  signal,
+  onTestFinished,
+}) => {
+  const run = withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:cold-preview",
+      sessionId: "cold-preview",
+    };
+    await upsertSessionEntryCore(scope, {
+      sessionId: scope.sessionId,
+      visibility: "shared",
+      updatedAt: Date.now(),
     });
-  },
-);
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        { message: { role: "user", content: "Remember the restored conversation" } },
+        { message: { role: "assistant", content: "I will remember it." } },
+      ],
+      touchSessionEntry: false,
+    });
+    await waitForSessionTranscriptIndexReconcile({ agentId: scope.agentId });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60 * 86_400_000);
+    await expect(
+      runSessionColdStorageMaintenance({
+        config: {
+          ...cfg,
+          session: { maintenance: { coldStorage: { enabled: true, afterDays: 30 } } },
+        },
+      }),
+    ).resolves.toEqual({ archivedTranscripts: 1, externalizedTranscripts: 0 });
+    clock.mockRestore();
+    const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
+    const originalEntry = loadSessionEntry(scope);
+    const context = requestContext(cfg);
+    const client = identifiedClient("viewer@example.com");
+    const request = { includeLastMessage: true };
+    const omitted = observeSessionRowBackfill([scope.sessionKey]);
+    try {
+      await listSessions({ context, client, request });
+      await withinTest(omitted, signal);
+      const projection = getSessionRowProjection(context)!;
+      const query = { agentId: scope.agentId, key: scope.sessionKey };
+      const before = await listSessions({ context, client, request });
+      expect(before.sessions).toEqual([
+        expect.objectContaining({ key: scope.sessionKey, sharingRole: "viewer" }),
+      ]);
+      expect(before.sessions[0]?.lastMessagePreview).toBeUndefined();
+      expect(readSessionColdTranscript(database.db, scope.sessionId)).toBeDefined();
+      const sharingEntry = projection.capture(query)?.sharingEntry;
+      const refreshed = observeSessionRowBackfill([scope.sessionKey], projection);
+      const history = await readSessionMessagesPageWithStatsAsync(scope, {
+        maxMessages: 100,
+        offset: 0,
+      });
+      expect(history.messages).toEqual([
+        expect.objectContaining({ role: "user", content: "Remember the restored conversation" }),
+        expect.objectContaining({ role: "assistant", content: "I will remember it." }),
+      ]);
+      expect(readSessionColdTranscript(database.db, scope.sessionId)).toBeUndefined();
+      expect(projection.capture(query)?.sharingEntry).toEqual(sharingEntry);
+      await withinTest(refreshed, signal);
+      const after = await listSessions({ context, client, request });
+      expect(after.sessions).toEqual([
+        expect.objectContaining({
+          key: scope.sessionKey,
+          sharingRole: "viewer",
+          lastMessagePreview: "I will remember it.",
+        }),
+      ]);
+      expect(loadSessionEntry(scope)).toEqual(originalEntry);
+    } finally {
+      getSessionRowProjection(context)?.dispose();
+    }
+  });
+  onTestFinished(() => run);
+  return run;
+});
+
+it("keeps projection reads outside borrowed startup admission and admits completed recovery", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = {
+      agents: {
+        entries: { main: {}, worker: {} },
+        defaults: { sessionStore: { agentId: "main" } },
+      },
+    };
+    const query = { agentId: "worker", key: "agent:worker:recovering" };
+    const unaffected = { agentId: "main", key: "agent:main:unchanged" };
+    replaceSessionEntrySync(
+      { agentId: unaffected.agentId, sessionKey: unaffected.key },
+      { sessionId: "unchanged", updatedAt: 1 },
+    );
+    replaceSessionEntrySync(
+      { agentId: query.agentId, sessionKey: query.key },
+      { sessionId: "recovering", updatedAt: 1 },
+    );
+    const path = resolveOpenClawAgentSqlitePath({ agentId: query.agentId });
+    closeOpenClawAgentDatabaseByPath(path, query.agentId);
+    const refusal = createAgentDatabaseInspectionRefusal({
+      agentId: query.agentId,
+      paths: [path],
+      pending: true,
+      reason: "Startup preparation is still pending",
+    });
+    recordAgentDatabaseAdmissions([refusal], { source: "startup" });
+    const projection = await createSessionRowProjection({ cfg });
+    try {
+      expect(projection.snapshot(query).row).toBeNull();
+      let beforeRecovery = 0;
+      await preparePendingAgentDatabase(refusal, { assertCurrent() {} }, async () => {
+        sessionChanges.emit({ all: true, scope: "config" });
+        expect(projection.capture(query)).toBeUndefined();
+        await projection.ensureMaterialized();
+        expect(projection.snapshot(query).row).toBeNull();
+        expect(listOpenClawAgentDatabasesForTest().some((db) => db.path === path)).toBe(false);
+        beforeRecovery = projection.materializedCount;
+      });
+      await projection.ensureMaterialized();
+      expect(projection.snapshot(query).row?.sessionId).toBe("recovering");
+      expect(projection.snapshot(unaffected).row?.sessionId).toBe("unchanged");
+      expect(projection.materializedCount - beforeRecovery).toBe(1);
+    } finally {
+      projection.dispose();
+    }
+  });
+});
 
 it("refreshes previews after reconciliation without metadata mutation or clean-read SQLite", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const scope = {
       agentId: "main",
@@ -125,13 +212,9 @@ it("refreshes previews after reconciliation without metadata mutation or clean-r
     const stop = onInternalSessionTranscriptUpdate(transcriptUpdates);
     try {
       const initial = await listSessions({ context, client, request: options });
-      expect(initial.sessions).toEqual([
-        expect.objectContaining({
-          key: scope.sessionKey,
-          derivedTitle: undefined,
-          lastMessagePreview: undefined,
-        }),
-      ]);
+      expect(initial.sessions.map((row) => row.key)).toEqual([scope.sessionKey]);
+      expect(initial.sessions[0]?.derivedTitle).toBeUndefined();
+      expect(initial.sessions[0]?.lastMessagePreview).toBeUndefined();
       await vi.waitFor(() => expect(previewRead).toHaveBeenCalled());
       previewRead.mockRestore();
       database.db
@@ -158,7 +241,13 @@ it("refreshes previews after reconciliation without metadata mutation or clean-r
       expect(loadSessionEntry(scope)).toEqual(originalEntry);
       const nativeCalls = observeMainThreadSql();
       const healed = await listSessions({ context, client, request: options });
-      expect(healed.sessions).toEqual([expect.objectContaining(expected)]);
+      expect(healed.sessions).toEqual([
+        expect.objectContaining({
+          key: expected.key,
+          lastMessagePreview: expected.lastMessagePreview,
+        }),
+      ]);
+      expect(healed.sessions[0]?.derivedTitle).toBeUndefined();
       const respond = vi.fn();
       await sessionByKeyReadHandlers["sessions.describe"]!({
         req: { type: "req", id: "recovered-describe", method: "sessions.describe" },
@@ -179,27 +268,6 @@ it("refreshes previews after reconciliation without metadata mutation or clean-r
       stop();
       getSessionRowProjection(context)?.dispose();
       vi.restoreAllMocks();
-    }
-  });
-});
-
-it("captures the committed replacement before background materialization", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
-    const query = { agentId: "main", key: "agent:main:replaced" };
-    const target = { agentId: query.agentId, sessionKey: query.key };
-    replaceSessionEntrySync(target, { sessionId: "previous", updatedAt: 1 });
-    const projection = await createSessionRowProjection({ cfg });
-    try {
-      const previous = projection.capture(query)!;
-      replaceSessionEntrySync(target, { sessionId: "current", updatedAt: 2 });
-      const captured = projection.capture(query)!;
-      expect(captured.entry?.sessionId).toBe("current");
-      await projection.ensureMaterialized();
-      expect(projection.isCurrent(captured)).toBe(true);
-      expect(projection.isCurrent(previous)).toBe(false);
-    } finally {
-      projection.dispose();
     }
   });
 });

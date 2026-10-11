@@ -101,14 +101,20 @@ async function cycleBoardProviderConnection(page: Page): Promise<void> {
     const surface = document.querySelector(".board-session-surface");
     const pane = surface?.closest("openclaw-chat-pane");
     const lease = pane ? Reflect.get(pane, "boardProviderLease") : undefined;
-    const scopedProvider = lease?.provider;
-    const transport = scopedProvider ? Reflect.get(scopedProvider, "transport") : undefined;
-    const client = transport ? Reflect.get(transport, "client") : undefined;
-    if (!transport || !client || typeof transport.attachClient !== "function") {
+    const context = pane ? Reflect.get(pane, "context") : undefined;
+    const client = context?.gateway.snapshot.client;
+    const provider = lease?.provider;
+    if (!lease || !provider || !client) {
       throw new Error("Dashboard Gateway provider is unavailable");
     }
-    transport.attachClient(client, false);
-    transport.attachClient(client, true);
+    const capabilities = {
+      canPinWidgets: provider.canPinWidgets,
+      canPinMcpApps: provider.canPinMcpApps,
+      canMutate: provider.canMutate,
+      canGrant: provider.canGrant,
+    };
+    lease.update(client, false, capabilities);
+    lease.update(client, true, capabilities);
   });
 }
 
@@ -524,10 +530,10 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
             reported?.width === size.width && reported?.height === size.height,
         );
     };
-    expect(await frameInsets()).toEqual({ top: 0, bottom: 0, bodyHeightGap: 0 });
+    await expect.poll(frameInsets).toEqual({ top: 0, bottom: 0, bodyHeightGap: 0 });
     await expectHostDimensions();
     await page.setViewportSize({ width: 1440, height: 1000 });
-    expect(await frameInsets()).toEqual({ top: 0, bottom: 0, bodyHeightGap: 0 });
+    await expect.poll(frameInsets).toEqual({ top: 0, bottom: 0, bodyHeightGap: 0 });
     await expectHostDimensions();
     await expectRetainedBoardPresentation(page, "expanded");
     if (artifactDir) {
@@ -540,7 +546,7 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
       .getByRole("button", { name: "Restore split", exact: true })
       .click();
     await expectRetainedBoardPresentation(page, "split");
-    expect((await frameInsets()).bodyHeightGap).toBe(0);
+    await expect.poll(async () => (await frameInsets()).bodyHeightGap).toBe(0);
     await expectHostDimensions();
     await restoreChatAsMain(page);
 

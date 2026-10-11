@@ -194,7 +194,7 @@ describe("applyGroupGating allowlist drop warning", () => {
   it("warns once per account and group for identity-derived mention drops", async () => {
     const warn = vi.fn<WarnLogger>();
     const cfg = {
-      agents: { list: [{ id: "main", identity: { name: "Claw" } }] },
+      agents: { entries: { main: { identity: { name: "Claw" } } } },
       channels: {
         whatsapp: {
           groups: { "*": {} },

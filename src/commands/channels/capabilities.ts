@@ -7,14 +7,14 @@ import { resolveChannelAccount } from "../../channels/account-resolution.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import {
   createMessageActionDiscoveryContext,
-  resolveMessageActionDiscoveryForPlugin,
+  resolveMessageActionDiscoveryForPluginAsync,
 } from "../../channels/plugins/message-action-discovery.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type {
   ChannelCapabilities,
   ChannelCapabilitiesDiagnostics,
   ChannelCapabilitiesDisplayLine,
-  ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
 import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -35,7 +35,7 @@ import {
 import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 import { formatChannelAccountLabel } from "./shared.js";
 
-export type ChannelsCapabilitiesOptions = {
+type ChannelsCapabilitiesOptions = {
   agent?: string;
   channel?: string;
   account?: string;
@@ -60,45 +60,19 @@ type ChannelCapabilitiesReport = {
 const CHANNEL_CAPABILITIES_TIMEOUT_MAX_MS = 30_000;
 
 // These CLI waits need a referenced deadline so stalled plugins still produce a report.
-async function runChannelCapabilitiesProbe(params: {
+async function runChannelCapabilitiesCheck<T>(params: {
   timeoutMs: number;
-  run: () => unknown;
-}): Promise<unknown> {
+  run: () => T | Promise<T>;
+  failure: (error: unknown, timedOut: boolean) => T;
+}): Promise<T> {
   try {
     const result = await awaitWithinDeadline(
       async () => params.run(),
       Date.now() + params.timeoutMs,
     );
-    return result === ABSOLUTE_DEADLINE_EXPIRED
-      ? { ok: false, timedOut: true, error: `probe timed out after ${params.timeoutMs}ms` }
-      : result;
+    return result === ABSOLUTE_DEADLINE_EXPIRED ? params.failure(undefined, true) : result;
   } catch (error) {
-    return { ok: false, error: formatErrorMessage(error) };
-  }
-}
-
-async function runChannelCapabilitiesDiagnostics(params: {
-  timeoutMs: number;
-  run: () =>
-    | Promise<ChannelCapabilitiesDiagnostics | undefined>
-    | ChannelCapabilitiesDiagnostics
-    | undefined;
-}): Promise<ChannelCapabilitiesDiagnostics | undefined> {
-  try {
-    const result = await awaitWithinDeadline(
-      async () => params.run(),
-      Date.now() + params.timeoutMs,
-    );
-    return result === ABSOLUTE_DEADLINE_EXPIRED
-      ? {
-          lines: [{ text: `Diagnostics: timed out after ${params.timeoutMs}ms`, tone: "error" }],
-          details: { timedOut: true },
-        }
-      : result;
-  } catch (error) {
-    return {
-      lines: [{ text: `Diagnostics: failed (${formatErrorMessage(error)})`, tone: "error" }],
-    };
+    return params.failure(error, false);
   }
 }
 
@@ -137,12 +111,12 @@ function formatGenericProbeLines(probe: unknown): ChannelCapabilitiesDisplayLine
   const probeObj = probe as Record<string, unknown>;
   const ok = typeof probeObj.ok === "boolean" ? probeObj.ok : undefined;
   if (ok === true) {
-    return [{ text: "Probe: ok" }];
+    return [{ text: "Check: ok" }];
   }
   if (ok === false) {
     const error =
       typeof probeObj.error === "string" && probeObj.error ? ` (${probeObj.error})` : "";
-    return [{ text: `Probe: failed${error}`, tone: "error" }];
+    return [{ text: `Check: failed${error}`, tone: "error" }];
   }
   return [];
 }
@@ -150,13 +124,10 @@ function formatGenericProbeLines(probe: unknown): ChannelCapabilitiesDisplayLine
 function renderDisplayLine(line: ChannelCapabilitiesDisplayLine) {
   switch (line.tone) {
     case "muted":
-      return theme.muted(line.text);
     case "success":
-      return theme.success(line.text);
     case "warn":
-      return theme.warn(line.text);
     case "error":
-      return theme.error(line.text);
+      return theme[line.tone](line.text);
     default:
       return line.text;
   }
@@ -190,8 +161,12 @@ async function resolveChannelReports(params: {
       : (resolvedAccount as { enabled?: boolean }).enabled !== false;
     let probe: unknown;
     if (configured && enabled && plugin.status?.probeAccount) {
-      probe = await runChannelCapabilitiesProbe({
+      probe = await runChannelCapabilitiesCheck({
         timeoutMs,
+        failure: (error, timedOut) =>
+          timedOut
+            ? { ok: false, timedOut: true, error: `check timed out after ${timeoutMs}ms` }
+            : { ok: false, error: formatErrorMessage(error) },
         run: () =>
           plugin.status?.probeAccount?.({
             account: resolvedAccount,
@@ -203,8 +178,19 @@ async function resolveChannelReports(params: {
 
     const diagnostics =
       configured && enabled && plugin.status?.buildCapabilitiesDiagnostics
-        ? await runChannelCapabilitiesDiagnostics({
+        ? await runChannelCapabilitiesCheck<ChannelCapabilitiesDiagnostics | undefined>({
             timeoutMs,
+            failure: (error, timedOut) => ({
+              lines: [
+                {
+                  text: timedOut
+                    ? `Diagnostics: timed out after ${timeoutMs}ms`
+                    : `Diagnostics: failed (${formatErrorMessage(error)})`,
+                  tone: "error",
+                },
+              ],
+              ...(timedOut ? { details: { timedOut: true } } : {}),
+            }),
             run: () =>
               plugin.status?.buildCapabilitiesDiagnostics?.({
                 account: resolvedAccount,
@@ -215,15 +201,17 @@ async function resolveChannelReports(params: {
               }),
           })
         : undefined;
-    const discoveredActions = resolveMessageActionDiscoveryForPlugin({
-      pluginId: plugin.id,
-      actions: plugin.actions,
-      context: createMessageActionDiscoveryContext({
-        cfg,
-        accountId,
-      }),
-      includeActions: true,
-    }).actions;
+    const discoveredActions = (
+      await resolveMessageActionDiscoveryForPluginAsync({
+        pluginId: plugin.id,
+        actions: plugin.actions,
+        context: createMessageActionDiscoveryContext({
+          cfg,
+          accountId,
+        }),
+        includeActions: true,
+      })
+    ).actions;
     const actions = Array.from(new Set<string>(["send", "broadcast", ...discoveredActions]));
 
     reports.push({
@@ -374,7 +362,7 @@ export async function channelsCapabilitiesCommand(
     if (probeLines.length > 0) {
       lines.push(...probeLines.map(renderDisplayLine));
     } else if (report.configured && report.enabled) {
-      lines.push(theme.muted("Probe: unavailable"));
+      lines.push(theme.muted("Check: unavailable"));
     }
     if (report.diagnostics?.lines?.length) {
       lines.push(...report.diagnostics.lines.map(renderDisplayLine));

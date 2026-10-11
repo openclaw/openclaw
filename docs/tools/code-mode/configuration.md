@@ -43,7 +43,7 @@ shared saved-result allowance; it does not cap Node's retained live context.
 
 `timeoutMs` is a wall-clock budget per `exec` or `wait` call. Worker preparation, guest
 computation, and inline tool waits share that budget; approval waits pause it.
-For an explicitly `required: true` cell, off-VM tool waiting also pauses the
+For an explicitly `awaitResults: true` cell, off-VM tool waiting also pauses the
 execution allowance. The same unused allowance resumes after settlement;
 worker preparation and guest execution never receive a fresh budget. Existing
 agent-run and tool deadlines continue running during required waits.
@@ -56,8 +56,8 @@ headless wall-clock deadline. A checkpoint does not reset that wall deadline.
 When the shell `exec` tool is available, use it for heavier computation
 and keep guest JavaScript focused on coordinating tools and processing results.
 
-If code mode is enabled but the selected executor cannot load, OpenClaw fails closed
-for that run; it does not silently expose normal tools as a fallback. This
+If code mode is enabled but the selected executor cannot load, OpenClaw stops
+that run; it does not silently expose normal tools as a fallback. This
 holds for `true` and for `"auto"` runs where the model resolves as preferred:
 an engaged run never silently falls back to another executor or broad direct
 tool exposure.

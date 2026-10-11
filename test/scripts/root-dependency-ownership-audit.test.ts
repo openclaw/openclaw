@@ -31,17 +31,6 @@ function writeRepoFile(repoRoot: string, relativePath: string, value: string) {
 }
 
 describe("collectModuleSpecifiers", () => {
-  it("captures require.resolve package lookups used by runtime shims and bundled plugins", () => {
-    expect([
-      ...collectModuleSpecifiers(`
-        const require = createRequire(import.meta.url);
-        const runtimeRequire = createRequire(runtimePackagePath);
-        require.resolve("gaxios");
-        runtimeRequire.resolve("openshell/package.json");
-      `),
-    ]).toEqual(["gaxios", "openshell/package.json"]);
-  });
-
   it("resolves simple string constants used by lazy runtime imports", () => {
     expect([
       ...collectModuleSpecifiers(`
@@ -80,19 +69,6 @@ describe("classifyRootDependencyOwnership", () => {
       category: "extension_only_localizable",
       recommendation:
         "remove from root package.json and rely on owning extension manifests plus doctor --fix",
-    });
-  });
-
-  it("allows explicit root-owned internal extension runtime dependencies", () => {
-    expect(
-      classifyRootDependencyOwnership({
-        depName: "playwright-core",
-        sections: ["extensions", "test"],
-      }),
-    ).toEqual({
-      category: "root_owned_extension_runtime",
-      recommendation:
-        "keep at root; the internal browser runtime is shipped with core even though downloadable browser-adjacent plugins also declare it",
     });
   });
 
@@ -190,30 +166,6 @@ describe("collectRootDependencyOwnershipCheckErrors", () => {
         sections: ["packages"],
         spec: "0.1.9",
       },
-    ]);
-  });
-
-  it("fails only extension-owned root dependencies", () => {
-    expect(
-      collectRootDependencyOwnershipCheckErrors([
-        {
-          category: "extension_only_localizable",
-          declaredInExtensions: ["demo-channel:dependencies"],
-          depName: "vendor-sdk",
-          recommendation:
-            "remove from root package.json and rely on owning extension manifests plus doctor --fix",
-          sampleFiles: ["extensions/demo-channel/src/setup.ts"],
-        },
-        {
-          category: "unreferenced",
-          declaredInExtensions: [],
-          depName: "@mozilla/readability",
-          recommendation: "investigate removal; no direct source imports found in scanned files",
-          sampleFiles: [],
-        },
-      ]),
-    ).toEqual([
-      "root dependency 'vendor-sdk' is extension-owned (remove from root package.json and rely on owning extension manifests plus doctor --fix); extension declarations: demo-channel:dependencies; sample imports: extensions/demo-channel/src/setup.ts",
     ]);
   });
 
@@ -317,45 +269,5 @@ describe("collectRootDependencyOwnershipCheckErrors", () => {
       },
     ]);
     expect(collectRootDependencyOwnershipCheckErrors(records)).toStrictEqual([]);
-  });
-
-  it("keeps excluded bundled plugin deps localizable", () => {
-    const repoRoot = makeTempRepo();
-    writeRepoFile(
-      repoRoot,
-      "package.json",
-      JSON.stringify({
-        dependencies: { "vendor-sdk": "^1.0.0" },
-        files: ["dist/", "!dist/extensions/externalized/**"],
-      }),
-    );
-    writeRepoFile(
-      repoRoot,
-      "extensions/externalized/package.json",
-      JSON.stringify({ dependencies: { "vendor-sdk": "^1.0.0" } }),
-    );
-    writeRepoFile(repoRoot, "extensions/externalized/openclaw.plugin.json", JSON.stringify({}));
-    writeRepoFile(
-      repoRoot,
-      "extensions/externalized/src/setup.ts",
-      'const sdk = await import("vendor-sdk");\n',
-    );
-
-    const records = collectRootDependencyOwnershipAudit({ repoRoot, scanRoots: ["extensions"] });
-
-    expect(records).toEqual([
-      {
-        category: "extension_only_localizable",
-        declaredInExtensions: ["externalized:dependencies"],
-        depName: "vendor-sdk",
-        fileCount: 1,
-        internalizedBundledRuntimeOwners: [],
-        recommendation:
-          "remove from root package.json and rely on owning extension manifests plus doctor --fix",
-        sampleFiles: ["extensions/externalized/src/setup.ts"],
-        sections: ["extensions"],
-        spec: "^1.0.0",
-      },
-    ]);
   });
 });

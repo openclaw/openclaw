@@ -1,4 +1,4 @@
-import { html } from "lit";
+import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
 import "../styles/sidebar-reorder.css";
 import { icons } from "./icons.ts";
@@ -9,6 +9,7 @@ type ReorderPosition = "before" | "after";
 export function renderSidebarReorderMenu(params: {
   label: string;
   kind: "entry" | "section";
+  onRemove?: () => void;
   onMove: (target: string, position: ReorderPosition) => void | Promise<void>;
 }) {
   const attribute = params.kind === "entry" ? "data-sidebar-entry" : "data-session-section";
@@ -44,6 +45,10 @@ export function renderSidebarReorderMenu(params: {
       }}
       @wa-select=${async (event: CustomEvent<{ item: { value?: string } }>) => {
         const position = event.detail.item.value;
+        if (position === "remove") {
+          params.onRemove?.();
+          return;
+        }
         if (position !== "before" && position !== "after") {
           return;
         }
@@ -79,6 +84,7 @@ export function renderSidebarReorderMenu(params: {
         <span slot="icon" aria-hidden="true">${icons.arrowDown}</span>
         ${t("chat.sidebar.moveDown")}
       </wa-dropdown-item>
+      ${params.onRemove ? html`<wa-dropdown-item value="remove"><span slot="icon" aria-hidden="true">${icons.pin}</span>${t("nav.unpin")}</wa-dropdown-item>` : nothing}
     </wa-dropdown>
   `;
 }

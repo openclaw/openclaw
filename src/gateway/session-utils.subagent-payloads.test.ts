@@ -56,7 +56,7 @@ describe("session list subagent payload reads", () => {
 
   const cfg: OpenClawConfig = {
     session: { mainKey: "main" },
-    agents: { list: [{ id: "main", default: true }] },
+    agents: { entries: { main: {} } },
   };
 
   test("loads direct children without repeated or unrelated host-thread payload validation", async () => {

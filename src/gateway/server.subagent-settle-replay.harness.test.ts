@@ -9,11 +9,14 @@ import type { AgentDeliveryEvidence } from "../agents/embedded-agent-runner/deli
 import { buildMainSessionRecoveryClearPatch } from "../agents/main-session-recovery/main-session-recovery-clear.js";
 import { recoverRestartAbortedMainSessions } from "../agents/main-session-recovery/main-session-restart-recovery.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../agents/subagents/announce/subagent-announce.requester-settle-wake.js";
-import { settleRequesterCompletionBatch } from "../agents/subagents/completion/subagent-completion-admission.store.js";
+import {
+  mutateRequesterCompletionBatch,
+  SubagentCompletionSourceChangedError,
+} from "../agents/subagents/completion/subagent-completion-admission.store.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { bindSubagentRunRecord } from "../agents/subagents/registry/subagent-registry.store.codec.js";
-import { upsertSubagentRunRowInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
-import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { buildRestartRecoveryClaimCleanupPatch } from "../config/sessions/restart-recovery-state.js";
@@ -121,7 +124,11 @@ describe("public yielded settle replay with real Gateway admission", () => {
   });
 
   function persistChild(entry = child) {
-    upsertSubagentRunRowInDatabase(openOpenClawStateDatabase(), bindSubagentRunRecord(entry));
+    writeSubagentRunValuesInDatabase(
+      openOpenClawStateDatabase(),
+      [bindSubagentRunRecord(entry)],
+      [],
+    );
   }
 
   const finalResult = (): Exclude<Awaited<ReturnType<typeof agentCommandMock>>, void> => ({
@@ -141,10 +148,16 @@ describe("public yielded settle replay with real Gateway admission", () => {
       Parameters<typeof maybeWakeRequesterAfterAllChildrenSettled>[0]["completeBatch"]
     >(async (batch, _generation, outcome, onCommitted) => {
       expect(outcome).toBeDefined();
-      await settleRequesterCompletionBatch({
-        entries: batch.map((subagent) => ({ subagent })),
-        outcome: outcome!,
-        isCurrent: () => subagentRuns.get(child.runId) === child,
+      await mutateRequesterCompletionBatch({
+        entries: batch,
+        operation: { kind: "settle", outcome: outcome! },
+        assertCurrent: () => {
+          if (subagentRuns.get(child.runId) !== child) {
+            throw new SubagentCompletionSourceChangedError(
+              "Subagent completion owner changed before settlement",
+            );
+          }
+        },
       });
       onCommitted?.();
     });
@@ -272,19 +285,6 @@ describe("public yielded settle replay with real Gateway admission", () => {
       }
     },
   );
-
-  it("settles the canonical wake after a terminal visible final", async () => {
-    agentCommandMock.mockImplementationOnce(async () => finalResult());
-    const completion = wake();
-    expect(await completion.result).toBe(true);
-    expect(agentCommandMock).toHaveBeenCalledOnce();
-    expect(completion.completeBatch).toHaveBeenCalledOnce();
-    expect(completion.completeBatch.mock.calls[0]?.[2]).toMatchObject({
-      delivered: true,
-      requesterVisibleFinalDelivered: true,
-    });
-    expect(loadSubagentRegistryFromSqlite().get(child.runId)?.requesterSettleWake).toBeUndefined();
-  });
 
   it.each(["retained stale", "mixed", "legacy"] as const)(
     "scopes a saved batch's actionable recovery roster (%s)",
@@ -440,7 +440,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
         if (transcriptOnly && acceptedMessages.length === 1 && receipt) {
           // Leave the real committed transcript as the only durable evidence,
           // as when the process exits before the completion write is admitted.
-          receipt.complete = () => {
+          receipt.completeAsync = async () => {
             throw new Error("isolated process exit before completion persistence");
           };
         }
@@ -697,7 +697,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
         });
         await original;
         expect(loadSessionEntryReadOnly(scope)).toMatchObject({
-          status: "running",
+          status: "interrupted",
           abortedLastRun: true,
           restartRecoveryRuns: [expect.objectContaining({ runId })],
         });

@@ -1,6 +1,11 @@
 /** Keeps automatic auth profiles stable unless reset, unavailable, or recovering a preference. */
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
+import {
+  sessionEntryCommitGuardOptions,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderModelRouteAuthRequirement } from "../../plugin-sdk/provider-model-types.js";
@@ -15,7 +20,6 @@ import {
   isStoredCredentialCompatibleWithAuthProvider,
   resolveAuthProfileOrderWithMetadata,
 } from "../auth-profiles/order.js";
-import { hasAnyAuthProfileStoreSource } from "../auth-profiles/store.js";
 import {
   isActiveUnusableWindow,
   isModelScopedCooldownReason,
@@ -30,6 +34,7 @@ import { resolveModelCatalogIdentityKey } from "../openai-model-routes.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
 import { authProfilesLog } from "./constants.js";
 import { createSelectedAuthProfileUnavailableError } from "./selection-error.js";
+import { hasAnyAuthProfileStoreSourceAsync } from "./source-check.js";
 import { ensureAuthProfileStore } from "./store-runtime.js";
 
 // Read-only auth resolution must not import session persistence.
@@ -73,21 +78,19 @@ function applySessionAuthProfileOverrideState(
   state: SessionAuthProfileOverrideState,
   updatedAt: number,
 ): void {
-  if (state.authProfileOverride === undefined) {
-    delete entry.authProfileOverride;
-  } else {
-    entry.authProfileOverride = state.authProfileOverride;
-  }
-  if (state.authProfileOverrideSource === undefined) {
-    delete entry.authProfileOverrideSource;
-  } else {
-    entry.authProfileOverrideSource = state.authProfileOverrideSource;
-  }
-  if (state.authProfileOverrideCompactionCount === undefined) {
-    delete entry.authProfileOverrideCompactionCount;
-  } else {
-    entry.authProfileOverrideCompactionCount = state.authProfileOverrideCompactionCount;
-  }
+  const apply = <K extends keyof SessionAuthProfileOverrideState>(
+    key: K,
+    value: SessionAuthProfileOverrideState[K],
+  ) => {
+    if (value === undefined) {
+      delete entry[key];
+    } else {
+      entry[key] = value;
+    }
+  };
+  apply("authProfileOverride", state.authProfileOverride);
+  apply("authProfileOverrideSource", state.authProfileOverrideSource);
+  apply("authProfileOverrideCompactionCount", state.authProfileOverrideCompactionCount);
   entry.updatedAt = Math.max(entry.updatedAt ?? 0, updatedAt);
 }
 
@@ -119,7 +122,7 @@ async function persistSessionAuthProfileOverrideState(params: {
   sessionKey: string;
   state: SessionAuthProfileOverrideState;
   storePath?: string;
-  assertCommitAllowed?: () => void;
+  assertCommitAllowed?: SessionSourceAssertion;
   expectedSnapshot?: SessionAuthProfileOverrideSnapshot;
 }): Promise<SessionEntry | undefined> {
   const { sessionEntry, sessionStore, sessionKey, state, storePath, expectedSnapshot } = params;
@@ -166,7 +169,7 @@ async function persistSessionAuthProfileOverrideState(params: {
     },
     {
       ...(expectedSnapshot ? {} : { fallbackEntry: sessionEntry }),
-      assertCommitAllowed: params.assertCommitAllowed,
+      ...sessionEntryCommitGuardOptions(params.assertCommitAllowed),
     },
   );
   if (persisted) {
@@ -187,24 +190,21 @@ function isProfileForProvider(params: {
   store: ReturnType<typeof ensureAuthProfileStore>;
 }): boolean {
   const entry = params.store.profiles[params.profileId];
-  if (entry) {
-    if (!entry.provider) {
-      return false;
-    }
-    return params.providers.some((provider) =>
-      isStoredCredentialCompatibleWithAuthProvider({
-        cfg: params.cfg,
-        provider,
-        credential: entry,
-      }),
-    );
+  if (entry && !entry.provider) {
+    return false;
   }
   return params.providers.some((provider) =>
-    isConfiguredAwsSdkAuthProfileForProvider({
-      cfg: params.cfg,
-      provider,
-      profileId: params.profileId,
-    }),
+    entry
+      ? isStoredCredentialCompatibleWithAuthProvider({
+          cfg: params.cfg,
+          provider,
+          credential: entry,
+        })
+      : isConfiguredAwsSdkAuthProfileForProvider({
+          cfg: params.cfg,
+          provider,
+          profileId: params.profileId,
+        }),
   );
 }
 
@@ -268,21 +268,16 @@ export async function clearSessionAuthProfileOverride(params: {
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
   storePath?: string;
-  assertCommitAllowed?: () => void;
+  assertCommitAllowed?: SessionSourceAssertion;
+  expectedSnapshot?: SessionAuthProfileOverrideSnapshot;
 }) {
-  const { sessionEntry, sessionStore, sessionKey, storePath } = params;
   await persistSessionAuthProfileOverrideState({
-    agentId: params.agentId,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
+    ...params,
     state: {
       authProfileOverride: undefined,
       authProfileOverrideSource: undefined,
       authProfileOverrideCompactionCount: undefined,
     },
-    storePath,
-    assertCommitAllowed: params.assertCommitAllowed,
   });
 }
 
@@ -292,11 +287,12 @@ async function resolveSessionAuthProfileOverride(params: {
   modelId: string;
   agentId: string;
   agentDir: string;
+  reader?: SessionEntryCohortReader;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
-  assertCommitAllowed?: () => void;
+  assertCommitAllowed?: SessionSourceAssertion;
   isNewSession: boolean;
   acceptedProviderIds?: string[];
   requesterProfileId?: string;
@@ -323,7 +319,7 @@ async function resolveSessionAuthProfileOverride(params: {
     !sessionEntry.authProfileOverride?.trim() &&
     !params.requesterProfileId &&
     !hasConfiguredAuthProfiles &&
-    !hasAnyAuthProfileStoreSource(agentDir)
+    !(await hasAnyAuthProfileStoreSourceAsync(agentDir, params.reader))
   ) {
     return { profileId: undefined, store: undefined };
   }
@@ -554,10 +550,8 @@ async function resolveSessionAuthProfileOverride(params: {
   let next = current;
   if (retryableHigherPriorityProfile) {
     next = retryableHigherPriorityProfile;
-  } else if (isNewSession || shouldRotateCurrent) {
+  } else if (isNewSession || shouldRotateCurrent || !current) {
     next = pickAvailable(currentUnavailable ? undefined : current);
-  } else if (!current) {
-    next = pickAvailable();
   }
 
   if (!next) {
@@ -594,11 +588,12 @@ export async function resolveSessionAuthSelection(params: {
   configuredProfileId?: string;
   harnessRuntime?: string;
   agentDir: string;
+  reader?: SessionEntryCohortReader;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
-  assertCommitAllowed?: () => void;
+  assertCommitAllowed?: SessionSourceAssertion;
   isNewSession: boolean;
   requesterProfileId?: string;
 }): Promise<SessionAuthSelection | undefined> {

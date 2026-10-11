@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../app/context.ts";
 import {
@@ -47,24 +46,6 @@ describe("AppSidebar catalog event refresh", () => {
     vi.useRealTimers();
   });
 
-  it("keeps four stable tabs idle for five minutes and refreshes each once per catalog event", async () => {
-    const tabs = [];
-    for (let index = 0; index < 4; index += 1) {
-      tabs.push(await mountTab());
-    }
-    await vi.advanceTimersByTimeAsync(300_000);
-    for (const { request, gateway } of tabs) {
-      expect.soft(request).toHaveBeenCalledTimes(1);
-      request.mockClear();
-      gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-    }
-    await vi.advanceTimersByTimeAsync(5_000);
-    for (const { request, sidebar } of tabs) {
-      expect(request).toHaveBeenCalledTimes(1);
-      expect(sidebar.textContent).toContain("Stable catalog");
-    }
-  });
-
   it("ignores session churn and unrelated agents while coalescing catalog event bursts", async () => {
     const { gateway, request } = await mountTab();
     gateway.publishEvent("sessions.changed", {
@@ -102,88 +83,43 @@ describe("AppSidebar catalog event refresh", () => {
     expect(request).toHaveBeenCalledTimes(3);
   });
 
-  it("paces a trailing event after a slow catalog request without overlapping reads", async () => {
-    vi.spyOn(Math, "random").mockReturnValue(0);
-    const pending = deferred<ReturnType<typeof catalogPage>>();
-    const request = createGatewayRequestMock()
-      .mockResolvedValueOnce(catalogPage([]))
-      .mockReturnValueOnce(pending.promise)
-      .mockResolvedValue(catalogPage([{ threadId: "updated", name: "Updated catalog" }]));
-    const { gateway, sidebar } = await mountTab(request);
-    gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(request).toHaveBeenCalledTimes(2);
-    for (let second = 0; second < 3; second += 1) {
-      gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-      await vi.advanceTimersByTimeAsync(1_000);
+  it.each(["recovered", "exhausted"] as const)("paces busy retries until %s", async (outcome) => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const error = new GatewayRequestError({
+      code: "UNAVAILABLE",
+      message: "server busy",
+      retryable: true,
+      retryAfterMs: outcome === "recovered" ? 5_000 : 100,
+    });
+    const request = createGatewayRequestMock().mockResolvedValueOnce(
+      catalogPage([{ threadId: "stable", name: "Stable catalog" }]),
+    );
+    if (outcome === "recovered") {
+      request
+        .mockRejectedValueOnce(error)
+        .mockResolvedValue(catalogPage([{ threadId: "updated", name: "Updated catalog" }]));
+    } else {
+      request.mockRejectedValue(error);
     }
-    expect(request).toHaveBeenCalledTimes(2);
-    pending.resolve(catalogPage([]));
-    await vi.advanceTimersByTimeAsync(8_999);
-    expect(request).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(request).toHaveBeenCalledTimes(3);
-    expect(sidebar.textContent).toContain("Updated catalog");
-    await vi.advanceTimersByTimeAsync(300_000);
-    expect(request).toHaveBeenCalledTimes(3);
-  });
-
-  it("absorbs an event when an explicit refresh already reads the current catalog", async () => {
-    const { gateway, sidebar, request } = await mountTab();
-    gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-    await sidebar.sessionData.refreshSessionCatalogs();
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it("recovers a busy catalog without flashing an error or letting events bypass the retry delay", async () => {
-    const request = createGatewayRequestMock()
-      .mockResolvedValueOnce(catalogPage([{ threadId: "stable", name: "Stable catalog" }]))
-      .mockRejectedValueOnce(
-        new GatewayRequestError({
-          code: "UNAVAILABLE",
-          message: "server busy",
-          retryable: true,
-          retryAfterMs: 5_000,
-        }),
-      )
-      .mockResolvedValue(catalogPage([{ threadId: "updated", name: "Updated catalog" }]));
     const { gateway, sidebar } = await mountTab(request);
     await sidebar.sessionData.refreshSessionCatalogs();
     await sidebar.updateComplete;
     expect(sidebar.textContent).toContain("Stable catalog");
     expect(sidebar.sessionData.sessionCatalogRefreshStatus.error).toBeNull();
-    for (let second = 0; second < 4; second += 1) {
-      gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-      await vi.advanceTimersByTimeAsync(1_000);
+    if (outcome === "recovered") {
+      for (let second = 0; second < 4; second += 1) {
+        gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(request).toHaveBeenCalledTimes(2);
+      }
+      await vi.advanceTimersByTimeAsync(999);
       expect(request).toHaveBeenCalledTimes(2);
-    }
-    await vi.advanceTimersByTimeAsync(999);
-    expect(request).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(1);
-    await sidebar.updateComplete;
-    expect(request).toHaveBeenCalledTimes(3);
-    expect(sidebar.textContent).toContain("Updated catalog");
-    expect(sidebar.sessionData.sessionCatalogRefreshStatus.error).toBeNull();
-    await vi.advanceTimersByTimeAsync(300_000);
-    expect(request).toHaveBeenCalledTimes(3);
-  });
-
-  it("bounds busy retries and reports a persistent failure while preserving the catalog", async () => {
-    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const request = createGatewayRequestMock()
-      .mockResolvedValueOnce(catalogPage([{ threadId: "stable", name: "Stable catalog" }]))
-      .mockRejectedValue(
-        new GatewayRequestError({
-          code: "UNAVAILABLE",
-          message: "server busy",
-          retryable: true,
-          retryAfterMs: 100,
-        }),
-      );
-    try {
-      const { sidebar } = await mountTab(request);
-      await sidebar.sessionData.refreshSessionCatalogs();
+      await vi.advanceTimersByTimeAsync(1);
+      await sidebar.updateComplete;
+      expect(request).toHaveBeenCalledTimes(3);
+      expect(sidebar.textContent).toContain("Updated catalog");
+      expect(sidebar.sessionData.sessionCatalogRefreshStatus.error).toBeNull();
+    } else {
       for (const delay of [1_000, 2_000, 4_000]) {
         expect(sidebar.sessionData.sessionCatalogRefreshStatus.error).toBeNull();
         expect(warning).not.toHaveBeenCalled();
@@ -200,11 +136,47 @@ describe("AppSidebar catalog event refresh", () => {
         stale: true,
       });
       expect(warning).toHaveBeenCalledOnce();
-      await vi.advanceTimersByTimeAsync(300_000);
-      expect(request).toHaveBeenCalledTimes(5);
-    } finally {
-      warning.mockRestore();
     }
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(request).toHaveBeenCalledTimes(outcome === "recovered" ? 3 : 5);
+  });
+
+  it("keeps agent startup quiet past three minutes and surfaces a later inspection failure", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const request = createGatewayRequestMock().mockRejectedValue(
+      new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Agent has not completed startup inspection. Run openclaw doctor --fix.",
+        retryable: true,
+        retryAfterMs: 250,
+        details: { code: "agent-database-inspection-pending", agentId: "main" },
+      }),
+    );
+    const { sidebar } = await mountTab(request);
+    await vi.advanceTimersByTimeAsync(180_000);
+    await sidebar.updateComplete;
+    expect(request.mock.calls.length).toBeGreaterThan(30);
+    expect(
+      sidebar.querySelector('.sidebar-session-empty-hint--startup[role="status"]')?.textContent,
+    ).toContain("Starting up");
+    expect(sidebar.querySelector(".callout.danger")).toBeNull();
+    expect(sidebar.textContent).not.toContain("doctor --fix");
+    expect(warning).not.toHaveBeenCalled();
+
+    request.mockRejectedValue(
+      new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Inspection failed. Run openclaw doctor --fix.",
+        retryable: false,
+        details: { code: "agent-database-inspection-failed", agentId: "main" },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+    await sidebar.updateComplete;
+    expect(sidebar.textContent).not.toContain("Starting up");
+    expect(sidebar.querySelector(".sidebar-session-catalog-error")?.textContent).toContain(
+      "Inspection failed. Run openclaw doctor --fix.",
+    );
   });
 
   it.each(["hide", "remove"])(

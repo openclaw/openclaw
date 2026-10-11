@@ -282,10 +282,10 @@ four of Buzz's 1,024 connection subscriptions for membership notifications and
 concurrent profile, membership, and metadata queries, so one account can
 configure up to 1,020 rooms. Near that limit, optional member profile
 subscriptions are reduced first. Directory entries continue to work with stable
-public keys and deterministic fallback labels.
+public keys and stable fallback labels.
 
 Unique current room names can resolve as outbound targets through OpenClaw's
-shared directory lookup. The canonical `buzz:<ROOM_UUID>` target remains the
+shared directory lookup. The explicit `buzz:<ROOM_UUID>` target remains the
 safest choice for automation and for rooms with duplicate names.
 
 ### Route rooms to different agents
@@ -502,7 +502,7 @@ To restrict one room while keeping other configured rooms open:
 }
 ```
 
-Room UUIDs are the canonical targets. Use the UUID shown during discovery or ask
+Room UUIDs identify the targets directly. Use the UUID shown during discovery or ask
 a room admin for it. A unique current room name can resolve through the live
 directory, but automation should use `buzz:<ROOM_UUID>` to avoid ambiguity.
 
@@ -619,13 +619,13 @@ buzz-admin generate-key
 
 ## Verify the connection
 
-Run the authenticated channel probe:
+Run the authenticated channel check:
 
 ```bash
 openclaw channels status --channel buzz --probe
 ```
 
-A successful probe confirms that the bot can authenticate and that Buzz reports
+A successful check confirms that the bot can authenticate and that Buzz reports
 the selected room with the **Bot** role.
 
 Then send a real message:
@@ -652,7 +652,7 @@ pnpm openclaw qa buzz \
 ```
 
 The command runs a real relay canary and mention-gating check while using the
-deterministic mock model. The private JSON credential
+fixed-response mock model. The private JSON credential
 file contains `relayUrl`, `roomId`, `driverPrivateKey`, and `sutPrivateKey`, plus
 optional `driverAuthTag` and `sutAuthTag` values for closed relays. Both test
 public keys must be room members, and the SUT public key must have the **Bot**

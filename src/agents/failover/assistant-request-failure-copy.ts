@@ -1,15 +1,23 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { GatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
+import { redactSensitiveText } from "../../logging/redact.js";
 import {
+  CONTEXT_OVERFLOW_ERROR_MESSAGE,
   extractErrorHttpStatus,
   formatTransportErrorCopy,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
+import { escapeMarkdownText } from "../../shared/text/escape-markdown.js";
 import { classifyFailoverSignalCore } from "./classify-core.js";
 import { isContextOverflowErrorFromTables } from "./context-overflow-tables.js";
 import {
   isServerErrorMessage,
   isSessionTranscriptValidationErrorMessage,
+  isUnsupportedReasoningEffortParameterError,
+  resolveExecutionApprovalFailureMessage,
 } from "./message-patterns.js";
 import { extractFailoverSignalDetails } from "./signal-details.js";
 import type { FailoverReason } from "./signal.js";
@@ -18,8 +26,6 @@ export const ERROR_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|codex\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;
 export const PROVIDER_SCHEMA_REJECTION_USER_TEXT =
   "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.";
-const GATEWAY_SESSION_TRANSCRIPT_VALIDATION_USER_TEXT =
-  "OpenClaw couldn't read this conversation's history. Try /compact, or start a new conversation with /new.";
 const PROVIDER_OUTPUT_TOKEN_LIMIT_RE =
   /^['"]?max_(?:tokens|output_tokens|completion_tokens|new_tokens)['"]?\s*(?:[:=]\s*)?\(?(\d[\d,]*)\)?\s+exceeds?\b.{0,120}?\b(?:maximum|max|limit)\b(?:\s+(?:output\s+)?tokens?)?(?:\s+(?:is|of)|\s*[:=])?\s*\(?(\d[\d,]*)\)?(?:\D|$)/i;
 const PROVIDER_CACHE_CONTROL_LIMIT_RE =
@@ -52,6 +58,14 @@ const STORAGE_FAILURE_COPY: Record<GatewayStorageFailure, string> = {
     "This conversation changed while OpenClaw was working. Check its latest messages before continuing.",
 };
 
+const RUNTIME_COORDINATION_FAILURE_CODE_COPY: Readonly<Record<string, string>> = {
+  codex_node_disconnected: "Codex execution node disconnected. Start a fresh attempt.",
+  node_runner_update_required:
+    "The device worker requires an update before it can host sessions. Run `openclaw update`, reconnect it, then run `openclaw node restart` on a headless node before trying again.",
+  "runner-offline":
+    "The device runner is offline. Reconnect it, retry later, or bring the session back to this gateway.",
+};
+
 const ASSISTANT_REQUEST_FAILURE_COPY = {
   auth: "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
   auth_permanent:
@@ -65,8 +79,7 @@ const ASSISTANT_REQUEST_FAILURE_COPY = {
   timeout:
     "The request took too long. Check the conversation for any completed work before trying again.",
   tls_certificate: `Couldn't connect securely to the AI service. ${ERROR_DETAILS_HINT}`,
-  context_overflow:
-    "This conversation is too long for the model. Try /compact, or start a new conversation with /new.",
+  context_overflow: CONTEXT_OVERFLOW_ERROR_MESSAGE,
   model_not_found:
     "This model was not found. Choose another model in the Control UI or run `openclaw configure`.",
   session_expired:
@@ -106,46 +119,103 @@ export function renderAssistantRequestFailureCopy(
   return `⚠️ OpenClaw couldn't finish this reply. ${ERROR_DETAILS_HINT}`;
 }
 
-/** Surface bounded rejection facts without arbitrary provider-controlled text. */
+/** Render already-classified coordination facts without loading provider runtime. */
+export function renderRuntimeCoordinationFailureCopy(code: string | undefined): string | undefined {
+  const copy = code ? RUNTIME_COORDINATION_FAILURE_CODE_COPY[code] : undefined;
+  return copy ? `⚠️ ${copy}` : undefined;
+}
+
+/** Preserve the rejection diagnostic without publishing the surrounding response body. */
 export function renderFormatErrorCopy(raw: string): string {
   const trimmed = raw.trim();
   const normalized =
     extractErrorHttpStatus(trimmed)?.rest ?? trimmed.replace(ERROR_PREFIX_RE, "").trim();
-  const candidate = extractErrorHttpStatus(normalized)?.rest ?? normalized;
-  if (isSessionTranscriptValidationErrorMessage(candidate)) {
-    return GATEWAY_SESSION_TRANSCRIPT_VALIDATION_USER_TEXT;
+  let candidate = extractErrorHttpStatus(normalized)?.rest ?? normalized;
+  // Some proxies serialize the upstream error inside their own error.message.
+  for (let depth = 0; depth < 4; depth++) {
+    // HTTP reason phrases can precede a body, including inside a proxy's message.
+    candidate = (extractErrorHttpStatus(candidate)?.rest ?? candidate).replace(
+      /^(?:bad request|unprocessable (?:entity|content))\s*:?\s*(?=[{[<])/iu,
+      "",
+    );
+    const parsedMessage = parseApiErrorInfo(candidate)?.message?.trim();
+    if (!parsedMessage || parsedMessage === candidate) {
+      break;
+    }
+    candidate = parsedMessage;
   }
-  const cacheLimit = candidate.match(PROVIDER_CACHE_CONTROL_LIMIT_RE);
-  if (cacheLimit) {
+  if (isSessionTranscriptValidationErrorMessage(candidate)) {
+    return "OpenClaw couldn't read this conversation's history. Ask the Gateway operator to try `openclaw doctor --fix`. If it still fails, preserve the history and contact support with the Gateway logs.";
+  }
+  const embeddingModel = candidate.match(/^"([\w./:-]{1,200})" does not support chat$/u)?.[1];
+  if (embeddingModel) {
+    const model = escapeMarkdownText(redactSensitiveText(embeddingModel, { mode: "tools" }));
+    return `${model} is an embedding model and cannot chat; pick a chat model with /model (or remove it from models.providers.ollama.models).`;
+  }
+  if (PROVIDER_CACHE_CONTROL_LIMIT_RE.test(candidate)) {
     return "The AI service couldn't accept this conversation. Start a new conversation with /new, or choose another model in the Control UI.";
   }
-  const match = candidate.length <= 300 ? candidate.match(PROVIDER_OUTPUT_TOKEN_LIMIT_RE) : null;
-  const [, value, maximum] = match ?? [];
-  if (!value || !maximum) {
-    return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
+  if (isUnsupportedReasoningEffortParameterError(candidate)) {
+    return "This model endpoint does not support reasoning_effort. Set compat.supportsReasoningEffort: false on this model in your custom provider configuration and try again.";
+  }
+  if (candidate.length > 300 || !PROVIDER_OUTPUT_TOKEN_LIMIT_RE.test(candidate)) {
+    if (!candidate || /^[{<]/u.test(candidate)) {
+      return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
+    }
+    if (candidate.startsWith("[")) {
+      try {
+        JSON.parse(candidate);
+        return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
+      } catch {
+        // Preserve field-path diagnostics, not truncated or suffixed JSON arrays.
+        if (!/^\[[a-z_$][\w$.-]*\](?:\s|:|$)/iu.test(candidate)) {
+          return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
+        }
+      }
+    }
+    // Redact before truncation so a clipped credential cannot escape matching.
+    const detail = redactSensitiveText(candidate, { mode: "tools" })
+      .replace(/[\p{Cc}\p{Cf}\s]+/gu, " ")
+      .trim();
+    if (!detail) {
+      return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
+    }
+    const bounded = detail.length > 600 ? `${truncateUtf16Safe(detail, 600)}…` : detail;
+    return `LLM request rejected: ${escapeMarkdownText(bounded)}`;
   }
   return "The reply length is set too high for this model. Lower its reply limit in the Control UI settings, or choose another model.";
 }
 
 /** Share bounded request-limit facts between live failures and persisted chat history. */
-export function renderAssistantFormatFailureCopy(message: {
-  errorMessage?: unknown;
-  errorBody?: unknown;
-}): string | undefined {
-  for (const raw of [message.errorMessage, message.errorBody]) {
+export function renderAssistantFormatFailureCopy(
+  message: { errorMessage?: unknown; errorBody?: unknown; errorType?: unknown },
+  reason?: FailoverReason | null,
+): string | undefined {
+  for (const [isBody, raw] of [
+    [true, message.errorBody],
+    [false, message.errorMessage],
+  ] as const) {
     if (typeof raw !== "string") {
       continue;
     }
     const info = parseApiErrorInfo(raw);
+    if (isBody && !info?.message) {
+      continue;
+    }
     const status = extractErrorHttpStatus(raw)?.code;
     if (
+      reason !== "format" &&
+      !(
+        typeof message.errorType === "string" &&
+        message.errorType.toLowerCase().includes("invalid_request")
+      ) &&
       !info?.type?.toLowerCase().includes("invalid_request") &&
       status !== 400 &&
       status !== 422
     ) {
       continue;
     }
-    const copy = renderFormatErrorCopy(info?.message ?? raw);
+    const copy = renderFormatErrorCopy(raw);
     if (copy !== PROVIDER_SCHEMA_REJECTION_USER_TEXT) {
       return copy;
     }
@@ -153,16 +223,49 @@ export function renderAssistantFormatFailureCopy(message: {
   return undefined;
 }
 
+/** Render loading facts without trusting provider diagnostics or recovery instructions. */
+export function renderModelLoadFailureCopy(message: {
+  model?: unknown;
+  errorCode?: unknown;
+  errorBody?: unknown;
+}): string | undefined {
+  if (
+    message.errorCode !== "model_load_failed" ||
+    typeof message.errorBody !== "string" ||
+    typeof message.model !== "string"
+  ) {
+    return undefined;
+  }
+  const contextLength = asPositiveSafeInteger(
+    safeParseJsonRecord(message.errorBody)?.requestedContextLength,
+  );
+  const model = redactSensitiveText(message.model, { mode: "tools" })
+    .replace(/[\p{Cc}\p{Cf}\s]+/gu, " ")
+    .trim();
+  if (!contextLength || !model) {
+    return undefined;
+  }
+  const label = escapeMarkdownText(truncateUtf16Safe(model, 200));
+  return `Could not load model "${label}" with ${contextLength} context tokens. Wait for loading to finish on the model server, then retry, or lower the model's configured context size.`;
+}
+
 /** Classify saved error facts without loading providers or publishing their raw diagnostics. */
 export function renderRecordedAssistantFailureCopy(message: {
+  model?: unknown;
   errorMessage?: unknown;
   errorBody?: unknown;
   errorCode?: unknown;
   errorType?: unknown;
 }): string | undefined {
-  const formatCopy = renderAssistantFormatFailureCopy(message);
-  if (formatCopy) {
-    return formatCopy;
+  const modelLoadCopy = renderModelLoadFailureCopy(message);
+  if (modelLoadCopy) {
+    return modelLoadCopy;
+  }
+  const approvalMessage = resolveExecutionApprovalFailureMessage(
+    typeof message.errorMessage === "string" ? message.errorMessage : undefined,
+  );
+  if (approvalMessage) {
+    return `⚠️ ${approvalMessage}`;
   }
   const raw = typeof message.errorMessage === "string" ? message.errorMessage.trim() : "";
   if (raw === "Worker inference result exceeds the transcript message limit.") {
@@ -193,7 +296,14 @@ export function renderRecordedAssistantFailureCopy(message: {
           isContextOverflowErrorFromTables(value)),
     )
   ) {
-    return "This conversation is too long for the model. Try /compact, or start a new conversation with /new.";
+    return CONTEXT_OVERFLOW_ERROR_MESSAGE;
+  }
+  const formatCopy =
+    !classification?.reason || classification.reason === "format"
+      ? renderAssistantFormatFailureCopy(message, classification?.reason)
+      : undefined;
+  if (formatCopy) {
+    return formatCopy;
   }
   const classifiedCopy = renderAssistantRequestFailureCopy({
     code,

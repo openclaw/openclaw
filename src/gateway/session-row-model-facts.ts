@@ -1,8 +1,9 @@
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/types.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readPreparedGatewayModelCatalogMetadata } from "./server-model-catalog-view.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js";
 import type {
   GatewaySessionModelSource,
   SessionListRowContext,
@@ -21,6 +22,9 @@ export function readSessionRowModelFacts(params: {
   agentId: string;
   entry?: SessionEntry;
   preparedAcpMeta?: SessionEntry["acp"] | null;
+  preparedRuntimeOwnership?: AgentHarnessSessionRuntimeOwnership | null;
+  /** Null records an admitted absence; only standalone readers may discover metadata. */
+  preparedModelMetadata?: PluginMetadataSnapshot | null;
   source: GatewaySessionModelSource;
   rowContext: SessionListRowContext;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
@@ -30,40 +34,47 @@ export function readSessionRowModelFacts(params: {
   const lightweight = params.lightweightListRow === true;
   const preparedCatalog =
     params.modelCatalog instanceof Map ? params.modelCatalog.get(agentId) : undefined;
-  const metadataSnapshot = readPreparedGatewayModelCatalogMetadata(preparedCatalog);
+  const metadataSnapshot = preparedCatalog
+    ? readPreparedGatewayModelMetadata(cfg, preparedCatalog)
+    : params.preparedModelMetadata;
   const selectedModel = resolveSessionSelectedModelRef({
     cfg,
     sessionKey: key,
     source,
     agentId,
     rowContext,
+    preparedRuntimeOwnership: params.preparedRuntimeOwnership,
     allowPluginNormalization: !lightweight,
-    manifestPlugins: metadataSnapshot,
+    manifestPlugins: metadataSnapshot === null ? [] : metadataSnapshot,
   });
   const { provider, model } = selectedModel;
   const rowModelIdentity = resolveSessionDisplayModelIdentityRefCached({
     cfg,
     provider,
     model,
+    metadataSnapshot,
     rowContext,
   });
   // Entries and provider policy stay bound to the same prepared agent owner.
   const rowModelCatalog =
     params.modelCatalog instanceof Map ? preparedCatalog?.entries : params.modelCatalog;
-  // Lightweight projections must not rediscover plugin-backed configured catalog metadata.
+  // Prepared and lightweight projections never discover missing provider policy.
   const thinkingProjection = resolveGatewaySessionThinkingProjectionInternal({
     cfg,
     agentId,
-    provider: provider ?? DEFAULT_PROVIDER,
-    model: model ?? DEFAULT_MODEL,
+    provider,
+    model,
     sessionKey: key,
     entry: params.entry,
     preparedAcpMeta: params.preparedAcpMeta,
-    modelCatalog: rowModelCatalog ?? (lightweight ? [] : undefined),
+    modelCatalog:
+      rowModelCatalog ?? (lightweight || metadataSnapshot !== undefined ? [] : undefined),
     modelCatalogRouteVariants: preparedCatalog?.routeVariants,
     metadataSnapshot,
     rowContext,
-    providerPolicySource: preparedCatalog?.pluginRegistry ?? (lightweight ? "active" : undefined),
+    providerPolicySource:
+      preparedCatalog?.pluginRegistry ??
+      (lightweight || metadataSnapshot !== undefined ? "active" : undefined),
   });
   return {
     selectedModel,

@@ -21,6 +21,7 @@ import {
   type McpAppFormOrigin,
   type McpFormResourceUpload,
 } from "../agents/mcp-ui-resource.js";
+import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveMcpAppRequesterId, callMcpAppToolWithElicitation } from "./mcp-app-operations.js";
 import { canSelectQuestion } from "./question-access.js";
@@ -43,7 +44,6 @@ type Form = {
   previewViews: Set<string>;
   owner: McpFormResourceOwner;
   signal: AbortSignal;
-  context: StructuredInputResourceContext;
   operations: number;
   activeOperations: number;
   uploadedBytes: number;
@@ -83,10 +83,8 @@ const actionSchema = z.discriminatedUnion("action", [
     .strict(),
 ]);
 
-/** Binds capabilities to one originating MCP call; its ID is not a pending Gateway record ID. */
 export async function createMcpAppFormResourceContext(params: {
   origin: McpAppFormOrigin;
-  requestId: string | number;
   snapshot: Record<string, unknown>;
   signal: AbortSignal;
   uploadResources?: McpFormResourceUpload;
@@ -193,7 +191,6 @@ export async function createMcpAppFormResourceContext(params: {
     previewViews,
     owner,
     signal: params.signal,
-    context,
     operations: 0,
     activeOperations: 0,
     uploadedBytes: 0,
@@ -215,8 +212,8 @@ function acceptsFile(
   if (!accepts?.length) {
     return true;
   }
-  const name = file.name.toLowerCase(),
-    mime = file.mimeType.toLowerCase().split(";", 1)[0]!;
+  const name = file.name.toLowerCase();
+  const mime = file.mimeType.toLowerCase().split(";", 1)[0]!;
   return accepts.some((rule) => {
     const accept = rule.toLowerCase();
     return accept.startsWith(".")
@@ -492,11 +489,35 @@ export function createMcpAppWorkspaceUploadProvider(params: {
   agentId: string;
   assertCurrent: () => void;
 }): McpFormResourceUpload {
+  const metadata = captureSessionEntryMetadataRead(params);
+  const initial = metadata?.readCurrent();
   return async (request) => {
     const assertCurrent = () => {
       params.assertCurrent();
+      metadata?.assertCurrent();
       request.assertCurrent();
-      if (resolveLocalSessionWorkspaceRoot(params) !== params.workspaceDir) {
+      if (metadata) {
+        const current = metadata.readCurrent();
+        if (
+          current?.sessionId !== initial?.sessionId ||
+          current?.lifecycleRevision !== initial?.lifecycleRevision
+        ) {
+          throw new Error("Form upload session generation changed");
+        }
+      }
+      if (
+        resolveLocalSessionWorkspaceRoot({
+          ...params,
+          ...(metadata
+            ? {
+                source: {
+                  entry: metadata.readCurrent(),
+                  cfg: request.options.context.getRuntimeConfig(),
+                },
+              }
+            : {}),
+        }) !== params.workspaceDir
+      ) {
         throw new Error("Form upload workspace authority changed");
       }
     };

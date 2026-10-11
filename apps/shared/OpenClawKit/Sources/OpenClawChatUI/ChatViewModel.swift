@@ -240,7 +240,7 @@ public final class OpenClawChatViewModel {
     @ObservationIgnored
     var canonicalOutboxMessageKeys: [String] = []
     @ObservationIgnored
-    var isFlushingOutbox = false
+    var outboxFlushTask: Task<Void, Never>?
     @ObservationIgnored
     var isOutboxFlushRequestedWhileActive = false
     @ObservationIgnored
@@ -642,7 +642,8 @@ public final class OpenClawChatViewModel {
         startBootstrap()
     }
 
-    public func resumeFromForeground() {
+    @discardableResult
+    public func resumeFromForeground() -> Task<Void, Never> {
         Task { await self.refreshRunStateAfterForeground() }
     }
 
@@ -880,7 +881,7 @@ extension OpenClawChatViewModel {
         self.invalidateProgressCardTarget()
         self.invalidateOutboxBranchReconciliation()
         self.healthOK = false
-        clearPendingRuns(reason: nil)
+        clearPendingRuns()
         self.clearStreamingActivity()
         self.updateActiveSessionRunWithoutChatSnapshot(false)
         self.sessionId = nil
@@ -992,9 +993,7 @@ extension OpenClawChatViewModel {
                 self.updateActiveSessionRunWithoutChatSnapshot(self.pendingRuns.isEmpty)
             } else {
                 self.updateActiveSessionRunWithoutChatSnapshot(false)
-                clearPendingRuns(
-                    reason: nil,
-                    hapticEvent: assistantHapticEventAfterLatestUser())
+                clearPendingRuns(hapticEvent: assistantHapticEventAfterLatestUser())
                 self.clearStreamingActivity()
             }
         }
@@ -1268,7 +1267,7 @@ extension OpenClawChatViewModel {
         self.sessionBranches = []
         self.isLoadingSessionBranches = false
         self.sessionBranchSwitchActivity = nil
-        clearPendingRuns(reason: nil)
+        clearPendingRuns()
     }
 
     func performReset() async {
@@ -1371,9 +1370,9 @@ extension OpenClawChatViewModel {
         do {
             guard let routeLease else { throw OpenClawChatTransportSendError.notDispatched }
             let patchResult = try await routeLease.patchSessionSettings(
-                sessionKey: request.target.canonicalSessionKey,
-                agentID: request.target.agentID,
-                patch: OpenClawChatSessionSettingsPatch(model: .some(request.modelRef)))
+                request.target.canonicalSessionKey,
+                request.target.agentID,
+                OpenClawChatSessionSettingsPatch(model: .some(request.modelRef)))
             self.lastSuccessfulSettingsPatchRequestIDsByTarget[request.target] = request.id
             guard request.id == self.latestModelSelectionRequestIDsByTarget[request.target] else {
                 // Keep older successful patches as rollback state, but do not replay
@@ -1570,9 +1569,14 @@ extension OpenClawChatViewModel {
             selectionID: selectionID,
             patchResult: patchResult,
             target: target)
-        if target.canonicalSessionKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "global",
-           let targetAgentID = target.agentID,
-           targetAgentID != activeAgentId
+        let modelStateKey = sessionEntryKey ?? target.canonicalSessionKey
+        let capturedAgentID = OpenClawChatSessionKey.agentID(from: target.canonicalSessionKey) ?? target.agentID
+        if self.sidebarData != nil {
+            // A global ACK can outlive an explicit owner switch without changing the Gateway's default agent.
+            if modelStateKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "global",
+               capturedAgentID != self.currentSessionSnapshot().deliveryAgentID { return }
+        } else if target.canonicalSessionKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "global",
+                  let targetAgentID = target.agentID, targetAgentID != activeAgentId
         {
             return
         }
@@ -1583,15 +1587,13 @@ extension OpenClawChatViewModel {
         } else {
             self.resolvedSessionModelIdentity(forSelectionID: selectionID)
         }
-        let modelStateKey = sessionEntryKey ?? target.canonicalSessionKey
         updateCurrentSessionModel(
             modelID: resolved.modelID,
             modelProvider: resolved.modelProvider,
             sessionKey: modelStateKey,
+            agentID: capturedAgentID,
             syncSelection: syncSelection)
-        if let thinkingLevels = patchResult?.thinkingLevels {
-            updateCurrentSessionThinkingLevels(thinkingLevels, sessionKey: modelStateKey)
-        }
+        updateCurrentSessionThinkingLevels(patchResult?.thinkingLevels, sessionKey: modelStateKey)
         if syncSelection,
            !self.prefersExplicitThinkingLevel,
            Self.normalizedThinkingLevel(self.preferredThinkingLevel) != "ultra",
@@ -1618,7 +1620,7 @@ extension OpenClawChatViewModel {
             self.acceptedThinkingLevelsByTarget[target] = thinkingLevel
             if self.acceptedExplicitThinkingPreferencesByTarget[target] == false {
                 self.acceptedPreferredThinkingLevelsByTarget[target] = thinkingLevel
-                self.recordAuthoritativeInheritedThinkingPreference(thinkingLevel)
+                self.confirmedThinkingPreference = PreferenceState(level: thinkingLevel, isExplicit: false)
             }
         }
         if let patchResult {

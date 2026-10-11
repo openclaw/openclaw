@@ -15,6 +15,7 @@ import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-stat
 import type { OpenClawConfig } from "../types.js";
 import { resolveSessionArtifactDirectory } from "./paths.js";
 import { readSessionColdStorageInventory } from "./session-cold-storage-inventory.js";
+import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
 import { prepareSessionStoreTargetInventory } from "./session-store-target-inventory.js";
 import { withSessionHistoryWorkerReadCandidates } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabases } from "./session-transcript-worker-runtime.js";
@@ -32,6 +33,8 @@ async function fileBytes(pathname: string): Promise<number> {
 }
 
 export async function getSessionColdStorageStatus(config: OpenClawConfig) {
+  const binding = captureIncognitoSessionBinding();
+  binding?.admissionSignal?.throwIfAborted();
   const prepared = prepareSessionStoreTargetInventory(
     config,
     listConfiguredSessionStoreAgentIds(config),
@@ -48,6 +51,8 @@ export async function getSessionColdStorageStatus(config: OpenClawConfig) {
   const nativeGeneration = readOpenIncognitoAgentDatabaseGeneration();
   let hasNativeStores = false;
   const assertSnapshotCurrent = () => {
+    binding?.admissionSignal?.throwIfAborted();
+    binding?.actor.assertReadable();
     context.maintenanceScope?.assertAdmission();
     context.admission.assertCurrent();
     registryRead.assertCurrent();
@@ -81,15 +86,18 @@ export async function getSessionColdStorageStatus(config: OpenClawConfig) {
       throw new Error("Cold storage inventory did not receive its registry snapshot");
     }
     const stores = inventory.agents.flatMap(({ reads }) =>
-      reads.map(({ database, target }) => ({
-        ...database,
-        env,
-        storePath: target.storePath,
-        native: isIncognitoOpenClawAgentSqlitePath(database.path, {
-          agentId: database.agentId,
-          env,
-        }),
-      })),
+      reads
+        .filter(({ database }) => !binding || database.path !== binding.actor.path)
+        .map(({ database, target }) =>
+          Object.assign({}, database, {
+            env,
+            storePath: target.storePath,
+            native: isIncognitoOpenClawAgentSqlitePath(database.path, {
+              agentId: database.agentId,
+              env,
+            }),
+          }),
+        ),
     );
     hasNativeStores = stores.some((store) => store.native);
     assertCurrent();

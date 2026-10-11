@@ -1,13 +1,14 @@
 {
   "name": "@openclaw/workboard",
-  "version": "2026.9.7",
+  "version": "2026.9.9",
   "private": true,
   "description": "OpenClaw dashboard workboard plugin",
   "type": "module",
   "dependencies": {
     "@openclaw/gateway-protocol": "workspace:*",
     "@openclaw/workboard-contract": "workspace:*",
-    "lit": "3.3.3",
+    "@solidjs/web": "2.0.0-rc.13",
+    "solid-js": "2.0.0-rc.13",
     "typebox": "1.3.34",
     "zod": "4.6.5"
   },
@@ -15,10 +16,12 @@
     "@openclaw/gateway-client": "workspace:*",
     "@openclaw/normalization-core": "workspace:*",
     "@openclaw/plugin-sdk": "workspace:*",
+    "@solidjs/compiler": "2.0.0-rc.13",
+    "esbuild": "0.28.2",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.9.7"
+    "openclaw": ">=2026.9.9"
   },
   "peerDependenciesMeta": {
     "openclaw": {

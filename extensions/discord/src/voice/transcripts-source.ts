@@ -150,6 +150,10 @@ function notifyCaptureRetired(capture: CaptureRegistration | undefined): void {
   if (!capture?.onStatus) {
     return;
   }
+  const warn = (error: unknown) =>
+    logger.warn(
+      `discord voice: transcripts terminal notification failed: ${formatErrorMessage(error)}`,
+    );
   // Registration revocation owns terminal state; replaceable voice transports do not.
   // Persistence failures remain retryable in core without blocking the next capture.
   try {
@@ -159,15 +163,9 @@ function notifyCaptureRetired(capture: CaptureRegistration | undefined): void {
         sessionId: capture.sessionId,
         source: { providerId: "discord-voice", ...capture.source },
       }),
-    ).catch((error: unknown) =>
-      logger.warn(
-        `discord voice: transcripts terminal notification failed: ${formatErrorMessage(error)}`,
-      ),
-    );
+    ).catch(warn);
   } catch (error) {
-    logger.warn(
-      `discord voice: transcripts terminal notification failed: ${formatErrorMessage(error)}`,
-    );
+    warn(error);
   }
 }
 
@@ -385,19 +383,13 @@ export const discordVoiceTranscriptsSourceProvider: TranscriptSourceProvider = {
       }
       const account = resolveDiscordAccount({ cfg, accountId: callerAccountId });
       const access = await authorizeDiscordVoiceIngress({
+        ...target,
         readPolicy: manager?.readPolicy,
         cfg,
         discordConfig: account.config,
         accountId: account.accountId,
-        guild: target.guild,
         guildId,
         channelId,
-        ...(target.channelName ? { channelName: target.channelName } : {}),
-        channelSlug: target.channelSlug,
-        ...(target.parentId ? { parentId: target.parentId } : {}),
-        ...(target.parentName ? { parentName: target.parentName } : {}),
-        ...(target.parentSlug ? { parentSlug: target.parentSlug } : {}),
-        scope: target.scope,
         memberRoleIds: [...caller.roleIds],
         admissionAllowFrom: resolveDiscordVoiceAccess({
           cfg,

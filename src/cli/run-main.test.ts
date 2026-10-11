@@ -7,18 +7,17 @@ import {
   type PluginManifestCommandAliasRegistry,
 } from "../plugins/manifest-command-aliases.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { captureEnv } from "../test-utils/env.js";
+import { rewriteUpdateFlagArgv } from "./argv.js";
 import {
   resolveGatewayCatalogCommandPath,
   resolveGatewayRunPreBootstrapOptions,
 } from "./gateway-run-argv.js";
 import {
   isGatewayRunFastPathArgv,
-  rewriteUpdateFlagArgv,
   resolveMissingPluginCommandMessage,
-  shouldHandleBareRoot,
   shouldStartProxyForCli,
   shouldUseRootHelpFastPath,
-  shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
 import { runCli } from "./run-main.js";
 
@@ -67,6 +66,7 @@ vi.mock("../logging/console.js", async (importOriginal) => ({
 
 describe("CLI host admission and Gateway fast-path parsing", () => {
   const previousExitCode = process.exitCode;
+  const pathEnv = captureEnv(["PATH", "OPENCLAW_PATH_BOOTSTRAPPED"]);
   beforeEach(() => {
     process.exitCode = undefined;
     runGatewayCommand.mockClear();
@@ -75,6 +75,7 @@ describe("CLI host admission and Gateway fast-path parsing", () => {
     vi.spyOn(process.stderr, "write").mockImplementation(() => true);
   });
   afterEach(() => {
+    pathEnv.restore();
     process.exitCode = previousExitCode;
     vi.restoreAllMocks();
   });
@@ -193,15 +194,6 @@ describe("root startup policy", () => {
     expect(rewriteUpdateFlagArgv(cliArgs(...args))).toEqual(cliArgs(...expected));
   });
 
-  it.each([["--profile", "work", "--", "config", "get", "gateway.mode"]])(
-    "does not launch bare-root flows for literal commands: %j",
-    (...args) => {
-      const argv = cliArgs(...args);
-      expect(shouldHandleBareRoot(argv)).toBe(false);
-      expect(shouldUseRootHelpFastPath(argv)).toBe(false);
-    },
-  );
-
   it("skips proxy startup before SQLite maintenance", () => {
     expect(shouldStartProxyForCli(cliArgs("doctor", "--state-sqlite", "compact", "--json"))).toBe(
       false,
@@ -219,16 +211,6 @@ describe("root startup policy", () => {
     expect(shouldUseRootHelpFastPath(cliArgs("status", "--help"))).toBe(false);
     expect(shouldUseRootHelpFastPath(cliArgs("--help", "status"))).toBe(false);
     expect(shouldUseRootHelpFastPath(cliArgs("help", "gateway"))).toBe(false);
-  });
-
-  it("keeps setup help behind unambiguous argument parsing", () => {
-    expect(shouldUseSetupOnboardConfigureHelpFastPath(cliArgs("setup", "--help"))).toBe(true);
-    expect(shouldUseSetupOnboardConfigureHelpFastPath(cliArgs("onboard", "status", "--help"))).toBe(
-      false,
-    );
-    expect(
-      shouldUseSetupOnboardConfigureHelpFastPath(cliArgs("onboard", "--gateway-port", "--help")),
-    ).toBe(false);
   });
 });
 

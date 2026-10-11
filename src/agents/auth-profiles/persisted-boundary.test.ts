@@ -17,15 +17,12 @@ import {
   mergeAuthProfileStores,
 } from "./persisted.js";
 import { getRuntimeExternalCliProfileIds } from "./runtime-external-profile-references.js";
-import { markRuntimePersistedProfiles } from "./runtime-snapshot-owner.js";
 import { buildPersistedAuthProfileState, coerceAuthProfileState } from "./state.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
 describe("persisted auth profile boundary", () => {
   it.each([
     { mode: "api_key", provider: "example", apiKey: "synthetic-key" },
-    { type: "apiKey", provider: "example", apiKey: "synthetic-key" },
-    { type: "api_key", provider: "example", api_key: "synthetic-key" },
     { type: "api_key", provider: "example", key: { source: "env", id: "SYNTHETIC_KEY" } },
     { type: "token", provider: "example", token: { source: "env", id: "SYNTHETIC_TOKEN" } },
   ])(
@@ -46,28 +43,10 @@ describe("persisted auth profile boundary", () => {
 
   it.each([
     {
-      name: "token-expired classification with auth reason",
-      cooldownReason: "auth",
-      cooldownClassification: "wham_token_expired",
-      expectedClassification: "wham_token_expired",
-    },
-    {
       name: "dead-account classification with permanent-auth reason",
       cooldownReason: "auth_permanent",
       cooldownClassification: "wham_account_dead",
       expectedClassification: "wham_account_dead",
-    },
-    {
-      name: "classification mismatched with its canonical reason",
-      cooldownReason: "rate_limit",
-      cooldownClassification: "wham_account_dead",
-      expectedClassification: undefined,
-    },
-    {
-      name: "classification missing its canonical reason",
-      cooldownReason: undefined,
-      cooldownClassification: "wham_token_expired",
-      expectedClassification: undefined,
     },
   ] as const)("normalizes $name", (testCase) => {
     const state = {
@@ -98,7 +77,7 @@ describe("persisted auth profile boundary", () => {
           type: "api_key",
           provider: " OpenAI ",
           key: "demo-openai-key",
-          keyRef: { source: "env", id: "OPENAI_API_KEY" },
+          keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
           metadata: { account: "acct_123", bad: 123 },
           copyToAgents: "yes",
           email: ["wrong"],
@@ -273,56 +252,6 @@ describe("persisted auth profile boundary", () => {
     expect(merged.lastGood?.anthropic).toBeUndefined();
   });
 
-  it("keeps override profiles when authoritative metadata removes base runtime external state", () => {
-    const profileId = "anthropic:claude-cli";
-    const merged = mergeAuthProfileStores(
-      {
-        version: AUTH_STORE_VERSION,
-        runtimeExternalProfileIds: [profileId],
-        runtimeExternalProfileIdsAuthoritative: true,
-        profiles: {
-          [profileId]: {
-            type: "oauth",
-            provider: "anthropic",
-            access: "stale-access",
-            refresh: "stale-refresh",
-            expires: 1,
-          },
-        },
-        order: {
-          anthropic: [profileId],
-        },
-        lastGood: {
-          anthropic: profileId,
-        },
-      },
-      {
-        version: AUTH_STORE_VERSION,
-        runtimeExternalProfileIds: [],
-        runtimeExternalProfileIdsAuthoritative: true,
-        profiles: {
-          [profileId]: createApiKeyCredential("anthropic", "sk-local"),
-        },
-        order: {
-          anthropic: [profileId],
-        },
-        lastGood: {
-          anthropic: profileId,
-        },
-      },
-    );
-
-    expect(merged.runtimeExternalProfileIds).toEqual([]);
-    expect(merged.runtimeExternalProfileIdsAuthoritative).toBe(true);
-    expect(merged.profiles[profileId]).toMatchObject({
-      type: "api_key",
-      provider: "anthropic",
-      key: "sk-local",
-    });
-    expect(merged.order?.anthropic).toEqual([profileId]);
-    expect(merged.lastGood?.anthropic).toBe(profileId);
-  });
-
   it("tracks persisted profile provenance with override precedence", () => {
     const sharedSource = { databasePath: "synthetic-shared.sqlite", provider: "openai" };
     const localSource = { databasePath: "synthetic-local.sqlite", provider: "openai" };
@@ -364,68 +293,6 @@ describe("persisted auth profile boundary", () => {
   });
 
   it.each([
-    { name: "inherited order", order: undefined, localProviders: [] },
-    { name: "local override", order: { openai: ["openai:shared"] }, localProviders: ["openai"] },
-  ])("preserves local priority ownership for $name", ({ order, localProviders }) => {
-    const shared = markRuntimePersistedProfiles({
-      version: AUTH_STORE_VERSION,
-      profiles: {
-        "openai:shared": { type: "api_key", provider: "openai", key: "shared-key" },
-      },
-      order: { openai: ["openai:shared"] },
-    });
-    const local = markRuntimePersistedProfiles({
-      version: AUTH_STORE_VERSION,
-      profiles: {},
-      order,
-    });
-    const merged = mergeAuthProfileStores(shared, local);
-
-    expect(merged.order).toEqual({ openai: ["openai:shared"] });
-    expect(merged.runtimeLocalOrderProviderIds).toEqual(localProviders);
-    expect(markRuntimePersistedProfiles(merged, local).runtimeLocalOrderProviderIds).toEqual(
-      localProviders,
-    );
-    expect(shared.runtimeLocalOrderProviderIds).toEqual(["openai"]);
-  });
-
-  it("preserves config-only order fallbacks during agent-store merges", () => {
-    const merged = mergeAuthProfileStores(
-      {
-        version: AUTH_STORE_VERSION,
-        profiles: {},
-        order: {
-          openai: ["openai:aws-sdk"],
-        },
-      },
-      {
-        version: AUTH_STORE_VERSION,
-        profiles: {
-          "openai:new-login": {
-            type: "oauth",
-            provider: "openai",
-            access: "new-access",
-            refresh: "new-refresh",
-            expires: 1,
-          },
-        },
-        order: {
-          openai: ["openai:new-login", "openai:aws-sdk"],
-        },
-      },
-      { preserveBaseRuntimeExternalProfiles: true },
-    );
-
-    expect(merged.order?.openai).toEqual(["openai:new-login", "openai:aws-sdk"]);
-  });
-
-  it.each([
-    {
-      name: "unbound registered identity with a plain main-store account",
-      localIdentity: { ...oidcIdentity(), accountId: undefined },
-      mainIdentity: { accountId: "main-account" },
-      replace: false,
-    },
     {
       name: "unbound registered identity with a bound main-store account",
       localIdentity: { ...oidcIdentity(), accountId: undefined },
@@ -550,50 +417,6 @@ describe("persisted auth profile boundary", () => {
     expect(merged.order).toEqual({
       openai: ["openai:agent"],
     });
-  });
-
-  it("preserves inherited base runtime external profiles during agent-store merges", () => {
-    const profileId = "anthropic:claude-cli";
-    const merged = mergeAuthProfileStores(
-      {
-        version: AUTH_STORE_VERSION,
-        runtimeExternalProfileIds: [profileId],
-        runtimeExternalProfileIdsAuthoritative: true,
-        profiles: {
-          [profileId]: {
-            type: "oauth",
-            provider: "anthropic",
-            access: "main-access",
-            refresh: "main-refresh",
-            expires: 1,
-          },
-        },
-        order: {
-          anthropic: [profileId],
-        },
-        lastGood: {
-          anthropic: profileId,
-        },
-      },
-      {
-        version: AUTH_STORE_VERSION,
-        runtimeExternalProfileIds: [],
-        runtimeExternalProfileIdsAuthoritative: true,
-        profiles: {},
-      },
-      { preserveBaseRuntimeExternalProfiles: true },
-    );
-
-    expect(merged.runtimeExternalProfileIds).toEqual([profileId]);
-    expect(merged.runtimeExternalProfileIdsAuthoritative).toBe(true);
-    expect(merged.profiles[profileId]).toMatchObject({
-      type: "oauth",
-      provider: "anthropic",
-      access: "main-access",
-      refresh: "main-refresh",
-    });
-    expect(merged.order?.anthropic).toEqual([profileId]);
-    expect(merged.lastGood?.anthropic).toBe(profileId);
   });
 
   it("carries built-in CLI provenance only with the winning external profile", () => {

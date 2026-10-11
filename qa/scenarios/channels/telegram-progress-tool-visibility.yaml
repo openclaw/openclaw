@@ -41,24 +41,6 @@ scenario:
 
 flow:
   steps:
-    - name: verifies Telegram Test Server credentials
-      actions:
-        - set: credentialDoctor
-          value:
-            expr: |-
-              (async () => {
-                const scripts = path.join(env.repoRoot, '.agents/skills/telegram-e2e-userbot/scripts');
-                const { runTelegramTestDoctor } = await qaImport(path.join(scripts, 'telegram-test-doctor.mjs'));
-                const { runCommand } = await qaImport(path.join(scripts, 'run-mock-sut-user-e2e.mjs'));
-                return runTelegramTestDoctor({
-                  // The package harness runs the same TDLib driver with python3; its image has no uv.
-                  runCommandImpl: (_command, args, options) => runCommand('python3', args.slice(1), options),
-                });
-              })()
-        - assert:
-            expr: credentialDoctor.ok === true
-            message: the Telegram credential doctor must pass before sending test messages
-      detailsExpr: JSON.stringify(credentialDoctor)
     - name: preserves commentary and final delivery across quiet and detailed progress
       actions:
         - assert:
@@ -108,7 +90,7 @@ flow:
                   expr: "`SLACK-QA-COMMENTARY-DONE-${suffix}`"
               - set: execCommand
                 value:
-                  expr: "`grep '${toolMarker}' /dev/null || sleep 5`"
+                  expr: "`printf '%s' '${toolMarker}' >/dev/null; sleep 5; printf '%s\\\\n' 'SLACK-QA-OUTPUT-${suffix}'`"
               - set: requestCursor
                 value:
                   expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"

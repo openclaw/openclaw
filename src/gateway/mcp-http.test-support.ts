@@ -1,6 +1,26 @@
 import { expect } from "vitest";
+import type { AnyAgentTool } from "../agents/tools/common.js";
 import { ensureMcpLoopbackServer } from "./mcp-http.js";
 import { getActiveMcpLoopbackRuntime } from "./mcp-http.loopback-runtime.js";
+
+export type MockGatewayTool = {
+  name: string;
+  label: string;
+  description: string;
+  parameters: AnyAgentTool["parameters"] | Record<string, unknown>;
+  prepareBeforeToolCallParams?: (...args: unknown[]) => unknown;
+  finalizeBeforeToolCallParams?: (...args: unknown[]) => unknown;
+  execute: (...args: unknown[]) => Promise<{
+    content: unknown[];
+    details?: unknown;
+  }>;
+};
+
+export type MockGatewayScopedTools = {
+  agentId: string;
+  workspaceDir?: string;
+  tools: MockGatewayTool[];
+};
 
 export type McpToolResultPayload = {
   result?: {

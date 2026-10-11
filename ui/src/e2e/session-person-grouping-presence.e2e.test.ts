@@ -86,6 +86,11 @@ suite.define(() => {
 
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
+      // This scenario intentionally compares sessions beyond the current human's Mine scope.
+      await page
+        .locator(".sidebar-navigation-scope")
+        .getByRole("button", { name: "All", exact: true })
+        .click();
       await page.getByText("Ada research", { exact: true }).first().waitFor();
       const menu = await openSidebarSortMenu(page);
       await chooseSidebarMenuOption(menu.page(), "Group by", "Person");

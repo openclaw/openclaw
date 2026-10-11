@@ -35,10 +35,8 @@ export const NATIVE_HOOK_RELAY_EVENTS = [
   "before_agent_finalize",
 ] as const;
 
-const NATIVE_HOOK_RELAY_PROVIDERS = ["codex"] as const;
-
 export type NativeHookRelayEvent = (typeof NATIVE_HOOK_RELAY_EVENTS)[number];
-export type NativeHookRelayProvider = (typeof NATIVE_HOOK_RELAY_PROVIDERS)[number];
+export type NativeHookRelayProvider = "codex";
 
 export type NativeHookRelayInvocation = {
   provider: NativeHookRelayProvider;
@@ -147,6 +145,7 @@ type NativeHookRelayCommandOptions = {
 
 type NativeHookRelayCommandForEventOptions = {
   timeoutMs?: number;
+  remoteCredentialPath?: string;
 };
 
 export type InvokeNativeHookRelayParams = {
@@ -159,6 +158,7 @@ export type InvokeNativeHookRelayParams = {
 };
 
 export type InvokeNativeHookRelayBridgeParams = InvokeNativeHookRelayParams & {
+  signal?: AbortSignal;
   registrationTimeoutMs?: number;
   stateDbPath?: string;
   timeoutMs?: number;
@@ -182,22 +182,6 @@ export type NativeHookRelayInvocationMetadata = Partial<
 
 type NativeHookRelayPermissionDecision = "allow" | "deny";
 
-export type NativeHookRelayProviderAdapter = {
-  readToolInput: (rawPayload: JsonValue) => Record<string, JsonValue>;
-  readToolResponse: (rawPayload: JsonValue) => unknown;
-  renderNoopResponse: (event: NativeHookRelayEvent) => NativeHookRelayProcessResponse;
-  renderPreToolUseBlockResponse: (
-    reason: string,
-    failureDisposition?: Exclude<BeforeToolCallFailureDisposition, "blocked">,
-  ) => NativeHookRelayProcessResponse;
-  renderBeforeAgentFinalizeReviseResponse: (reason: string) => NativeHookRelayProcessResponse;
-  renderBeforeAgentFinalizeStopResponse: (reason?: string) => NativeHookRelayProcessResponse;
-  renderPermissionDecisionResponse: (
-    decision: NativeHookRelayPermissionDecision,
-    message?: string,
-  ) => NativeHookRelayProcessResponse;
-};
-
 export type NativeHookRelayPermissionApprovalResult =
   | NativeHookRelayPermissionDecision
   | "allow-always"
@@ -215,6 +199,8 @@ export type ActiveNativeHookRelayRegistrationHandle = NativeHookRelayRegistratio
 };
 
 export type OwnedNativeHookRelayRegistrationHandle = ActiveNativeHookRelayRegistrationHandle & {
+  /** Explicitly expose only this registration through the token-scoped HTTP callback. */
+  enableRemoteCallback: () => { token: string };
   /** Strict policy preparation and direct publication result. */
   ready: Promise<void>;
   /** Requires current foreground authority; direct publication may use the Gateway fallback. */
@@ -277,6 +263,7 @@ export type NativeHookRelayBridgeRegistration = {
   pending: Promise<void>;
   cancelStartup: () => void;
   closing?: Promise<void>;
+  remoteEnabled?: boolean;
 };
 
 export type NativeHookRelaySharedState = {

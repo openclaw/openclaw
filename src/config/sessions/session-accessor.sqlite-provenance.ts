@@ -1,7 +1,65 @@
+import { expressionBuilder, type Selectable } from "kysely";
+import { jsonObjectFrom } from "kysely/helpers/sqlite";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { readSqliteNativeMutationRevision } from "../../infra/sqlite-schema-facts.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { hasStoredTranscriptEvents } from "./session-accessor.sqlite-transcript-presence.js";
+import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import type { SessionEntry } from "./types.js";
+
+const sessionEntryWindowColumns = [
+  "session_id",
+  "session_key",
+  "reason",
+  "created_at",
+  "updated_at",
+  "session_entry_provenance",
+  "acp_owned",
+  "plugin_owner_id",
+  "hook_external_content_source",
+  "previous_session_id",
+  "session_scope",
+  "started_at",
+  "ended_at",
+  "status",
+  "chat_type",
+  "channel",
+  "account_id",
+  "model_provider",
+  "model",
+  "agent_harness_id",
+  "parent_session_key",
+  "spawned_by",
+  "display_name",
+  "primary_conversation_id",
+  "transcript_observed_at",
+  "transcript_updated_at",
+] as const;
+
+export function sessionEntryWindowFactsExpression() {
+  const eb = expressionBuilder<OpenClawAgentKyselyDatabase, "session_nodes">();
+  return jsonObjectFrom(
+    eb
+      .selectFrom("session_windows")
+      .select(sessionEntryWindowColumns)
+      .whereRef("session_windows.session_id", "=", "session_nodes.current_session_id"),
+  )
+    .$castTo<string | null>()
+    .as("window_json");
+}
+
+export type SessionEntryWindowRow = Pick<
+  Selectable<OpenClawAgentKyselyDatabase["session_windows"]>,
+  (typeof sessionEntryWindowColumns)[number]
+>;
+
+export type SessionEntryWindowFacts = {
+  database: OpenClawAgentDatabase["db"];
+  revision: number;
+  sessionId: string;
+  row: SessionEntryWindowRow | null;
+};
 
 type SessionProvenanceRow = {
   acp_owned: number;
@@ -29,56 +87,71 @@ export function bindSessionEntryProvenance(entry: SessionEntry): SessionProvenan
   };
 }
 
-export function resolveSessionEntryProvenanceRow<T extends SessionProvenanceRow>(params: {
+export function prepareSessionEntryWindowRow<T extends SessionProvenanceRow>(params: {
   boundSessionRow: T;
   database: OpenClawAgentDatabase;
   entry: SessionEntry;
   previousEntry?: SessionEntry;
-}): T {
+  retainOwner: boolean;
+  prepared?: SessionEntryWindowFacts;
+}): { row: T & { transcript_observed_at: number }; changed: boolean } {
   const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(params.database.db);
-  const existingRoot = executeSqliteQueryTakeFirstSync(
-    params.database.db,
-    db
-      .selectFrom("session_windows")
-      .select([
-        "session_entry_provenance",
-        "acp_owned",
-        "plugin_owner_id",
-        "hook_external_content_source",
-      ])
-      .where("session_id", "=", params.entry.sessionId),
-  );
+  const actor = readSessionActorTransactionState(params.database, {
+    sessionId: params.entry.sessionId,
+  });
+  const prepared = params.prepared;
+  const existingRoot = actor
+    ? actor.window
+    : prepared?.database === params.database.db &&
+        prepared.sessionId === params.entry.sessionId &&
+        prepared.revision === readSqliteNativeMutationRevision(params.database.db)
+      ? prepared.row
+      : executeSqliteQueryTakeFirstSync(
+          params.database.db,
+          db
+            .selectFrom("session_windows")
+            .select(sessionEntryWindowColumns)
+            .where("session_id", "=", params.entry.sessionId),
+        );
+  // Registry writes snapshot the current transcript watermark so recovery can
+  // distinguish same-millisecond transcript writes before and after this row.
+  let row = {
+    ...params.boundSessionRow,
+    transcript_observed_at: existingRoot?.transcript_updated_at ?? params.entry.updatedAt,
+  };
   // Updates cannot prove provenance for a migrated transcript. Known exclusion metadata is monotonic.
   if (
     existingRoot?.session_entry_provenance === 0 &&
     (params.previousEntry?.sessionId === params.entry.sessionId ||
-      Boolean(
-        executeSqliteQueryTakeFirstSync(
-          params.database.db,
-          db
-            .selectFrom("transcript_events")
-            .select("seq")
-            .where("session_id", "=", params.entry.sessionId)
-            .limit(1),
-        ),
-      ))
+      hasStoredTranscriptEvents(params.database, params.entry.sessionId))
   ) {
-    return {
-      ...params.boundSessionRow,
+    row = {
+      ...row,
       session_entry_provenance: 0,
       acp_owned: 0,
       plugin_owner_id: null,
       hook_external_content_source: null,
     };
+  } else if (existingRoot?.session_entry_provenance === 1) {
+    row = {
+      ...row,
+      acp_owned: existingRoot.acp_owned === 1 ? 1 : row.acp_owned,
+      plugin_owner_id: row.plugin_owner_id ?? existingRoot.plugin_owner_id,
+      hook_external_content_source:
+        row.hook_external_content_source ?? existingRoot.hook_external_content_source,
+    };
   }
-  return existingRoot?.session_entry_provenance === 1
-    ? {
-        ...params.boundSessionRow,
-        acp_owned: existingRoot.acp_owned === 1 ? 1 : params.boundSessionRow.acp_owned,
-        plugin_owner_id: params.boundSessionRow.plugin_owner_id ?? existingRoot.plugin_owner_id,
-        hook_external_content_source:
-          params.boundSessionRow.hook_external_content_source ??
-          existingRoot.hook_external_content_source,
-      }
-    : params.boundSessionRow;
+  const previous = new Map(Object.entries(existingRoot ?? {}));
+  return {
+    row,
+    changed:
+      !existingRoot ||
+      Object.entries(row).some(
+        ([key, value]) =>
+          // Conflict updates retain creation time and, for metadata patches, window ownership.
+          key !== "created_at" &&
+          !(params.retainOwner && key === "session_key") &&
+          previous.get(key) !== value,
+      ),
+  };
 }

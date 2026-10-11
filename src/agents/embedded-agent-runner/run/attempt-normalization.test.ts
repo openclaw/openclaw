@@ -127,11 +127,12 @@ describe("buildContextEngineCompactionSessionTarget", () => {
     });
   });
 
-  it("uses the configured default agent without inventing a session key", () => {
+  it("uses the explicit agent owner without inventing a session key", () => {
     expect(
       buildContextEngineCompactionSessionTarget({
+        agentId: "worker",
         config: {
-          agents: { list: [{ id: "main" }, { id: "worker", default: true }] },
+          agents: { ownership: "explicit", entries: { main: {}, worker: {} } },
           session: { store: "/tmp/{agentId}/sessions.json" },
         },
         sessionFile: "compat-session",
@@ -229,6 +230,7 @@ describe("fixed-store session bootstrap", () => {
       };
       const callerError = new Error("reset owner closed while waiting for commit");
       let closed = false;
+      let commitGuardAccepted = false;
       const assertActive = () => {
         if (closed) {
           throw callerError;
@@ -237,7 +239,8 @@ describe("fixed-store session bootstrap", () => {
       sessionAccessorMocks.patchSessionEntryCore.mockImplementationOnce(
         async (_scope, _update, options) => {
           closed = closeBeforeCommit;
-          options?.assertCommitAllowed?.();
+          options?.workerGuard?.source?.();
+          commitGuardAccepted = true;
           return null;
         },
       );
@@ -251,24 +254,29 @@ describe("fixed-store session bootstrap", () => {
       expect(sessionAccessorMocks.patchSessionEntryCore).toHaveBeenCalledWith(
         sessionTarget,
         expect.any(Function),
-        expect.objectContaining({ skipMaintenance: true, assertCommitAllowed: assertActive }),
+        expect.objectContaining({
+          skipMaintenance: true,
+          workerGuard: expect.objectContaining({ source: assertActive }),
+        }),
       );
+      expect(commitGuardAccepted).toBe(!closeBeforeCommit);
     },
   );
 
-  it("carries the persisted owner into harness admission", () => {
-    assertAgentHarnessRunAdmission({
+  it("carries the persisted owner into harness admission", async () => {
+    await assertAgentHarnessRunAdmission({
       config,
       sessionId: "ops-session",
       sessionKey: "global",
     } as never);
 
-    expect(sessionAccessorMocks.loadSessionEntry).toHaveBeenCalledWith(
+    expect(sessionReaderMocks.readSessionEntryInWorker).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "ops",
         sessionKey: "global",
         storePath: "/tmp/shared-sessions.json",
       }),
+      expect.any(Function),
     );
   });
 

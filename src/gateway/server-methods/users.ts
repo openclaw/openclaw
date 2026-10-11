@@ -33,12 +33,11 @@ import {
   setCanonicalUserProfileRole,
 } from "../../state/user-profile-writes.js";
 import { UserProfileMergeError, UserProfileOwnerError } from "../../state/user-profiles-schema.js";
+import { listProfiles, UserProfileNotFoundError } from "../../state/user-profiles.js";
 import {
-  getUserProfileListItem,
-  listProfiles,
-  UserProfileNotFoundError,
-} from "../../state/user-profiles.js";
-import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
+  invalidateOperatorRolePolicy,
+  resolveOperatorRoleSelection,
+} from "../operator-role-policy.js";
 import { broadcastChatMetadataChanged } from "../server-chat-metadata-lifecycle.js";
 import { holdGatewayPolicyResponse } from "../server/ws-policy-close.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
@@ -49,6 +48,7 @@ import {
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { publishUserPreferencesChanged } from "./user-preference-events.js";
 import { usersAuthConnectHandlers } from "./users-auth-connect.js";
+import { prepareUserBackgroundAction, usersBackgroundHandlers } from "./users-background.js";
 import { usersChannelIdentityHandlers } from "./users-channel-identities.js";
 import { usersGitHubHandlers } from "./users-github.js";
 import { usersPersonalFileHandlers } from "./users-personal-file.js";
@@ -57,7 +57,7 @@ import {
   prepareProfileMutationAccess,
   prepareUserProfileAdministration,
 } from "./users-profile-access.js";
-import { assertValidParams } from "./validation.js";
+import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 function refreshConnectedProfile(
   context: GatewayRequestHandlerOptions["context"],
@@ -108,17 +108,33 @@ export const usersHandlers: GatewayRequestHandlers = {
   ...usersChannelIdentityHandlers,
   ...usersGitHubHandlers,
   ...usersPersonalFileHandlers,
-  "users.list": async ({ params, respond }) => {
+  ...usersBackgroundHandlers,
+  "users.list": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateUsersListParams, "users.list", respond)) {
       return;
     }
     const { githubAccountIds } = params;
-    respond(
-      true,
+    const result =
       githubAccountIds === undefined
         ? { profiles: await listProfiles() }
-        : await readUserProfileSnapshot(githubAccountIds),
-    );
+        : await readUserProfileSnapshot(githubAccountIds);
+    const cfg = context.getRuntimeConfig();
+    const profilesById = new Map(result.profiles.map((profile) => [profile.id, profile]));
+    respond(true, {
+      ...result,
+      profiles: result.profiles.map((profile) => {
+        const canonical = profilesById.get(profile.mergedInto ?? profile.id) ?? profile;
+        return Object.assign(
+          profile,
+          resolveOperatorRoleSelection(
+            canonical.id,
+            canonical.role ?? null,
+            cfg,
+            canonical.githubIdentity?.login ?? null,
+          ),
+        );
+      }),
+    });
   },
   "users.self": async (options) => {
     const { client, params, respond } = options;
@@ -134,21 +150,23 @@ export const usersHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      let syncError: unknown;
       if (client.authenticatedGitHubIdentitySync) {
         try {
           await client.authenticatedGitHubIdentitySync();
-        } catch {
+        } catch (error) {
           // A previously attached immutable profile stays usable; unresolved aliases stay hidden.
+          syncError = error;
         }
       }
-      const profile = await prepareAuthenticatedProfile(options);
+      const profile = await prepareAuthenticatedProfile(options, true);
       profile.assertCurrent();
       const profileId = profile.profileId;
-      if (!profileId) {
-        respond(false, undefined, authenticatedProfileUnavailableError());
+      if (!profileId || !profile.listItem) {
+        respond(false, undefined, authenticatedProfileUnavailableError(syncError));
         return;
       }
-      respond(true, { profile: getUserProfileListItem(profileId) });
+      respond(true, { profile: profile.listItem });
     } catch (error) {
       respond(false, undefined, profileError(error));
     }
@@ -183,7 +201,8 @@ export const usersHandlers: GatewayRequestHandlers = {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.prefs.set": async ({ client, context, params, respond }) => {
+  "users.prefs.set": async (options) => {
+    const { client, context, params, respond } = options;
     if (!assertValidParams(params, validateUsersPrefsSetParams, "users.prefs.set", respond)) {
       return;
     }
@@ -197,7 +216,14 @@ export const usersHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const assertCurrent = preparePersonalPreferences(client);
+      const assertPersonal = preparePersonalPreferences(client);
+      const backgroundAction = Object.hasOwn(params.entries, "ui.background")
+        ? await prepareUserBackgroundAction(options, "operator.write")
+        : undefined;
+      const assertCurrent = () => {
+        assertPersonal();
+        backgroundAction?.assertCurrent();
+      };
       const result = await setCanonicalUserPreferences(profileId, params.entries, {
         expectedEntries: params.expectedEntries,
         assertCurrent,
@@ -270,12 +296,11 @@ export const usersHandlers: GatewayRequestHandlers = {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.merge": async (options) => {
-    const { context, params, respond } = options;
-    if (!assertValidParams(params, validateUsersMergeParams, "users.merge", respond)) {
-      return;
-    }
-    try {
+  "users.merge": defineValidatedGatewayHandler(
+    "users.merge",
+    validateUsersMergeParams,
+    async (options) => {
+      const { context, params, respond } = options;
       const assertCurrent = await prepareUserProfileAdministration(options);
       holdGatewayPolicyResponse(respond);
       const { profile, movedAliasKinds } = await mergeCanonicalUserProfiles(
@@ -303,18 +328,14 @@ export const usersHandlers: GatewayRequestHandlers = {
         broadcastChatMetadataChanged(context);
       }
       respond(true, { profile, movedAliasKinds });
-    } catch (error) {
-      respond(false, undefined, profileError(error));
-    }
-  },
-  "users.setDisplayName": async (options) => {
-    const { context, params, respond } = options;
-    if (
-      !assertValidParams(params, validateUsersSetDisplayNameParams, "users.setDisplayName", respond)
-    ) {
-      return;
-    }
-    try {
+    },
+    profileError,
+  ),
+  "users.setDisplayName": defineValidatedGatewayHandler(
+    "users.setDisplayName",
+    validateUsersSetDisplayNameParams,
+    async (options) => {
+      const { context, params, respond } = options;
       const assertCurrent = await prepareProfileMutationAccess(options, params.profileId);
       if (!assertCurrent) {
         return;
@@ -327,10 +348,9 @@ export const usersHandlers: GatewayRequestHandlers = {
       assertCurrent();
       refreshConnectedProfile(context, profile.id);
       respond(true, { profile });
-    } catch (error) {
-      respond(false, undefined, profileError(error));
-    }
-  },
+    },
+    profileError,
+  ),
   "users.setRole": async (options) => {
     const { context, params, respond } = options;
     if (!assertValidParams(params, validateUsersSetRoleParams, "users.setRole", respond)) {

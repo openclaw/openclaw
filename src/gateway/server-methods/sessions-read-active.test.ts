@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import type { SessionsListParams } from "../../../packages/gateway-protocol/src/index.js";
+import { withinTest } from "../../../test/helpers/promise.js";
 import type { EmbeddedAgentQueueHandle } from "../../agents/embedded-agent-runner/run-state.js";
 import {
   clearActiveEmbeddedRun,
@@ -35,6 +36,7 @@ import {
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../chat-abort.js";
+import { observeSessionRowBackfill } from "../session-row-backfill.test-support.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import * as rowInputs from "../session-utils-row.js";
 import {
@@ -68,13 +70,14 @@ afterEach(async () => {
 it("selects current work before pagination and represents an isolated cron run once", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const config: OpenClawConfig = {
-      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      agents: { entries: { main: {}, work: {} } },
     };
     const context = requestContext(config);
     const client = identifiedClient("viewer@example.test");
     const childKey = "agent:main:subagent:child";
     const cronKey = "agent:main:cron:daily";
     const runKey = `${cronKey}:run:cron-session`;
+    const recent = Date.now() - 1_000;
     for (const [agentId, sessionKey, sessionId, updatedAt] of [
       ["main", "agent:main:local", "local-session", 40],
       ["work", "agent:work:remote", "remote-session", 30],
@@ -89,11 +92,10 @@ it("selects current work before pagination and represents an isolated cron run o
       const scope = { agentId, sessionKey };
       const entry = await upsertSessionEntryCore(scope, {
         sessionId,
-        updatedAt,
-        status: "running",
+        updatedAt: recent + updatedAt,
         visibility: "shared",
       });
-      await replaceSessionEntry(scope, { ...entry!, updatedAt });
+      await replaceSessionEntry(scope, { ...entry!, updatedAt: recent + updatedAt });
     }
     context.chatAbortControllers.set("local-run", {
       sessionKey: "agent:main:local",
@@ -188,7 +190,7 @@ it.each(["global", "unknown"] as const)(
   async (sessionKey) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const config: OpenClawConfig = {
-        agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
+        agents: { entries: { main: {}, ops: {} } },
         session: { scope: "global", store: state.statePath("{agentId}.sqlite") },
       };
       const sessionId = `restored-${sessionKey}`;
@@ -247,14 +249,15 @@ it.each(["global", "unknown"] as const)(
   },
 );
 
-it.each(["global", "unknown"] as const)(
+it.for(["global", "unknown"] as const)(
   "keeps active %s owners and their physical transcript, board, and sharing rows distinct",
-  async (sentinel) => {
+  async (sentinel, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const now = Date.now();
       const agents = ["main", "ops", "research", "private"] as const;
       const config: OpenClawConfig = {
         session: { scope: "global", store: state.statePath("{agentId}.sqlite") },
-        agents: { list: agents.map((id) => ({ id, ...(id === "main" ? { default: true } : {}) })) },
+        agents: { entries: Object.fromEntries(agents.map((id) => [id, {}])) },
       };
       const context = requestContext(config);
       const client = identifiedClient("viewer@example.test");
@@ -268,12 +271,12 @@ it.each(["global", "unknown"] as const)(
         const entry = await upsertSessionEntryCore(scope, {
           sessionId,
           boardFace,
-          updatedAt: 100 - index,
+          updatedAt: now - index,
           displayName: `${agentId.charAt(0).toUpperCase()}${agentId.slice(1)} task`,
           visibility: agentId === "private" ? "draft" : "shared",
           createdActor: { type: "human", source: "profile", id: "owner@example.test" },
         });
-        await replaceSessionEntry(scope, { ...entry!, updatedAt: 100 - index });
+        await replaceSessionEntry(scope, { ...entry!, updatedAt: now - index });
         await persistSessionTranscriptTurn(
           { agentId, storePath, sessionKey: sentinel, sessionId },
           {
@@ -297,7 +300,7 @@ it.each(["global", "unknown"] as const)(
         { agentId: "ops", storePath: storePathFor("ops"), sessionKey: childKey },
         {
           sessionId: "sentinel-child",
-          updatedAt: 1,
+          updatedAt: now - 100,
           parentSessionKey: sentinel,
           spawnedBy: sentinel,
           visibility: "shared",
@@ -329,10 +332,10 @@ it.each(["global", "unknown"] as const)(
       const literalEntry = await upsertSessionEntryCore(literalScope, {
         sessionId: literalSessionId,
         boardFace,
-        updatedAt: 1,
+        updatedAt: now - 100,
         visibility: "shared",
       });
-      await replaceSessionEntry(literalScope, { ...literalEntry!, updatedAt: 1 });
+      await replaceSessionEntry(literalScope, { ...literalEntry!, updatedAt: now - 100 });
       context.chatAbortControllers.set("literal-sentinel-run", {
         sessionKey: literalKey,
         sessionId: literalSessionId,
@@ -341,6 +344,13 @@ it.each(["global", "unknown"] as const)(
       await new SqliteBoardStore({
         resolveSession: () => ({ agentId: "ops", path: storePathFor("ops"), sessionKey: sentinel }),
       }).applyOps({ sessionKey: sentinel }, [{ kind: "tab_create", tabId: "main", title: "Ops" }]);
+      const backfilled = observeSessionRowBackfill(
+        ["ops", "research"].map((agentId) =>
+          JSON.stringify([agentId, storePathFor(agentId), sentinel]),
+        ),
+        undefined,
+        (row) => JSON.stringify([row.agentId, row.storeTarget.storePath, row.key]),
+      );
       const normal = await listSessions({
         client,
         context,
@@ -362,16 +372,15 @@ it.each(["global", "unknown"] as const)(
         archived: "all" as const,
         limit: 10,
       };
-      await vi.waitFor(() => {
-        for (const agentId of ["ops", "research"]) {
-          expect(
-            getSessionRowProjection(context)?.snapshot(
-              { agentId, key: sentinel, storePath: storePathFor(agentId) },
-              { includeLastMessage: true },
-            ).row?.lastMessagePreview,
-          ).toBe(`${agentId} progress`);
-        }
-      });
+      await withinTest(backfilled, signal);
+      for (const agentId of ["ops", "research"]) {
+        expect(
+          getSessionRowProjection(context)?.snapshot(
+            { agentId, key: sentinel, storePath: storePathFor(agentId) },
+            { includeLastMessage: true },
+          ).row?.lastMessagePreview,
+        ).toBe(`${agentId} progress`);
+      }
       const active = await listSessions({ client, context, request });
       expect(active).toMatchObject({ count: 3, totalCount: 3, nextOffset: null });
       expect(active.sessions).toMatchObject([
@@ -584,7 +593,7 @@ it.each([false, true])(
       const result = await listSessions({
         client: identifiedClient("viewer@example.com"),
         context,
-        request: { agentId: "main", limit: 100 },
+        request: { agentId: "main", activeOnly: true, limit: 100 },
       });
       expect(readiness).toHaveBeenCalled();
       const row = result.sessions.find((session) => session.key === sessionKey);
@@ -597,7 +606,7 @@ it.each([false, true])(
 
 it.each(
   (["configured", "inherited"] as const).flatMap((selection) =>
-    (["done", "running"] as const).map((storedStatus) => ({ selection, storedStatus })),
+    (["done", undefined] as const).map((storedStatus) => ({ selection, storedStatus })),
   ),
 )(
   "reconciles a completed fallback during projection ($selection selection, $storedStatus status)",

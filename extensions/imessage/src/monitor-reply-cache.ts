@@ -31,25 +31,11 @@ type IMessageReplyCacheEntry = IMessageChatContext & {
   messageId: string;
   shortId: string;
   timestamp: number;
-  /**
-   * True when the gateway sent this message itself (recorded from the
-   * outbound path in send.ts after a successful imsg send), false when the
-   * cache entry came from inbound watch (most common path).
-   *
-   * Edit / unsend actions require this to be true: Messages.app only lets
-   * the original sender edit or retract a message, and even if the bridge
-   * accepted a non-sender attempt, letting an agent unsend a human user's
-   * message in a group chat would be a permission boundary violation.
-   *
-   * Optional for backwards compatibility with persisted entries from older
-   * gateway versions that did not record this field; missing values are
-   * treated as `false` (the safe default — pre-existing entries on disk
-   * came from the inbound-only writer that existed before this change).
-   */
+  // Edit/unsend require an outbound record; missing persisted provenance is untrusted.
   isFromMe?: boolean;
 };
 
-type IMessageReplyCacheStore = PluginStateKeyedStore<IMessageReplyCacheEntry>;
+type IMessageReplyCacheStore = PluginStateKeyedStore<IMessageReplyCacheEntry, 2>;
 type IMessageReplyCacheCounter = { counter: number };
 
 const imessageReplyCacheByMessageId = new Map<string, IMessageReplyCacheEntry>();
@@ -57,14 +43,14 @@ const imessageShortIdToUuid = new Map<string, string>();
 let imessageShortIdCounter = 0;
 
 function openReplyCacheStore(): IMessageReplyCacheStore {
-  return getIMessageRuntime().state.openKeyedStore<IMessageReplyCacheEntry>({
+  return getIMessageRuntime().state.openKeyedStoreV2<IMessageReplyCacheEntry>({
     namespace: IMESSAGE_REPLY_CACHE_NAMESPACE,
     maxEntries: IMESSAGE_REPLY_CACHE_MAX_ENTRIES,
   });
 }
 
-function openReplyCacheCounterStore(): PluginStateKeyedStore<IMessageReplyCacheCounter> {
-  return getIMessageRuntime().state.openKeyedStore<IMessageReplyCacheCounter>({
+function openReplyCacheCounterStore(): PluginStateKeyedStore<IMessageReplyCacheCounter, 2> {
+  return getIMessageRuntime().state.openKeyedStoreV2<IMessageReplyCacheCounter>({
     namespace: IMESSAGE_REPLY_CACHE_COUNTER_NAMESPACE,
     maxEntries: IMESSAGE_REPLY_CACHE_COUNTER_MAX_ENTRIES,
   });
@@ -109,10 +95,7 @@ async function hydrateFromStoreOnce(): Promise<void> {
       const counter = await openReplyCacheCounterStore().lookup(IMESSAGE_REPLY_CACHE_COUNTER_KEY);
       hydrateCounter(counter);
       const entries = await openReplyCacheStore().entries();
-      // A legacy host callback can finish synchronous hydration while this read waits.
-      if (!hydrated) {
-        hydrateRows(entries.map(({ value }) => value));
-      }
+      hydrateRows(entries.map(({ value }) => value));
     } catch (err) {
       reportPersistenceFailure("read", err);
     } finally {
@@ -120,32 +103,6 @@ async function hydrateFromStoreOnce(): Promise<void> {
     }
   })();
   await hydration;
-}
-
-function hydrateFromStoreOnceSync(): void {
-  if (hydrated) {
-    return;
-  }
-  hydrated = true;
-  try {
-    const state = getIMessageRuntime().state;
-    const counter = state
-      .openSyncKeyedStore<IMessageReplyCacheCounter>({
-        namespace: IMESSAGE_REPLY_CACHE_COUNTER_NAMESPACE,
-        maxEntries: IMESSAGE_REPLY_CACHE_COUNTER_MAX_ENTRIES,
-      })
-      .lookup(IMESSAGE_REPLY_CACHE_COUNTER_KEY);
-    hydrateCounter(counter);
-    const entries = state
-      .openSyncKeyedStore<IMessageReplyCacheEntry>({
-        namespace: IMESSAGE_REPLY_CACHE_NAMESPACE,
-        maxEntries: IMESSAGE_REPLY_CACHE_MAX_ENTRIES,
-      })
-      .entries();
-    hydrateRows(entries.map(({ value }) => value));
-  } catch (err) {
-    reportPersistenceFailure("read", err);
-  }
 }
 
 async function persistReplyCacheEntry(entry: IMessageReplyCacheEntry): Promise<void> {
@@ -221,28 +178,22 @@ export async function rememberIMessageReplyCache(
 
   const cutoff = Date.now() - IMESSAGE_REPLY_CACHE_TTL_MS;
   const deletedMessageIds: string[] = [];
-  for (const [key, value] of imessageReplyCacheByMessageId) {
-    if (value.timestamp >= cutoff) {
-      break;
+  const pruneUntil = (retain: (key: string, cached: IMessageReplyCacheEntry) => boolean) => {
+    for (const [key, cached] of imessageReplyCacheByMessageId) {
+      if (retain(key, cached)) {
+        break;
+      }
+      imessageReplyCacheByMessageId.delete(key);
+      deletedMessageIds.push(key);
+      if (cached.shortId) {
+        imessageShortIdToUuid.delete(cached.shortId);
+      }
     }
-    imessageReplyCacheByMessageId.delete(key);
-    deletedMessageIds.push(key);
-    if (value.shortId) {
-      imessageShortIdToUuid.delete(value.shortId);
-    }
-  }
-  while (imessageReplyCacheByMessageId.size > IMESSAGE_REPLY_CACHE_MAX_ENTRIES) {
-    const oldest = imessageReplyCacheByMessageId.keys().next().value;
-    if (!oldest) {
-      break;
-    }
-    const oldEntry = imessageReplyCacheByMessageId.get(oldest);
-    imessageReplyCacheByMessageId.delete(oldest);
-    deletedMessageIds.push(oldest);
-    if (oldEntry?.shortId) {
-      imessageShortIdToUuid.delete(oldEntry.shortId);
-    }
-  }
+  };
+  pruneUntil((_key, cached) => cached.timestamp >= cutoff);
+  pruneUntil(
+    (key) => !key || imessageReplyCacheByMessageId.size <= IMESSAGE_REPLY_CACHE_MAX_ENTRIES,
+  );
 
   const counter = imessageShortIdCounter;
   // Publish memory without yielding, then persist each admitted mutation in order.
@@ -269,10 +220,6 @@ function hasChatScope(ctx?: IMessageChatContext): boolean {
     normalizeOptionalString(ctx.chatIdentifier) ||
     typeof ctx.chatId === "number",
   );
-}
-
-function isCrossChatMismatch(cached: IMessageReplyCacheEntry, ctx: IMessageChatContext): boolean {
-  return resolveIMessageChatMatch(cached, ctx) === "mismatch";
 }
 
 function describeChatForError(values: IMessageChatContext): string {
@@ -317,18 +264,7 @@ export async function resolveIMessageMessageId(
   opts?: {
     requireKnownShortId?: boolean;
     chatContext?: IMessageChatContext;
-    /**
-     * When true, only resolve message ids that the gateway recorded as sent
-     * by itself (`isFromMe: true`). Used by `edit` / `unsend` so an agent
-     * cannot retract or edit messages other participants sent — Messages.app
-     * enforces this at the OS level too, but failing earlier in the plugin
-     * gives a clean error and avoids dispatching a guaranteed-to-fail bridge
-     * call.
-     *
-     * Cache entries with no `isFromMe` field (older persisted entries from
-     * before this option existed, or any uncached UUID the agent passes
-     * through) are treated as not-from-me and rejected.
-     */
+    /** Reject inbound, uncached, or provenance-free records for edit/unsend. */
     requireFromMe?: boolean;
   },
 ): Promise<string> {
@@ -336,40 +272,16 @@ export async function resolveIMessageMessageId(
   if (!trimmed) {
     return trimmed;
   }
-  // Hydrate SQLite-backed mappings before reading them. Without this, the
-  // first post-restart action with a short MessageSid would miss
-  // `imessageShortIdToUuid` and fall through to "no longer available".
-  // `rememberIMessageReplyCache` already hydrates on its own, so this only
-  // matters for the resolve-first-after-restart sequence.
   await hydrateFromStoreOnce();
-
-  if (/^\d+$/.test(trimmed)) {
-    // Cache hit: the cached entry carries the chat info this short id was
-    // issued for, so we can resolve the UUID even without a caller-supplied
-    // chat scope. Cross-chat detection still fires when the caller did
-    // provide a scope and it disagrees with the cache.
-    const uuid = imessageShortIdToUuid.get(trimmed);
-    if (uuid) {
-      const cached = imessageReplyCacheByMessageId.get(uuid);
-      if (opts?.chatContext && hasChatScope(opts.chatContext)) {
-        if (cached && isCrossChatMismatch(cached, opts.chatContext)) {
-          throw buildCrossChatError(trimmed, "short", cached, opts.chatContext);
-        }
-      }
-      if (opts?.requireFromMe && cached?.isFromMe !== true) {
-        throw buildFromMeError(trimmed, "short");
-      }
-      return uuid;
-    }
-    // Cache miss: now the chat-scope requirement matters — without scope
-    // we have no way to verify the caller is reacting in the right chat,
-    // and without a cached UUID the bridge cannot resolve the short id.
-    if (opts?.requireKnownShortId && !hasChatScope(opts.chatContext)) {
-      throw new Error(
-        `iMessage short message id ${describeMessageIdForError(trimmed, "short")} requires a chat scope (chatGuid / chatIdentifier / chatId or a target).`,
-      );
-    }
+  const inputKind = /^\d+$/.test(trimmed) ? "short" : "uuid";
+  const messageId = inputKind === "short" ? imessageShortIdToUuid.get(trimmed) : trimmed;
+  if (!messageId) {
     if (opts?.requireKnownShortId) {
+      if (!hasChatScope(opts.chatContext)) {
+        throw new Error(
+          `iMessage short message id ${describeMessageIdForError(trimmed, "short")} requires a chat scope (chatGuid / chatIdentifier / chatId or a target).`,
+        );
+      }
       throw new Error(
         `iMessage short message id ${describeMessageIdForError(trimmed, "short")} is no longer available. Use MessageSidFull.`,
       );
@@ -377,16 +289,19 @@ export async function resolveIMessageMessageId(
     return trimmed;
   }
 
-  const cached = imessageReplyCacheByMessageId.get(trimmed);
-  if (opts?.chatContext) {
-    if (cached && isCrossChatMismatch(cached, opts.chatContext)) {
-      throw buildCrossChatError(trimmed, "uuid", cached, opts.chatContext);
-    }
+  const cached = imessageReplyCacheByMessageId.get(messageId);
+  if (
+    cached &&
+    opts?.chatContext &&
+    (inputKind === "uuid" || hasChatScope(opts.chatContext)) &&
+    resolveIMessageChatMatch(cached, opts.chatContext) === "mismatch"
+  ) {
+    throw buildCrossChatError(trimmed, inputKind, cached, opts.chatContext);
   }
   if (opts?.requireFromMe && cached?.isFromMe !== true) {
-    throw buildFromMeError(trimmed, "uuid");
+    throw buildFromMeError(trimmed, inputKind);
   }
-  return trimmed;
+  return messageId;
 }
 
 export async function isKnownFromMeIMessageMessageId(
@@ -434,31 +349,11 @@ function buildFromMeError(inputId: string, inputKind: "short" | "uuid"): Error {
   );
 }
 
-/**
- * Return the most recent cached entry whose chat scope matches the supplied
- * context. Used as a fallback when an agent calls a per-message action (e.g.
- * `react`) without specifying a `messageId` — the natural intent is "react
- * to the message I just received in this chat."
- *
- * Strict semantics for safety:
- *  - Caller must supply a chat scope. We refuse to "guess" the active chat.
- *  - Cached entry must positively match on at least one identifier kind
- *    (chatGuid, chatIdentifier, chatId, or normalized direct-DM fingerprint).
- *    We do NOT fall through on "no overlapping identifier" — that's how a
- *    cached entry from a foreign chat could be returned when the caller's
- *    context didn't share any identifier kind with the cache.
- *  - Caller must supply an accountId; we never cross account boundaries.
- *  - We only consider entries newer than `LATEST_FALLBACK_MS`. The intent
- *    of "react to the latest" is "the message I just received," not
- *    "anything in this chat from any time."
- */
+/** Latest recent entry with a positive same-account conversation match; never guess a chat. */
 export function findLatestIMessageEntryForChat(
   ctx: IMessageChatContext & { accountId?: string },
 ): IMessageReplyCacheEntry | undefined {
-  if (!hasChatScope(ctx)) {
-    return undefined;
-  }
-  if (!ctx.accountId) {
+  if (!hasChatScope(ctx) || !ctx.accountId) {
     return undefined;
   }
   const cutoff = Date.now() - LATEST_FALLBACK_MS;
@@ -510,12 +405,6 @@ type CurrentMessageChatParams = {
   currentMessageId: string | number;
   chatContext: IMessageChatContext;
 };
-
-/** @deprecated Used only by hosts without asynchronous conversation matching. */
-export function isIMessageCurrentMessageInChat(params: CurrentMessageChatParams): boolean {
-  hydrateFromStoreOnceSync();
-  return isCurrentMessageInChat(params);
-}
 
 export async function isIMessageCurrentMessageInChatAsync(
   params: CurrentMessageChatParams,

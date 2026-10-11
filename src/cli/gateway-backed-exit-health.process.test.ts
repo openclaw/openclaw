@@ -24,6 +24,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { getFreePort } from "../test-utils/ports.js";
 import {
   prepareGatewayCliFixture,
+  prepareSharedStateReadArtifacts,
   prepareUnreachableGatewayCliFixture,
   runIsolatedGatewayCli,
   snapshotDirectoryContents,
@@ -51,8 +52,10 @@ function expectUnreachableGatewayTransportFailure(
     });
     return;
   }
-  expect(result.stderr).toContain("Gateway not reachable");
-  expect(result.stderr).toContain(UNREACHABLE_GATEWAY_URL);
+  expect(result.stderr).toBe(
+    "Couldn't connect to OpenClaw.\n" +
+      "Check the Control UI or run `openclaw gateway status` in your terminal.\n",
+  );
   expect(result.stderr).not.toContain("gateway timeout");
 }
 
@@ -117,6 +120,7 @@ describe("gateway-backed CLI process exit", () => {
         env,
       });
       closeOpenClawStateDatabaseForTest();
+      prepareSharedStateReadArtifacts(stateDir);
       const before = await snapshotDirectoryContents(stateDir);
       const expectedAfter = { ...before };
       const canonicalStateDir = await fs.realpath(stateDir);

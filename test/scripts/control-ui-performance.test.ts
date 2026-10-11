@@ -253,6 +253,7 @@ describe("Control UI performance budgets", () => {
     writeAsset("chat-e.css", { rawBytes: 25, gzipBytes: 10, brotliBytes: 8 });
     writeAsset("new-f.js", { rawBytes: 150, gzipBytes: 60, brotliBytes: 45 });
     writeAsset("lazy-g.js", { rawBytes: 300, gzipBytes: 90, brotliBytes: 65 });
+    fs.writeFileSync(path.join(distDir, "assets/art.webp"), Buffer.alloc(17));
 
     const metrics = collectControlUiPerformanceMetrics(distDir);
 
@@ -283,8 +284,7 @@ describe("Control UI performance budgets", () => {
     expect(report).toContain("chat boot JS: 3 requests, 135 B gzip");
     expect(report).toContain("70 B beyond initial-entry JS");
     expect(report).toContain("new boot JS: 3 requests, 125 B gzip");
-
-    writeAsset("chat-d.js", { rawBytes: 200, gzipBytes: 50, brotliBytes: 40 });
+    writeAsset("chat-d.js", { rawBytes: 180, gzipBytes: 50, brotliBytes: 40 });
     const smaller = collectControlUiPerformanceMetrics(distDir);
     expect(formatControlUiPerformanceReport(smaller, looseBudgets, null, 512, metrics)).toContain(
       "chat boot JS gzip vs base: 135 B -> 115 B (-20 B); requests 3 -> 3",

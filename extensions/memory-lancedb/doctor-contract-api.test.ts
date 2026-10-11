@@ -2,6 +2,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import * as lancedb from "@lancedb/lancedb";
 import { expectDefined } from "@openclaw/normalization-core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,
@@ -13,6 +14,15 @@ import {
   stateMigrations,
 } from "./doctor-contract-api.js";
 import { installTmpDirHarness } from "./test-helpers.js";
+
+type AuthoredAgents = NonNullable<OpenClawConfig["agents"]>;
+type AuthoredEntry = NonNullable<AuthoredAgents["entries"]>[string];
+type RawLegacyDoctorConfig = Omit<OpenClawConfig, "agents"> & {
+  agents?: Omit<AuthoredAgents, "entries"> & {
+    entries?: Record<string, AuthoredEntry & { default?: boolean }>;
+    list?: unknown[];
+  };
+};
 
 const unusedDoctorContext = {
   openPluginStateKeyedStore() {
@@ -28,7 +38,7 @@ describe("memory-lancedb doctor migration", () => {
   type MigrationParams = Parameters<PluginDoctorStateMigration["detectLegacyState"]>[0];
 
   function migrationParams(
-    agents: MigrationParams["config"]["agents"] = { list: [{ id: "main", default: true }] },
+    agents: RawLegacyDoctorConfig["agents"] = { list: [{ id: "main", default: true }] },
     dbPath = getDbPath(),
     home = getTmpDir(),
   ): MigrationParams {
@@ -128,6 +138,23 @@ describe("memory-lancedb doctor migration", () => {
     await expect(migratedTable.countRows("agentId = 'main-agent'")).resolves.toBe(1);
     migratedTable.close();
     migratedConnection.close();
+  });
+
+  test("uses the migration state directory for an unconfigured database", async () => {
+    const params = migrationParams();
+    params.config = {};
+    params.stateDir = path.join(getTmpDir(), "state");
+    const dbPath = path.join(params.stateDir, "memory", "lancedb");
+    await createLegacyTable(dbPath);
+    const migration = expectDefined(stateMigrations[0], "memory-lancedb state migration");
+
+    await expect(migration.detectLegacyState(params)).resolves.toMatchObject({
+      preview: [expect.stringContaining(dbPath)],
+    });
+    await expect(migration.migrateLegacyState(params)).resolves.toMatchObject({
+      changes: [expect.stringContaining("Assigned 1 legacy Memory LanceDB row")],
+    });
+    await expect(migration.detectLegacyState(params)).resolves.toBeNull();
   });
 
   test("keeps literal $ patterns in home when expanding a tilde dbPath", async () => {

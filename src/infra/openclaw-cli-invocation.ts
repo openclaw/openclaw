@@ -43,7 +43,7 @@ export function filterOpenClawChildExecArgv(
       }
       continue;
     }
-    // Node resolves bare preloads from the child cwd. Pin only our known TSX
+    // Runtimes resolve bare preloads from the child cwd. Pin only our known TSX
     // spelling; unrelated parent import hooks retain their own semantics.
     const bareTsx = arg === "tsx" && execArgv[index - 1] === "--import";
     filtered.push(
@@ -70,6 +70,20 @@ function buildPackageRootCliArgs(packageRoot: string, execPath: string): string[
   return [...resolveRuntimeArgs(execPath), path.join(packageRoot, "openclaw.mjs")];
 }
 
+export function resolveOpenClawCliEntryPath(argv1: string | undefined): string | undefined {
+  const entry = argv1?.trim();
+  if (!entry) {
+    return entry;
+  }
+  try {
+    // Pin argv and package discovery before an installation selector can move.
+    return fs.realpathSync(entry);
+  } catch {
+    // Missing entries retain the caller's existing fallback.
+    return entry;
+  }
+}
+
 export function resolveCurrentOpenClawCliInvocation(
   args: readonly string[],
   options: {
@@ -81,7 +95,7 @@ export function resolveCurrentOpenClawCliInvocation(
   } = {},
 ): OpenClawCliInvocation {
   const execPath = options.execPath ?? process.execPath;
-  const entry = (options.argv1 ?? process.argv[1])?.trim();
+  const entry = resolveOpenClawCliEntryPath(options.argv1 ?? process.argv[1]);
   const cwd = options.cwd ?? tryProcessCwd();
   const entryPackageRoot = entry ? resolveOpenClawPackageRootSync({ argv1: entry }) : null;
   const packageRoot =
@@ -109,9 +123,7 @@ export function resolveCurrentOpenClawCliInvocation(
     ? [
         ...filterOpenClawChildExecArgv(
           options.execArgv ?? process.execArgv,
-          currentEntry === sourceEntry && !isBunRuntime(execPath)
-            ? (packageRoot ?? undefined)
-            : undefined,
+          currentEntry === sourceEntry ? (packageRoot ?? undefined) : undefined,
         ),
         currentEntry,
       ]

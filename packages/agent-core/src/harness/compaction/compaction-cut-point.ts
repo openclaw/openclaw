@@ -91,20 +91,13 @@ function isCutPointMessage(message: AgentMessage): boolean {
 }
 
 function isTurnStartMessage(message: AgentMessage): boolean {
-  switch (message.role) {
-    case "custom":
-      return !isRuntimeContextCarrier(message);
-    case "user":
-    case "bashExecution":
-    case "branchSummary":
-    case "compactionSummary":
-      return true;
-    case "assistant":
-    case "toolResult":
-      return false;
-  }
-
-  return false;
+  const role = message.role;
+  return role === "custom"
+    ? !isRuntimeContextCarrier(message)
+    : role === "user" ||
+        role === "bashExecution" ||
+        role === "branchSummary" ||
+        role === "compactionSummary";
 }
 
 function isTurnStartEntry(entry: SessionTreeEntry): boolean {
@@ -120,10 +113,7 @@ export function findTurnStartIndex(
 ): number {
   for (let i = entryIndex; i >= startIndex; i--) {
     const entry = entries[i];
-    if (!entry) {
-      continue;
-    }
-    if (isTurnStartEntry(entry)) {
+    if (entry && isTurnStartEntry(entry)) {
       return i;
     }
   }

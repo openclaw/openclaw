@@ -9,21 +9,7 @@ function readTokenCount(record: JsonObject, key: string): number | undefined {
   return asSafeIntegerInRange(record[key], { min: 0 });
 }
 
-function readCodexThreadTokenUsage(params: JsonObject): ReturnType<typeof normalizeUsage> {
-  const tokenUsage = isJsonObject(params.tokenUsage) ? params.tokenUsage : undefined;
-  const last = tokenUsage && isJsonObject(tokenUsage.last) ? tokenUsage.last : undefined;
-  return last ? normalizeCodexResponseTokenUsage(last) : undefined;
-}
-
-export function readCodexThreadContextSnapshot(params: JsonObject): {
-  activeContextTokens?: number;
-  cachedInputTokens?: number;
-  cacheWriteInputTokens?: number;
-  inputTokens?: number;
-  modelContextWindow?: number;
-  promptTokens?: number;
-  reasoningOutputTokens?: number;
-} {
+export function readCodexThreadContextSnapshot(params: JsonObject) {
   const tokenUsage = isJsonObject(params.tokenUsage) ? params.tokenUsage : undefined;
   const last = tokenUsage && isJsonObject(tokenUsage.last) ? tokenUsage.last : undefined;
   const modelContextWindow = tokenUsage
@@ -110,7 +96,9 @@ export class CodexUsageProjection {
   }
 
   recordThread(params: JsonObject): ReturnType<typeof readCodexThreadContextSnapshot> {
-    const usage = readCodexThreadTokenUsage(params);
+    const tokenUsage = isJsonObject(params.tokenUsage) ? params.tokenUsage : undefined;
+    const last = tokenUsage && isJsonObject(tokenUsage.last) ? tokenUsage.last : undefined;
+    const usage = last ? normalizeCodexResponseTokenUsage(last) : undefined;
     this.threadUsage = usage ?? this.threadUsage;
     if (!this.responseUsage && usage) {
       this.contextUsage = usage.contextUsage;

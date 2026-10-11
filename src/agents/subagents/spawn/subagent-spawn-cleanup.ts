@@ -1,4 +1,5 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { sleepWithAbort } from "@openclaw/retry";
 import type { callGateway } from "../../../gateway/call.js";
 import { waitForChatAbortControllerRemoval } from "../../../gateway/chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "../../../gateway/chat-abort.js";
@@ -234,11 +235,8 @@ export function bindSubagentSpawnCleanup(params: {
 
 function isMatchingAbortResponse(response: unknown, gatewayRunId: string): boolean {
   const result = asNullableRecord(response);
-  if (!result) {
-    return false;
-  }
   return (
-    result.aborted === true &&
+    result?.aborted === true &&
     Array.isArray(result.runIds) &&
     result.runIds.some((runId) => runId === gatewayRunId)
   );
@@ -246,11 +244,8 @@ function isMatchingAbortResponse(response: unknown, gatewayRunId: string): boole
 
 function isDefinitiveAbortMiss(response: unknown, gatewayRunId: string): boolean {
   const result = asNullableRecord(response);
-  if (!result) {
-    return false;
-  }
   return (
-    typeof result.aborted === "boolean" &&
+    typeof result?.aborted === "boolean" &&
     Array.isArray(result.runIds) &&
     result.runIds.every((runId) => typeof runId === "string") &&
     !result.runIds.includes(gatewayRunId)
@@ -259,7 +254,7 @@ function isDefinitiveAbortMiss(response: unknown, gatewayRunId: string): boolean
 
 export async function retrySubagentCleanup(
   attempt: () => boolean | Promise<boolean>,
-  options?: { shouldRetry?: () => boolean; onError?: (error: unknown) => void },
+  options?: { shouldRetry?: () => boolean | Promise<boolean>; onError?: (error: unknown) => void },
 ): Promise<boolean> {
   for (;;) {
     try {
@@ -269,17 +264,15 @@ export async function retrySubagentCleanup(
     } catch (error) {
       options?.onError?.(error);
     }
-    if (options?.shouldRetry?.() === false) {
+    if ((await options?.shouldRetry?.()) === false) {
       return false;
     }
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
-      timer.unref?.();
-    });
+    await sleepWithAbort(isFastTestRuntimeEnv() ? 1 : 1_000, undefined, { ref: false });
   }
 }
 
 type SessionCleanupOptions = {
+  waitForCleanup?: () => Promise<void> | undefined;
   isCurrent?: () => boolean;
   emitLifecycleHooks?: boolean;
   deleteTranscript?: boolean;
@@ -320,7 +313,19 @@ async function waitForProvisionalSessionDeletion(
       deleted = outcome === "deleted";
       return outcome !== "failed";
     },
-    { shouldRetry: options?.isCurrent },
+    {
+      shouldRetry: async () => {
+        for (
+          let pending = options?.waitForCleanup?.();
+          pending;
+          pending = options?.waitForCleanup?.()
+        ) {
+          await pending;
+        }
+        // A provisional claim pauses cleanup; decide ownership after that claim settles.
+        return options?.isCurrent?.() !== false;
+      },
+    },
   );
   return deleted;
 }
@@ -333,6 +338,7 @@ export async function cleanupFailedSpawnBeforeAgentStart(params: {
   emitLifecycleHooks?: boolean;
   deleteTranscript?: boolean;
   waitForSessionDeletion?: boolean;
+  waitForCleanup?: () => Promise<void> | undefined;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string;
 }): Promise<{ attachmentsRemoved: boolean; sessionDeleted: boolean }> {
@@ -383,10 +389,7 @@ export async function terminateFailedRegistrationRun(params: {
     }
   } else {
     await terminateAcceptedCollectorRun({
-      childSessionKey: params.childSessionKey,
-      gatewayRunId: params.gatewayRunId,
-      expectedSessionId: params.expectedSessionId,
-      expectedLifecycleRevision: params.expectedLifecycleRevision,
+      ...params,
       isCurrent: deleteSessionOnMiss ? params.isCleanupCurrent : params.isAbortCurrent,
       sessionCleanup: deleteSessionOnMiss ? "delete-on-abort-miss" : "preserve",
       ...(params.cleanupOwner ? { callGateway: params.cleanupOwner.callGateway } : {}),

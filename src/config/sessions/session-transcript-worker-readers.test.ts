@@ -1,7 +1,35 @@
 import path from "node:path";
+import { runInNewContext } from "node:vm";
 import { expect, it } from "vitest";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { createSessionHistoryWorkerReaders } from "./session-transcript-worker-readers.js";
+
+it("preserves the direct read request, signal, and projected result", async () => {
+  const input = { scope: { agentId: "main", sessionId: "synthetic-session" } };
+  const signal = new AbortController().signal;
+  const readers = createSessionHistoryWorkerReaders(
+    async (prepare, inputBytes, receive, receivedSignal) => {
+      expect(prepare()).toEqual({ kind: "transcript-message-presence", ...input });
+      expect(inputBytes).toBe(JSON.stringify(input).length * 2);
+      expect(receivedSignal).toBe(signal);
+      return receive({ kind: "transcript-message-presence", present: true });
+    },
+  );
+  await expect(readers.readMessagePresence(input, signal)).resolves.toBe(true);
+});
+
+it.each([
+  { value: false },
+  { value: { kind: "session-members" as const, entry: undefined, members: [] } },
+  { value: { kind: "prewarm" as const } },
+])("rejects another worker result before projecting it: %j", async ({ value }) => {
+  const readers = createSessionHistoryWorkerReaders(async (_prepare, _inputBytes, receive) =>
+    receive(value),
+  );
+  await expect(
+    readers.readMessagePresence({ scope: { sessionId: "synthetic-session" } }),
+  ).rejects.toThrow("Session history worker returned another result instead of message presence");
+});
 
 it.each(["archives", "corpus", "targets"] as const)(
   "serializes Windows storage environments for %s inventory",
@@ -62,3 +90,69 @@ it.each(["archives", "corpus", "targets"] as const)(
     }
   },
 );
+
+it("passes the cold metadata caller's signal to its reader task", async () => {
+  const input = { sessionId: "synthetic-cold-session", env: {} };
+  const signal = new AbortController().signal;
+  const readers = createSessionHistoryWorkerReaders(
+    async (prepare, _inputBytes, receive, receivedSignal) => {
+      expect(prepare()).toEqual({ kind: "cold-metadata", ...input });
+      expect(receivedSignal).toBe(signal);
+      return receive({ kind: "cold-metadata", archive: undefined });
+    },
+  );
+  await expect(readers.readColdMetadata(input, signal)).resolves.toEqual({
+    kind: "cold-metadata",
+    archive: undefined,
+  });
+});
+
+it.each([
+  { view: "Uint8Array", accepted: true },
+  { view: "Uint16Array", accepted: false },
+  { view: "DataView", accepted: false },
+])("validates cross-realm $view transcript frames", async ({ view, accepted }) => {
+  const event = { type: "message", text: "hello 🦞" };
+  const json = JSON.stringify(event);
+  const bytes = Array.from(new TextEncoder().encode(json));
+  const data: unknown = runInNewContext(
+    view === "DataView" ? "new DataView(new Uint8Array(bytes).buffer)" : `new ${view}(bytes)`,
+    { bytes },
+  );
+  const version = { generation: "synthetic-generation", rawSeq: 7, updatedAt: 123 };
+  const signal = new AbortController().signal;
+  const readers = createSessionHistoryWorkerReaders(
+    async (_prepare, _inputBytes, receive, _signal, onRequest) => {
+      if (!onRequest) {
+        throw new Error("Transcript reader did not provide its chunk receiver");
+      }
+      await onRequest(
+        {
+          kind: "transcript-hydration-chunk",
+          encoding: "utf-8",
+          frames: [{ data, endOfEvent: true, seq: 7 }],
+        },
+        signal,
+      );
+      return receive({ kind: "full", version, eventCount: 1 });
+    },
+  );
+  const result = readers.readTranscript(
+    {
+      target: { sessionId: "synthetic-session" },
+      resolvedScope: { agentId: "main", sessionId: "synthetic-session" },
+      includeEventJson: true,
+    },
+    signal,
+  );
+  if (accepted) {
+    await expect(result).resolves.toEqual({
+      kind: "full",
+      snapshot: { events: [event], eventJson: [json], eventSeqs: [7], version },
+    });
+  } else {
+    await expect(result).rejects.toThrow(
+      "Session history worker returned an invalid transcript frame",
+    );
+  }
+});
