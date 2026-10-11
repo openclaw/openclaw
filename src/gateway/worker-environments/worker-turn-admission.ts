@@ -51,8 +51,11 @@ export function createRequiredWorkerTurnAdmission(options: {
   withRequiredSession?: RequiredSessionPlacementAdmission;
 }) {
   return {
-    usesWorkerInference: (identity: Omit<LocalTurnPlacementClaim, "runId">) => {
-      const placement = options.placements.get(identity.sessionId);
+    usesWorkerInference: async (identity: Omit<LocalTurnPlacementClaim, "runId">) => {
+      const projection = await options.placements.readProjection([identity.sessionId], {
+        current: true,
+      });
+      const placement = projection.placements.get(identity.sessionId);
       const environment = placement?.environmentId
         ? options.environments.get(placement.environmentId)
         : undefined;
