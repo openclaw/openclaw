@@ -12,6 +12,7 @@ import {
 } from "./session-store-target-inventory.js";
 import { resolveExistingAgentSessionStoreTargetsReadOnlyResult } from "./targets-read-availability.worker.js";
 
+// mock-isolation: Inventory cases supply availability without opening persistent stores.
 vi.mock("./targets-read-availability.worker.js", () => ({
   resolveExistingAgentSessionStoreTargetsReadOnlyResult: vi.fn(),
 }));
