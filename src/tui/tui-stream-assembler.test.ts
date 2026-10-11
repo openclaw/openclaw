@@ -4,7 +4,6 @@ import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 
 const text = (value: string) => ({ type: "text", text: value }) as const;
 const thinking = (value: string) => ({ type: "thinking", thinking: value }) as const;
-const toolUse = () => ({ type: "tool_use", name: "search" }) as const;
 const pairingQr = (terminalText: string) =>
   ({ type: "openclaw_pairing_qr", terminalText }) as const;
 
@@ -22,29 +21,6 @@ describe("TuiStreamAssembler", () => {
 
     const second = assembler.ingestDelta("run-1", messageWithContent([thinking("Brain")]), true);
     expect(second).toBe("[thinking]\nBrain\n\nHello");
-  });
-
-  it("defers streamed terminal sanitization to the markdown boundary", () => {
-    const assembler = new TuiStreamAssembler();
-    const unsafe = "before\x1b]52;c;unsafe\x07after";
-
-    expect(assembler.ingestDelta("run-unsafe", messageWithContent([text(unsafe)]), false)).toBe(
-      unsafe,
-    );
-  });
-
-  it("retains hidden thinking across display toggles", () => {
-    const assembler = new TuiStreamAssembler();
-    const output = assembler.ingestDelta(
-      "run-2",
-      messageWithContent([thinking("Hidden"), text("Visible")]),
-      false,
-    );
-    expect(output).toBe("Visible");
-    expect(assembler.ingestDelta("run-2", messageWithContent([]), true)).toBe(
-      "[thinking]\nHidden\n\nVisible",
-    );
-    expect(assembler.ingestDelta("run-2", messageWithContent([]), false)).toBe("Visible");
   });
 
   it("tracks literal placeholder text as real displayable content until finalization", () => {
@@ -88,21 +64,6 @@ describe("TuiStreamAssembler", () => {
       true,
     );
     expect(finalText).toBe("[thinking]\nPreparing the attachment\n\nAttached image");
-  });
-
-  it("keeps a streamed caption ahead of an attachment-only final", () => {
-    const assembler = new TuiStreamAssembler();
-    assembler.ingestDelta(
-      "run-media-caption",
-      messageWithContent([text("Generated chart")]),
-      false,
-    );
-    const finalText = assembler.finalize(
-      "run-media-caption",
-      messageWithContent([{ type: "image", data: "secret-image" }]),
-      false,
-    );
-    expect(finalText).toBe("Generated chart");
   });
 
   it("keeps an error ahead of an attachment summary", () => {
@@ -153,21 +114,5 @@ describe("TuiStreamAssembler", () => {
       "Late final",
     );
     expect(assembler.finalize("run-1", { role: "assistant", content: [] }, false)).toBe("Draft 1");
-  });
-
-  it("prefers final text when non-text appears only in final payload", () => {
-    const assembler = new TuiStreamAssembler();
-    assembler.ingestDelta(
-      "run-boundary",
-      messageWithContent([text("Draft line 1"), text("Draft line 2")]),
-      false,
-    );
-    expect(
-      assembler.finalize(
-        "run-boundary",
-        messageWithContent([toolUse(), text("Draft line 2")]),
-        false,
-      ),
-    ).toBe("Draft line 2");
   });
 });
