@@ -3,6 +3,7 @@ import type {
   ProviderThinkingProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-metadata";
+import { resolveEffortThinkingProfile } from "openclaw/plugin-sdk/provider-thinking-runtime";
 
 export type VllmQwenThinkingFormat = "chat-template" | "top-level";
 
@@ -10,6 +11,26 @@ const VLLM_BINARY_THINKING_PROFILE = {
   levels: [{ id: "off" }, { id: "low", label: "on" }],
   defaultLevel: "off",
 } satisfies ProviderThinkingProfile;
+
+export function resolveVllmEffortProfile(
+  model: Pick<ProviderDefaultThinkingPolicyContext, "compat" | "thinkingLevelMap">,
+): ProviderThinkingProfile | undefined {
+  const { compat } = model;
+  const efforts = compat?.supportedReasoningEfforts?.map((effort) => effort.trim()).filter(Boolean);
+  if (compat?.supportsReasoningEffort === false || !efforts?.length) {
+    return undefined;
+  }
+  const mappedLevels = Object.entries({
+    ...model.thinkingLevelMap,
+    ...compat?.reasoningEffortMap,
+  })
+    .filter(([, effort]) => typeof effort === "string" && efforts.includes(effort.trim()))
+    .map(([level]) => level.trim().toLowerCase());
+  const profile = resolveEffortThinkingProfile([...efforts, ...mappedLevels]);
+  return profile?.levels.some(({ id }) => id !== "off")
+    ? { ...profile, defaultLevel: "off" }
+    : undefined;
+}
 
 export function resolveVllmQwenThinkingFormatFromCompat(
   compat?: ProviderDefaultThinkingPolicyContext["compat"],
@@ -36,7 +57,10 @@ export function resolveThinkingProfile(
     return null;
   }
   const qwenFormat = resolveVllmQwenThinkingFormatFromCompat(ctx.compat);
-  if (qwenFormat || (ctx.reasoning === true && isVllmNemotronThinkingModel(ctx.modelId))) {
+  if (qwenFormat) {
+    return resolveVllmEffortProfile(ctx) ?? VLLM_BINARY_THINKING_PROFILE;
+  }
+  if (ctx.reasoning === true && isVllmNemotronThinkingModel(ctx.modelId)) {
     return VLLM_BINARY_THINKING_PROFILE;
   }
   return null;

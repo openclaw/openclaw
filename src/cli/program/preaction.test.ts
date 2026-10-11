@@ -582,11 +582,9 @@ describe("registerPreActionHooks", () => {
       parseArgv: ["config", "set", "gateway.auth.mode", "{bad", "--json"],
     });
 
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
-      runtime: runtimeMock,
-      measure: expect.any(Function),
-      commandPath: ["config", "set"],
-    });
+    expect(routeLogsToStderrMock).not.toHaveBeenCalled();
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
   it("does not select JSON output when Commander consumed --json as an option value", async () => {
@@ -775,20 +773,14 @@ describe("registerPreActionHooks", () => {
     });
   });
 
-  it("uses the Commander path past parent option values for gateway calls", async () => {
+  it("leaves gateway call config loading to the transport past parent option values", async () => {
     const parseProgram = buildProgram();
     process.argv = ["node", "openclaw", "gateway", "--token", "secret", "call", "health", "--json"];
 
     await parseProgram.parseAsync(process.argv);
 
-    const bootstrap = ensureConfigReadyMock.mock.calls.at(-1)?.[0];
-    expect(bootstrap).toEqual({
-      runtime: runtimeMock,
-      measure: expect.any(Function),
-      commandPath: ["gateway", "call"],
-      suppressDoctorStdout: true,
-      validateConfigOnly: true,
-    });
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
   it("uses the shared skip policy for gateway health on the Commander path", async () => {
@@ -882,16 +874,13 @@ describe("registerPreActionHooks", () => {
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
-  it("keeps config guard for config unset mutations", async () => {
+  it("defers config unset preparation to its command owner", async () => {
     await runPreAction({
       parseArgv: ["config", "unset", "gateway.port"],
     });
 
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
-      runtime: runtimeMock,
-      measure: expect.any(Function),
-      commandPath: ["config", "unset"],
-    });
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
   it("bypasses config guard for backup create", async () => {

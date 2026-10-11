@@ -3,9 +3,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadLegacyCronQuarantineForMigration } from "../commands/doctor/cron/legacy-quarantine-migration.js";
-import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import {
   loadCronQuarantinedJobs,
   loadCronStore,
@@ -52,54 +52,50 @@ describe("cron quarantine", () => {
     expect(preserved.jobs[0]?.raw).toBe("keep-me");
   });
 
-  it.each(["transaction", "commit"] as const)(
-    "preserves recovery rows when maintenance authority expires at native %s admission",
-    async (stage) => {
-      const { storePath } = makeStorePath();
-      const retained = { sourceIndex: 0, reason: "missing-schedule", job: { id: "retained" } };
-      await saveCronQuarantinedJobs({ storePath, nowMs: 100, entries: [retained] });
-      let current = true;
-      let witnessed = false;
-      const scope = createOpenClawDatabaseMaintenanceScope({
-        assertOwnerCurrent: () => {
-          if (!current) {
-            throw new Error("Quarantine maintenance owner revoked");
-          }
-        },
+  it("preserves recovery rows when maintenance authority expires before worker dispatch", async () => {
+    const { storePath } = makeStorePath();
+    const retained = { sourceIndex: 0, reason: "missing-schedule", job: { id: "retained" } };
+    await saveCronQuarantinedJobs({ storePath, nowMs: 100, entries: [retained] });
+    const database = openOpenClawStateDatabase().db;
+    const schemaVersion = database.prepare("PRAGMA schema_version").get();
+    let current = true;
+    let witnessed = false;
+    const scope = createOpenClawDatabaseMaintenanceScope({
+      assertOwnerCurrent: () => {
+        if (!current) {
+          throw new Error("Quarantine maintenance owner revoked");
+        }
+      },
+    });
+    const runWorkerOperation = stateWorker.runOpenClawStateWorkerOperation;
+    const admission = vi
+      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+      .mockImplementation((context, operation, options) => {
+        witnessed = true;
+        current = false;
+        return runWorkerOperation(context, operation, options);
       });
-      const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-      const admission = vi
-        .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === stage) {
-              witnessed = true;
-              current = false;
-            }
-            admit(request, grant);
-          }, attachment),
-        );
-      try {
-        await expect(
-          scope.run(() =>
-            saveCronQuarantinedJobs({
-              storePath,
-              nowMs: 200,
-              entries: [{ sourceIndex: 1, reason: "missing-schedule", job: { id: "refused" } }],
-            }),
-          ),
-        ).rejects.toThrow("Quarantine maintenance owner revoked");
-        expect(witnessed).toBe(true);
-        expect(await loadCronQuarantinedJobs(storePath)).toEqual([
-          { ...retained, quarantinedAtMs: 100 },
-        ]);
-      } finally {
-        admission.mockRestore();
-        current = true;
-        await scope.close();
-      }
-    },
-  );
+    try {
+      await expect(
+        scope.run(() =>
+          saveCronQuarantinedJobs({
+            storePath,
+            nowMs: 200,
+            entries: [{ sourceIndex: 1, reason: "missing-schedule", job: { id: "refused" } }],
+          }),
+        ),
+      ).rejects.toThrow("Quarantine maintenance owner revoked");
+      expect(witnessed).toBe(true);
+      expect(await loadCronQuarantinedJobs(storePath)).toEqual([
+        { ...retained, quarantinedAtMs: 100 },
+      ]);
+      expect(database.prepare("PRAGMA schema_version").get()).toEqual(schemaVersion);
+    } finally {
+      admission.mockRestore();
+      current = true;
+      await scope.close();
+    }
+  });
 
   it("captures quarantine input and preserves the first recovery timestamp", async () => {
     const { storePath } = makeStorePath();

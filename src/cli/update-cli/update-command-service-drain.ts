@@ -209,6 +209,20 @@ export async function withGatewayMaintenanceDrain<T>(
     observationFailure = { error };
   }
   assertResidentCurrent();
+  if (
+    !explicitDrain &&
+    !params.state.running &&
+    params.state.runtime?.status === "stopped" &&
+    observationFailure &&
+    connection?.target
+  ) {
+    const usage = await inspectPortUsage(connection.port, { probeHosts: ["127.0.0.1"] });
+    assertResidentCurrent();
+    if (usage.status === "free") {
+      // Rollback can revisit an already-stopped unit; retain the guarded native stop.
+      return await finish();
+    }
+  }
   // A resident whose installation was replaced underneath it refuses every
   // connection; it can neither report readiness nor accept new work, so
   // draining it is pointless and would only burn the deadline.
@@ -315,12 +329,12 @@ export async function withGatewayMaintenanceDrain<T>(
           lastObservation?.blockers
             .map(({ kind, count, message }) => `${kind}=${count} (${message})`)
             .join(", ") || "admitted work";
-        const roots = lastObservation
-          ? (lastObservation.blockers.find(({ kind }) => kind === "root-request")?.count ?? 0)
-          : (residentBudget?.activeWork?.rootRequests ?? "unknown");
-        const cron = lastObservation
-          ? (lastObservation.blockers.find(({ kind }) => kind === "cron-run")?.count ?? 0)
-          : (residentBudget?.activeWork?.cronRuns ?? "unknown");
+        const countWork = (kind: string, fallback: number | undefined) =>
+          lastObservation
+            ? (lastObservation.blockers.find((blocker) => blocker.kind === kind)?.count ?? 0)
+            : (fallback ?? "unknown");
+        const roots = countWork("root-request", residentBudget?.activeWork?.rootRequests);
+        const cron = countWork("cron-run", residentBudget?.activeWork?.cronRuns);
         const custodyNotice =
           custody === undefined
             ? `The resident build cannot distinguish migrations/backups from ordinary work in this observation.${observationFailure ? ` Current lifecycle observation unavailable (${coerceErrorMessage(observationFailure.error)}).` : ""}`

@@ -20,7 +20,6 @@ src/agents/embedded-agent-runner/run/attempt-client-tools.test.ts	3
 src/agents/prepared-model-catalog-worker.native-renewal.integration.test.ts	4
 src/agents/prepared-model-catalog-worker.reuse.integration.test.ts	1
 src/agents/provider-local-service.shutdown.test.ts	1
-src/agents/sandbox/ssh.stream-errors.test.ts	2
 src/agents/tools/ask-user-tool.test.ts	2
 src/agents/tools/message-tool.hosted-transport.test.ts	1
 src/agents/tools/message-tool.scheduled-lifetime.test.ts	1
@@ -35,14 +34,13 @@ src/auto-reply/reply/dispatch-from-config.active-command.test.ts	2
 src/auto-reply/reply/reply-run-registry.question-registration.test.ts	2
 src/cli/gateway-cli/run-loop-startup.test-support.ts	4
 src/cli/gateway-cli/run-loop.restart-liveness.process.test.ts	1
-src/cli/one-shot-exit.test.ts	1
 src/cli/update-cli/update-command-retained-custody.test.ts	2
 src/config/sessions/legacy-main-session-migration.race.test.ts	1
 src/config/sessions/session-accessor.sqlite-page-reclamation.binding.test.ts	1
 src/config/sessions/session-cold-storage.test.ts	1
 src/config/sessions/session-history-archive-pruning.admission.test.ts	4
 src/config/sessions/session-history-eviction.writer-fairness.test.ts	2
-src/config/sessions/session-transcript-reconcile-memory.test.ts	4
+src/config/sessions/session-transcript-reconcile-memory.test.ts	3
 src/config/sessions/session-transcript-reconcile.native-exit.test.ts	2
 src/cron/isolated-agent/model-preflight.runtime.test.ts	2
 src/cron/isolated-agent/model-preflight.runtime.transport.test.ts	4
@@ -76,7 +74,6 @@ src/gateway/server.labs-hot-reload.test.ts	2
 src/gateway/server.node-chat-subscriptions.test.ts	2
 src/gateway/server.node-pairing-ssh-verify.test.ts	2
 src/gateway/server.plugins-install-authority.test.ts	6
-src/gateway/server.portals.session.test.ts	3
 src/gateway/server.shared-auth-rotation.test.ts	2
 src/gateway/server.spawn-broker.test.ts	1
 src/gateway/server.visible-spawn-fallback.product-proof.test.ts	1
@@ -107,7 +104,6 @@ src/process/command-queue.publish-transaction.test.ts	3
 src/process/spawn-broker/command-startup.test.ts	1
 src/process/spawn-broker/startup.test.ts	1
 src/process/supervisor/service-child-relay-host.awaited-output.test.ts	1
-src/skills/workshop/experience-review.apply.test.ts	1
 src/state/openclaw-database-preflight.lifecycle.test.ts	4
 src/state/openclaw-state-lease-existing.test.ts	1
 src/system-agent/setup-lifetime.test.ts	1

@@ -1,7 +1,7 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexCommandExecParams, CodexCommandExecResponse } from "./command-exec-protocol.js";
 import type * as Control from "./protocol-control-plane.js";
-import type { JsonObject, JsonValue } from "./protocol-json.js";
+import type { CodexCursorPage, JsonObject, JsonValue } from "./protocol-json.js";
 import type * as CodexMcpProtocol from "./protocol-mcp.js";
 import type { CodexSessionSource, CodexThreadSourceKind } from "./protocol-session-source.js";
 
@@ -221,11 +221,9 @@ export type CodexThreadListParams = JsonObject & {
   ancestorThreadId?: string | null;
 };
 
-export type CodexThreadListResponse = {
-  data: CodexThread[];
-  nextCursor?: string | null;
-  backwardsCursor?: string | null;
-};
+type CodexThreadPage<T> = CodexCursorPage<T> & { backwardsCursor?: string | null };
+
+export type CodexThreadListResponse = CodexThreadPage<CodexThread>;
 
 export type CodexThreadTurnsListParams = JsonObject & {
   threadId: string;
@@ -235,11 +233,7 @@ export type CodexThreadTurnsListParams = JsonObject & {
   itemsView?: "notLoaded" | "summary" | "full" | null;
 };
 
-export type CodexThreadTurnsListResponse = {
-  data: CodexTurn[];
-  nextCursor?: string | null;
-  backwardsCursor?: string | null;
-};
+export type CodexThreadTurnsListResponse = CodexThreadPage<CodexTurn>;
 
 export type CodexThreadItemsListParams = JsonObject & {
   threadId: string;
@@ -248,16 +242,14 @@ export type CodexThreadItemsListParams = JsonObject & {
   sortDirection: "desc";
 };
 
-export type CodexThreadItemsListResponse = {
-  data: Array<{ turnId: string; item: CodexThreadItem }>;
-  nextCursor?: string | null;
-};
+export type CodexThreadItemsListResponse = CodexCursorPage<{
+  turnId: string;
+  item: CodexThreadItem;
+}>;
 
 type CodexThreadIdParams = JsonObject & { threadId: string };
 
-type CodexInitialTurnsPage = Omit<CodexThreadTurnsListResponse, "data"> & {
-  data: Pick<CodexTurn, "id" | "status">[];
-};
+type CodexInitialTurnsPage = CodexThreadPage<Pick<CodexTurn, "id" | "status">>;
 
 export type CodexThreadResumeResponse = CodexThreadStartResponse & {
   cwd: string;
@@ -484,10 +476,7 @@ type CodexReasoningEffortOption = {
   reasoningEffort?: string | null;
 };
 
-export type CodexModelListResponse = {
-  data: CodexModel[];
-  nextCursor?: string | null;
-};
+export type CodexModelListResponse = CodexCursorPage<CodexModel>;
 
 export type CodexGetAccountResponse = {
   account?:
@@ -559,6 +548,11 @@ type CodexAppServerRequests = {
   "app/list": CodexRequestContract<Control.CodexAppsListParams, Control.CodexAppsListResponse>;
   "app/read": CodexRequestContract<Control.CodexAppsReadParams, Control.CodexAppsReadResponse>;
   "command/exec": CodexRequestContract<CodexCommandExecParams, CodexCommandExecResponse>;
+  "fs/writeFile": CodexRequestContract<{ path: string; dataBase64: string }, JsonObject>;
+  "fs/remove": CodexRequestContract<
+    { path: string; force?: boolean; recursive?: boolean },
+    JsonObject
+  >;
   "config/batchWrite": CodexRequestContract<
     Control.CodexConfigBatchWriteParams,
     Control.CodexConfigWriteResponse

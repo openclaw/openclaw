@@ -25,7 +25,6 @@ import {
   type CodexDynamicToolSpec,
   type CodexThreadResumeParams,
   type CodexThreadStartParams,
-  type CodexTurnEnvironmentParams,
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
@@ -207,9 +206,11 @@ export function buildThreadStartParams(
     personality: CODEX_NATIVE_PERSONALITY_NONE,
     serviceName: "OpenClaw",
     threadSource: "openclaw",
-    ...resolveCodexThreadEnvironmentSelection(
-      params.requireWorkspaceOnly === true ? { nativeCodeModeEnabled: false } : options,
-    ),
+    ...(params.requireWorkspaceOnly === true || options.nativeCodeModeEnabled === false
+      ? { environments: [] }
+      : options.environmentSelection
+        ? { environments: options.environmentSelection }
+        : {}),
     // Codex 0.146 accepts canonical typed function and namespace specs natively.
     dynamicTools: [...options.dynamicTools],
     experimentalRawEvents: true,
@@ -365,6 +366,7 @@ export function buildCodexRuntimeThreadConfigForRun(
     restrictedToolSurfaceInheritedMcpServerNames?: readonly string[];
     shellEnvironment?: Readonly<Record<string, string>>;
     shellPathPrepend?: readonly string[];
+    shellGitConfigParameters?: string;
     disableLoginShell?: boolean;
   } = {},
 ): JsonObject {
@@ -455,6 +457,7 @@ export function buildCodexRuntimeThreadConfigForRun(
     options.shellEnvironment,
     options.disableLoginShell,
     options.shellPathPrepend,
+    options.shellGitConfigParameters,
   );
 }
 
@@ -687,17 +690,4 @@ export function codexThreadSandboxOrPermissions(
     return {};
   }
   return { sandbox: appServer.sandbox };
-}
-
-function resolveCodexThreadEnvironmentSelection(options: {
-  nativeCodeModeEnabled?: boolean;
-  environmentSelection?: CodexTurnEnvironmentParams[];
-}): Pick<CodexThreadStartParams, "environments"> {
-  if (options.nativeCodeModeEnabled === false) {
-    return { environments: [] };
-  }
-  if (options.environmentSelection) {
-    return { environments: options.environmentSelection };
-  }
-  return {};
 }

@@ -59,10 +59,12 @@ describe("ssrf pinning", () => {
     },
   );
 
-  it("keeps automatic pinned lookups on IPv4 when both address families are available", async () => {
-    const lookup = createPinnedLookup({
-      hostname: "api.anthropic.com",
-      addresses: ["160.79.104.10", "2607:6bc0::10"],
+  it("keeps single-address lookups on IPv4 while exposing both validated families to Happy Eyeballs", async () => {
+    const { lookup } = await resolvePinnedHostnameWithPolicy("api.anthropic.com", {
+      lookupFn: async () => [
+        { address: "2607:6bc0::10", family: 6 },
+        { address: "160.79.104.10", family: 4 },
+      ],
     });
     const lookupDefault = () => {
       let called = false;
@@ -105,12 +107,52 @@ describe("ssrf pinning", () => {
       });
     });
     expect(allCalled).toBe(false);
-    await expect(all).resolves.toEqual([{ address: "160.79.104.10", family: 4 }]);
+    await expect(all).resolves.toEqual([
+      { address: "160.79.104.10", family: 4 },
+      { address: "2607:6bc0::10", family: 6 },
+    ]);
 
     await expect(lookupWithOptions({ family: 6 })).resolves.toEqual({
       address: "2607:6bc0::10",
       family: 6,
     });
+  });
+
+  it.each([
+    { address: "160.79.104.10", family: 4 },
+    { address: "2607:6bc0::10", family: 6 },
+  ])(
+    "supports IPv$family-only DNS answers for all-address lookups",
+    async ({ address, family }) => {
+      const { lookup } = await resolvePinnedHostnameWithPolicy("example.com", {
+        lookupFn: async () => [{ address, family }],
+      });
+      const all = new Promise<unknown>((resolve, reject) => {
+        lookup("example.com", { all: true }, (err, addresses) => {
+          if (err) {
+            reject(err);
+          } else {
+            resolve(addresses);
+          }
+        });
+      });
+      await expect(all).resolves.toEqual([{ address, family }]);
+    },
+  );
+
+  it.each([
+    ["private IPv4/public IPv6", "10.0.0.1", "2607:6bc0::10"],
+    ["public IPv4/private IPv6", "160.79.104.10", "fd00::1"],
+    ["all private", "10.0.0.1", "fd00::1"],
+  ])("rejects the entire %s DNS answer before creating a pinned lookup", async (_, ipv4, ipv6) => {
+    await expect(
+      resolvePinnedHostnameWithPolicy("example.com", {
+        lookupFn: async () => [
+          { address: ipv4, family: 4 },
+          { address: ipv6, family: 6 },
+        ],
+      }),
+    ).rejects.toThrow(SsrFBlockedError);
   });
 
   it("fails loud when a pinned lookup is created without any addresses", () => {

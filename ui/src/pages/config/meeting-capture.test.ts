@@ -885,7 +885,7 @@ describe("curated meeting capture", () => {
         ),
       ].every((button) => button.disabled),
     ).toBe(true);
-    expect(page.querySelector("wa-switch")?.hasAttribute("disabled")).toBe(true);
+    expect(page.querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled).toBe(true);
     expect(runtimeConfig.state.configFormDirty).toBe(false);
   });
 

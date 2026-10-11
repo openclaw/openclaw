@@ -1,5 +1,6 @@
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
 import { assertCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
 import type {
   OpenClawAgentDatabase,
@@ -11,7 +12,10 @@ import {
 } from "./openclaw-agent-db-identity.js";
 import { withCommittedOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-companion.js";
 import {
+  openOpenClawAgentDatabaseReadOnly,
   readOpenClawAgentDatabase,
+  readOpenClawAgentDatabaseSnapshot,
+  withFreshOpenClawAgentDatabaseReadOnly,
   type OpenClawAgentDatabaseReadOnlyResult,
   type OpenClawAgentReadOnlyDatabase,
 } from "./openclaw-agent-db-readonly-open.js";
@@ -61,6 +65,16 @@ export function retainOpenClawAgentDatabaseReadOnly(
 ):
   | { found: true; database: OpenClawAgentReadOnlyDatabase; claim: OpenClawAgentDatabaseClaim }
   | { found: false; reason: "database-missing" | "schema-missing" } {
+  if (isArtifactPreservingStateRead("agent", resolveOpenClawAgentSqlitePath(options))) {
+    const inspected = openOpenClawAgentDatabaseReadOnly(options);
+    return inspected.found
+      ? {
+          found: true,
+          database: inspected.database,
+          claim: createOpenClawAgentDatabaseClaim(inspected.database, inspected.database.close),
+        }
+      : inspected;
+  }
   const opened = findOpenAgentDatabase(options);
   if (opened && !opened.db.isTransaction) {
     const borrowed = borrowOpenClawAgentDatabase(options);
@@ -83,6 +97,9 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
 ): OpenClawAgentDatabaseReadOnlyResult<T> {
   const agentId = normalizeAgentId(options.agentId);
   const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
+  if (isArtifactPreservingStateRead("agent", pathname)) {
+    return withFreshOpenClawAgentDatabaseReadOnly(operation, options, behavior);
+  }
   if (isIncognitoOpenClawAgentSqlitePath(pathname, { agentId, env: options.env })) {
     // Read-only misses must not create process-lifetime handles; only creation and
     // write paths may materialize the process-held incognito database.
@@ -100,10 +117,12 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
     ? undefined
     : findOpenAgentDatabase({ ...options, agentId });
   if (processOpened?.db.isTransaction) {
-    return withCommittedOpenClawAgentDatabaseReadOnly(processOpened, operation, {
-      ...options,
-      agentId,
-    });
+    return withCommittedOpenClawAgentDatabaseReadOnly(
+      processOpened,
+      operation,
+      { ...options, agentId },
+      behavior,
+    );
   }
   if (!processOpened) {
     return withScopedOpenClawAgentDatabaseReadOnly(
@@ -112,15 +131,14 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
       behavior,
     );
   }
-  // The handle's admission owner refreshes these facts after DDL or a foreign commit.
-  return runSqliteReadOperationSync(
-    processOpened.db,
-    () => {
-      const userVersion = assertSupportedAgentSchemaVersion(processOpened.db, pathname);
-      assertCanonicalAgentPersistenceVersion(processOpened.db, pathname, userVersion);
-      assertCanonicalSessionValidationSchema(processOpened.db);
-      return readOpenClawAgentDatabase(processOpened, operation);
-    },
-    "fresh",
-  );
+  if (behavior.snapshot) {
+    return readOpenClawAgentDatabaseSnapshot(processOpened, operation);
+  }
+  // The migration owner publishes changes to the handle's shared schema admission.
+  return runSqliteReadOperationSync(processOpened.db, () => {
+    const userVersion = assertSupportedAgentSchemaVersion(processOpened.db, pathname);
+    assertCanonicalAgentPersistenceVersion(processOpened.db, pathname, userVersion);
+    assertCanonicalSessionValidationSchema(processOpened.db);
+    return readOpenClawAgentDatabase(processOpened, operation);
+  });
 }

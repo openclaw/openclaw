@@ -1,3 +1,8 @@
+import {
+  resolveUiTypeScriptPath,
+  uiTypeScriptPathGlob,
+} from "../../test/vitest/vitest.ui-paths.mjs";
+
 // Styles are imported by these page owners; the runtime import graph omits CSS.
 const pageStyles = {
   about: [
@@ -178,20 +183,28 @@ type UiE2eOwnerWatch = {
   watchGlobs: readonly string[];
 };
 
+const sessionMenuOwnerRoots = [
+  "ui/src/components/modal-dialog.ts",
+  "ui/src/components/session-menu.ts",
+  "ui/src/lib/sessions/session-capability.ts",
+  "ui/src/pages/chat/components/chat-header-session-menu.ts",
+] as const;
+
 function pageWatch(
   testFile: string,
   pages: readonly (keyof typeof pageStyles)[],
   ownerRoots: readonly string[] = [],
+  watchGlobs: readonly string[] = [],
 ): UiE2eOwnerWatch {
   const routes = pages.map((page) => `ui/src/pages/${page}/route.ts`);
   return {
     testFile,
     ownerRoots: [...routes, ...ownerRoots].toSorted(),
-    watchGlobs: [...routes, ...pages.flatMap<string>((page) => pageStyles[page])],
+    watchGlobs: [...routes, ...watchGlobs, ...pages.flatMap<string>((page) => pageStyles[page])],
   };
 }
 
-export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
+const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch("ui/src/e2e/activity-answer-candidates.e2e.test.ts", ["activity", "chat"]),
   pageWatch("ui/src/e2e/activity-current-work.e2e.test.ts", ["activity", "chat"]),
   pageWatch(
@@ -242,6 +255,8 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
       "ui/src/components/select-picker.ts",
       "ui/src/components/settings-save-indicator.ts",
       "ui/src/pages/agents/agents-page.ts",
+      "ui/src/pages/agents/agents-page.tsx",
+      "ui/src/pages/agents/agents-page-state.ts",
     ],
   ),
   pageWatch(
@@ -278,16 +293,7 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
     ["ui/src/components/agent-select-registration.ts"],
   ),
   pageWatch("ui/src/e2e/agent-selection-persistence.e2e.test.ts", ["chat"]),
-  pageWatch(
-    "ui/src/e2e/agent-switch-roster.e2e.test.ts",
-    ["chat"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
-  ),
+  pageWatch("ui/src/e2e/agent-switch-roster.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
   pageWatch("ui/src/e2e/agents-set-default-persistence.e2e.test.ts", [
     "agents-home",
     "agents",
@@ -301,64 +307,31 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
     ["chat", "config"],
     ["ui/src/pages/config/custom-theme-import.ts"],
   ),
-  {
-    testFile: "ui/src/e2e/approval-bootstrap.e2e.test.ts",
-    ownerRoots: ["ui/src/components/sidebar-attention.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/styles/sidebar-attention-floating.css",
-      ...pageStyles["chat"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/approval-flow.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/sidebar-attention.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/styles/sidebar-attention-floating.css",
-      ...pageStyles["chat"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/assistant-panel-context.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/assistant-panel.ts",
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/styles/assistant-panel.css",
-      ...pageStyles["chat"],
-    ],
-  },
+  pageWatch(
+    "ui/src/e2e/approval-bootstrap.e2e.test.ts",
+    ["chat"],
+    ["ui/src/components/sidebar-attention.ts"],
+    ["ui/src/styles/sidebar-attention-floating.css"],
+  ),
+  pageWatch(
+    "ui/src/e2e/approval-flow.e2e.test.ts",
+    ["chat"],
+    ["ui/src/components/modal-dialog.ts", "ui/src/components/sidebar-attention.ts"],
+    ["ui/src/styles/sidebar-attention-floating.css"],
+  ),
+  pageWatch(
+    "ui/src/e2e/assistant-panel-context.e2e.test.ts",
+    ["chat"],
+    ["ui/src/components/assistant-panel.ts", "ui/src/pages/chat/chat-pane.ts"],
+    ["ui/src/styles/assistant-panel.css"],
+  ),
   pageWatch("ui/src/e2e/attachment-file-styles.e2e.test.ts", ["chat"]),
-  {
-    testFile: "ui/src/e2e/avatar-initial-emoji.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/agent-emoji-picker.ts",
-      "ui/src/components/agent-select-registration.ts",
-      "ui/src/pages/agents-home/route.ts",
-      "ui/src/pages/agents/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/usage/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/agents-home/route.ts",
-      "ui/src/pages/agents/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/usage/route.ts",
-      "ui/src/styles/agent-emoji-picker.css",
-      ...pageStyles["agents-home"],
-      ...pageStyles["agents"],
-      ...pageStyles["config"],
-      ...pageStyles["usage"],
-    ],
-  },
+  pageWatch(
+    "ui/src/e2e/avatar-initial-emoji.e2e.test.ts",
+    ["agents-home", "agents", "config", "usage"],
+    ["ui/src/components/agent-emoji-picker.ts", "ui/src/components/agent-select-registration.ts"],
+    ["ui/src/styles/agent-emoji-picker.css"],
+  ),
   pageWatch(
     "ui/src/e2e/browser-dictation-status.e2e.test.ts",
     ["chat", "config", "model-providers", "new-session"],
@@ -450,19 +423,12 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/chat-comment-lifecycle.e2e.test.ts",
     ["chat"],
-    ["ui/src/lib/toast.ts", "ui/src/plugins/control-ui-view.runtime.ts"],
+    ["ui/src/lib/toast.ts", "ui/src/plugins/control-ui-view.solid.tsx"],
   ),
   pageWatch(
     "ui/src/e2e/chat-comment-pane-retirement.e2e.test.ts",
     ["chat"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/chat-page.ts",
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
+    [...sessionMenuOwnerRoots, "ui/src/pages/chat/chat-page.ts", "ui/src/pages/chat/chat-pane.ts"],
   ),
   pageWatch("ui/src/e2e/chat-composer-accessory-focus.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-composer-capability-menu-height.e2e.test.ts", [
@@ -502,28 +468,18 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
     ["ui/src/pages/chat/components/chat-header-session-menu.ts"],
   ),
   pageWatch("ui/src/e2e/chat-composer-redesign.e2e.test.ts", ["chat"]),
-  {
-    testFile: "ui/src/e2e/chat-context-attachment.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/assistant-panel-content.ts",
-      "ui/src/components/home-session.runtime.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/styles/assistant-panel-content.css",
-      ...pageStyles["chat"],
-    ],
-  },
+  pageWatch(
+    "ui/src/e2e/chat-context-attachment.e2e.test.ts",
+    ["chat"],
+    ["ui/src/components/assistant-panel-content.ts", "ui/src/components/home-session.runtime.ts"],
+    ["ui/src/styles/assistant-panel-content.css"],
+  ),
   pageWatch(
     "ui/src/e2e/chat-continue-in-terminal.e2e.test.ts",
     ["chat"],
     [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
+      ...sessionMenuOwnerRoots,
       "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
       "ui/src/pages/chat/route-draft-focus-handoff.ts",
     ],
   ),
@@ -607,13 +563,7 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/chat-flow.sidebar-presentation.e2e.test.ts",
     ["chat"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
+    [...sessionMenuOwnerRoots, "ui/src/pages/chat/chat-pane.ts"],
   ),
   pageWatch(
     "ui/src/e2e/chat-flow.stream-reconciliation.e2e.test.ts",
@@ -630,16 +580,7 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
     ["ui/src/components/workspace-icon.ts", "ui/src/pages/chat/chat-pane.ts"],
   ),
   pageWatch("ui/src/e2e/chat-header-owner-presence.capture.e2e.test.ts", ["chat", "profile"]),
-  pageWatch(
-    "ui/src/e2e/chat-header-session-lineage.e2e.test.ts",
-    ["chat"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
-  ),
+  pageWatch("ui/src/e2e/chat-header-session-lineage.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
   pageWatch(
     "ui/src/e2e/chat-header-session-outcomes.e2e.test.ts",
     ["chat", "sessions"],
@@ -669,7 +610,7 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/chat-mermaid-load-errors.e2e.test.ts",
     ["chat"],
-    ["ui/src/components/markdown-mermaid.ts"],
+    ["ui/src/components/markdown-mermaid.tsx"],
   ),
   pageWatch(
     "ui/src/e2e/chat-metadata-observation.e2e.test.ts",
@@ -690,16 +631,7 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
     ["ui/src/components/modal-dialog.ts", "ui/src/pages/chat/chat-pane.ts"],
   ),
   pageWatch("ui/src/e2e/chat-nested-tool-presentation.e2e.test.ts", ["chat"]),
-  pageWatch(
-    "ui/src/e2e/chat-offline-session-title.e2e.test.ts",
-    ["chat"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
-  ),
+  pageWatch("ui/src/e2e/chat-offline-session-title.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
   pageWatch(
     "ui/src/e2e/chat-omitted-image-placeholder.e2e.test.ts",
     ["chat"],
@@ -780,19 +712,12 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
   pageWatch("ui/src/e2e/chat-recovered-search.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-reply-attribution.e2e.test.ts", ["chat", "profile"]),
   pageWatch("ui/src/e2e/chat-reply-preview-recovery.e2e.test.ts", ["chat"]),
-  {
-    testFile: "ui/src/e2e/chat-retained-pane-escape.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/app-sidebar.ts",
-      "ui/src/lib/session-pull-requests.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/styles/app-sidebar.css",
-      ...pageStyles["chat"],
-    ],
-  },
+  pageWatch(
+    "ui/src/e2e/chat-retained-pane-escape.e2e.test.ts",
+    ["chat"],
+    ["ui/src/components/app-sidebar.ts", "ui/src/lib/session-pull-requests.ts"],
+    ["ui/src/styles/app-sidebar.css"],
+  ),
   pageWatch(
     "ui/src/e2e/chat-retained-pane-eviction.e2e.test.ts",
     ["chat"],
@@ -842,12 +767,9 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
     "ui/src/e2e/chat-session-companion-focus.e2e.test.ts",
     ["chat"],
     [
+      ...sessionMenuOwnerRoots,
       "ui/src/components/command-palette.ts",
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
       "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
       "ui/src/pages/chat/components/chat-session-rail.ts",
     ],
   ),
@@ -876,7 +798,7 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
       "ui/src/lib/session-pull-requests.ts",
       "ui/src/pages/chat/chat-pane.ts",
       "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/components/session-diff-menus.ts",
+      "ui/src/pages/chat/components/session-diff-menus.tsx",
     ],
   ),
   pageWatch(
@@ -921,20 +843,16 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
   ),
   pageWatch("ui/src/e2e/chat-skill-references.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-slash-command-ranking.e2e.test.ts", ["chat", "plugin"]),
-  {
-    testFile: "ui/src/e2e/chat-split-close-focus.e2e.test.ts",
-    ownerRoots: [
+  pageWatch(
+    "ui/src/e2e/chat-split-close-focus.e2e.test.ts",
+    ["chat"],
+    [
       "ui/src/components/assistant-panel.ts",
       "ui/src/pages/chat/chat-page.ts",
       "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/styles/assistant-panel.css",
-      ...pageStyles["chat"],
-    ],
-  },
+    ["ui/src/styles/assistant-panel.css"],
+  ),
   pageWatch(
     "ui/src/e2e/chat-split-narrow.e2e.test.ts",
     ["chat"],
@@ -1007,19 +925,10 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
     ["chat", "search"],
     [
       "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/components/session-diff-menus.ts",
+      "ui/src/pages/chat/components/session-diff-menus.tsx",
     ],
   ),
-  pageWatch(
-    "ui/src/e2e/child-session-load-errors.e2e.test.ts",
-    ["chat"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
-  ),
+  pageWatch("ui/src/e2e/child-session-load-errors.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
   pageWatch("ui/src/e2e/chrome-extension-status.e2e.test.ts", ["config", "device"]),
   pageWatch("ui/src/e2e/cloud-reconciliation-followup.e2e.test.ts", ["chat"]),
   {
@@ -1041,7 +950,7 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
     ["cloud-workers", "config"],
     [
       "ui/src/components/modal-dialog.ts",
-      "ui/src/pages/cloud-workers/cloud-worker-snapshot-rows.ts",
+      "ui/src/pages/cloud-workers/cloud-worker-snapshot-rows.tsx",
     ],
   ),
   pageWatch("ui/src/e2e/cloud-workspace-conflict.e2e.test.ts", ["chat"]),
@@ -1106,35 +1015,25 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
     ["chat"],
     ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/route-draft-focus-handoff.ts"],
   ),
-  {
-    testFile: "ui/src/e2e/cron-agent-ownership.e2e.test.ts",
-    ownerRoots: [
+  pageWatch(
+    "ui/src/e2e/cron-agent-ownership.e2e.test.ts",
+    ["cron"],
+    [
       "ui/src/components/agent-select-registration.ts",
       "ui/src/components/select-picker.ts",
       "ui/src/lib/cron/types.ts",
-      "ui/src/pages/cron/cron-page.ts",
-      "ui/src/pages/cron/route.ts",
+      "ui/src/pages/cron/cron-page.tsx",
+      "ui/src/pages/cron/cron-page-controller.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/cron/route.ts",
-      "ui/src/styles/select-picker.css",
-      ...pageStyles["cron"],
-    ],
-  },
+    ["ui/src/styles/select-picker.css"],
+  ),
   pageWatch("ui/src/e2e/cron-descriptions.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
-  {
-    testFile: "ui/src/e2e/cron-filters.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/select-picker.ts",
-      "ui/src/lib/cron/types.ts",
-      "ui/src/pages/cron/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/cron/route.ts",
-      "ui/src/styles/select-picker.css",
-      ...pageStyles["cron"],
-    ],
-  },
+  pageWatch(
+    "ui/src/e2e/cron-filters.e2e.test.ts",
+    ["cron"],
+    ["ui/src/components/select-picker.ts", "ui/src/lib/cron/types.ts"],
+    ["ui/src/styles/select-picker.css"],
+  ),
   pageWatch(
     "ui/src/e2e/cron-heartbeat-scratch.e2e.test.ts",
     ["cron"],
@@ -1143,7 +1042,11 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/cron-history-recovery.e2e.test.ts",
     ["cron"],
-    ["ui/src/lib/cron/types.ts", "ui/src/pages/cron/cron-page.ts"],
+    [
+      "ui/src/lib/cron/types.ts",
+      "ui/src/pages/cron/cron-page.tsx",
+      "ui/src/pages/cron/cron-page-controller.ts",
+    ],
   ),
   pageWatch("ui/src/e2e/cron-job-link.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
   pageWatch("ui/src/e2e/cron-pacing.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
@@ -1180,21 +1083,12 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
     ["config", "labs", "model-providers"],
     ["ui/src/components/settings-save-indicator.ts"],
   ),
-  {
-    testFile: "ui/src/e2e/custodian-event-nudge.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/option-card.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/custodian/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/custodian/route.ts",
-      "ui/src/styles/option-card.css",
-      ...pageStyles["chat"],
-      ...pageStyles["custodian"],
-    ],
-  },
+  pageWatch(
+    "ui/src/e2e/custodian-event-nudge.e2e.test.ts",
+    ["chat", "custodian"],
+    ["ui/src/components/option-card.ts"],
+    ["ui/src/styles/option-card.css"],
+  ),
   pageWatch(
     "ui/src/e2e/dashboards-list-demand.e2e.test.ts",
     ["chat", "dashboards", "new-session"],
@@ -1273,30 +1167,12 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
     ["config", "devices"],
     ["ui/src/components/settings-save-indicator.ts"],
   ),
-  {
-    testFile: "ui/src/e2e/device-scope-upgrade.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/sidebar-attention.ts",
-      "ui/src/pages/activity/route.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/custodian/route.ts",
-      "ui/src/pages/new-session/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/activity/route.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/custodian/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      "ui/src/styles/sidebar-attention-floating.css",
-      ...pageStyles["activity"],
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-      ...pageStyles["custodian"],
-      ...pageStyles["new-session"],
-    ],
-  },
+  pageWatch(
+    "ui/src/e2e/device-scope-upgrade.e2e.test.ts",
+    ["activity", "chat", "config", "custodian", "new-session"],
+    ["ui/src/components/sidebar-attention.ts"],
+    ["ui/src/styles/sidebar-attention-floating.css"],
+  ),
   pageWatch("ui/src/e2e/dynamic-route-loader-count.e2e.test.ts", ["plugins"]),
   pageWatch(
     "ui/src/e2e/favicon-status.e2e.test.ts",
@@ -1315,58 +1191,26 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
     "ui/src/e2e/guest-session-controls.e2e.test.ts",
     ["chat", "sessions"],
     [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
+      ...sessionMenuOwnerRoots,
       "ui/src/lib/sessions/route-navigation.ts",
-      "ui/src/lib/sessions/session-capability.ts",
       "ui/src/pages/chat/chat-pane.ts",
       "ui/src/pages/chat/chat-state-host.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
     ],
   ),
   pageWatch("ui/src/e2e/home-attention.e2e.test.ts", ["chat"]),
-  {
-    testFile: "ui/src/e2e/home-command-recovery.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/assistant-panel-content.ts",
-      "ui/src/components/home-session.runtime.ts",
-      "ui/src/pages/agents-home/route.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/agents-home/route.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/styles/assistant-panel-content.css",
-      ...pageStyles["agents-home"],
-      ...pageStyles["chat"],
-    ],
-  },
+  pageWatch(
+    "ui/src/e2e/home-command-recovery.e2e.test.ts",
+    ["agents-home", "chat"],
+    ["ui/src/components/assistant-panel-content.ts", "ui/src/components/home-session.runtime.ts"],
+    ["ui/src/styles/assistant-panel-content.css"],
+  ),
   pageWatch("ui/src/e2e/identity-config-refresh.e2e.test.ts", ["chat"]),
-  {
-    testFile: "ui/src/e2e/inference-setup-gate.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/assistant-panel.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/custodian/custodian-surface.ts",
-      "ui/src/pages/custodian/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-      "ui/src/pages/new-session/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/custodian/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      "ui/src/styles/assistant-panel.css",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-      ...pageStyles["custodian"],
-      ...pageStyles["model-providers"],
-      ...pageStyles["new-session"],
-    ],
-  },
+  pageWatch(
+    "ui/src/e2e/inference-setup-gate.e2e.test.ts",
+    ["chat", "config", "custodian", "model-providers", "new-session"],
+    ["ui/src/components/assistant-panel.ts", "ui/src/pages/custodian/custodian-surface.ts"],
+    ["ui/src/styles/assistant-panel.css"],
+  ),
   pageWatch(
     "ui/src/e2e/keyboard-shortcuts-focus.e2e.test.ts",
     ["chat"],
@@ -1391,7 +1235,11 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
     ["chat", "new-session"],
     ["ui/src/components/lobster-pet-plans.ts", "ui/src/components/lobster-pet.runtime.ts"],
   ),
-  pageWatch("ui/src/e2e/logs-autofollow.e2e.test.ts", ["logs"], ["ui/src/pages/logs/logs-page.ts"]),
+  pageWatch(
+    "ui/src/e2e/logs-autofollow.e2e.test.ts",
+    ["logs"],
+    ["ui/src/pages/logs/logs-page.tsx"],
+  ),
   pageWatch("ui/src/e2e/logs-layout.e2e.test.ts", ["config", "logs"]),
   pageWatch(
     "ui/src/e2e/managed-media-base-path.e2e.test.ts",
@@ -1409,36 +1257,23 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
     ["config"],
     ["ui/src/pages/config/memory-page.ts"],
   ),
-  pageWatch(
-    "ui/src/e2e/mobile-chat-session-menu.e2e.test.ts",
-    ["chat"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
-  ),
+  pageWatch("ui/src/e2e/mobile-chat-session-menu.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
   pageWatch(
     "ui/src/e2e/mobile-shell-geometry.e2e.test.ts",
     ["chat", "new-session"],
     ["ui/src/lib/session-pull-requests.ts"],
   ),
-  pageWatch(
-    "ui/src/e2e/mobile-sidebar-session-menu.e2e.test.ts",
-    ["chat"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
-  ),
+  pageWatch("ui/src/e2e/mobile-sidebar-session-menu.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
   pageWatch("ui/src/e2e/model-agent-scoping.e2e.test.ts", ["config", "debug", "model-providers"]),
   pageWatch(
     "ui/src/e2e/model-alias-display.e2e.test.ts",
     ["agents-home", "agents", "chat", "config"],
-    ["ui/src/components/select-picker.ts", "ui/src/pages/agents/agents-page.ts"],
+    [
+      "ui/src/components/select-picker.ts",
+      "ui/src/pages/agents/agents-page.ts",
+      "ui/src/pages/agents/agents-page.tsx",
+      "ui/src/pages/agents/agents-page-state.ts",
+    ],
   ),
   pageWatch(
     "ui/src/e2e/model-defaults-recovery.e2e.test.ts",
@@ -1667,7 +1502,7 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
     "ui/src/e2e/new-session-page.provisional-navigation.e2e.test.ts",
     ["about", "chat", "new-session"],
     [
-      "ui/src/pages/about/about-page.ts",
+      "ui/src/pages/about/about-page.tsx",
       "ui/src/pages/chat/chat-page.ts",
       "ui/src/pages/chat/chat-pane.ts",
     ],
@@ -1720,6 +1555,8 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
       "ui/src/components/agent-select-registration.ts",
       "ui/src/components/modal-dialog.ts",
       "ui/src/pages/agents/agents-page.ts",
+      "ui/src/pages/agents/agents-page.tsx",
+      "ui/src/pages/agents/agents-page-state.ts",
     ],
   ),
   pageWatch("ui/src/e2e/placement-error-unicode.e2e.test.ts", ["chat", "new-session"]),
@@ -1739,7 +1576,7 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
     [
       "ui/src/components/config-form.shared.ts",
       "ui/src/lib/plugins/index.ts",
-      "ui/src/pages/plugins/plugins-page.ts",
+      "ui/src/pages/plugins/plugins-page.tsx",
     ],
   ),
   pageWatch(
@@ -1770,36 +1607,23 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
     ["chat", "cron", "skills"],
     ["ui/src/pages/chat/chat-page.ts"],
   ),
-  {
-    testFile: "ui/src/e2e/screen-requester-routing.e2e.test.ts",
-    ownerRoots: [
+  pageWatch(
+    "ui/src/e2e/screen-requester-routing.e2e.test.ts",
+    ["chat"],
+    [
       "ui/src/components/desktop/desktop-client.ts",
       "ui/src/components/desktop/desktop-panel.ts",
       "ui/src/components/panel-loading-skeleton.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/portals/portals-page.ts",
+      "ui/src/pages/portals/portals-page.tsx",
     ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/portals/portals.css",
-      ...pageStyles["chat"],
-    ],
-  },
+    ["ui/src/pages/portals/portals.css"],
+  ),
   pageWatch(
     "ui/src/e2e/session-catalog-pending-host.e2e.test.ts",
     ["chat"],
     ["ui/src/components/app-sidebar-session-navigation.ts"],
   ),
-  pageWatch(
-    "ui/src/e2e/session-color.e2e.test.ts",
-    ["chat"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
-  ),
+  pageWatch("ui/src/e2e/session-color.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
   pageWatch(
     "ui/src/e2e/session-dashboard-active-panel.e2e.test.ts",
     ["chat", "terminal"],
@@ -1827,248 +1651,132 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/session-management.account-label.e2e.test.ts",
     ["chat", "sessions"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
+    sessionMenuOwnerRoots,
   ),
   pageWatch(
     "ui/src/e2e/session-management.archive-batch.e2e.test.ts",
     ["chat"],
-    [
-      "ui/src/components/app-sidebar-session-navigation.ts",
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
+    [...sessionMenuOwnerRoots, "ui/src/components/app-sidebar-session-navigation.ts"],
   ),
   pageWatch(
     "ui/src/e2e/session-management.archive.e2e.test.ts",
     ["chat", "sessions"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/lib/toast.ts",
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
+    [...sessionMenuOwnerRoots, "ui/src/lib/toast.ts", "ui/src/pages/chat/chat-pane.ts"],
   ),
   pageWatch(
     "ui/src/e2e/session-management.archived-actions.e2e.test.ts",
     ["chat"],
     [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
+      ...sessionMenuOwnerRoots,
       "ui/src/lib/session-pull-requests.ts",
-      "ui/src/lib/sessions/session-capability.ts",
       "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
     ],
   ),
   pageWatch(
     "ui/src/e2e/session-management.bulk-delete-scope.e2e.test.ts",
     ["chat"],
-    [
-      "ui/src/components/app-sidebar-session-navigation.ts",
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
+    [...sessionMenuOwnerRoots, "ui/src/components/app-sidebar-session-navigation.ts"],
   ),
   pageWatch(
     "ui/src/e2e/session-management.copy-session-id.e2e.test.ts",
     ["chat"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
+    sessionMenuOwnerRoots,
   ),
   pageWatch(
     "ui/src/e2e/session-management.created-sort.e2e.test.ts",
     ["chat"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
+    sessionMenuOwnerRoots,
   ),
   pageWatch(
     "ui/src/e2e/session-management.delete.e2e.test.ts",
     ["chat", "sessions", "worktrees"],
     [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
+      ...sessionMenuOwnerRoots,
       "ui/src/lib/chat/composer-draft-store.runtime.ts",
       "ui/src/lib/chat/outbox-store.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
     ],
   ),
-  {
-    testFile: "ui/src/e2e/session-management.draft-indicator.e2e.test.ts",
-    ownerRoots: ["ui/src/components/app-sidebar.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/styles/app-sidebar.css",
-      ...pageStyles["chat"],
-    ],
-  },
+  pageWatch(
+    "ui/src/e2e/session-management.draft-indicator.e2e.test.ts",
+    ["chat"],
+    ["ui/src/components/app-sidebar.ts"],
+    ["ui/src/styles/app-sidebar.css"],
+  ),
   pageWatch(
     "ui/src/e2e/session-management.filtered-errors.e2e.test.ts",
     ["chat", "sessions"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/sessions/sessions-page.ts",
-    ],
+    [...sessionMenuOwnerRoots, "ui/src/pages/sessions/sessions-page.ts"],
   ),
   pageWatch(
     "ui/src/e2e/session-management.group-identity.e2e.test.ts",
     ["chat", "sessions"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
+    sessionMenuOwnerRoots,
   ),
   pageWatch(
     "ui/src/e2e/session-management.group-return.e2e.test.ts",
     ["chat"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
+    sessionMenuOwnerRoots,
   ),
   pageWatch(
     "ui/src/e2e/session-management.groups.e2e.test.ts",
     ["chat", "sessions"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/cron/types.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
+    [...sessionMenuOwnerRoots, "ui/src/lib/cron/types.ts"],
   ),
   pageWatch(
     "ui/src/e2e/session-management.mutation-scope.e2e.test.ts",
     ["chat"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-data-controller.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
+    [...sessionMenuOwnerRoots, "ui/src/components/session-data-controller.ts"],
   ),
-  pageWatch(
-    "ui/src/e2e/session-management.new-group.e2e.test.ts",
-    ["chat"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
-  ),
+  pageWatch("ui/src/e2e/session-management.new-group.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
   pageWatch(
     "ui/src/e2e/session-management.operator-scopes.e2e.test.ts",
     ["chat", "new-session", "sessions"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
+    [...sessionMenuOwnerRoots, "ui/src/pages/chat/chat-pane.ts"],
   ),
   pageWatch(
     "ui/src/e2e/session-management.optimistic-pin.e2e.test.ts",
     ["chat"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
+    sessionMenuOwnerRoots,
   ),
-  {
-    testFile: "ui/src/e2e/session-management.queue.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/app-sidebar.ts",
-      "ui/src/components/session-glyph.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/styles/app-sidebar.css",
-      ...pageStyles["chat"],
-    ],
-  },
+  pageWatch(
+    "ui/src/e2e/session-management.queue.e2e.test.ts",
+    ["chat"],
+    ["ui/src/components/app-sidebar.ts", "ui/src/components/session-glyph.ts"],
+    ["ui/src/styles/app-sidebar.css"],
+  ),
   pageWatch(
     "ui/src/e2e/session-management.rename-composition.e2e.test.ts",
     ["chat"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
+    sessionMenuOwnerRoots,
   ),
   pageWatch(
     "ui/src/e2e/session-management.rename-identity.e2e.test.ts",
     ["chat", "sessions"],
+    sessionMenuOwnerRoots,
+  ),
+  pageWatch(
+    "ui/src/e2e/session-management.rename.e2e.test.ts",
+    ["chat"],
     [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
+      ...sessionMenuOwnerRoots,
+      "ui/src/components/session-organizer-operations.runtime.ts",
+      "ui/src/components/session-organizer-patch.runtime.ts",
     ],
   ),
   pageWatch(
     "ui/src/e2e/session-management.trailing-state.e2e.test.ts",
     ["chat"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/session-pull-requests.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
+    [...sessionMenuOwnerRoots, "ui/src/lib/session-pull-requests.ts"],
   ),
   pageWatch(
     "ui/src/e2e/session-manager-history.e2e.test.ts",
     ["search", "sessions"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/lib/toast.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
+    [...sessionMenuOwnerRoots, "ui/src/lib/toast.ts"],
   ),
   pageWatch(
     "ui/src/e2e/session-mention-involvement.e2e.test.ts",
     ["chat", "profile"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
+    sessionMenuOwnerRoots,
   ),
   pageWatch(
     "ui/src/e2e/session-observer-model-catalog-recovery.e2e.test.ts",
@@ -2079,24 +1787,16 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
     "ui/src/e2e/session-owner-assignment.e2e.test.ts",
     ["chat", "sessions"],
     [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
+      ...sessionMenuOwnerRoots,
       "ui/src/components/viewer-facepile.ts",
-      "ui/src/lib/sessions/session-capability.ts",
       "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
       "ui/src/pages/sessions/sessions-page.ts",
     ],
   ),
   pageWatch(
     "ui/src/e2e/session-owner-filter-empty-section.e2e.test.ts",
     ["chat", "profile"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
+    sessionMenuOwnerRoots,
   ),
   pageWatch("ui/src/e2e/session-owner-filter-header.e2e.test.ts", ["chat", "profile"]),
   pageWatch("ui/src/e2e/session-owner-first.e2e.test.ts", ["chat"]),
@@ -2106,16 +1806,7 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
     ["chat", "device", "profile"],
     ["ui/src/components/modal-dialog.ts", "ui/src/pages/chat/chat-pane.ts"],
   ),
-  pageWatch(
-    "ui/src/e2e/session-prefetch.e2e.test.ts",
-    ["chat"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
-  ),
+  pageWatch("ui/src/e2e/session-prefetch.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
   pageWatch(
     "ui/src/e2e/session-progress-disclosure.e2e.test.ts",
     ["chat", "config", "connection"],
@@ -2165,24 +1856,17 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
     ["chat"],
     ["ui/src/pages/chat/chat-pane.ts"],
   ),
-  {
-    testFile: "ui/src/e2e/session-progress-widget.e2e.test.ts",
-    ownerRoots: [
+  pageWatch(
+    "ui/src/e2e/session-progress-widget.e2e.test.ts",
+    ["chat", "plugin"],
+    [
       "ui/src/components/board/board-view.ts",
       "ui/src/lib/board/widgets/session-progress.ts",
       "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/route.ts",
       "ui/src/pages/chat/sidebar-layout.ts",
-      "ui/src/pages/plugin/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/plugin/route.ts",
-      "ui/src/styles/board.css",
-      ...pageStyles["chat"],
-      ...pageStyles["plugin"],
-    ],
-  },
+    ["ui/src/styles/board.css"],
+  ),
   pageWatch(
     "ui/src/e2e/session-pull-requests.e2e.test.ts",
     ["chat"],
@@ -2192,12 +1876,7 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/session-roster-event-scope.e2e.test.ts",
     ["chat", "sessions"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
+    sessionMenuOwnerRoots,
   ),
   pageWatch(
     "ui/src/e2e/session-runtime-freshness.e2e.test.ts",
@@ -2209,12 +1888,9 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
     "ui/src/e2e/session-shortcuts.e2e.test.ts",
     ["chat"],
     [
+      ...sessionMenuOwnerRoots,
       "ui/src/components/keyboard-shortcuts-dialog.ts",
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
       "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
       "ui/src/pages/new-session/new-session-page-entry.ts",
     ],
   ),
@@ -2247,52 +1923,32 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
     ],
   ),
   pageWatch("ui/src/e2e/sidebar-agent-first.e2e.test.ts", ["chat", "config", "new-session"]),
-  {
-    testFile: "ui/src/e2e/sidebar-attention-scope.e2e.test.ts",
-    ownerRoots: [
+  pageWatch(
+    "ui/src/e2e/sidebar-attention-scope.e2e.test.ts",
+    ["chat", "cron", "new-session"],
+    [
       "ui/src/components/agent-select-registration.ts",
       "ui/src/components/sidebar-update-card.ts",
       "ui/src/lib/cron/types.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/cron/route.ts",
-      "ui/src/pages/new-session/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/cron/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      "ui/src/styles/sidebar-update-card.css",
-      ...pageStyles["chat"],
-      ...pageStyles["cron"],
-      ...pageStyles["new-session"],
-    ],
-  },
+    ["ui/src/styles/sidebar-update-card.css"],
+  ),
   pageWatch(
     "ui/src/e2e/sidebar-cached-list-stability.e2e.test.ts",
     ["chat"],
-    [
-      "ui/src/components/app-sidebar-session-navigation.ts",
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
+    [...sessionMenuOwnerRoots, "ui/src/components/app-sidebar-session-navigation.ts"],
   ),
   pageWatch(
     "ui/src/e2e/sidebar-cron-inventory.e2e.test.ts",
     ["chat"],
     ["ui/src/lib/cron/types.ts"],
   ),
-  {
-    testFile: "ui/src/e2e/sidebar-dev-branch.e2e.test.ts",
-    ownerRoots: ["ui/src/components/app-sidebar.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/styles/app-sidebar.css",
-      "ui/src/styles/layout.css",
-      ...pageStyles["chat"],
-    ],
-  },
+  pageWatch(
+    "ui/src/e2e/sidebar-dev-branch.e2e.test.ts",
+    ["chat"],
+    ["ui/src/components/app-sidebar.ts"],
+    ["ui/src/styles/app-sidebar.css", "ui/src/styles/layout.css"],
+  ),
   pageWatch(
     "ui/src/e2e/sidebar-inbox-latency.e2e.test.ts",
     ["chat", "cron", "new-session"],
@@ -2307,96 +1963,34 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/sidebar-per-tab-visibility.capture.e2e.test.ts",
     ["chat"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
+    sessionMenuOwnerRoots,
   ),
   pageWatch("ui/src/e2e/sidebar-plugin-order.e2e.test.ts", ["chat", "workboard"]),
   pageWatch("ui/src/e2e/sidebar-refresh-availability.e2e.test.ts", ["new-session"]),
-  pageWatch(
-    "ui/src/e2e/sidebar-restart-recovery.e2e.test.ts",
-    ["chat"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
-  ),
+  pageWatch("ui/src/e2e/sidebar-restart-recovery.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
   pageWatch(
     "ui/src/e2e/sidebar-roster-completeness.capture.e2e.test.ts",
     ["chat"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
+    sessionMenuOwnerRoots,
   ),
+  pageWatch("ui/src/e2e/sidebar-selection-overflow.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
+  pageWatch("ui/src/e2e/sidebar-session-stability.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
   pageWatch(
-    "ui/src/e2e/sidebar-selection-overflow.e2e.test.ts",
-    ["chat"],
+    "ui/src/e2e/sidebar-settings.e2e.test.ts",
+    ["chat", "config", "connection", "cron", "new-session"],
     [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
-  ),
-  pageWatch(
-    "ui/src/e2e/sidebar-session-stability.e2e.test.ts",
-    ["chat"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
-  ),
-  {
-    testFile: "ui/src/e2e/sidebar-settings.e2e.test.ts",
-    ownerRoots: [
       "ui/src/components/select-picker.ts",
       "ui/src/components/sidebar-attention.ts",
       "ui/src/lib/cron/types.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/connection/route.ts",
-      "ui/src/pages/cron/route.ts",
       "ui/src/pages/devices/view.types.ts",
-      "ui/src/pages/new-session/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/connection/route.ts",
-      "ui/src/pages/cron/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      "ui/src/styles/sidebar-attention-floating.css",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-      ...pageStyles["connection"],
-      ...pageStyles["cron"],
-      ...pageStyles["new-session"],
-    ],
-  },
+    ["ui/src/styles/sidebar-attention-floating.css"],
+  ),
   pageWatch(
     "ui/src/e2e/sidebar-transient-surfaces.e2e.test.ts",
     ["chat", "config"],
-    [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
+    sessionMenuOwnerRoots,
   ),
-  pageWatch("ui/src/e2e/skill-workshop-revision-integrity.e2e.test.ts", [
-    "skill-workshop",
-    "skills",
-  ]),
   pageWatch(
     "ui/src/e2e/skills-any-bin-requirements.e2e.test.ts",
     ["skills"],
@@ -2460,107 +2054,77 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
     ["ui/src/components/select-picker.ts"],
   ),
   pageWatch("ui/src/e2e/tool-titles.e2e.test.ts", ["chat"]),
-  {
-    testFile: "ui/src/e2e/update-coalesced.e2e.test.ts",
-    ownerRoots: [
+  pageWatch(
+    "ui/src/e2e/update-coalesced.e2e.test.ts",
+    ["chat"],
+    [
       "ui/src/components/modal-dialog.ts",
       "ui/src/components/sidebar-attention.ts",
       "ui/src/components/sidebar-update-card.ts",
       "ui/src/components/tooltip.ts",
       "ui/src/components/update-run-view.ts",
-      "ui/src/pages/chat/route.ts",
       "ui/src/pages/config/config-page.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
+    [
       "ui/src/styles/config.css",
       "ui/src/styles/sidebar-attention-floating.css",
       "ui/src/styles/sidebar-update-card.css",
       "ui/src/styles/update-run-view.css",
-      ...pageStyles["chat"],
     ],
-  },
-  {
-    testFile: "ui/src/e2e/update-confirmation.e2e.test.ts",
-    ownerRoots: [
+  ),
+  pageWatch(
+    "ui/src/e2e/update-confirmation.e2e.test.ts",
+    ["chat", "config"],
+    [
       "ui/src/components/modal-dialog.ts",
       "ui/src/components/sidebar-attention.ts",
       "ui/src/components/sidebar-update-card.ts",
       "ui/src/components/update-run-view.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
+    [
       "ui/src/styles/sidebar-attention-floating.css",
       "ui/src/styles/sidebar-update-card.css",
       "ui/src/styles/update-run-view.css",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
     ],
-  },
+  ),
   pageWatch(
     "ui/src/e2e/update-external-supervisor.e2e.test.ts",
     ["config"],
     ["ui/src/components/modal-dialog.ts"],
   ),
-  {
-    testFile: "ui/src/e2e/update-git-revisions.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/update-git-revisions.ts",
-      "ui/src/pages/config/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/styles/update-git-revisions.css",
-      ...pageStyles["config"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/update-lifecycle.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/sidebar-update-card.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/styles/sidebar-update-card.css",
-      ...pageStyles["chat"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/update-run.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/update-run-view.ts",
-      "ui/src/pages/config/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/styles/update-run-view.css",
-      ...pageStyles["config"],
-    ],
-  },
+  pageWatch(
+    "ui/src/e2e/update-git-revisions.e2e.test.ts",
+    ["config"],
+    ["ui/src/components/modal-dialog.ts", "ui/src/components/update-git-revisions.ts"],
+    ["ui/src/styles/update-git-revisions.css"],
+  ),
+  pageWatch(
+    "ui/src/e2e/update-lifecycle.e2e.test.ts",
+    ["chat"],
+    ["ui/src/components/modal-dialog.ts", "ui/src/components/sidebar-update-card.ts"],
+    ["ui/src/styles/sidebar-update-card.css"],
+  ),
+  pageWatch(
+    "ui/src/e2e/update-run.e2e.test.ts",
+    ["config"],
+    ["ui/src/components/modal-dialog.ts", "ui/src/components/update-run-view.ts"],
+    ["ui/src/styles/update-run-view.css"],
+  ),
   pageWatch("ui/src/e2e/update-stale-git-refresh-proof.e2e.test.ts", ["config"]),
-  {
-    testFile: "ui/src/e2e/update-triage.e2e.test.ts",
-    ownerRoots: [
+  pageWatch(
+    "ui/src/e2e/update-triage.e2e.test.ts",
+    ["config"],
+    [
       "ui/src/components/assistant-panel-content.ts",
       "ui/src/components/assistant-panel.ts",
       "ui/src/components/modal-dialog.ts",
-      "ui/src/pages/config/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/config/route.ts",
+    [
       "ui/src/styles/assistant-panel-content.css",
       "ui/src/styles/assistant-panel.css",
       "ui/src/styles/rail-header.css",
-      ...pageStyles["config"],
     ],
-  },
+  ),
   pageWatch(
     "ui/src/e2e/updates-settings.e2e.test.ts",
     ["config", "new-session"],
@@ -2599,32 +2163,30 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
     "plugin",
     "workboard",
   ]),
-  {
-    testFile: "ui/src/e2e/workspace-panel-startup.e2e.test.ts",
-    ownerRoots: [
+  pageWatch(
+    "ui/src/e2e/workspace-panel-startup.e2e.test.ts",
+    ["custodian", "new-session", "terminal"],
+    [
       "ui/src/components/assistant-panel-content.ts",
       "ui/src/components/assistant-panel.ts",
       "ui/src/components/browser/browser-panel.ts",
       "ui/src/components/desktop/desktop-panel.ts",
       "ui/src/components/terminal/terminal-panel-registration.ts",
-      "ui/src/pages/custodian/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      "ui/src/pages/terminal/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/custodian/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      "ui/src/pages/terminal/route.ts",
+    [
       "ui/src/styles/assistant-panel-content.css",
       "ui/src/styles/assistant-panel.css",
       "ui/src/styles/rail-header.css",
-      ...pageStyles["custodian"],
-      ...pageStyles["new-session"],
-      ...pageStyles["terminal"],
     ],
-  },
+  ),
   pageWatch("ui/src/e2e/worktrees.e2e.test.ts", ["config", "worktrees"]),
 ];
+
+export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = ownerWatches.map((watch) => ({
+  testFile: watch.testFile,
+  ownerRoots: watch.ownerRoots,
+  watchGlobs: watch.watchGlobs.map(uiTypeScriptPathGlob),
+}));
 
 export const UI_E2E_SMOKE_TEST_FILES: readonly string[] = [
   // Always run cold history admission, exact session URLs, and desktop/mobile draft and IME preservation.
@@ -2637,4 +2199,4 @@ export const UI_E2E_SMOKE_TEST_FILES: readonly string[] = [
   "ui/src/e2e/connection-settings.e2e.test.ts",
   // Always run a settings edit through rendered CSS, persistence, and reset.
   "ui/src/e2e/appearance-accent-selection.e2e.test.ts",
-];
+].map((file) => resolveUiTypeScriptPath(file));

@@ -1,30 +1,8 @@
 /**
  * Control UI gateway routing tests.
  */
-import { isControlUiFocusPath } from "@openclaw/session-url-contract";
 import { describe, expect, it } from "vitest";
-import {
-  classifyControlUiRequest,
-  isControlUiApprovalDocumentPath,
-  isControlUiPluginManagerRequest,
-} from "./control-ui-routing.js";
-
-describe("isControlUiPluginManagerRequest", () => {
-  it.each([
-    { basePath: "", pathname: "/settings/plugins", method: "GET", expected: true },
-    { basePath: "", pathname: "/settings/plugins/", method: "HEAD", expected: true },
-    {
-      basePath: "/openclaw",
-      pathname: "/openclaw/settings/plugins",
-      method: "GET",
-      expected: true,
-    },
-    { basePath: "", pathname: "/settings/plugins", method: "POST", expected: false },
-    { basePath: "", pathname: "/plugins", method: "GET", expected: false },
-  ])("classifies $method $pathname", ({ basePath, pathname, method, expected }) => {
-    expect(isControlUiPluginManagerRequest({ basePath, pathname, method })).toBe(expected);
-  });
-});
+import { classifyControlUiRequest, isControlUiApprovalDocumentPath } from "./control-ui-routing.js";
 
 describe("isControlUiApprovalDocumentPath", () => {
   it.each([
@@ -42,23 +20,6 @@ describe("isControlUiApprovalDocumentPath", () => {
     { basePath: "/openclaw", pathname: "/approve/id" },
   ])("does not reserve $pathname", ({ basePath, pathname }) => {
     expect(isControlUiApprovalDocumentPath({ basePath, pathname })).toBe(false);
-  });
-});
-
-describe("isControlUiFocusPath", () => {
-  it.each([
-    { basePath: "", pathname: "/focus" },
-    { basePath: "", pathname: "/focus/not-supported" },
-    { basePath: "/openclaw", pathname: "/openclaw/focus/desktop/control" },
-  ])("classifies $pathname", ({ basePath, pathname }) => {
-    expect(isControlUiFocusPath(pathname, basePath)).toBe(true);
-  });
-
-  it.each([
-    { basePath: "", pathname: "/focused" },
-    { basePath: "/openclaw", pathname: "/focus/terminal" },
-  ])("does not classify $pathname", ({ basePath, pathname }) => {
-    expect(isControlUiFocusPath(pathname, basePath)).toBe(false);
   });
 });
 

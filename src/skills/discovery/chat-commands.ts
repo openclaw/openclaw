@@ -15,6 +15,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { prepareRemoteSkillConnections } from "../runtime/remote-skills.js";
 import { getRemoteSkillEligibility } from "../runtime/remote.js";
 import type { SkillCommandSpec } from "../types.js";
@@ -44,13 +45,7 @@ type WorkspaceSkillCommandParams = {
 };
 
 function resolveWorkspaceSkillCommandOptions(params: WorkspaceSkillCommandParams) {
-  const nodeSkills = resolveNodeExecEligibility({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    sessionEntry: params.sessionEntry,
-    sessionKey: params.sessionKey,
-    execOverrides: params.execOverrides,
-  });
+  const nodeSkills = resolveNodeExecEligibility(params);
   const eligibility = {
     nodeSkills,
     remote: getRemoteSkillEligibility({ advertiseExecNode: nodeSkills.canExec }),
@@ -79,10 +74,15 @@ function hasRemoteWorkspace(workspaceDir: string): boolean {
   }
 }
 
-/** Synchronous public SDK contract; remote workspace menus are deferred. */
+/** @deprecated Await prepareSkillCommandsForWorkspace; removed at the next Plugin SDK major. */
 export function listSkillCommandsForWorkspace(
   params: WorkspaceSkillCommandParams,
 ): SkillCommandSpec[] {
+  warnPluginSdkDeprecation({
+    family: "skill-command-discovery",
+    method: "listSkillCommandsForWorkspace",
+    replacement: "prepareSkillCommandsForWorkspace",
+  });
   return buildWorkspaceSkillCommandSpecs(params.workspaceDir, {
     ...resolveWorkspaceSkillCommandOptions(params),
     reservedNames: listReservedChatSlashCommandNames(),
@@ -219,8 +219,13 @@ function appendSkillCommands(
   }
 }
 
-/** Synchronous public SDK contract for native command consumers. */
+/** @deprecated Await prepareSkillCommandsForAgents; removed at the next Plugin SDK major. */
 export function listSkillCommandsForAgents(params: AgentSkillCommandParams): SkillCommandSpec[] {
+  warnPluginSdkDeprecation({
+    family: "skill-command-discovery",
+    method: "listSkillCommandsForAgents",
+    replacement: "prepareSkillCommandsForAgents",
+  });
   const used = listReservedChatSlashCommandNames();
   const entries: SkillCommandSpec[] = [];
   for (const { workspaceDir, options } of resolveAgentSkillCommandWorkspaces(params)) {

@@ -158,13 +158,6 @@ function pathsMatchByRealpathOrResolve(left: string, right: string): boolean {
   return (tryRealpath(left) ?? path.resolve(left)) === (tryRealpath(right) ?? path.resolve(right));
 }
 
-function addCandidate(candidates: Set<string>, value: string | null) {
-  if (!value) {
-    return;
-  }
-  candidates.add(path.resolve(value));
-}
-
 export function resolveControlUiRootOverrideSync(rootOverride: string): string | null {
   const resolved = path.resolve(rootOverride);
   try {
@@ -184,6 +177,11 @@ export function resolveControlUiRootOverrideSync(rootOverride: string): string |
 
 export function resolveControlUiRootSync(opts: ControlUiRootResolveOptions = {}): string | null {
   const candidates = new Set<string>();
+  const addCandidate = (value: string | null) => {
+    if (value) {
+      candidates.add(path.resolve(value));
+    }
+  };
   const argv1 = opts.argv1 ?? process.argv[1];
   const cwd = opts.cwd ?? process.cwd();
   const moduleDir = opts.moduleUrl ? path.dirname(fileURLToPath(opts.moduleUrl)) : null;
@@ -196,25 +194,21 @@ export function resolveControlUiRootSync(opts: ControlUiRootResolveOptions = {})
   });
 
   // Support legacy packaged runtimes that place assets alongside the executable.
-  addCandidate(candidates, execPath ? path.join(path.dirname(execPath), "control-ui") : null);
+  addCandidate(execPath ? path.join(path.dirname(execPath), "control-ui") : null);
   if (moduleDir) {
-    // dist/<bundle>.js -> dist/control-ui
-    addCandidate(candidates, path.join(moduleDir, "control-ui"));
-    // dist/gateway/control-ui.js -> dist/control-ui
-    addCandidate(candidates, path.join(moduleDir, "../control-ui"));
-    // src/gateway/control-ui.ts -> dist/control-ui
-    addCandidate(candidates, path.join(moduleDir, "../../dist/control-ui"));
+    // Bundle, nested Gateway bundle, then source Gateway module.
+    for (const relative of ["control-ui", "../control-ui", "../../dist/control-ui"]) {
+      addCandidate(path.join(moduleDir, relative));
+    }
   }
   // Keep the lexical launcher before its target for symlinked global wrappers.
   for (const entrypoint of entrypointPaths) {
     const directory = path.dirname(entrypoint);
-    addCandidate(candidates, path.join(directory, "dist", "control-ui"));
-    addCandidate(candidates, path.join(directory, "control-ui"));
+    addCandidate(path.join(directory, "dist", "control-ui"));
+    addCandidate(path.join(directory, "control-ui"));
   }
-  if (packageRoot) {
-    addCandidate(candidates, path.join(packageRoot, "dist", "control-ui"));
-  }
-  addCandidate(candidates, path.join(cwd, "dist", "control-ui"));
+  addCandidate(packageRoot ? path.join(packageRoot, "dist", "control-ui") : null);
+  addCandidate(path.join(cwd, "dist", "control-ui"));
 
   for (const dir of candidates) {
     const indexPath = path.join(dir, "index.html");

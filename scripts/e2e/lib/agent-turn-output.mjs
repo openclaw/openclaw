@@ -1,4 +1,3 @@
-// Helpers for extracting agent turn output from E2E protocol events.
 import { isRecord } from "../../lib/record-shared.mjs";
 import { readTextFileTail, tailText, textFileContains } from "./text-file-utils.mjs";
 
@@ -8,15 +7,11 @@ const REPLY_TEXT_PREVIEW_BYTES = 8 * 1024;
 const REPLY_TEXT_PREVIEW_COUNT = 5;
 const OPENAI_REQUEST_PATH_PATTERN = /\/v1\/(responses|chat\/completions)/u;
 
-function textByteLength(text) {
-  return Buffer.byteLength(text, "utf8");
-}
-
 function summarizeReplyTexts(replyTexts) {
   const previewStart = Math.max(0, replyTexts.length - REPLY_TEXT_PREVIEW_COUNT);
   const recent = replyTexts.slice(previewStart).map((text, index) => ({
     index: previewStart + index,
-    bytes: textByteLength(text),
+    bytes: Buffer.byteLength(text, "utf8"),
     tail: tailText(text, REPLY_TEXT_PREVIEW_BYTES),
   }));
   return JSON.stringify({ count: replyTexts.length, recent });

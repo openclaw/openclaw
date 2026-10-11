@@ -7,8 +7,6 @@ import {
   type APIGatewayBotInfo,
   type APIVoiceState,
   type GatewayDispatchPayload,
-  type GatewayHeartbeat,
-  type GatewayIdentify,
   type GatewayReceivePayload,
   type GatewaySendPayload,
   type GatewayVoiceStateUpdateData,
@@ -256,16 +254,11 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
                 session_id: resumeState.sessionId,
                 seq: resumeState.sequence,
               },
-            } as GatewaySendPayload,
+            },
             true,
           );
         } else {
-          void this.identifyWithConcurrency(sourceSocket).catch((error: unknown) => {
-            this.emitter.emit(
-              "error",
-              error instanceof Error ? error : new Error(String(error), { cause: error }),
-            );
-          });
+          void this.identifyWithConcurrency(sourceSocket).catch(this.emitAsyncError);
         }
         break;
       }
@@ -276,12 +269,7 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
         this.sendHeartbeat();
         break;
       case GatewayOpcodes.Dispatch:
-        void this.handleDispatch(payload).catch((error: unknown) => {
-          this.emitter.emit(
-            "error",
-            error instanceof Error ? error : new Error(String(error), { cause: error }),
-          );
-        });
+        void this.handleDispatch(payload).catch(this.emitAsyncError);
         break;
       case GatewayOpcodes.InvalidSession:
         if (!payload.d) {
@@ -300,6 +288,13 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
     }
   }
 
+  private emitAsyncError = (error: unknown): void => {
+    this.emitter.emit(
+      "error",
+      error instanceof Error ? error : new Error(String(error), { cause: error }),
+    );
+  };
+
   private startHeartbeat(intervalMs: number): void {
     this.heartbeatTimers.start({
       intervalMs,
@@ -317,7 +312,7 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
       return;
     }
     this.lastHeartbeatAck = false;
-    this.send({ op: GatewayOpcodes.Heartbeat, d: this.sequence } as GatewayHeartbeat, true);
+    this.send({ op: GatewayOpcodes.Heartbeat, d: this.sequence }, true);
   }
 
   private identify(): void {
@@ -329,7 +324,7 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
           intents: this.options.intents ?? 0,
           properties: { os: process.platform, browser: "openclaw", device: "openclaw" },
         },
-      } as GatewayIdentify,
+      },
       true,
     );
   }
@@ -352,10 +347,7 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
       throw new Error("Discord gateway socket is not open");
     }
     const serialized = JSON.stringify(payload);
-    const payloadSize =
-      typeof Buffer !== "undefined"
-        ? Buffer.byteLength(serialized, "utf8")
-        : new TextEncoder().encode(serialized).byteLength;
+    const payloadSize = Buffer.byteLength(serialized, "utf8");
     if (payloadSize > DISCORD_GATEWAY_PAYLOAD_LIMIT_BYTES) {
       throw new Error(
         `Discord gateway payload exceeds ${DISCORD_GATEWAY_PAYLOAD_LIMIT_BYTES}-byte limit`,
@@ -376,14 +368,11 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
       return;
     }
     if (payload.t === GatewayDispatchEvents.Ready) {
-      const ready = payload.d as { session_id?: string; resume_gateway_url?: string };
+      const ready = payload.d;
       this.sessionId = ready.session_id ?? null;
       this.resumeGatewayUrl = ready.resume_gateway_url ?? null;
-      this.reconnectAttempts = 0;
-      this.consecutiveResumeFailures = 0;
-      this.isConnected = true;
     }
-    if (payload.t === GatewayDispatchEvents.Resumed) {
+    if (payload.t === GatewayDispatchEvents.Ready || payload.t === GatewayDispatchEvents.Resumed) {
       this.reconnectAttempts = 0;
       this.consecutiveResumeFailures = 0;
       this.isConnected = true;
@@ -470,7 +459,7 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
   }
 
   updateVoiceState(data: GatewayVoiceStateUpdateData): void {
-    this.send({ op: GatewayOpcodes.VoiceStateUpdate, d: data } as GatewaySendPayload, true);
+    this.send({ op: GatewayOpcodes.VoiceStateUpdate, d: data }, true);
   }
 
   getRateLimitStatus() {

@@ -64,7 +64,6 @@ const archiveTime = Date.UTC(2026, 7, 26, 12);
 const archiveStamp = "2026-08-26T12-00-00.000Z";
 const generation = "0123456789abcdef0123456789abcdef";
 const config = { plugins: { enabled: false } };
-type Encoding = "plain" | "zstd";
 
 function assistant(tokens: number): AssistantMessage {
   return {
@@ -114,17 +113,13 @@ function serialize(manager: SessionManager): string {
 async function writeArchive(params: {
   state: OpenClawTestState;
   manager: SessionManager;
-  encoding: Encoding;
   reason?: "reset" | "deleted";
   agentId?: string;
   mtime?: number;
   generated?: boolean;
 }): Promise<string> {
   const content = serialize(params.manager);
-  const encoded =
-    params.encoding === "zstd"
-      ? encodeSessionArchiveContent(content)
-      : { bytes: Buffer.from(content), suffix: "" };
+  const encoded = encodeSessionArchiveContent(content);
   const directory = params.state.sessionsDir(params.agentId);
   await fs.mkdir(directory, { recursive: true });
   const fileName = `${params.manager.getSessionId()}.jsonl.${params.reason ?? "reset"}.${archiveStamp}${params.generated ? `.${generation}` : ""}${encoded.suffix}`;
@@ -475,93 +470,86 @@ describe("usage archive identity", () => {
     expect(readSessionColdTranscript(database.db, missingScope.sessionId)).toBeDefined();
   });
 
-  it.for([
-    { encoding: "plain", reason: "reset", agentId: "main" },
-    { encoding: "zstd", reason: "deleted", agentId: "worker" },
-  ] as const)(
-    "discovers and reads $encoding $reason archives for $agentId",
-    async ({ encoding, reason, agentId }, { signal }) => {
-      const manager = transcript();
-      const sessionId = manager.getSessionId();
-      const sessionFile = await writeArchive({
-        state,
-        manager,
-        encoding,
-        reason,
-        agentId,
-        generated: true,
-      });
-      const sourceStats = await fs.stat(sessionFile);
-      const sessions = await discoverAllSessions({ agentId });
-      expect(sessions).toEqual([
-        {
-          sessionId,
-          sessionFile,
-          mtime: sourceStats.mtimeMs,
-        },
-      ]);
-
-      const resolved = expectDefined(
-        await resolveUsageCostTranscriptFile(sessionFile),
-        "resolved archive",
-      );
-      expect(resolved).toMatchObject({
-        size: Buffer.byteLength(serialize(manager)),
-        mtimeMs: sourceStats.mtimeMs,
-      });
-      expect(resolved.filePath === sessionFile).toBe(encoding === "plain");
-
-      const cacheLookup = { agentId, config, sessions: [{ sessionId, sessionFile }] };
-      expect(readSessionCostUsageRollupRows(agentId)).toEqual([]);
-      const work = new AsyncWorkScope();
-      try {
-        expect(
-          await racePromiseWithAbortSignal(
-            work.track(() => loadSessionCostSummariesFromCache(cacheLookup)),
-            signal,
-          ),
-        ).toMatchObject({
-          summaries: [null],
-          cacheStatus: { status: "refreshing", cachedFiles: 0, pendingFiles: 1 },
-        });
-        await racePromiseWithAbortSignal(
-          work.runWhenIdle(() => undefined),
-          signal,
-        );
-        expect(readSessionCostUsageRollupRows(agentId)).toHaveLength(1);
-      } finally {
-        await work.drain();
-      }
-      expect(
-        await loadSessionCostSummariesFromCache({ ...cacheLookup, requestRefresh: false }),
-      ).toMatchObject({
-        summaries: [{ sessionId, sessionFile, totalTokens: 17 }],
-        cacheStatus: { status: "fresh", cachedFiles: 1, pendingFiles: 0 },
-      });
-
-      const lookup = {
-        agentId,
-        sessionId: expectDefined(sessions[0], "discovered archive").sessionId,
-        config,
-      };
-      const summary = await loadSessionCostSummary(lookup);
-      expect(summary).toMatchObject({ sessionFile, totalTokens: 17 });
-      expect(await loadSessionLogs(lookup)).toEqual([
-        expect.objectContaining({ role: "user", content: "retained archive prompt" }),
-        expect.objectContaining({ role: "assistant", tokens: 17 }),
-      ]);
-      expect(await loadSessionUsageTimeSeries(lookup)).toMatchObject({
+  it("discovers and reads compressed deleted archives for a non-main agent", async ({ signal }) => {
+    const agentId = "worker";
+    const manager = transcript();
+    const sessionId = manager.getSessionId();
+    const sessionFile = await writeArchive({
+      state,
+      manager,
+      reason: "deleted",
+      agentId,
+      generated: true,
+    });
+    const sourceStats = await fs.stat(sessionFile);
+    const sessions = await discoverAllSessions({ agentId });
+    expect(sessions).toEqual([
+      {
         sessionId,
-        points: [expect.objectContaining({ totalTokens: 17, cumulativeTokens: 17 })],
+        sessionFile,
+        mtime: sourceStats.mtimeMs,
+      },
+    ]);
+
+    const resolved = expectDefined(
+      await resolveUsageCostTranscriptFile(sessionFile),
+      "resolved archive",
+    );
+    expect(resolved).toMatchObject({
+      size: Buffer.byteLength(serialize(manager)),
+      mtimeMs: sourceStats.mtimeMs,
+    });
+    expect(resolved.filePath).not.toBe(sessionFile);
+
+    const cacheLookup = { agentId, config, sessions: [{ sessionId, sessionFile }] };
+    expect(readSessionCostUsageRollupRows(agentId)).toEqual([]);
+    const work = new AsyncWorkScope();
+    try {
+      expect(
+        await racePromiseWithAbortSignal(
+          work.track(() => loadSessionCostSummariesFromCache(cacheLookup)),
+          signal,
+        ),
+      ).toMatchObject({
+        summaries: [null],
+        cacheStatus: { status: "refreshing", cachedFiles: 0, pendingFiles: 1 },
       });
-      const firstRows = readSessionCostUsageRollupRows(agentId);
-      expect(firstRows.map((row) => row.key)).toEqual([resolved.filePath]);
-    },
-  );
+      await racePromiseWithAbortSignal(
+        work.runWhenIdle(() => undefined),
+        signal,
+      );
+      expect(readSessionCostUsageRollupRows(agentId)).toHaveLength(1);
+    } finally {
+      await work.drain();
+    }
+    expect(
+      await loadSessionCostSummariesFromCache({ ...cacheLookup, requestRefresh: false }),
+    ).toMatchObject({
+      summaries: [{ sessionId, sessionFile, totalTokens: 17 }],
+      cacheStatus: { status: "fresh", cachedFiles: 1, pendingFiles: 0 },
+    });
+
+    const lookup = {
+      agentId,
+      sessionId: expectDefined(sessions[0], "discovered archive").sessionId,
+      config,
+    };
+    const summary = await loadSessionCostSummary(lookup);
+    expect(summary).toMatchObject({ sessionFile, totalTokens: 17 });
+    expect(await loadSessionLogs(lookup)).toEqual([
+      expect.objectContaining({ role: "user", content: "retained archive prompt" }),
+      expect.objectContaining({ role: "assistant", tokens: 17 }),
+    ]);
+    expect(await loadSessionUsageTimeSeries(lookup)).toMatchObject({
+      sessionId,
+      points: [expect.objectContaining({ totalTokens: 17, cumulativeTokens: 17 })],
+    });
+    const firstRows = readSessionCostUsageRollupRows(agentId);
+    expect(firstRows.map((row) => row.key)).toEqual([resolved.filePath]);
+  });
 
   {
-    const encoding = "zstd";
-    it(`excludes a ${encoding} archive copy of SQLite only in its owning agent`, async () => {
+    it("excludes a compressed archive copy of SQLite only in its owning agent", async () => {
       const manager = transcript(100);
       const sessionId = manager.getSessionId();
       const sessionKey = "agent:main:main";
@@ -574,8 +562,8 @@ describe("usage archive identity", () => {
         { agentId: "main", sessionId, sessionKey, storePath },
         { messages: [{ message: assistant(17) }], touchSessionEntry: false },
       );
-      const mainArchive = await writeArchive({ state, manager, encoding });
-      const workerArchive = await writeArchive({ state, manager, encoding, agentId: "worker" });
+      const mainArchive = await writeArchive({ state, manager });
+      const workerArchive = await writeArchive({ state, manager, agentId: "worker" });
       const readFile = vi.spyOn(fsSync, "readFileSync");
       try {
         await listUsageCountedTranscriptStats("main");
@@ -609,14 +597,13 @@ describe("usage archive identity", () => {
       expect(await totalUsage("worker")).toMatchObject({ totals: { totalTokens: 100 } });
     });
 
-    it(`keeps newest-archive and primary precedence with ${encoding} archives`, async () => {
+    it("keeps newest-archive and primary precedence with compressed archives", async () => {
       const manager = transcript();
       const sessionId = manager.getSessionId();
-      await writeArchive({ state, manager, encoding, reason: "reset" });
+      await writeArchive({ state, manager, reason: "reset" });
       const newestArchive = await writeArchive({
         state,
         manager,
-        encoding,
         reason: "deleted",
         mtime: archiveTime + 1000,
       });
@@ -635,7 +622,7 @@ describe("usage archive identity", () => {
   it("replaces compressed read bytes without changing the durable session identity", async () => {
     const manager = transcript();
     const sessionId = manager.getSessionId();
-    const sessionFile = await writeArchive({ state, manager, encoding: "zstd" });
+    const sessionFile = await writeArchive({ state, manager });
     const lookup = { agentId: "main", sessionId, sessionFile, config };
     expect(await loadSessionCostSummary(lookup)).toMatchObject({ totalTokens: 17 });
     const original = expectDefined(
@@ -646,9 +633,7 @@ describe("usage archive identity", () => {
     expect(originalRows.map((row) => row.key)).toEqual([original.filePath]);
 
     manager.appendMessage(assistant(29));
-    expect(
-      await writeArchive({ state, manager, encoding: "zstd", mtime: archiveTime + 2000 }),
-    ).toBe(sessionFile);
+    expect(await writeArchive({ state, manager, mtime: archiveTime + 2000 })).toBe(sessionFile);
     const replacement = expectDefined(
       await resolveUsageCostTranscriptFile(sessionFile),
       "replacement archive",
@@ -689,7 +674,7 @@ describe("usage archive identity", () => {
 
   it("preserves rollups when a compressed source becomes unreadable", async () => {
     const manager = transcript();
-    const sessionFile = await writeArchive({ state, manager, encoding: "zstd" });
+    const sessionFile = await writeArchive({ state, manager });
     await loadSessionCostSummary({ agentId: "main", sessionFile, config });
     const rows = readSessionCostUsageRollupRows("main");
     expect(rows).toHaveLength(1);

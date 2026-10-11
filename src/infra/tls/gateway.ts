@@ -224,6 +224,7 @@ export async function loadGatewayTlsServerRuntime(
       : path.join(baseDir, "gateway-key.pem"),
   );
   const caPath = cfg.caPath ? resolveUserPath(cfg.caPath) : undefined;
+  const runtime = { enabled: false, required: true, certPath, keyPath };
 
   const hasCert = await pathExists(certPath);
   const hasKey = await pathExists(keyPath);
@@ -233,10 +234,7 @@ export async function loadGatewayTlsServerRuntime(
       await generateSelfSignedCert({ certPath, keyPath, log });
     } catch (error) {
       return {
-        enabled: false,
-        required: true,
-        certPath,
-        keyPath,
+        ...runtime,
         error: `gateway tls: failed to generate cert (${String(error)})`,
       };
     }
@@ -244,10 +242,7 @@ export async function loadGatewayTlsServerRuntime(
 
   if (!(await pathExists(certPath)) || !(await pathExists(keyPath))) {
     return {
-      enabled: false,
-      required: true,
-      certPath,
-      keyPath,
+      ...runtime,
       error: "gateway tls: cert/key missing",
     };
   }
@@ -261,10 +256,7 @@ export async function loadGatewayTlsServerRuntime(
 
     if (!fingerprintSha256) {
       return {
-        enabled: false,
-        required: true,
-        certPath,
-        keyPath,
+        ...runtime,
         caPath,
         error: "gateway tls: unable to compute certificate fingerprint",
       };
@@ -274,20 +266,15 @@ export async function loadGatewayTlsServerRuntime(
     // Reject incomplete renewals before any listener can adopt mismatched material.
     tls.createSecureContext(tlsOptions);
     return {
+      ...runtime,
       enabled: true,
-      required: true,
-      certPath,
-      keyPath,
       caPath,
       fingerprintSha256,
       tlsOptions,
     };
   } catch (error) {
     return {
-      enabled: false,
-      required: true,
-      certPath,
-      keyPath,
+      ...runtime,
       caPath,
       error: `gateway tls: failed to load cert (${String(error)})`,
     };

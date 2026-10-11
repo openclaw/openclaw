@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-// Advises on ineffective or suspicious dynamic import patterns.
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
@@ -136,8 +135,10 @@ export function findDynamicImportAdvisories(
   return advisories;
 }
 
-function collectDynamicImportAdvisories() {
-  return collectFileViolations({
+export async function main(argv = process.argv.slice(2)) {
+  const fail = argv.includes("--fail");
+  const json = argv.includes("--json");
+  const advisories = await collectFileViolations({
     repoRoot,
     sourceRoots: defaultRoots,
     extraTestSuffixes: [".suite.ts"],
@@ -147,12 +148,6 @@ function collectDynamicImportAdvisories() {
         ? []
         : findDynamicImportAdvisories(content, filePath, sourceFile),
   });
-}
-
-export async function main(argv = process.argv.slice(2)) {
-  const fail = argv.includes("--fail");
-  const json = argv.includes("--json");
-  const advisories = await collectDynamicImportAdvisories();
 
   if (json) {
     console.log(JSON.stringify({ advisories }, null, 2));

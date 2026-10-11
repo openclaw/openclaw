@@ -1,11 +1,6 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { ok } from "@openclaw/normalization-core/result";
-import { listAgentIds, tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
-import {
-  resolveSessionStoreCompatibilityAgentId,
-  tryResolveLegacyCompatibilityAgentId,
-} from "../config/legacy.default-agent-owner.js";
 import { readPreparedSessionSharingChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import {
   assertSessionEntryCreationPublication,
@@ -28,7 +23,6 @@ import {
   prepareSessionStoreTargetInventory,
 } from "../config/sessions/session-store-target-inventory.js";
 import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
-import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   assertExistingDatabaseIdentity,
@@ -54,7 +48,11 @@ import {
   SessionMutationFactsUnavailableError,
 } from "./session-sharing-incognito.js";
 import type { PreparedSessionMutationFacts } from "./session-sharing-policy.js";
-import { resolveSessionStoreIdentity } from "./session-store-key.js";
+import {
+  readSessionRoutingFacts,
+  resolveSessionStoreIdentity,
+  type SessionRoutingTarget,
+} from "./session-store-key.js";
 import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
 import { prepareGatewaySessionStoreTargetReadOnly } from "./session-utils-store-lookup.js";
 import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
@@ -72,25 +70,21 @@ type ExistingSessionMutationFacts = PreparedSessionSourceFacts & {
 
 export { SessionMutationFactsUnavailableError } from "./session-sharing-incognito.js";
 
-function routeFacts(cfg: OpenClawConfig) {
-  return {
-    agents: listAgentIds(cfg),
-    storeOwner: resolveSessionStoreCompatibilityAgentId(cfg),
-    compatibilityOwner: tryResolveLegacyCompatibilityAgentId(cfg),
-    systemOwner: tryResolveAmbientOwnerAgentId(cfg),
-    store: cfg.session?.store,
-    mainKey: cfg.session?.mainKey,
-    scope: cfg.session?.scope,
-  };
-}
-
 export function captureSessionMutationRouting(
   cfg: OpenClawConfig,
   changed: () => Error = () => new SessionMutationFactsUnavailableError(),
+  targets?: readonly SessionRoutingTarget[],
 ) {
-  const route = routeFacts(cfg);
+  const capturedTargets = targets?.length
+    ? targets.map(({ sessionKey, agentId, preserveQualifiedAddress }) => ({
+        sessionKey,
+        agentId,
+        preserveQualifiedAddress,
+      }))
+    : undefined;
+  const route = readSessionRoutingFacts(cfg, capturedTargets);
   return (current: OpenClawConfig) => {
-    if (!isDeepStrictEqual(routeFacts(current), route)) {
+    if (!isDeepStrictEqual(readSessionRoutingFacts(current, capturedTargets), route)) {
       throw changed();
     }
   };
@@ -120,7 +114,7 @@ export function prepareSessionMutationFacts(
 export async function prepareSessionMutationFacts(
   params: SessionFactsRequest & { allowMissing?: true },
 ): Promise<SessionFactsRead<PreparedSessionSourceFacts>> {
-  const assertRoutingCurrent = captureSessionMutationRouting(params.cfg);
+  const assertRoutingCurrent = captureSessionMutationRouting(params.cfg, undefined, [params]);
   const { canonicalKey, agentId } = resolveSessionStoreIdentity(params);
   const initialStoreKeys = [params.sessionKey.trim(), canonicalKey];
   const incognito = isIncognitoSessionKey(canonicalKey);
@@ -239,6 +233,7 @@ export async function prepareSessionMutationFacts(
     }
     if (
       change.scope === "automation" ||
+      change.scope === "acp" ||
       (change.agentId && change.agentId !== agentId && !change.storePath) ||
       ![...initialStoreKeys, ...(facts?.target?.storeKeys ?? [])].includes(change.sessionKey)
     ) {
@@ -437,7 +432,6 @@ export async function prepareSessionMutationFacts(
           preparedSources,
           registryDiscovery: inventory.registryDiscovery,
         }),
-        projectionLane,
       );
       const assertPaths = () => {
         for (const { candidate, identity } of candidateIdentities) {
@@ -668,10 +662,6 @@ export async function prepareSessionMutationFacts(
       try {
         assertActive();
         assertRoutingCurrent(cfg);
-        const currentIdentity = resolveSessionStoreIdentity({ ...params, cfg });
-        if (currentIdentity.agentId !== agentId || currentIdentity.canonicalKey !== canonicalKey) {
-          throw new SessionMutationFactsUnavailableError();
-        }
         assertSource();
         if (creation) {
           assertSessionEntryCreationPublication(creation, {

@@ -42,11 +42,9 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
-import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import { resolveSessionTranscriptActiveLeafEntryId } from "../../config/sessions/transcript-tree.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import {
@@ -78,6 +76,8 @@ import {
 } from "./chat-message.test-fixtures.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import { readChatSendDedupeResponse } from "./chat-send-reservation.js";
+import { createChatSendLateReplyFinalizer } from "./chat-send-source-finalization.js";
+import { registerChatSourceMediaTests } from "./chat.directive-tags.source-media.suite.js";
 import {
   ChatDirectiveDedupe,
   createChatDirectiveReplyBackend,
@@ -91,7 +91,6 @@ import {
   readChatDirectiveConfig,
   seedChatDirectiveFileTranscript,
 } from "./chat.directive-tags.test-support.js";
-import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 type ProjectedDispatchParams = Parameters<
@@ -445,7 +444,7 @@ vi.mock("../../infra/outbound/session-binding-service.js", async () => {
     ...actual,
     getSessionBindingService: () => ({
       ...actual.getSessionBindingService(),
-      resolveByConversation: (ref: unknown) => bindingMocks.resolveByConversation(ref),
+      resolveByConversationAsync: async (ref: unknown) => bindingMocks.resolveByConversation(ref),
     }),
   };
 });
@@ -662,14 +661,6 @@ async function withTranscriptFixtureState(
   run: (fixtureDir: string) => Promise<void>,
 ): Promise<void> {
   const fixtureDir = await createTranscriptFixture(prefix);
-  await withEnvAsync({ OPENCLAW_STATE_DIR: suiteFixtureRoot }, async () => await run(fixtureDir));
-}
-
-async function withSqliteTranscriptFixtureState(
-  prefix: string,
-  run: (fixtureDir: string) => Promise<void>,
-): Promise<void> {
-  const fixtureDir = await createSqliteTranscriptFixture(prefix);
   await withEnvAsync({ OPENCLAW_STATE_DIR: suiteFixtureRoot }, async () => await run(fixtureDir));
 }
 
@@ -1076,8 +1067,9 @@ function createMainSourceReply(params: {
   replyToCurrent?: boolean;
   replyToId?: string;
   text?: string;
+  transcriptOwner?: true;
 }): TestReply {
-  const { idempotencyKey, mediaUrls, replyToCurrent, replyToId, text } = params;
+  const { idempotencyKey, mediaUrls, replyToCurrent, replyToId, text, transcriptOwner } = params;
   return createSourceReply(
     {
       ...(text ? { text } : {}),
@@ -1090,6 +1082,7 @@ function createMainSourceReply(params: {
       ...(text ? { text } : {}),
       ...(mediaUrls ? { mediaUrls } : {}),
       idempotencyKey,
+      ...(transcriptOwner ? { transcriptOwner } : {}),
     },
   );
 }
@@ -2078,15 +2071,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           cancel: successorCancel,
           queueMessage: vi.fn(async () => {}),
         });
-        delivery.resolve({
-          transcriptCommit: "unconfirmed",
-          errorMessage: "receipt timed out",
-        });
+        const errorMessage = "receipt timed out";
+        delivery.resolve({ transcriptCommit: "unconfirmed", errorMessage });
 
         await waitForAssertion(() => {
           expect(context.dedupe.get("chat:idem-steer-unconfirmed")?.payload).toEqual({
             runId: "idem-steer-unconfirmed",
-            status: "ok",
+            status: "error",
+            summary: errorMessage,
           });
         });
         expect(successor.result).toBeNull();
@@ -2421,41 +2413,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(context.registerToolEventRecipient).not.toHaveBeenCalledWith(denied, connId);
     },
   );
-
-  it("returns the rendered history branch leaf in session info", async () => {
-    await withSqliteTranscriptFixtureState("openclaw-chat-history-active-leaf-", async () => {
-      mockState.config = { session: { store: mockState.storePath } };
-      await appendTranscriptMessage(transcriptScope(), {
-        eventId: "history-active-leaf",
-        message: { role: "user", content: "render this branch" },
-        now: 1,
-        parentId: null,
-      });
-      const respond = vi.fn();
-      const context = createChatContext();
-      const cfg = context.getRuntimeConfig();
-      context.getRuntimeConfig = () => cfg;
-      await initializeSessionReadContext(context);
-
-      await expectDefined(
-        chatHandlers["chat.history"],
-        'chatHandlers["chat.history"] test invariant',
-      )({
-        params: { sessionKey: "main" },
-        respond: respond as never,
-        req: {} as never,
-        client: null,
-        isWebchatConnect: () => false,
-        context,
-      });
-
-      const result = lastRespondCall(respond);
-      expect(result?.[0], JSON.stringify(result?.[2])).toBe(true);
-      expect(result?.[1]).toMatchObject({
-        sessionInfo: { activeLeafEntryId: "history-active-leaf" },
-      });
-    });
-  });
 
   it("does not register tool-event recipients without tool-events capability", async () => {
     await createReadyChatTranscript("openclaw-chat-send-tool-events-off-");
@@ -3046,185 +3003,55 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
-  it("backs source reply media with an equivalent deduped delivery mirror", async () => {
-    await withTranscriptFixtureState(
-      "openclaw-chat-send-agent-source-reply-deduped-",
-      async (fixtureDir) => {
-        const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
-        const replyText = "Source reply with media";
-        writeSavedPng(fixtureDir, "source-reply-deduped.png");
-        const mirrorIdempotencyKey = "idem-agent-source-reply-deduped:internal-source-reply:0";
-        await appendSourceReplyMirrorEntry({
-          text:
-            resolveMirroredTranscriptText({ text: replyText, mediaUrls: [mediaUrl] }) ?? "media",
-        });
-        setAgentRunReplies([
-          createMainSourceReply({
-            idempotencyKey: mirrorIdempotencyKey,
-            text: replyText,
-            mediaUrls: [mediaUrl],
-          }),
-        ]);
-        const broadcast = await createChatRequestFixture().send({
-          idempotencyKey: "idem-agent-source-reply-deduped",
-          message: "hello from codex",
-        });
-
-        const broadcastContent = getMessageContent(broadcast);
-        expect(broadcastContent.filter((block) => block.type === "image")).toHaveLength(1);
-        expect(JSON.stringify(broadcastContent)).toContain("/api/chat/media/outgoing/");
-        const assistantEntries = await readActiveAssistantTranscriptMessages();
-        expect(assistantEntries).toHaveLength(1);
-        expect(assistantEntries[0]?.idempotencyKey).toBe(mirrorIdempotencyKey);
-        for (const message of [
-          assistantEntries[0],
-          ...(await readRawActiveAssistantTranscriptMessages()),
-        ]) {
-          expect(getMessageContent({ message }).filter((block) => block.type === "text")).toEqual([
-            { type: "text", text: replyText },
-          ]);
-        }
-        expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
-        expect(JSON.stringify(assistantEntries[0]?.content)).not.toContain(mediaUrl);
-      },
-    );
-  });
-
-  it("keeps backed media source replies when a sibling mirror is missing", async () => {
-    await withTranscriptFixtureState(
-      "openclaw-chat-send-agent-source-reply-partial-",
-      async (fixtureDir) => {
-        const firstMediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
-        const secondMediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
-        writeSavedPng(fixtureDir, "source-reply-backed.png");
-        writeSavedPng(fixtureDir, "source-reply-missing.png");
-        const backedMirrorKey = "idem-agent-source-reply-partial:internal-source-reply:0";
-        const missingMirrorKey = "idem-agent-source-reply-partial:internal-source-reply:1";
-        await appendSourceReplyMirrorEntry({
-          idempotencyKey: backedMirrorKey,
-          text: "Backed source reply",
-        });
-        setAgentRunReplies([
-          createMainSourceReply({
-            idempotencyKey: backedMirrorKey,
-            text: "Backed source reply",
-            mediaUrls: [firstMediaUrl],
-          }),
-          createMainSourceReply({
-            idempotencyKey: missingMirrorKey,
-            text: "Missing mirror source reply",
-            mediaUrls: [secondMediaUrl],
-          }),
-        ]);
-        const broadcast = await createChatRequestFixture().send({
-          idempotencyKey: "idem-agent-source-reply-partial",
-          message: "hello from codex",
-        });
-
-        const broadcastContent = getMessageContent(broadcast);
-        expect(broadcastContent.filter((block) => block.type === "image")).toHaveLength(1);
-        expect(extractFirstTextBlock(getMessage(broadcast))).toBe("Backed source reply");
-        expect(String(broadcastContent[1]?.url)).toContain("/api/chat/media/outgoing/");
-        const assistantEntries = await readActiveAssistantTranscriptMessages();
-        expect(assistantEntries).toHaveLength(1);
-        expect(assistantEntries[0]?.idempotencyKey).toBe(backedMirrorKey);
-        expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
-        expect(JSON.stringify(assistantEntries[0]?.content)).not.toContain(firstMediaUrl);
-        expect(JSON.stringify(broadcastContent)).not.toContain(secondMediaUrl);
-      },
-    );
-  });
-
-  it.each(["colliding key", "later transcript entry"] as const)(
-    "does not rewrite source media across a %s",
-    async (reason) => {
-      await withTranscriptFixtureState(
-        "openclaw-chat-send-source-rewrite-refusal-",
-        async (fixtureDir) => {
-          const collision = reason === "colliding key";
-          const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
-          writeSavedPng(fixtureDir, "source-reply.png");
-          const mirrorKey = "idem-source-rewrite-refusal:internal-source-reply:0";
-          const text = collision ? "Existing assistant content" : "Source reply with media";
-          await appendSourceReplyMirrorEntry({
-            idempotencyKey: mirrorKey,
-            text,
-            ...(collision ? { model: "gateway-injected" } : {}),
-          });
-          if (!collision) {
-            await appendSourceReplyMirrorEntry({
-              idempotencyKey: "later-assistant-entry",
-              text: "Later assistant content",
-              model: "gateway-injected",
-            });
-          }
-          setAgentRunReplies([
-            createMainSourceReply({
-              idempotencyKey: mirrorKey,
-              text: "Source reply with media",
-              mediaUrls: [mediaUrl],
-            }),
-          ]);
-          const broadcast = await createChatRequestFixture().send({
-            idempotencyKey: "idem-source-rewrite-refusal",
-            message: "hello from codex",
-          });
-          expect(JSON.stringify(getMessageContent(broadcast))).not.toContain(
-            "/api/chat/media/outgoing/",
-          );
-          const entries = await readActiveAssistantTranscriptMessages();
-          expect(entries[0]?.content).toStrictEqual([{ type: "text", text }]);
-          if (collision) {
-            expect(entries).toHaveLength(1);
-            expect(entries[0]?.model).toBe("gateway-injected");
-          } else {
-            expect(entries.map((entry) => entry.idempotencyKey)).toStrictEqual([
-              mirrorKey,
-              "later-assistant-entry",
-            ]);
-            expect(entries[1]?.content).toStrictEqual([
-              { type: "text", text: "Later assistant content" },
-            ]);
-          }
-        },
-      );
+  registerChatSourceMediaTests({
+    session: () => ({
+      cfg: readChatDirectiveConfig(mockState),
+      scope: { ...transcriptScope(), sessionId: mockState.sessionId },
+      stateDir: suiteFixtureRoot,
+    }),
+    stageMediaPath: (mediaPath, contentType) => {
+      mockState.savedMediaResults.push({ path: mediaPath, contentType });
     },
-  );
-
-  it("keeps a placeholder for unbacked media-only source reply siblings", async () => {
-    await withTranscriptFixtureState(
-      "openclaw-chat-send-agent-source-reply-media-only-sibling-",
-      async (fixtureDir) => {
-        const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
-        writeSavedPng(fixtureDir, "source-reply-media-only-sibling.png");
-        const textMirrorKey = "idem-agent-source-reply-media-only-sibling:internal-source-reply:0";
-        const missingMirrorKey =
-          "idem-agent-source-reply-media-only-sibling:internal-source-reply:1";
-        await appendSourceReplyMirrorEntry({
-          idempotencyKey: textMirrorKey,
-          text: "Text source reply",
-        });
-        setAgentRunReplies([
-          createMainSourceReply({ idempotencyKey: textMirrorKey, text: "Text source reply" }),
-          createMainSourceReply({ idempotencyKey: missingMirrorKey, mediaUrls: [mediaUrl] }),
-        ]);
-        const broadcast = await createChatRequestFixture().send({
-          idempotencyKey: "idem-agent-source-reply-media-only-sibling",
-          message: "hello from codex",
-        });
-
-        const broadcastContent = getMessageContent(broadcast);
-        expect(broadcastContent).toContainEqual({ type: "text", text: "Text source reply" });
-        expect(broadcastContent).toContainEqual({
-          type: "text",
-          text: "Media reply could not be displayed.",
-        });
-        const broadcastJson = JSON.stringify(broadcast);
-        expect(broadcastJson).not.toContain("MEDIA:");
-        expect(broadcastJson).not.toContain(mediaUrl);
-        expect(broadcastJson).not.toContain("/api/chat/media/outgoing/");
-      },
-    );
+    publishedUpdates: () => mockState.emittedTranscriptUpdates,
+    withTranscriptFixtureState,
+    readActiveAssistantTranscriptMessages,
+    readRawActiveAssistantTranscriptMessages,
+    appendSourceReplyMirrorEntry,
+    createMainSourceReply,
+    setAgentRunReplies,
+    send: (params) => createChatRequestFixture().send(params),
+    sendLate: async ({ runId, payloads, canvas, bufferCurrent }) => {
+      const context = createChatContext();
+      const run = context.chatRunState.getOrCreate(runId);
+      run.canvasBlocks = [{ type: "canvas", ...canvas }];
+      run.bufferIsCurrent = () => bufferCurrent;
+      const finalize = createChatSendLateReplyFinalizer({
+        context,
+        accountId: undefined,
+        terminalEntry: undefined,
+        session: {
+          cfg: readChatDirectiveConfig(mockState),
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          backingSessionId: mockState.sessionId,
+          clientRunId: runId,
+          sessionLoadOptions: { agentId: "main" },
+        },
+      });
+      await expect(
+        finalize({
+          runId,
+          clientRunId: runId,
+          payloads,
+          completion: { kind: "completed" },
+          isCurrent: () => true,
+        }),
+      ).resolves.toMatchObject({ kind: "delivered" });
+      expect(context.removeChatRun).toHaveBeenCalledWith(runId, runId, "agent:main:main");
+      expect(context.chatRunState.runs.has(runId)).toBe(false);
+      return lastBroadcastPayload(context);
+    },
+    writeSavedPng,
   });
 
   it("does not broadcast an error terminal after an internal-ui source reply final", async () => {
@@ -4814,41 +4641,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     },
   );
 
-  it("logs chat.send attachment parse failures with stack details", async () => {
-    await createTranscriptFixture("openclaw-chat-send-attachment-parse-stack-");
-    const { context, respond, send } = createChatRequestFixture();
-
-    await send({
-      idempotencyKey: "idem-chat-send-attachment-parse-stack",
-      message: "inspect this",
-      requestParams: {
-        attachments: [createFileAttachment("broken.png", "image/png", "not-base64")],
-      },
-      expectBroadcast: false,
-      waitFor: "none",
-    });
-
-    expect(mockState.lastDispatchCtx).toBeUndefined();
-    const response = lastRespondCall(respond);
-    expect(response?.[0]).toBe(false);
-    expect(response?.[1]).toBeUndefined();
-    expect(response?.[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
-    expect(response?.[2]?.message).toContain("attachment broken.png: invalid base64 content");
-    expect(getAgentRunContext("idem-chat-send-attachment-parse-stack")).toBeUndefined();
-    const parseLogCall = context.logGateway.error.mock.calls[0] as
-      | [string, Record<string, string>]
-      | undefined;
-    expect(parseLogCall?.[0]).toBe("chat.send attachment parse/stage failed");
-    expect(parseLogCall?.[1].consoleMessage).toContain(
-      "chat.send attachment parse/stage failed: Error: attachment broken.png",
-    );
-    expect(parseLogCall?.[1].error).toContain(
-      "Error: attachment broken.png: invalid base64 content",
-    );
-    const logMeta = context.logGateway.error.mock.calls[0]?.[1] as { error?: string } | undefined;
-    expect(logMeta?.error).toContain("\n    at ");
-  });
-
   it.each(["throw", "skip"] as const)(
     "falls back to the managed PDF path when sandbox staging %s occurs",
     async (mode) => {
@@ -4928,32 +4720,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.deleteMediaBufferCalls).toEqual([]);
   });
 
-  it("maps media offload failures to UNAVAILABLE in chat.send", async () => {
-    await createTranscriptFixture("openclaw-chat-send-media-offload-error-");
-    useChatTestModel("vision-model");
-    mockState.saveMediaError = new Error("disk full");
-    const { respond, send } = createChatRequestFixture();
-    const bigPng = createPngBuffer(2_100_000);
-
-    await send({
-      idempotencyKey: "idem-media-offload-error",
-      message: "describe image",
-      requestParams: {
-        attachments: [createImageAttachment({ content: bigPng.toString("base64") })],
-      },
-      waitFor: "none",
-    });
-
-    const response = lastRespondCall(respond);
-    expect(response?.[0]).toBe(false);
-    expect(response?.[1]).toBeUndefined();
-    expect(response?.[2]?.code).toBe(ErrorCodes.UNAVAILABLE);
-  });
-
-  it("persists a Gateway user turn under the durable owner when its loaded key is stale", async () => {
-    createFixturePaths("openclaw-chat-send-stale-transcript-owner-");
-    const canonicalSessionKey = "agent:main:canonical-transcript-owner";
-    const staleSessionKey = "agent:main:stale-transcript-owner";
+  it("persists a Gateway user turn under the canonical owner of a requested alias", async () => {
+    createFixturePaths("openclaw-chat-send-aliased-transcript-owner-");
+    const canonicalSessionKey = "agent:main:main";
+    const requestedSessionKey = "main";
     await replaceSessionEntry(
       {
         agentId: "main",
@@ -4964,9 +4734,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     mockState.finalText = "ok";
     await createChatRequestFixture().send({
-      idempotencyKey: "idem-stale-transcript-owner",
+      idempotencyKey: "idem-aliased-transcript-owner",
       message: "keep this Gateway turn",
-      sessionKey: staleSessionKey,
+      sessionKey: requestedSessionKey,
       requestParams: { sessionId: mockState.sessionId },
       expectBroadcast: false,
     });
@@ -4986,17 +4756,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         }),
       }),
     );
-    expect(
-      loadSqliteSessionEntry({
-        agentId: "main",
-        sessionKey: staleSessionKey,
-        storePath: mockState.storePath,
-      }),
-    ).toBeUndefined();
+    expect(mockState.loadSessionEntryCalls).toContainEqual({
+      rawKey: canonicalSessionKey,
+      opts: { agentId: "main" },
+    });
     expect(findUserUpdate()?.target).toEqual({
       agentId: "main",
       sessionId: mockState.sessionId,
-      sessionKey: staleSessionKey,
+      sessionKey: canonicalSessionKey,
       storePath: mockState.storePath,
     });
   });

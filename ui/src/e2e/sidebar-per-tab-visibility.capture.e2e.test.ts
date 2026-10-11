@@ -87,7 +87,7 @@ suite.define(() => {
     try {
       await installMockGateway(page, sessionsMock());
       await page.goto(`${suite.server.baseUrl}chat`);
-      const sidebar = page.locator("openclaw-app-sidebar");
+      const sidebar = page.locator("openclaw-app-sidebar .sidebar-shell");
       await sidebar.waitFor({ state: "visible", timeout: 10_000 });
       // The general chat surface is the app's main view; collapsing it here
       // would be a default-path regression, so this is the guard for it.
@@ -109,7 +109,7 @@ suite.define(() => {
     try {
       await installMockGateway(page, sessionsMock());
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, RESEARCH_KEY));
-      const sidebar = page.locator("openclaw-app-sidebar");
+      const sidebar = page.locator("openclaw-app-sidebar .sidebar-shell");
       const composer = page.getByPlaceholder("Message OpenClaw");
       await sidebar.waitFor({ state: "visible", timeout: 10_000 });
       await composer.waitFor({ state: "visible", timeout: 10_000 });
@@ -188,7 +188,7 @@ suite.define(() => {
           sessionTab,
           (catalog ? "catalog" : "session") + "-" + gesture + "-new-tab.png",
         );
-        const sidebar = sessionTab.locator("openclaw-app-sidebar");
+        const sidebar = sessionTab.locator("openclaw-app-sidebar .sidebar-shell");
         await expect.poll(() => sidebar.isVisible()).toBe(true);
         expect(targetUrl.searchParams.has("nav")).toBe(false);
         expect(sessionTab.url()).toBe(targetUrl.href);
@@ -197,17 +197,23 @@ suite.define(() => {
 
         await sessionTab.keyboard.press("ControlOrMeta+B");
         await expect.poll(() => sidebar.isVisible()).toBe(false);
-        expect(await page.locator("openclaw-app-sidebar").isVisible()).toBe(true);
+        expect(await sessionTab.locator(".sidebar-rail").isVisible()).toBe(true);
+        await expect
+          .poll(async () => (await sessionTab.locator(".shell-nav").boundingBox())?.width)
+          .toBe(52);
+        expect(await page.locator("openclaw-app-sidebar .sidebar-shell").isVisible()).toBe(true);
         await sessionTab.keyboard.press("ControlOrMeta+B");
         await sidebar.waitFor({ state: "visible" });
 
         await page.keyboard.press("ControlOrMeta+B");
-        await expect.poll(() => page.locator("openclaw-app-sidebar").isVisible()).toBe(false);
+        await expect
+          .poll(() => page.locator("openclaw-app-sidebar .sidebar-shell").isVisible())
+          .toBe(false);
         expect(await sidebar.isVisible()).toBe(true);
         await sessionTab.reload();
         await tabComposer.waitFor({ state: "visible" });
         await sidebar.waitFor({ state: "visible" });
-        expect(await page.locator("openclaw-app-sidebar").isVisible()).toBe(false);
+        expect(await page.locator("openclaw-app-sidebar .sidebar-shell").isVisible()).toBe(false);
       } finally {
         await context.close();
       }

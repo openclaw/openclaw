@@ -12,7 +12,10 @@ import {
   PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
   parsePackageDistContentInventory,
 } from "../../lib/package-dist-inventory-contract.mts";
-import { isUpdateCompatibilityChunk } from "../../lib/update-compat-contract.mjs";
+import {
+  isUpdateCompatibilityChunk,
+  supportsUpdateSchemas,
+} from "../../lib/update-compat-contract.mjs";
 import { readJson } from "./fixtures/common.mjs";
 
 // Frozen candidates predating the recorded inventory retain their original fixture contract.
@@ -22,8 +25,16 @@ export const LEGACY_UPDATE_COMPAT_CHUNKS = [
   "shared-DFJEouXv.js",
 ];
 
+// Candidates through 2026.10.5-beta.1 packed their inventory; later candidates leave it
+// in the source tree, which this harness checkout carries as release tooling.
+const PACKED_UPDATE_COMPAT_INVENTORY = path.join("dist", "update-compat-inventory.json");
+const HARNESS_UPDATE_COMPAT_INVENTORY = fileURLToPath(
+  new URL("../../lib/update-compat-inventory.json", import.meta.url),
+);
+
 function readFirstHopReleases(packageRoot) {
-  const inventoryPath = path.join(packageRoot, "dist", "update-compat-inventory.json");
+  const packedPath = path.join(packageRoot, PACKED_UPDATE_COMPAT_INVENTORY);
+  const inventoryPath = fs.existsSync(packedPath) ? packedPath : HARNESS_UPDATE_COMPAT_INVENTORY;
   if (!fs.existsSync(inventoryPath)) {
     return [];
   }
@@ -35,9 +46,13 @@ function readFirstHopReleases(packageRoot) {
 }
 
 export function listFirstHopSourceVersions(packageRoot, filter = "") {
-  const versions = readFirstHopReleases(packageRoot).map((release) => release.version);
+  const releases = readFirstHopReleases(packageRoot);
+  const target = readJson(path.join(packageRoot, "package.json")).openclaw?.schemaVersions;
+  const versions = releases
+    .filter((release) => supportsUpdateSchemas(release.schemaVersions, target))
+    .map((release) => release.version);
   if (
-    versions.length === 0 ||
+    releases.length === 0 ||
     new Set(versions).size !== versions.length ||
     versions.some(
       (version) =>
@@ -49,8 +64,9 @@ export function listFirstHopSourceVersions(packageRoot, filter = "") {
   const selected = filter.split(/[\s,]+/u).filter(Boolean);
   const unrecorded = selected.filter((version) => !versions.includes(version));
   if (unrecorded.length > 0) {
+    const recorded = releases.some((release) => unrecorded.includes(release.version));
     throw new Error(
-      `first-hop sources are not recorded in the candidate: ${unrecorded.join(", ")}`,
+      `first-hop sources are ${recorded ? "unsupported by" : "not recorded in"} the candidate: ${unrecorded.join(", ")}`,
     );
   }
   return selected.length > 0 ? versions.filter((version) => selected.includes(version)) : versions;
@@ -152,13 +168,9 @@ export function removeLegacyUpdateCompatChunks(packageRoot, expectedMissingChunk
     throw new Error("package fixture inventory is not a string array");
   }
 
-  const compatibilityPath = path.join(paths.root, "dist", "update-compat-inventory.json");
-  const hasRecordedCompatibility = fs.existsSync(compatibilityPath);
-  const recordedChunks = hasRecordedCompatibility
-    ? readJson(compatibilityPath).releases.flatMap((release) =>
-        release.chunks.map((chunk) => chunk.path),
-      )
-    : [];
+  const recordedChunks = readFirstHopReleases(paths.root).flatMap((release) =>
+    (release.chunks ?? []).map((chunk) => chunk.path),
+  );
   if (
     recordedChunks.some(
       (name) =>
@@ -180,18 +192,22 @@ export function removeLegacyUpdateCompatChunks(packageRoot, expectedMissingChunk
       throw new Error("package fixture expected missing chunk has an invalid path");
     }
   }
+  // Harness records may name chunks this candidate never built; only its own bridges count.
+  const bridges = recordedChunks.filter((name) => {
+    const filePath = path.join(paths.root, "dist", name);
+    return (
+      /-[A-Za-z0-9_-]{8}\.m?js$/.test(name) &&
+      fs.existsSync(filePath) &&
+      isUpdateCompatibilityChunk(fs.readFileSync(filePath, "utf8"))
+    );
+  });
+  const hasRecordedCompatibility =
+    fs.existsSync(path.join(paths.root, PACKED_UPDATE_COMPAT_INVENTORY)) || bridges.length > 0;
   const chunks = new Set(
     expectedMissingChunk
       ? [expectedMissingChunk]
       : hasRecordedCompatibility
-        ? recordedChunks.filter((name) => {
-            if (!/-[A-Za-z0-9_-]{8}\.m?js$/.test(name)) {
-              return false;
-            }
-            return isUpdateCompatibilityChunk(
-              fs.readFileSync(path.join(paths.root, "dist", name), "utf8"),
-            );
-          })
+        ? bridges
         : LEGACY_UPDATE_COMPAT_CHUNKS,
   );
   const removed = [];
@@ -355,9 +371,9 @@ function packNegativeUpdateFixture(candidateTarball, outputTarball, expectedMiss
 export function packFutureUpdateFixture(candidateTarball, outputTarball, sequence = 0) {
   return {
     method: "candidate-same-schema-self-update-fixture",
-    ...packTransformedFixture(candidateTarball, outputTarball, (root) => {
-      return markFutureUpdateFixture(root, sequence);
-    }),
+    ...packTransformedFixture(candidateTarball, outputTarball, (root) =>
+      markFutureUpdateFixture(root, sequence),
+    ),
   };
 }
 
@@ -443,22 +459,14 @@ function main() {
     );
     return;
   }
-  if (
-    (mode === "first-hop-tarball" ||
-      mode === "negative-tarball" ||
-      mode === "future-tarball" ||
-      mode === "unsupported-admission-tarball" ||
-      mode === "future-runtime-tarball") &&
-    packageRoot &&
-    outputTarball
-  ) {
-    const pack = {
-      "first-hop-tarball": packFirstHopUpdateFixture,
-      "negative-tarball": packNegativeUpdateFixture,
-      "future-tarball": packFutureUpdateFixture,
-      "unsupported-admission-tarball": packUnsupportedAdmissionFixture,
-      "future-runtime-tarball": packFutureRuntimeFixture,
-    }[mode];
+  const packers = {
+    "first-hop-tarball": packFirstHopUpdateFixture,
+    "negative-tarball": packNegativeUpdateFixture,
+    "future-tarball": packFutureUpdateFixture,
+    "unsupported-admission-tarball": packUnsupportedAdmissionFixture,
+    "future-runtime-tarball": packFutureRuntimeFixture,
+  };
+  if (Object.hasOwn(packers, mode) && packageRoot && outputTarball) {
     const fixtureArg =
       mode === "negative-tarball"
         ? (sequence ?? "")
@@ -466,7 +474,7 @@ function main() {
           ? 0
           : Number(sequence);
     process.stdout.write(
-      `${JSON.stringify(pack(packageRoot, outputTarball, fixtureArg), null, 2)}\n`,
+      `${JSON.stringify(packers[mode](packageRoot, outputTarball, fixtureArg), null, 2)}\n`,
     );
     return;
   }

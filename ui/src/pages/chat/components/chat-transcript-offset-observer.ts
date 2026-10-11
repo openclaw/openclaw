@@ -18,8 +18,7 @@ type TranscriptScrollRenderState = { atEnd: boolean; touchActive: boolean };
 export class TranscriptOffsetState {
   pendingScrollOffset: ChatTranscriptPendingScrollOffset | null = null;
   scrollCommand:
-    | { behavior: ScrollBehavior; target: "end" }
-    | { behavior: ScrollBehavior; target: "index" }
+    | { behavior: ScrollBehavior; target: "end" | "index" }
     | { behavior: ScrollBehavior; target: "message"; messageId: string }
     | null = null;
   touching = false;
@@ -117,6 +116,7 @@ type OffsetOwner = {
   canFollowEnd(): boolean;
   isProgrammaticScroll(): boolean;
   cancelScroll(): void;
+  onLayoutCorrection(before: number, after: number): void;
   requestUpdate(): void;
   onOffset(): boolean;
   onReaderScroll(towardEnd?: boolean): void;
@@ -168,7 +168,7 @@ export function observeTranscriptOffset(
     // Measurement retries can move the old end after the grown range commits.
     // Layout/composer receipts already carry their anchor correction separately.
     if (maintenance && before !== after) {
-      owner.endAnchor.recordLayoutCorrection(before, after);
+      owner.onLayoutCorrection(before, after);
     }
     recordProgrammaticScroll(before, after, maintenance);
   };

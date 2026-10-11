@@ -26,8 +26,5 @@ export async function resolveStickerVisionSupportRuntime(params: {
     agentId: params.agentId,
   });
   const entry = findModelInCatalog(catalog, defaultModel.provider, defaultModel.model);
-  if (!entry) {
-    return false;
-  }
-  return modelSupportsVision(entry);
+  return entry ? modelSupportsVision(entry) : false;
 }

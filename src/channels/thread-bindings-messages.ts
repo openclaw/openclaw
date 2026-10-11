@@ -87,21 +87,14 @@ export function resolveThreadBindingFarewellText(params: {
     return prefixSystemMessage(custom);
   }
 
-  if (params.reason === "idle-expired") {
+  if (params.reason === "idle-expired" || params.reason === "max-age-expired") {
+    const idle = params.reason === "idle-expired";
     const label = formatThreadBindingDurationLabel(
-      resolveNonNegativeIntegerOption(params.idleTimeoutMs, 0),
+      resolveNonNegativeIntegerOption(idle ? params.idleTimeoutMs : params.maxAgeMs, 0),
     );
+    const expiry = idle ? `after ${label} of inactivity` : `at max age of ${label}`;
     return prefixSystemMessage(
-      `Conversation binding expired after ${label} of inactivity. Messages here will no longer go to that session.`,
-    );
-  }
-
-  if (params.reason === "max-age-expired") {
-    const label = formatThreadBindingDurationLabel(
-      resolveNonNegativeIntegerOption(params.maxAgeMs, 0),
-    );
-    return prefixSystemMessage(
-      `Conversation binding expired at max age of ${label}. Messages here will no longer go to that session.`,
+      `Conversation binding expired ${expiry}. Messages here will no longer go to that session.`,
     );
   }
 

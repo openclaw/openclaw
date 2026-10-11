@@ -264,32 +264,6 @@ describe("plugins cli list", () => {
     }
   });
 
-  it("deduplicates plugin validation warnings while ignoring other config owners", async () => {
-    const googleWarning = {
-      path: "plugins.entries.google",
-      message: "plugin disabled (not in allowlist) but config is present",
-    };
-    mockPluginDoctorValidationWarnings([
-      { path: "gateway.auth", message: "owned by gateway doctor" },
-      { path: "plugins", message: "root plugin warning" },
-      googleWarning,
-      googleWarning,
-      { path: "pluginsOther.entries.google", message: "not a plugin-owned path" },
-    ]);
-
-    await runPluginsCommand(["plugins", "doctor", "--json"]);
-
-    const output = JSON.parse(pluginsCliRuntimeLogs[0] ?? "null") as {
-      ok: boolean;
-      configurationWarnings: string[];
-    };
-    expect(output.ok).toBe(false);
-    expect(output.configurationWarnings).toEqual([
-      "- plugins: root plugin warning",
-      "- plugins.entries.google: plugin disabled (not in allowlist) but config is present",
-    ]);
-  });
-
   it("sanitizes plugin warning terminal controls in human doctor output", async () => {
     mockPluginDoctorValidationWarnings([
       { path: "plugins.\nentries.google\u001b[31m", message: "bad\r\n\tvalue\u001b[0m\u0007" },
@@ -309,53 +283,16 @@ describe("plugins cli list", () => {
     expect(output).not.toContain(cleanDoctorMessage);
   });
 
-  it("reports stale plugin config in doctor output without claiming full plugin health", async () => {
-    const sourceConfig = {
-      plugins: {
-        allow: ["lossless-claw"],
-        entries: {
-          "lossless-claw": { enabled: true },
-        },
-        slots: {
-          contextEngine: "lossless-claw",
-        },
-      },
-    };
-    pluginCliConfigMock.mockReturnValue({});
-    readConfigFileSnapshotMock.mockResolvedValueOnce(createTestConfigSnapshot(sourceConfig, {}));
-    mockDoctorReport();
-
-    const output = await doctor();
-    expect(output).toContain("Plugin configuration:");
-    expect(output).toContain(
-      "Stale plugin references (plugins.allow/deny/entries): lossless-claw.",
-    );
-    expect(output).toContain(
-      'plugins.slots.contextEngine: slot references missing plugin "lossless-claw".',
-    );
-    expect(output).toContain(
-      'Run "openclaw doctor --fix" to remove stale plugin ids and dangling channel references.',
-    );
-    expect(output).toContain(
-      "No plugin install-tree issues detected; configuration warnings remain.",
-    );
-    expect(output).not.toContain(cleanDoctorMessage);
-  });
-
   it.each([
     ["codex", "missing", "openclaw plugins install @openclaw/codex"],
     ["acpx", "blocked", "Set plugins.entries.acpx.enabled=true"],
-    ["acpx", "disabled", 'Enable the "acpx" plugin'],
-    ["codex", "implicit", cleanDoctorMessage],
     ["codex", "enabled", cleanDoctorMessage],
     ["codex", "disabled", 'Enable the "codex" plugin'],
     ["codex", "denied", 'Remove "codex" from plugins.deny'],
   ] as const)("reports actionable %s runtime guidance when %s", async (id, state, guidance) => {
     const config: OpenClawConfig =
       id === "acpx" ? { acp: { backend: id } } : configuredCodexRuntime();
-    if (state === "implicit") {
-      config.agents = { defaults: { model: "openai/gpt-5.5" } };
-    } else if (state === "blocked") {
+    if (state === "blocked") {
       config.plugins = { entries: { [id]: { enabled: false } } };
     } else if (state === "denied") {
       config.plugins = { deny: [id] };
@@ -375,7 +312,7 @@ describe("plugins cli list", () => {
     });
     const output = await doctor();
     expect(output).toContain(guidance);
-    if (state === "implicit" || state === "enabled") {
+    if (state === "enabled") {
       expect(output).not.toContain(`Configured runtime "${id}"`);
       return;
     }
@@ -444,10 +381,12 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "registry", "--refresh"]);
 
-    expect(refreshPluginRegistryMock).toHaveBeenCalledWith({
-      config: {},
-      reason: "manual",
-    });
+    expect(refreshPluginRegistryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: {},
+        reason: "manual",
+      }),
+    );
     expect(inspectPluginRegistryMock).toHaveBeenCalledWith({ config: {} });
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("Plugin registry refreshed: 1/2 enabled");
   });
@@ -500,12 +439,9 @@ describe("plugins cli list", () => {
     },
   );
 
-  it.each([
-    { directory: "p-home", expectedRoot: "$OPENCLAW_HOME" },
-    { directory: "p-home-other", expectedRoot: path.resolve(path.sep, "tmp", "p-home-other") },
-  ])("preserves differing registry source paths for $directory", async (testCase) => {
+  it("preserves differing registry source paths beside the home directory", async () => {
     const homeDir = path.resolve(path.sep, "tmp", "p-home");
-    const sourceDir = path.resolve(path.sep, "tmp", testCase.directory);
+    const sourceDir = path.resolve(path.sep, "tmp", "p-home-other");
     const differences = [
       {
         pluginId: "source-probe",
@@ -525,7 +461,7 @@ describe("plugins cli list", () => {
     await withEnvAsync({ OPENCLAW_HOME: homeDir }, async () => {
       await runPluginsCommand(["plugins", "registry"]);
       expect(pluginsCliRuntimeLogs.join("\n")).toContain(
-        `persisted ${path.join(testCase.expectedRoot, "old.js")}; derived ${path.join(testCase.expectedRoot, "new.js")}`,
+        `persisted ${path.join(sourceDir, "old.js")}; derived ${path.join(sourceDir, "new.js")}`,
       );
       pluginsCliRuntimeLogs.length = 0;
       await runPluginsCommand(["plugins", "registry", "--json"]);

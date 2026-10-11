@@ -25,9 +25,6 @@ export function listRealtimeVoiceProviders(
   return [...buildCapabilityProviderIndex(providers, "canonical").values()];
 }
 
-/**
- * Resolves a realtime voice provider by canonical id or declared alias.
- */
 export function getRealtimeVoiceProvider(
   providerId: string | undefined,
   cfg?: OpenClawConfig,
@@ -43,9 +40,6 @@ export function getRealtimeVoiceProvider(
   });
 }
 
-/**
- * Converts a realtime voice provider id or alias into the canonical provider id when known.
- */
 export function canonicalizeRealtimeVoiceProviderId(
   providerId: string | undefined,
   cfg?: OpenClawConfig,

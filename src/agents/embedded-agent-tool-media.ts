@@ -84,18 +84,12 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
 const HTTP_URL_RE = /^https?:\/\//i;
 
 export function isCoreToolResultMediaTrustedName(toolName?: string): boolean {
-  if (!toolName) {
-    return false;
-  }
-  return TRUSTED_TOOL_RESULT_MEDIA.has(normalizeToolPolicyName(toolName));
+  return Boolean(toolName && TRUSTED_TOOL_RESULT_MEDIA.has(normalizeToolPolicyName(toolName)));
 }
 
 function isExternalToolResult(result: unknown): boolean {
   const details = readToolResultDetails(result);
-  if (!details) {
-    return false;
-  }
-  return typeof details.mcpServer === "string" || typeof details.mcpTool === "string";
+  return typeof details?.mcpServer === "string" || typeof details?.mcpTool === "string";
 }
 
 function isToolResultMediaTrusted(
@@ -193,6 +187,7 @@ const REPLY_ATTACHMENT_METADATA_KEYS = new Set([
   "width",
   "height",
 ]);
+const MEDIA_URL_KEYS = ["media", "path", "url", "mediaUrl", "filePath", "fileUrl"];
 
 function collectStructuredMedia(media: Record<string, unknown>): ToolResultMediaArtifact {
   const mediaUrls = new Set<string>();
@@ -227,16 +222,13 @@ function collectStructuredMedia(media: Record<string, unknown>): ToolResultMedia
         return typeof entry === "string";
       }),
     );
-    for (const key of ["media", "path", "url", "mediaUrl", "filePath", "fileUrl"]) {
+    for (const key of MEDIA_URL_KEYS) {
       pushString(record[key], attachment);
     }
   };
-  pushString(media.media);
-  pushString(media.path);
-  pushString(media.url);
-  pushString(media.mediaUrl);
-  pushString(media.filePath);
-  pushString(media.fileUrl);
+  for (const key of MEDIA_URL_KEYS) {
+    pushString(media[key]);
+  }
   if (Array.isArray(media.mediaUrls)) {
     for (const value of media.mediaUrls) {
       pushString(value);
@@ -278,13 +270,10 @@ export function extractToolResultMediaArtifact(
   }
 
   const content = Array.isArray(record.content) ? record.content : null;
-  if (!content) {
-    return undefined;
-  }
 
   // Fall back to legacy details.path when image content exists but no
   // structured media details.
-  if (content.some((item) => item && typeof item === "object" && item.type === "image")) {
+  if (content?.some((item) => item && typeof item === "object" && item.type === "image")) {
     const details = record.details as Record<string, unknown> | undefined;
     const p = normalizeOptionalString(details?.path) ?? "";
     if (p) {

@@ -205,15 +205,10 @@ async function runHeartbeatOutcomeOperation(
     };
     current.assertCurrent();
     return actor.sessions.withSharedState(async () => {
-      const result = await (command.type === "persist"
-        ? actor.sessions.sideData(current, {
-            type: "session.heartbeat.persist",
-            input: command.input,
-          })
-        : actor.sessions.sideData(current, {
-            type: "session.heartbeat.claim",
-            input: command.input,
-          }));
+      const result = await actor.sessions.sideData(current, {
+        type: `session.heartbeat.${command.type}`,
+        input: command.input,
+      });
       current.assertCurrent();
       claim.assertCurrent();
       return result;
@@ -227,11 +222,9 @@ async function runHeartbeatOutcomeOperation(
         runOpenClawAgentWriteTransaction(
           ({ db }) => {
             assertCurrent();
-            if (command.type === "persist") {
-              persistHeartbeatOutcomeInDatabase(db, command.input);
-              return undefined;
-            }
-            return claimHeartbeatOutcomeRowInDatabase(db, command.input);
+            return command.type === "persist"
+              ? persistHeartbeatOutcomeInDatabase(db, command.input)
+              : claimHeartbeatOutcomeRowInDatabase(db, command.input);
           },
           options,
           { operationLabel: `heartbeat.outcome.${command.type}` },

@@ -37,6 +37,7 @@ const mixed = ["ci", "openclaw-performance", "plugin-npm-release"];
 // GitHub-hosted labels (npm trusted publishing rejects self-hosted runners).
 const publishing = new Set([
   "openclaw-release-publish",
+  "openclaw-release-promote",
   "openclaw-npm-release",
   "plugin-npm-release",
   "plugin-clawhub-release",
@@ -86,6 +87,14 @@ function credentialed(name: string, job: Job) {
 }
 
 describe("release runner reservation", () => {
+  it("keeps the credentialed Linux promotion dispatcher on GitHub-hosted runners", () => {
+    const name = "openclaw-release-promote";
+    const workflow = parse(readFileSync(`.github/workflows/${name}.yml`, "utf8")) as Workflow;
+    const job = workflow.jobs.publish_linux!;
+    expect(credentialed(name, job)).toBe(true);
+    expect(evaluateWorkflowRunner(job["runs-on"], releaseDispatch)).toBe("ubuntu-latest");
+  });
+
   it("reserves release workers while preserving ordinary and credentialed runner labels", () => {
     const credentialedJobs: Record<string, string> = {
       "openclaw-npm-release": "publish_openclaw_npm",

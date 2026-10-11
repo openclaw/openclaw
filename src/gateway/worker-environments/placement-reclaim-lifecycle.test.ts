@@ -408,6 +408,7 @@ describe("SSH placement cleanup after worker credential expiry", () => {
           placements,
           environments: service,
           dispatch: harness.service,
+          reportChanges: (sweep) => sweep(),
           getConfig: () => support.testState.config,
           now: () => support.testState.nowMs,
           info: vi.fn(),

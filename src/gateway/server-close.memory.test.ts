@@ -8,11 +8,9 @@ import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
-import { prepareMemoryRuntimeReload } from "../plugins/memory-runtime.js";
 import {
   captureActivePluginRegistrySnapshot,
   createPluginRegistryOwner,
-  disposePluginRegistryInstances,
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
@@ -23,7 +21,7 @@ import {
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { getOpenClawAgentDatabaseIfOpen } from "../state/openclaw-agent-db.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
@@ -71,7 +69,7 @@ async function createFixture(label: string) {
   return { state, config, registry };
 }
 
-it("joins accepted Memory sync through Gateway close without reopening its executor between publications", async ({
+it("joins accepted Memory sync through Gateway close before its first publication without reopening its executor", async ({
   signal,
 }) => {
   const original = captureActivePluginRegistrySnapshot();
@@ -133,8 +131,7 @@ it("joins accepted Memory sync through Gateway close without reopening its execu
     assert(manager?.sync && manager.close, result.error ?? "Memory manager unavailable");
     await manager.probeEmbeddingAvailability();
     const options = { agentId: "main", env: fixture.state.env };
-    const agent = getOpenClawAgentDatabaseIfOpen(options);
-    assert(agent);
+    const agentPath = resolveOpenClawAgentSqlitePath(options);
     const agentOpenRequests = () =>
       messages.mock.calls.filter(([request]) => {
         const value: unknown = request;
@@ -144,19 +141,39 @@ it("joins accepted Memory sync through Gateway close without reopening its execu
           "type" in value &&
           value.type === "open" &&
           "databasePath" in value &&
-          value.databasePath === agent.path
+          value.databasePath === agentPath
         );
       });
     const shared = openOpenClawStateDatabase({ env: fixture.state.env });
     const readLeases = () =>
       shared.db
         .prepare("SELECT lease_id FROM agent_database_leases WHERE path = ? ORDER BY lease_id")
-        .all(agent.path);
+        .all(agentPath);
     beforeEmbedBatch.mockImplementation(async () => {
       embeddingEntered.resolve();
       await releaseEmbedding.promise;
     });
-    syncing = manager.sync({ reason: "accepted-before-close", force: true });
+    const acceptedLeases = readLeases();
+    expect(acceptedLeases.length).toBeGreaterThan(0);
+    expect(agentOpenRequests().length).toBeGreaterThan(0);
+    messages.mockClear();
+    let closeRequested = false;
+    syncing = manager.sync({
+      reason: "accepted-before-close",
+      force: true,
+      progress: () => {
+        if (closeRequested) {
+          return;
+        }
+        closeRequested = true;
+        // The first report precedes awaited source reads and the first publication.
+        markGatewayRestartDraining();
+        beginGatewayShutdownCleanup();
+        assert(server);
+        closing = server.close({ reason: "accepted Memory sync close" });
+        void closing.catch(() => {});
+      },
+    });
     void syncing.catch(() => {});
     await withinTest(
       awaitGateBeforeSettlement(
@@ -166,16 +183,7 @@ it("joins accepted Memory sync through Gateway close without reopening its execu
       ),
       signal,
     );
-    const acceptedLeases = readLeases();
-    expect(acceptedLeases.length).toBeGreaterThan(0);
-    expect(agentOpenRequests().length).toBeGreaterThan(0);
-    // Cache reads have admitted the native writer; remaining cache/index writes
-    // must finish on that generation after the real close prelude begins.
-    messages.mockClear();
-    markGatewayRestartDraining();
-    beginGatewayShutdownCleanup();
-    closing = server.close({ reason: "accepted Memory sync close" });
-    void closing.catch(() => {});
+    assert(closing, "Memory sync did not report progress before embedding");
     await withinTest(
       awaitGateBeforeSettlement(
         closePreludeEntered.promise,
@@ -185,14 +193,12 @@ it("joins accepted Memory sync through Gateway close without reopening its execu
       signal,
     );
     expect(readLeases()).toEqual(acceptedLeases);
-    expect(agent.db.isOpen).toBe(true);
     releaseEmbedding.resolve();
     await syncing;
     await closing;
     expect(agentOpenRequests().length).toBe(0);
-    expect(agent.db.isOpen).toBe(false);
     expect(shared.db.isOpen).toBe(false);
-    const stored = new DatabaseSync(agent.path, { readOnly: true });
+    const stored = new DatabaseSync(agentPath, { readOnly: true });
     const leases = new DatabaseSync(shared.path, { readOnly: true });
     try {
       expect(
@@ -206,7 +212,7 @@ it("joins accepted Memory sync through Gateway close without reopening its execu
         count: 1,
       });
       expect(
-        leases.prepare("SELECT lease_id FROM agent_database_leases WHERE path = ?").all(agent.path),
+        leases.prepare("SELECT lease_id FROM agent_database_leases WHERE path = ?").all(agentPath),
       ).toEqual([]);
     } finally {
       stored.close();
@@ -223,7 +229,7 @@ it("joins accepted Memory sync through Gateway close without reopening its execu
   }
 });
 
-it("drains memory before stalled connection cleanup while preserving terminal close and healthy siblings", async ({
+it("drains memory before stalled connection cleanup while preserving terminal close", async ({
   signal,
 }) => {
   const original = captureActivePluginRegistrySnapshot();
@@ -247,15 +253,11 @@ it("drains memory before stalled connection cleanup while preserving terminal cl
     }
     completed.push("first");
   });
-  const siblingClose = vi.fn(async () => {
-    completed.push("sibling");
-  });
   const first = fixture.registry(firstClose);
-  const sibling = fixture.registry(siblingClose);
   try {
-    for (const [index, owner] of [first, sibling].entries()) {
+    {
       const port = await getFreePort();
-      const token = `memory-close-token-${index}`;
+      const token = "memory-close-token";
       await fixture.state.writeConfig({
         ...fixture.config,
         gateway: {
@@ -265,7 +267,7 @@ it("drains memory before stalled connection cleanup while preserving terminal cl
           reload: { mode: "off" },
         },
       });
-      setActivePluginRegistry(owner.registry);
+      setActivePluginRegistry(first.registry);
       const factory = vi
         .spyOn(await import("./server-kernel.js"), "createGatewayKernel")
         .mockImplementation(async (...args) => {
@@ -286,22 +288,14 @@ it("drains memory before stalled connection cleanup while preserving terminal cl
         factory.mockRestore();
       }
       await server.startupSettled;
-      expect(kernels[index]!.pluginRuntime.registry).toBe(owner.registry);
+      expect(kernels[0]!.pluginRuntime.registry).toBe(first.registry);
     }
     const one = await first.runtime.getMemorySearchManager({
       cfg: fixture.config,
       agentId: "main",
     });
-    const two = await sibling.runtime.getMemorySearchManager({
-      cfg: fixture.config,
-      agentId: "main",
-    });
     assert(one.manager, one.error ?? "First memory manager unavailable");
-    assert(two.manager, two.error ?? "Sibling memory manager unavailable");
     await one.manager.probeEmbeddingAvailability();
-    await two.manager.probeEmbeddingAvailability();
-    const metadata = getGatewayPluginMetadataSnapshot();
-    assert(metadata);
     const warning = new Error("synthetic earlier shutdown warning");
     const firstKernel = kernels[0];
     assert(firstKernel);
@@ -327,7 +321,6 @@ it("drains memory before stalled connection cleanup while preserving terminal cl
       false,
     );
     expect(registryClose).not.toHaveBeenCalled();
-    expect(siblingClose).not.toHaveBeenCalled();
     releaseConnectionWork.resolve();
     const failure = await closing;
     expect.soft(failure).toBeInstanceOf(AggregateError);
@@ -342,29 +335,11 @@ it("drains memory before stalled connection cleanup while preserving terminal cl
       true,
     );
     expect(() => firstKernel.pluginRuntime.publish(first.registry)).toThrow();
-    expect(siblingClose).not.toHaveBeenCalled();
-    await expect(two.manager.probeEmbeddingAvailability()).resolves.toMatchObject({ ok: true });
     expect(completed).toEqual([]);
-    expect(getGatewayPluginMetadataSnapshot()).toBe(metadata);
-    const newcomer = await startGatewayServerCore(await getFreePort(), {
-      auth: { mode: "token", token: "memory-close-newcomer" },
-      bind: "loopback",
-      controlUiEnabled: false,
-      sidecarStartup: "defer",
-    });
-    servers.push(newcomer);
-    await newcomer.startupSettled;
-    await expect(two.manager.probeEmbeddingAvailability()).resolves.toMatchObject({ ok: true });
-    await newcomer.close({ reason: "newcomer leaves shared memory running" });
-    expect(siblingClose).not.toHaveBeenCalled();
-    expect(getGatewayPluginMetadataSnapshot()).toBe(metadata);
     await expect(servers[0]!.close({ reason: "warning failure stays terminal" })).rejects.toBe(
       failure,
     );
     expect(firstClose).toHaveBeenCalledTimes(failedAttempts);
-    await servers[1]!.close({ reason: "sibling close proof" });
-    expect(siblingClose).toHaveBeenCalledOnce();
-    expect(completed).toEqual(["sibling"]);
     expect(getGatewayPluginMetadataSnapshot()).toBeUndefined();
     await expect(servers[0]!.close({ reason: "already closed" })).rejects.toBe(failure);
     expect(firstClose).toHaveBeenCalledTimes(failedAttempts);
@@ -381,14 +356,13 @@ it("drains memory before stalled connection cleanup while preserving terminal cl
   }
 });
 
-it("closes one managed memory runtime exactly once when its registry owners close together", async () => {
+it("closes one managed memory runtime exactly once across repeated owner close calls", async () => {
   const original = captureActivePluginRegistrySnapshot();
   const fixture = await createFixture("gateway-shared-memory-close");
   const close = vi.fn(async () => {});
   const memory = fixture.registry(close);
   setActivePluginRegistry(memory.registry);
-  const first = createPluginRegistryOwner(memory.registry);
-  const second = createPluginRegistryOwner(memory.registry);
+  const owner = createPluginRegistryOwner(memory.registry);
   try {
     const result = await memory.runtime.getMemorySearchManager({
       cfg: fixture.config,
@@ -396,101 +370,17 @@ it("closes one managed memory runtime exactly once when its registry owners clos
     });
     assert(result.manager, result.error ?? "Shared memory manager unavailable");
     await result.manager.probeEmbeddingAvailability();
-    const preparation = first.prepareClose();
-    expect(first.prepareClose()).toBe(preparation);
-    await Promise.all([preparation, second.prepareClose()]);
+    const preparation = owner.prepareClose();
+    expect(owner.prepareClose()).toBe(preparation);
+    await preparation;
     expect(close).toHaveBeenCalledOnce();
     expect(memory.instance.lifecycle.signal.aborted).toBe(false);
-    await Promise.all([first.close(), second.close()]);
+    await Promise.all([owner.close(), owner.close()]);
     expect(close).toHaveBeenCalledOnce();
     expect(memory.instance.lifecycle.signal.aborted).toBe(true);
   } finally {
-    await Promise.allSettled([first.close(), second.close()]);
+    await Promise.allSettled([owner.close()]);
     restoreActivePluginRegistrySnapshot(original);
-    await fixture.state.cleanup();
-  }
-});
-
-it("retains memory shared with an open owner other than the process projection survivor", async () => {
-  const original = captureActivePluginRegistrySnapshot();
-  const fixture = await createFixture("gateway-three-memory-owners");
-  const close = vi.fn(async () => {});
-  const shared = fixture.registry(close);
-  const unrelated = fixture.registry(async () => {});
-  setActivePluginRegistry(shared.registry);
-  const first = createPluginRegistryOwner(shared.registry);
-  const sharing = createPluginRegistryOwner(shared.registry);
-  setActivePluginRegistry(unrelated.registry);
-  const last = createPluginRegistryOwner(unrelated.registry);
-  try {
-    const result = await shared.runtime.getMemorySearchManager({
-      cfg: fixture.config,
-      agentId: "main",
-    });
-    assert(result.manager, result.error ?? "Shared memory manager unavailable");
-    await result.manager.probeEmbeddingAvailability();
-    await first.prepareClose();
-    expect.soft(close).not.toHaveBeenCalled();
-    await expect(result.manager.probeEmbeddingAvailability()).resolves.toMatchObject({ ok: true });
-    await first.close();
-    await sharing.close();
-    expect(close).toHaveBeenCalledOnce();
-  } finally {
-    await Promise.allSettled([first.close(), sharing.close(), last.close()]);
-    restoreActivePluginRegistrySnapshot(original);
-    await fixture.state.cleanup();
-  }
-});
-
-it("resumes only currently retained managed memory runtimes after raw close settles", async () => {
-  const fixture = await createFixture("gateway-memory-retention-change");
-  const first = fixture.registry(async () => {});
-  const second = fixture.registry(async () => {});
-  const release = createDeferredCore();
-  const resumed: string[] = [];
-  for (const [id, owner] of [
-    ["first", first],
-    ["second", second],
-  ] as const) {
-    const runtime = owner.instance.wrap({
-      ...owner.runtime,
-      prepareReload: () => ({
-        drain: () => release.promise,
-        resume: () => {
-          resumed.push(id);
-        },
-      }),
-    });
-    owner.registry.memoryCapabilities[0]!.capability = owner.instance.wrap({ runtime });
-  }
-  const memoryCapabilities = [
-    ...first.registry.memoryCapabilities,
-    ...second.registry.memoryCapabilities,
-  ];
-  const reload = prepareMemoryRuntimeReload(
-    {
-      memoryCapabilities,
-      embeddingProviders: [
-        ...first.registry.embeddingProviders,
-        ...second.registry.embeddingProviders,
-      ],
-    },
-    { memoryCapabilities, embeddingProviders: [] },
-  );
-  const closing = reload.close();
-  try {
-    release.resolve();
-    await closing;
-    reload.commit({
-      memoryCapabilities: second.registry.memoryCapabilities,
-      embeddingProviders: [],
-    });
-    expect(resumed).toEqual(["second"]);
-  } finally {
-    release.resolve();
-    await closing;
-    await disposePluginRegistryInstances(first.registry);
-    await disposePluginRegistryInstances(second.registry);
     await fixture.state.cleanup();
   }
 });

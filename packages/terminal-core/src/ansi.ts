@@ -55,6 +55,9 @@ function stripAnsiInternal(
   input: string,
   options: { compatibilityGrammar: boolean; preserveIncompleteCsi?: boolean },
 ): string {
+  if (!hasAnsiIntroducer(input)) {
+    return input;
+  }
   const output: string[] = [];
   let copyStart = 0;
   let index = 0;
@@ -97,18 +100,12 @@ function stripAnsiInternal(
 }
 
 export function stripAnsi(input: string): string {
-  if (!hasAnsiIntroducer(input)) {
-    return input;
-  }
   return stripAnsiInternal(input, { compatibilityGrammar: false });
 }
 
 export function stripAnsiSequences(input: string): string {
   if (typeof input !== "string") {
     throw new TypeError(`Expected a \`string\`, got \`${typeof input}\``);
-  }
-  if (!hasAnsiIntroducer(input)) {
-    return input;
   }
   return stripAnsiInternal(input, { compatibilityGrammar: true });
 }

@@ -48,10 +48,7 @@ function buildDiscordModelPickerPreferenceKey(
   }
   const accountId = normalizeSharedAccountId(scope.accountId);
   const guildId = normalizeOptionalString(scope.guildId);
-  if (guildId) {
-    return `discord:${accountId}:guild:${guildId}:user:${userId}`;
-  }
-  return `discord:${accountId}:dm:user:${userId}`;
+  return `discord:${accountId}:${guildId ? `guild:${guildId}` : "dm"}:user:${userId}`;
 }
 
 function sanitizeStoredPreferenceEntry(value: unknown): ModelPickerPreferencesEntry | undefined {
@@ -152,13 +149,11 @@ export async function readDiscordModelPickerRecentModels(params: {
     const recent = scopedPreferenceEntries(await store.entries(), key)
       .toSorted(comparePreferenceEntries)
       .map((entry) => entry.value.modelRef);
-    if (!params.allowedModelRefs || params.allowedModelRefs.size === 0) {
-      return sanitizeRecentModels(recent, limit);
-    }
-    return sanitizeRecentModels(
-      recent.filter((modelRef) => params.allowedModelRefs?.has(modelRef)),
-      limit,
-    );
+    const visible =
+      !params.allowedModelRefs || params.allowedModelRefs.size === 0
+        ? recent
+        : recent.filter((modelRef) => params.allowedModelRefs?.has(modelRef));
+    return sanitizeRecentModels(visible, limit);
   } catch {
     return [];
   }

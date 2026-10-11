@@ -72,15 +72,12 @@ type LegacyCaptureBlobRow = {
   createdAt: number;
 };
 
-class LegacyDebugProxyBlobConflictError extends Error {
-  constructor(readonly blobId: string) {
-    super(`legacy debug proxy blob conflicts with shared state: ${blobId}`);
-  }
-}
-
-class LegacyDebugProxySessionConflictError extends Error {
-  constructor(readonly sessionId: string) {
-    super(`legacy debug proxy session conflicts with shared state: ${sessionId}`);
+class LegacyDebugProxyConflictError extends Error {
+  constructor(
+    readonly kind: "blob" | "session",
+    readonly id: string,
+  ) {
+    super(`legacy debug proxy ${kind} conflicts with shared state: ${id}`);
   }
 }
 
@@ -395,7 +392,7 @@ export function migrateLegacyDebugProxyCaptureSidecar(params: {
               !existing.data ||
               !Buffer.from(existing.data).equals(blob.data)
             ) {
-              throw new LegacyDebugProxyBlobConflictError(blob.blobId);
+              throw new LegacyDebugProxyConflictError("blob", blob.blobId);
             }
             continue;
           }
@@ -447,7 +444,7 @@ export function migrateLegacyDebugProxyCaptureSidecar(params: {
               proxyUrl: values[6],
             };
             if (JSON.stringify(existing) !== JSON.stringify(expected)) {
-              throw new LegacyDebugProxySessionConflictError(session.id);
+              throw new LegacyDebugProxyConflictError("session", session.id);
             }
             continue;
           }
@@ -489,11 +486,9 @@ export function migrateLegacyDebugProxyCaptureSidecar(params: {
     );
   } catch (err) {
     const detail =
-      err instanceof LegacyDebugProxyBlobConflictError
-        ? `blob ${err.blobId} already exists with different data`
-        : err instanceof LegacyDebugProxySessionConflictError
-          ? `session ${err.sessionId} already exists with different data`
-          : String(err);
+      err instanceof LegacyDebugProxyConflictError
+        ? `${err.kind} ${err.id} already exists with different data`
+        : String(err);
     return {
       changes,
       warnings: [`Failed migrating debug proxy capture sidecar ${detected.sourcePath}: ${detail}`],

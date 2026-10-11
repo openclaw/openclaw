@@ -175,6 +175,8 @@ describe("commitConfigWithPendingPluginInstalls", () => {
         },
         filePath: mocks.lease.databasePath,
         lease: mocks.lease,
+        assertCurrent: undefined,
+        onAcknowledged: expect.any(Function),
       },
     );
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
@@ -232,6 +234,8 @@ describe("commitConfigWithPendingPluginInstalls", () => {
         config: nextConfig,
         filePath: mocks.lease.databasePath,
         lease: mocks.lease,
+        assertCurrent: undefined,
+        onAcknowledged: expect.any(Function),
       },
     );
     expect(verifyConfigFresh).toHaveBeenCalledOnce();
@@ -281,6 +285,8 @@ describe("commitConfigWithPendingPluginInstalls", () => {
         config: {},
         filePath: mocks.lease.databasePath,
         lease: mocks.lease,
+        assertCurrent: undefined,
+        onAcknowledged: expect.any(Function),
       },
     );
     expect(commit).toHaveBeenCalledWith(
@@ -356,6 +362,8 @@ describe("commitConfigWithPendingPluginInstalls", () => {
           config: {},
           filePath: mocks.lease.databasePath,
           lease: mocks.lease,
+          assertCurrent: undefined,
+          onAcknowledged: expect.any(Function),
         },
       );
     },

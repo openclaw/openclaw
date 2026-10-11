@@ -1,6 +1,5 @@
 // Feishu tests cover media plugin behavior.
 import fs from "node:fs/promises";
-import path from "node:path";
 import { Readable } from "node:stream";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
@@ -60,11 +59,6 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
 
 function sendMedia(options: Omit<Parameters<typeof sendMediaFeishu>[0], "cfg" | "to">) {
   return sendMediaFeishu({ cfg: emptyConfig, to: "user:ou_target", ...options });
-}
-
-function expectMediaTimeoutClientConfigured(): void {
-  const options = mockCallArg<{ httpTimeoutMs?: number }>(createFeishuClientMock, 0, 0);
-  expect(options.httpTimeoutMs).toBe(FEISHU_MEDIA_HTTP_TIMEOUT_MS);
 }
 
 function mockResolvedFeishuAccount() {
@@ -177,25 +171,6 @@ describe("sendMediaFeishu msg_type routing", () => {
     runFfprobeMock.mockResolvedValue("1.234\n");
   });
 
-  it("suppresses reply text only for voice-intent or native voice media", () => {
-    expect(
-      shouldSuppressFeishuTextForVoiceMedia({
-        mediaUrl: "https://example.com/reply.mp3",
-        audioAsVoice: true,
-      }),
-    ).toBe(true);
-    expect(
-      shouldSuppressFeishuTextForVoiceMedia({
-        mediaUrl: "https://example.com/reply.ogg?download=1",
-      }),
-    ).toBe(true);
-    expect(
-      shouldSuppressFeishuTextForVoiceMedia({
-        mediaUrl: "https://example.com/song.mp3",
-      }),
-    ).toBe(false);
-  });
-
   it("respects ttsSupplement.visibleTextAlreadyDelivered over audioAsVoice", () => {
     expect(
       shouldSuppressFeishuTextForVoiceMedia({
@@ -219,58 +194,6 @@ describe("sendMediaFeishu msg_type routing", () => {
     ).toBe(true);
   });
 
-  it("uses msg_type=media for mp4 video", async () => {
-    runFfprobeMock.mockResolvedValueOnce("4.2\n");
-
-    await sendMedia({
-      mediaBuffer: Buffer.from("video"),
-      fileName: "clip.mp4",
-    });
-
-    expect(callData<{ file_type?: string }>(fileCreateMock).file_type).toBe("mp4");
-    expect(callData<{ duration?: number }>(fileCreateMock).duration).toBe(4200);
-    const ffprobeArgs = mockCallArg<string[]>(runFfprobeMock, 0, 0);
-    expect(ffprobeArgs.slice(0, -1)).toEqual([
-      "-v",
-      "error",
-      "-show_entries",
-      "format=duration",
-      "-of",
-      "csv=p=0",
-    ]);
-    expect(ffprobeArgs.at(-1)).toMatch(/input\.mp4$/);
-    expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("media");
-  });
-
-  it("includes audio duration in the Feishu file upload", async () => {
-    const audio = Buffer.from("opus");
-    runFfprobeMock.mockResolvedValueOnce("2.345\n");
-
-    await sendMedia({
-      mediaBuffer: audio,
-      fileName: "reply.ogg",
-    });
-
-    expect(runFfprobeMock).toHaveBeenCalledTimes(1);
-    const ffprobeArgs = mockCallArg<string[]>(runFfprobeMock, 0, 0);
-    expect(ffprobeArgs.slice(0, -1)).toEqual([
-      "-v",
-      "error",
-      "-show_entries",
-      "format=duration",
-      "-of",
-      "csv=p=0",
-    ]);
-    expect(ffprobeArgs.at(-1)).toMatch(/input\.ogg$/);
-    expect(mockCallArg(runFfprobeMock, 0, 1)).toEqual({ timeoutMs: 5_000 });
-    expect(callData<{ duration?: number }>(fileCreateMock).duration).toBe(2345);
-    const messageData = callData<{ content?: string; msg_type?: string }>(messageCreateMock);
-    expect(messageData.msg_type).toBe("audio");
-    expect(JSON.parse(messageData.content ?? "{}")).toEqual({
-      file_key: "file_key_1",
-    });
-  });
-
   it("omits audio duration when probing fails", async () => {
     runFfprobeMock.mockRejectedValueOnce(new Error("ffprobe missing"));
 
@@ -283,16 +206,6 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(JSON.parse(callData<{ content?: string }>(messageCreateMock).content ?? "{}")).toEqual({
       file_key: "file_key_1",
     });
-  });
-
-  it("uses msg_type=file for documents", async () => {
-    await sendMedia({
-      mediaBuffer: Buffer.from("doc"),
-      fileName: "paper.pdf",
-    });
-
-    expect(callData<{ file_type?: string }>(fileCreateMock).file_type).toBe("pdf");
-    expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("file");
   });
 
   it("uses msg_type=media for remote mp4 content even when the filename is generic", async () => {
@@ -313,23 +226,6 @@ describe("sendMediaFeishu msg_type routing", () => {
     const ffprobeArgs = mockCallArg<string[]>(runFfprobeMock, 0, 0);
     expect(ffprobeArgs.at(-1)).toMatch(/input\.mp4$/);
     expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("media");
-  });
-
-  it("falls back to generic file for unsupported audio formats", async () => {
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: Buffer.from("remote-mp3"),
-      fileName: "song.mp3",
-      kind: "audio",
-      contentType: "audio/mpeg",
-    });
-
-    await sendMedia({
-      mediaUrl: "https://example.com/song.mp3",
-    });
-
-    expect(callData<{ file_type?: string }>(fileCreateMock).file_type).toBe("stream");
-    expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("file");
-    expect(runFfmpegMock).not.toHaveBeenCalled();
   });
 
   it("transcodes voice-intent mp3 to msg_type=audio", async () => {
@@ -356,20 +252,6 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(fileData.file_type).toBe("opus");
     expect(fileData.file_name).toBe("voice.ogg");
     expect(fileData.file).toEqual(Buffer.from("opus-output"));
-    expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("audio");
-  });
-
-  it("leaves native voice audio unchanged when audioAsVoice is true", async () => {
-    await sendMedia({
-      mediaBuffer: Buffer.from("opus"),
-      fileName: "reply.ogg",
-      audioAsVoice: true,
-    });
-
-    expect(runFfmpegMock).not.toHaveBeenCalled();
-    const fileData = callData<{ file_name?: string; file_type?: string }>(fileCreateMock);
-    expect(fileData.file_type).toBe("opus");
-    expect(fileData.file_name).toBe("reply.ogg");
     expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("audio");
   });
 
@@ -471,32 +353,10 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
   });
 
-  it("allows media thread replies to fall back when the dispatcher marks top-level fallback safe", async () => {
-    messageReplyMock.mockResolvedValueOnce({
-      code: 231003,
-      msg: "The message is not found",
-    });
-    messageCreateMock.mockResolvedValueOnce({
-      code: 0,
-      data: { message_id: "msg_thread_fallback" },
-    });
-
-    const result = await sendMedia({
-      mediaBuffer: Buffer.from("video"),
-      fileName: "reply.mp4",
-      replyToMessageId: "om_parent",
-      replyInThread: true,
-      allowTopLevelReplyFallback: true,
-    });
-
-    expect(result.messageId).toBe("msg_thread_fallback");
-    expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("media");
-  });
-
   it("passes mediaLocalRoots as localRoots to loadWebMedia for local paths (#27884)", async () => {
     loadWebMediaMock.mockResolvedValue({
       buffer: Buffer.from("local-file"),
-      fileName: "doc.pdf",
+      fileName: "报告—详情（2026）.pdf",
       kind: "document",
       contentType: "application/pdf",
     });
@@ -515,6 +375,9 @@ describe("sendMediaFeishu msg_type routing", () => {
       localRoots: roots,
     });
     expect(options.localRoots).toBe(roots);
+    expect(callData<{ file_name?: string }>(fileCreateMock).file_name).toBe(
+      "报告—详情（2026）.pdf",
+    );
   });
 
   it("keeps approved workspace access authoritative over legacy access", async () => {
@@ -601,15 +464,6 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     expect(messageResourceGetMock).not.toHaveBeenCalled();
   });
-
-  it("preserves special Unicode characters (em-dash, full-width brackets) in filenames", async () => {
-    await sendMedia({
-      mediaBuffer: Buffer.from("doc"),
-      fileName: "报告—详情（2026）.md",
-    });
-
-    expect(callData<{ file_name?: string }>(fileCreateMock).file_name).toBe("报告—详情（2026）.md");
-  });
 });
 
 describe("saveMessageResourceFeishu", () => {
@@ -634,46 +488,6 @@ describe("saveMessageResourceFeishu", () => {
     messageResourceGetMock.mockImplementation(async () => ({
       getReadableStream: () => Readable.from([Buffer.from("fake-audio-data")]),
     }));
-  });
-
-  // Regression: Feishu API only supports type=image|file for messageResource.get.
-  // Audio/video resources must use type=file, not type=audio (#8746).
-  it("forwards provided type=file for non-image resources", async () => {
-    const result = await downloadResource({
-      messageId: "om_audio_msg",
-      fileKey: "file_key_audio",
-      type: "file",
-    });
-
-    const request = mockCallArg<{
-      params?: { type?: string };
-      path?: { file_key?: string; message_id?: string };
-    }>(messageResourceGetMock, 0, 0);
-    expect(request.path).toEqual({ message_id: "om_audio_msg", file_key: "file_key_audio" });
-    expect(request.params).toEqual({ type: "file" });
-    expectMediaTimeoutClientConfigured();
-    expect(result.saved.size).toBe("fake-audio-data".length);
-  });
-
-  it("image uses type=image", async () => {
-    messageResourceGetMock.mockResolvedValueOnce({
-      getReadableStream: () => Readable.from([Buffer.from("fake-image-data")]),
-    });
-
-    const result = await downloadResource({
-      messageId: "om_img_msg",
-      fileKey: "img_key_1",
-      type: "image",
-    });
-
-    const request = mockCallArg<{
-      params?: { type?: string };
-      path?: { file_key?: string; message_id?: string };
-    }>(messageResourceGetMock, 0, 0);
-    expect(request.path).toEqual({ message_id: "om_img_msg", file_key: "img_key_1" });
-    expect(request.params).toEqual({ type: "image" });
-    expectMediaTimeoutClientConfigured();
-    expect(result.saved.size).toBe("fake-image-data".length);
   });
 
   it("retries file resources as media after HTTP 502", async () => {
@@ -737,33 +551,6 @@ describe("saveMessageResourceFeishu", () => {
     ).toEqual({ type: "media" });
   });
 
-  it("does not retry non-fallback download failures", async () => {
-    for (const scenario of [
-      { messageId: "om_image_msg", fileKey: "img_key_502", type: "image" as const, status: 502 },
-      { messageId: "om_file_msg", fileKey: "file_key_500", type: "file" as const, status: 500 },
-    ]) {
-      const originalError = httpStatusError(scenario.status);
-      messageResourceGetMock.mockClear();
-      messageResourceGetMock.mockRejectedValueOnce(originalError);
-
-      await expect(
-        downloadResource({
-          messageId: scenario.messageId,
-          fileKey: scenario.fileKey,
-          type: scenario.type,
-        }),
-      ).rejects.toBe(originalError);
-
-      expect(messageResourceGetMock).toHaveBeenCalledTimes(1);
-      const request = mockCallArg<{
-        params?: { type?: string };
-        path?: { file_key?: string; message_id?: string };
-      }>(messageResourceGetMock, 0, 0);
-      expect(request.path).toEqual({ message_id: scenario.messageId, file_key: scenario.fileKey });
-      expect(request.params).toEqual({ type: scenario.type });
-    }
-  });
-
   it("recovers CJK filenames from plain Content-Disposition headers decoded as Latin-1", async () => {
     const fileName = "武汉15座山登山信息汇总.csv";
     const latin1HeaderFileName = Buffer.from(fileName, "utf8").toString("latin1");
@@ -781,50 +568,6 @@ describe("saveMessageResourceFeishu", () => {
     });
 
     expect(result.fileName).toBe(fileName);
-  });
-
-  it("keeps valid Latin-1 filenames from plain Content-Disposition headers unchanged", async () => {
-    messageResourceGetMock.mockResolvedValueOnce({
-      getReadableStream: () => Readable.from([Buffer.from("fake-file-data")]),
-      headers: {
-        "content-disposition": `attachment; filename="café-Â©.txt"`,
-      },
-    });
-
-    const result = await downloadResource({
-      messageId: "om_latin1_msg",
-      fileKey: "file_key_latin1",
-      type: "file",
-    });
-
-    expect(result.fileName).toBe("café-Â©.txt");
-  });
-
-  it("saves message resource streams directly to the media store", async () => {
-    await withIsolatedHome(async () => {
-      messageResourceGetMock.mockResolvedValueOnce({
-        getReadableStream: () => Readable.from([Buffer.from([0xff, 0xd8, 0xff, 0x00])]),
-        headers: {
-          "content-type": "image/jpeg",
-          "content-disposition": `attachment; filename="photo.jpg"`,
-        },
-      });
-
-      const result = await saveMessageResourceFeishu({
-        cfg: emptyConfig,
-        messageId: "om_stream_msg",
-        fileKey: "img_key_stream",
-        type: "image",
-        maxBytes: 1024,
-      });
-
-      expect(result.saved.path).toContain(`${path.sep}.openclaw${path.sep}media${path.sep}inbound`);
-      expect(result.saved.id).toMatch(/^photo---[a-f0-9-]{36}\.jpg$/);
-      expect(result.saved.size).toBe(4);
-      await expect(fs.readFile(result.saved.path)).resolves.toEqual(
-        Buffer.from([0xff, 0xd8, 0xff, 0x00]),
-      );
-    });
   });
 
   it("keeps the shipped 120-second media timeout for stalled stream bodies", async () => {

@@ -4,12 +4,31 @@ import { appendExecTimeoutRetryGuidance } from "../agents/bash-tools.exec-output
 import {
   buildCronEventPrompt,
   buildExecEventPrompt,
+  isConversationExecCompletion,
   isCronSystemEvent,
   isExecCompletionEvent,
   isRelayableExecCompletionEvent,
 } from "./heartbeat-events-filter.js";
 
 describe("heartbeat event prompts", () => {
+  it.each([
+    { contextKey: "exec:command", fromConversationTurn: true, expected: true },
+    { contextKey: "notice:ordinary", fromConversationTurn: true, expected: false },
+    { contextKey: "exec:command", fromConversationTurn: false, expected: false },
+    { contextKey: undefined, fromConversationTurn: true, expected: true },
+  ])(
+    "keeps conversation completion bound to its producer: $contextKey/$fromConversationTurn",
+    ({ contextKey, fromConversationTurn, expected }) => {
+      expect(
+        isConversationExecCompletion({
+          text: "Exec completed (command, code 0) :: result",
+          contextKey,
+          fromConversationTurn,
+        }),
+      ).toBe(expected);
+    },
+  );
+
   it.each([
     {
       name: "builds user-relay cron prompt by default",
@@ -193,7 +212,7 @@ describe("heartbeat event classification", () => {
     { value: "Exec completed (abc12345, code 0)", expected: false },
     { value: "Exec completed (rotate api keys)", expected: true },
   ])("classifies cron system events for %j", ({ value, expected }) => {
-    expect(isCronSystemEvent(value)).toBe(expected);
+    expect(isCronSystemEvent({ text: value })).toBe(expected);
   });
 
   it.each([

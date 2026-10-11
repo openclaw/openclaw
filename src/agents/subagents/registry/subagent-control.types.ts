@@ -1,5 +1,13 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 
+export type ResolvedSubagentController = {
+  controllerSessionKey: string;
+  controllerAgentId?: string;
+  callerSessionKey: string;
+  callerIsSubagent: boolean;
+  controlScope: "children" | "none";
+};
+
 export type SubagentCancellationControl = {
   assertCurrent: () => void;
   prepareRead?: () => Promise<void> | undefined;

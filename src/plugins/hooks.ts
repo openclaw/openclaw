@@ -50,7 +50,6 @@ import type {
   PluginHookBeforeDispatchEvent,
   PluginHookBeforeDispatchResult,
   PluginHookHandlerMap,
-  PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
   PluginHookInboundClaimContext,
@@ -71,9 +70,6 @@ import type {
   PluginHookBeforeMessageWriteResult,
   PluginHookResolveExecEnvContext,
   PluginHookResolveExecEnvEvent,
-  PluginHookSkillContext,
-  PluginHookSkillProposalEvaluateEvent,
-  PluginHookSkillProposalEvaluationOutcome,
 } from "./hook-types.js";
 import { getPluginValueInstance, runPluginCleanup } from "./plugin-instance-scope.js";
 import {
@@ -97,7 +93,6 @@ const DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, numbe
   before_compaction: 30_000,
   after_compaction: 30_000,
   skill_changed: 30_000,
-  skill_proposal_changed: 30_000,
   // Shutdown hooks share the Gateway's five-second teardown budget. They fail
   // open after logging so one plugin cannot consume the process watchdog.
   gateway_stop: 5_000,
@@ -118,7 +113,6 @@ const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, 
   message_sending: 15_000,
   reply_payload_sending: 15_000,
   resolve_exec_env: 15_000,
-  skill_proposal_evaluate: 120_000,
 };
 
 function deepFreezeHookValue<T>(value: T, seen = new WeakSet<object>()): T {
@@ -341,14 +335,6 @@ export function createHookRunner(
 
   const stickyTrue = (prev?: boolean, next?: boolean): true | undefined =>
     prev === true || next === true ? true : undefined;
-  const mergeBeforeModelResolve = (
-    acc: PluginHookBeforeModelResolveResult | undefined,
-    next: PluginHookBeforeModelResolveResult,
-  ): PluginHookBeforeModelResolveResult => ({
-    // Keep the first defined override so higher-priority hooks win.
-    modelOverride: acc?.modelOverride ?? next.modelOverride,
-    providerOverride: acc?.providerOverride ?? next.providerOverride,
-  });
 
   const normalizeHookToolsAllow = (value: unknown): string[] | undefined => {
     if (value === undefined) {
@@ -1101,52 +1087,6 @@ export function createHookRunner(
     return result && result.message !== event.message ? { message: result.message } : undefined;
   }
 
-  /**
-   * Run every registered proposal evaluator and retain its attribution.
-   *
-   * Evaluator failures are returned as data so Workshop can persist and show
-   * them. A broken optional evaluator must not make proposal state unreadable.
-   */
-  async function runSkillProposalEvaluate(
-    event: PluginHookSkillProposalEvaluateEvent,
-    ctx: PluginHookSkillContext,
-  ): Promise<PluginHookSkillProposalEvaluationOutcome[]> {
-    const hookName = "skill_proposal_evaluate";
-    const hooks = getHooksForName(registry, hookName);
-    if (hooks.length === 0) {
-      return [];
-    }
-
-    logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers, attributed)`);
-    const immutableEvent = deepFreezeHookValue(structuredClone(event));
-    return await Promise.all(
-      hooks.map(async (hook): Promise<PluginHookSkillProposalEvaluationOutcome> => {
-        const pluginVersion = registry.plugins.find(
-          (plugin) => plugin.id === hook.pluginId,
-        )?.packageVersion;
-        const attribution = {
-          evaluatorId: hook.registrationId ?? hook.pluginId,
-          pluginId: hook.pluginId,
-          ...(pluginVersion ? { pluginVersion } : {}),
-        };
-        try {
-          const handler = hook.handler;
-          const promise = Promise.resolve(handler(immutableEvent, ctx));
-          const result = await awaitHook(hook, promise, modifyingHookTimeoutMsByHook[hookName]);
-          return result
-            ? Object.assign(attribution, { status: "completed" as const, result })
-            : Object.assign(attribution, { status: "skipped" as const });
-        } catch (error) {
-          const message = sanitizeHookError(error);
-          logger?.error(
-            `[hooks] ${hookName} handler from ${hook.pluginId} failed: ${formatHookErrorForLog(error)}`,
-          );
-          return Object.assign(attribution, { status: "error" as const, error: message });
-        }
-      }),
-    );
-  }
-
   async function runResolveExecEnv(
     event: PluginHookResolveExecEnvEvent,
     ctx: PluginHookResolveExecEnvContext,
@@ -1159,7 +1099,12 @@ export function createHookRunner(
 
   return {
     runBeforeModelResolve: bindModifyingHook("before_model_resolve", {
-      mergeResults: mergeBeforeModelResolve,
+      mergeResults: (acc, next) => ({
+        // Keep the first defined override so higher-priority hooks win, including [].
+        modelOverride: acc?.modelOverride ?? next.modelOverride,
+        providerOverride: acc?.providerOverride ?? next.providerOverride,
+        fallbacksOverride: acc?.fallbacksOverride ?? next.fallbacksOverride,
+      }),
     }),
     runAgentTurnPrepare: bindModifyingHook("agent_turn_prepare", {
       mergeResults: mergeAgentTurnPrepare,
@@ -1267,8 +1212,6 @@ export function createHookRunner(
     }),
     runCronReconciled: bindVoidHook("cron_reconciled"),
     runCronChanged: bindVoidHook("cron_changed"),
-    runSkillProposalEvaluate,
-    runSkillProposalChanged: bindFrozenVoidHook("skill_proposal_changed"),
     runSkillChanged: bindFrozenVoidHook("skill_changed"),
     runBeforeInstall: bindModifyingHook("before_install", {
       mergeResults: (acc, next) => {

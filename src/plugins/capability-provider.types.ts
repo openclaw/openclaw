@@ -1,4 +1,9 @@
-import type { WorkerExecutionMode } from "../../packages/gateway-protocol/src/schema/environments.js";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
+import type {
+  WorkerExecutionMode,
+  WorkerMachineOption as ProtocolWorkerMachineOption,
+  WorkerOperatingSystem as ProtocolWorkerOperatingSystem,
+} from "../../packages/gateway-protocol/src/schema/environments.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import type { ImageGenerationProvider } from "../image-generation/types.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
@@ -49,23 +54,13 @@ import type { PluginJsonValue } from "./host-hook-json.js";
 export type WorkerProfile = Readonly<Record<string, PluginJsonValue>>;
 
 /** Provider-authored picker metadata for one machine class or exact machine type. */
-export type WorkerMachineOption = Readonly<{
-  id: string;
-  label: string;
-  os?: string;
-  cpu?: number;
-  memoryGb?: number;
-  default?: boolean;
-}>;
+export type WorkerMachineOption = Readonly<SchemaContract<ProtocolWorkerMachineOption>>;
 
-/** Provider-owned operating system choices for one configured worker profile. */
-export type WorkerOperatingSystem = Readonly<{
-  id: string;
-  label: string;
-  default?: boolean;
-  /** Why this advertised target cannot currently be selected, including a repair hint. */
-  disabledReason?: string;
-}>;
+/**
+ * Provider-owned operating system choices for one configured worker profile.
+ * disabledReason explains why a target cannot currently be selected, including a repair hint.
+ */
+export type WorkerOperatingSystem = Readonly<SchemaContract<ProtocolWorkerOperatingSystem>>;
 
 /** SSH endpoint material returned by a worker provider after provisioning. */
 export type WorkerSshEndpoint = {

@@ -119,18 +119,16 @@ export function captureChatComposerDraftSnapshot(
   const goalMode = state.chatGoalDraftMode ? { ...state.chatGoalDraftMode } : undefined;
   const replyTarget = state.chatReplyTarget ? { ...state.chatReplyTarget } : undefined;
   const mentions = readHumanMentions(state.chatMessage, state.chatMentions);
-  const attachments = (state.chatAttachments ?? []).map((attachment) =>
-    Object.assign(
-      {},
-      attachment,
-      attachment.browserAnnotation
-        ? { browserAnnotation: Object.assign({}, attachment.browserAnnotation) }
-        : {},
-      attachment.selectionAnnotation
-        ? { selectionAnnotation: Object.assign({}, attachment.selectionAnnotation) }
-        : {},
-    ),
-  );
+  const attachments =
+    state.chatAttachments?.map((attachment) => ({
+      ...attachment,
+      ...(attachment.browserAnnotation
+        ? { browserAnnotation: { ...attachment.browserAnnotation } }
+        : {}),
+      ...(attachment.selectionAnnotation
+        ? { selectionAnnotation: { ...attachment.selectionAnnotation } }
+        : {}),
+    })) ?? [];
   const durable = durableScope
     ? {
         scope: durableScope,

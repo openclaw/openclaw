@@ -22,7 +22,6 @@ export type { AllowAlwaysPattern, ExecAllowlistEntry } from "./exec-approvals.ty
 export type { ExecApprovalsDefaultOverrides } from "./exec-approvals-contracts.js";
 export {
   DEFAULT_EXEC_APPROVAL_ASK_FALLBACK,
-  mergeExecApprovalsSocketDefaults,
   normalizeExecApprovalsInternal as normalizeExecApprovals,
   resolveExecApprovalsDisplayPath,
 } from "./exec-approvals-config.js";
@@ -32,6 +31,7 @@ export {
   loadExecApprovals,
   loadExecApprovalsReadOnly,
   readExecApprovalsSnapshot,
+  readExecApprovalsSnapshotAsync,
   restoreExecApprovalsSnapshotLocked,
   updateExecApprovals,
   withAgentExecApprovalsRemoved,

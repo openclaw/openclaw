@@ -19,6 +19,9 @@ describe("CI changed Node test plan", () => {
       );
       if (hub === "pnpm-lock.yaml") {
         expect(configOwners.length).toBeGreaterThan(0);
+        expect(selectedFiles(bounded)).toContain(
+          "src/commands/doctor-config-flow.session-store-owner.test.ts",
+        );
         expect(
           configOwners
             .flatMap((group) => group.includePatterns ?? [])

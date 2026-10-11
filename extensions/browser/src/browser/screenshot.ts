@@ -54,9 +54,7 @@ export async function normalizeBrowserScreenshot(
         throw err;
       }
 
-      if (smallestSize === undefined || out.byteLength < smallestSize) {
-        smallestSize = out.byteLength;
-      }
+      smallestSize = Math.min(smallestSize ?? Infinity, out.byteLength);
 
       if (out.byteLength <= maxBytes) {
         return { buffer: out, contentType: "image/jpeg", sourceDimensions: meta };

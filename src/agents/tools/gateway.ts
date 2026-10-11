@@ -432,6 +432,7 @@ async function resolveAgentRuntimeIdentityForGatewayTool(params: {
     }
     throw new Error("trusted operational run instance required for this gateway call");
   }
+  let lineageHandoff: ReturnType<typeof createAgentRuntimeExecutionLineageHandoff>;
   try {
     const sessionSpawnContext = getGatewaySessionSpawnContext();
     const parentExecutionIdentityToken = getGatewaySessionSpawnParentExecutionIdentityToken();
@@ -442,7 +443,7 @@ async function resolveAgentRuntimeIdentityForGatewayTool(params: {
     if (executionLineage && !activeAuthority) {
       throw new Error("execution lineage handoff requires active parent authority");
     }
-    const lineageHandoff =
+    lineageHandoff =
       sessionSpawnContext && executionLineage && activeAuthority
         ? createAgentRuntimeExecutionLineageHandoff({
             agentId: identity.agentId,
@@ -458,40 +459,36 @@ async function resolveAgentRuntimeIdentityForGatewayTool(params: {
     if (executionLineage && !lineageHandoff) {
       throw new Error("execution lineage handoff could not bind the parent admission");
     }
-    try {
-      // A request lifetime narrows inherited tool lifetimes; neither may replace the other.
-      const approvalSignals =
-        params.method === "exec.approval.request" || params.method === "plugin.approval.request"
-          ? [...(identity.approvalSignals ?? []), ...(params.signal ? [params.signal] : [])]
-          : undefined;
-      const approvalAuthority =
-        activeAuthority && approvalSignals?.length
-          ? claimAgentRunApprovalAuthority(activeAuthority, approvalSignals)
-          : activeAuthority;
-      const prepared: AgentRuntimeIdentityTokenParams = {
-        ...identity,
-        operationalRunInstance: identity.operationalRunInstance,
-        approvalAuthority,
-        ...(lineageHandoff ? { executionIdentityToken: undefined } : {}),
-        ...(lineageHandoff
-          ? { executionLineageHandoffId: lineageHandoff.id }
-          : sessionSpawnContext
-            ? { executionIdentityToken: parentExecutionIdentityToken, sessionSpawnContext }
-            : {}),
-      };
-      if (!params.inProcess) {
-        return await mintAgentRuntimeIdentityToken(prepared);
-      }
-      const runtimeIdentity = await createAgentRuntimeIdentity(prepared);
-      if (!runtimeIdentity) {
-        throw new Error("invalid agent runtime identity");
-      }
-      return runtimeIdentity;
-    } catch (error) {
-      lineageHandoff?.revoke();
-      throw error;
+    // A request lifetime narrows inherited tool lifetimes; neither may replace the other.
+    const approvalSignals =
+      params.method === "exec.approval.request" || params.method === "plugin.approval.request"
+        ? [...(identity.approvalSignals ?? []), ...(params.signal ? [params.signal] : [])]
+        : undefined;
+    const approvalAuthority =
+      activeAuthority && approvalSignals?.length
+        ? claimAgentRunApprovalAuthority(activeAuthority, approvalSignals)
+        : activeAuthority;
+    const prepared: AgentRuntimeIdentityTokenParams = {
+      ...identity,
+      operationalRunInstance: identity.operationalRunInstance,
+      approvalAuthority,
+      ...(lineageHandoff ? { executionIdentityToken: undefined } : {}),
+      ...(lineageHandoff
+        ? { executionLineageHandoffId: lineageHandoff.id }
+        : sessionSpawnContext
+          ? { executionIdentityToken: parentExecutionIdentityToken, sessionSpawnContext }
+          : {}),
+    };
+    if (!params.inProcess) {
+      return await mintAgentRuntimeIdentityToken(prepared);
     }
+    const runtimeIdentity = await createAgentRuntimeIdentity(prepared);
+    if (!runtimeIdentity) {
+      throw new Error("invalid agent runtime identity");
+    }
+    return runtimeIdentity;
   } catch (error) {
+    lineageHandoff?.revoke();
     if (optionalLocalIdentity && !params.required) {
       return undefined;
     }
@@ -569,19 +566,16 @@ async function resolveMessageActionIdentity<T>(
     }
     return undefined;
   }
-  const resolvedMessageActionContext = terminalSourceReply
-    ? {
-        ...messageActionContext,
-        turnCapability: params.turnCapability,
-        sourceReplyFinal: true as const,
-        sourceReplyToolCallId: sourceReplyToolCallId!,
-      }
-    : {
-        ...messageActionContext,
-        turnCapability: params.turnCapability,
-        ...(params.sourceReplyFinal === false ? { sourceReplyFinal: false as const } : {}),
-        ...(sourceReplyToolCallId ? { sourceReplyToolCallId } : {}),
-      };
+  const resolvedMessageActionContext = {
+    ...messageActionContext,
+    turnCapability: params.turnCapability,
+    ...(terminalSourceReply
+      ? { sourceReplyFinal: true as const, sourceReplyToolCallId: sourceReplyToolCallId! }
+      : {
+          ...(params.sourceReplyFinal === false ? { sourceReplyFinal: false as const } : {}),
+          ...(sourceReplyToolCallId ? { sourceReplyToolCallId } : {}),
+        }),
+  };
   return await createIdentity({
     ...identity,
     sessionKey: turnCapabilitySessionKey,

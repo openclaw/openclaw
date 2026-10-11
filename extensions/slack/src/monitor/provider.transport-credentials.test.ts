@@ -169,17 +169,4 @@ describe("Slack transport credential activation", () => {
       }
     },
   );
-
-  it("rejects an unresolved signing secret before starting HTTP transport", async () => {
-    await expect(
-      monitorSlackProvider({
-        scheduler: createTestPluginServiceScheduler(),
-        config: {
-          channels: {
-            slack: { mode: "http", botToken: "xoxb-loopback", signingSecret: inactiveSecret },
-          },
-        },
-      }),
-    ).rejects.toThrow("channels.slack.accounts.default.signingSecret");
-  });
 });

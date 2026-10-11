@@ -17,19 +17,27 @@ beforeEach(() => resetGatewayWorkAdmission());
 afterEach(() => resetGatewayWorkAdmission());
 
 describe("Gateway MCP OAuth callback route", () => {
-  it("serves the exact GET route before authenticated plugin catch-alls", async () => {
+  it("claims the callback before a hooks path that overlaps /oauth", async () => {
     const callback = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
       res.statusCode = 200;
       res.end("connected");
       return true;
     });
     const plugin = vi.fn(async () => false);
+    // Simulates hooks.path "/oauth": a prefix-claiming hooks handler that would
+    // otherwise 405 the provider redirect.
+    const hooks = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+      res.statusCode = 405;
+      res.end();
+      return true;
+    });
 
     await withGatewayServer({
-      prefix: "mcp-oauth-callback-route",
+      prefix: "mcp-oauth-callback-hooks-overlap",
       resolvedAuth: AUTH_TOKEN,
       overrides: {
         handleMcpOAuthCallbackRequest: callback,
+        handleHooksRequest: hooks,
         handlePluginRequest: plugin,
       },
       run: async (server) => {
@@ -46,46 +54,8 @@ describe("Gateway MCP OAuth callback route", () => {
         expect(response.res.statusCode).toBe(200);
         expect(response.getBody()).toBe("connected");
         expect(callback).toHaveBeenCalledOnce();
-        expect(plugin).not.toHaveBeenCalled();
-      },
-    });
-  });
-
-  it("claims the callback before a hooks path that overlaps /oauth", async () => {
-    const callback = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
-      res.statusCode = 200;
-      res.end("connected");
-      return true;
-    });
-    // Simulates hooks.path "/oauth": a prefix-claiming hooks handler that would
-    // otherwise 405 the provider redirect.
-    const hooks = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
-      res.statusCode = 405;
-      res.end();
-      return true;
-    });
-
-    await withGatewayServer({
-      prefix: "mcp-oauth-callback-hooks-overlap",
-      resolvedAuth: AUTH_TOKEN,
-      overrides: {
-        handleMcpOAuthCallbackRequest: callback,
-        handleHooksRequest: hooks,
-      },
-      run: async (server) => {
-        const response = createResponse();
-        await dispatchRequest(
-          server,
-          createRequest({
-            path: "/oauth/mcp/callback?code=code&state=state",
-            method: "GET",
-          }),
-          response.res,
-        );
-
-        expect(response.res.statusCode).toBe(200);
-        expect(callback).toHaveBeenCalledOnce();
         expect(hooks).not.toHaveBeenCalled();
+        expect(plugin).not.toHaveBeenCalled();
       },
     });
   });

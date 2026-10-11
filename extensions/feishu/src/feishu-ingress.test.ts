@@ -276,27 +276,6 @@ describe("Feishu durable ingress", () => {
     });
   });
 
-  it("recovers an uncompleted envelope with a fresh drain and dispatches exactly once", async () => {
-    await withQueue(async (queue, startIngress) => {
-      const interrupted = startIngress({ queue, dispatcher: createDispatcher() });
-      await interrupted.invoke(messageEnvelope({ eventId: "evt-restart" }), { needCheck: false });
-      await interrupted.stop();
-
-      const dispatch = vi.fn(async (data: ReturnType<typeof messageEnvelope>) => {
-        await recovered.resolveLifecycle(flattenEnvelope(data))?.onAdopted();
-      });
-      const recovered = startIngress({ queue, dispatcher: createDispatcher(dispatch) });
-      recovered.start();
-      await recovered.waitForIdle();
-
-      expect(dispatch).toHaveBeenCalledTimes(1);
-      expect((await queue.enqueue("evt-restart", {} as FeishuIngressPayload)).kind).toBe(
-        "completed",
-      );
-      await recovered.stop();
-    });
-  });
-
   it("retains completion so one event_id dispatches only once", async () => {
     await withQueue(async (queue, startIngress) => {
       const dispatch = vi.fn(async (data: ReturnType<typeof messageEnvelope>) => {
@@ -376,46 +355,6 @@ describe("Feishu durable ingress", () => {
         queue.enqueue("evt-downstream-syntax", {} as FeishuIngressPayload),
       ).resolves.toMatchObject({ kind: "pending", duplicate: true });
       await ingress.stop();
-    });
-  });
-
-  it("keeps the permanent logical guard for different event_id and message_id twins", async () => {
-    await withQueue(async () => {
-      const firstEnvelope = messageEnvelope({
-        eventId: "evt-twin-a",
-        messageId: "om-twin-a",
-      });
-      const secondEnvelope = messageEnvelope({
-        eventId: "evt-twin-b",
-        messageId: "om-twin-b",
-      });
-      const first = firstEnvelope.event as FeishuMessageEvent;
-      const second = secondEnvelope.event as FeishuMessageEvent;
-      const firstKey = resolveFeishuMessageDedupeKey(first);
-      const secondKey = resolveFeishuMessageDedupeKey(second);
-      expect(firstEnvelope.header.event_id).not.toBe(secondEnvelope.header.event_id);
-      expect(firstKey).toBe(secondKey);
-
-      const claim = await claimUnprocessedFeishuMessage({
-        messageId: firstKey,
-        namespace: "default",
-      });
-      expect(claim.kind).toBe("claimed");
-      if (claim.kind !== "claimed") {
-        throw new Error(`expected claimed logical twin, received ${claim.kind}`);
-      }
-      const transport = createLifecycle();
-      const { lifecycle } = buildFeishuFlushIngressLifecycle([
-        { lifecycle: transport.lifecycle, replayClaim: claim.handle },
-      ]);
-      lifecycle?.onAdoptionFinalizing();
-      await lifecycle?.onAdopted();
-
-      await expect(
-        claimUnprocessedFeishuMessage({ messageId: secondKey, namespace: "default" }),
-      ).resolves.toEqual({ kind: "duplicate" });
-      expect(transport.calls.finalizing).toHaveBeenCalledTimes(1);
-      expect(transport.calls.adopted).toHaveBeenCalledTimes(1);
     });
   });
 

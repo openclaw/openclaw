@@ -253,31 +253,23 @@ run_cross_state_approval_flow() {
   exec_source_hash="$(sha256sum "$exec_source" | awk '{print $1}')"
   plugin_source_hash="$(sha256sum "$plugin_source" | awk '{print $1}')"
 
-  run_logged_command "$automated_log" "$command_timeout" env \
-    OPENCLAW_STATE_DIR="$custom_state_dir" \
-    OPENCLAW_CONFIG_PATH="$custom_state_dir/openclaw.json" \
-    OPENCLAW_UPDATE_IN_PROGRESS=1 \
-    "$npm_bin" doctor --repair --yes --non-interactive
+  local log
+  local -a update_env=(OPENCLAW_UPDATE_IN_PROGRESS=1)
+  for log in "$automated_log" "$direct_log"; do
+    run_logged_command "$log" "$command_timeout" env \
+      "${update_env[@]}" \
+      OPENCLAW_STATE_DIR="$custom_state_dir" \
+      OPENCLAW_CONFIG_PATH="$custom_state_dir/openclaw.json" \
+      "$npm_bin" doctor --repair --yes --non-interactive
 
-  test "$(sha256sum "$exec_source" | awk '{print $1}')" = "$exec_source_hash"
-  test "$(sha256sum "$plugin_source" | awk '{print $1}')" = "$plugin_source_hash"
-  test ! -e "$exec_source.migrated"
-  test ! -e "$plugin_source.migrated"
-  test ! -e "$custom_state_dir/exec-approvals.json"
-  test "$(plugin_binding_approval_count "$state_database")" = "0"
-
-  run_logged_command "$direct_log" "$command_timeout" env \
-    -u OPENCLAW_UPDATE_IN_PROGRESS \
-    OPENCLAW_STATE_DIR="$custom_state_dir" \
-    OPENCLAW_CONFIG_PATH="$custom_state_dir/openclaw.json" \
-    "$npm_bin" doctor --repair --yes --non-interactive
-
-  test "$(sha256sum "$exec_source" | awk '{print $1}')" = "$exec_source_hash"
-  test "$(sha256sum "$plugin_source" | awk '{print $1}')" = "$plugin_source_hash"
-  test ! -e "$exec_source.migrated"
-  test ! -e "$plugin_source.migrated"
-  test ! -e "$custom_state_dir/exec-approvals.json"
-  test "$(plugin_binding_approval_count "$state_database")" = "0"
+    test "$(sha256sum "$exec_source" | awk '{print $1}')" = "$exec_source_hash"
+    test "$(sha256sum "$plugin_source" | awk '{print $1}')" = "$plugin_source_hash"
+    test ! -e "$exec_source.migrated"
+    test ! -e "$plugin_source.migrated"
+    test ! -e "$custom_state_dir/exec-approvals.json"
+    test "$(plugin_binding_approval_count "$state_database")" = "0"
+    update_env=(-u OPENCLAW_UPDATE_IN_PROGRESS)
+  done
 }
 
 run_cross_state_approval_flow

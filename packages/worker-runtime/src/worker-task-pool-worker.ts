@@ -18,7 +18,9 @@ function postWorkerTaskInput<Input, Output>(
     {
       input,
       taskId: task.id,
-      interactive: Boolean(task.options.onRequest || task.options.onRequestSync),
+      interactive: Boolean(
+        task.options.onRequest || task.options.onRequestSync || task.options.onNotification,
+      ),
       nativeSections: slot.nativeSections.buffer,
       taskContext,
       sampleMemory: true,
@@ -64,13 +66,14 @@ export function sendWorkerTaskInput<Input, Output>(params: {
     }
     const transferList = task.options.transferList?.(input);
     if (!task.done) {
+      const context = params.host.captureTaskContext(worker);
       postWorkerTaskInput(
         worker,
         slot,
         task,
         input,
-        transferList,
-        params.host.captureTaskContext(),
+        [...(transferList ?? []), ...(params.host.taskContextTransferList?.(context) ?? [])],
+        context,
       );
     }
   } catch (error) {

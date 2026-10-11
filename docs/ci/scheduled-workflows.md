@@ -153,8 +153,9 @@ frozen release target or replace an exact-head PR release gate.
 ### What stays on pushes
 
 CodeQL retains all seven main-push security categories. CI retains
-`security-fast` (committed private keys, changed-workflow security auditing,
-and production dependency auditing) on its existing non-docs push scope.
+`security-fast` (committed private keys and changed-workflow security auditing)
+on its existing non-docs push scope. Pull-request, push, and scheduled CI skip
+production dependency auditing; only release dispatches run it, as a warning.
 Default main pushes also run the baseline-growth, assertion-safety, test timeout
 race, and new protocol-method metadata guards there against the exact push
 `before` SHA, so scheduled CI's main-against-itself comparison cannot lose these
@@ -545,10 +546,12 @@ approval revocations; its per-head review serialization remains non-canceling.
 
 `Dependency Audit` runs the production lockfile audit daily at 07:23 UTC and on
 manual dispatch. It stays separate from PR CI and fails on findings, unavailable
-advisories, or invalid data. Each dependency graph is submitted as one request;
+advisories, or invalid data. This red triage signal is not a required PR check
+and never gates merging. Follow up with a dependency bump on `main`.
+Each dependency graph is submitted as one request;
 release checks keep their product and tooling graphs separate.
 
-Both ordinary CI and this strict audit publish the outcome, package count,
+Both release CI and this strict audit publish the outcome, package count,
 duration, timestamp, and bounded failure reason in the job summary. A completed
 npm check covers npm bulk advisories only, not every upstream advisory source.
 
@@ -572,9 +575,15 @@ For local reproduction, run
 `node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high`. Adding `--ci`
 selects a shorter 30-second diagnostic budget but preserves exit codes: 0 means
 no matching findings, 1 means findings or an error, and 2 means incomplete coverage.
-Ordinary CI, scheduled audits, and local hooks propagate every non-zero exit.
-CI dispatched by Full Release Validation or release publication reports a
-non-zero exit as a warning, because advisories never block a release.
+This direct diagnostic command and the daily Dependency Audit retain those
+non-zero exits. Ordinary pull-request, push, and scheduled CI skip the audit.
+CI runs it only for `workflow_dispatch` IDs beginning with
+`full-release-validation-` or `release-native-android-`; every non-zero audit exit
+becomes a warning with exit code 0. The optional `pnpm-audit-prod` pre-commit
+hook uses the same warn-only wrapper and retains the audit output. Dependency
+advisories cannot block CI, local commits, or releases. The separate release
+`pnpm deps:vuln:gate` still blocks known malware; vulnerability advisories there
+remain warnings.
 
 ### Docs Sync Publish Repo
 
@@ -629,6 +638,8 @@ for the weekly burst separately from PR and main admission.
 ## ClawSweeper activity forwarding
 
 `.github/workflows/clawsweeper-dispatch.yml` is the target-side bridge from OpenClaw repository activity into ClawSweeper. It does not check out or execute untrusted pull request code. The workflow creates a GitHub App token from `CLAWSWEEPER_APP_PRIVATE_KEY`, then dispatches compact `repository_dispatch` payloads to `openclaw/clawsweeper`.
+
+The same workflow file also runs Barnacle's `auto-response` job. GitHub creates one run per subscribing workflow before job `if:` admission, and ClawSweeper's own comments and labels arrive as ordinary events, so one shared listener starts one run per event instead of two. The `auto-response` job keeps Barnacle's original event set (issue opened/edited/labeled, comment created, pull request opened/edited/synchronize/reopened/labeled/unlabeled), credentials, trusted base checkout, and its own per-item concurrency group. The file path stays fixed because ClawSweeper's direct queue intake verifies the OIDC `workflow_ref` of `clawsweeper-dispatch.yml`.
 
 Dispatch API calls retry rate-limit failures for up to five attempts with quadratic backoff. Other API errors stop immediately, and exhausted retries preserve the final API exit code. Dispatch callers warn and continue on failure rather than reporting a successful dispatch.
 

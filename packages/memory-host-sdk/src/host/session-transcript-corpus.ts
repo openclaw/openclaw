@@ -488,6 +488,49 @@ function readCorpusSessionEntries(
     : listSessionEntriesCore(input);
 }
 
+async function readSessionTranscriptCorpusArtifacts(
+  scope: SessionTranscriptCorpusScope,
+  options: SessionTranscriptCorpusOptions,
+): Promise<SessionTranscriptCorpusArtifact[]> {
+  const artifactDirs = new Map<string, string>();
+  for (const dir of scope.artifactDirs) {
+    artifactDirs.set(await normalizeRealComparablePathAsync(dir), dir);
+  }
+  const artifacts: SessionTranscriptCorpusArtifact[] = [];
+  const seen = new Set<string>();
+  // Keep filesystem preparation sequential; none of it may block Gateway callbacks.
+  for (const dir of artifactDirs.values()) {
+    let entries: Dirent[];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch (error) {
+      if (isFileMissingError(error) && error.code === "ENOENT") {
+        continue;
+      }
+      throw error;
+    }
+    for (const artifactPath of sessionTranscriptArtifactPaths(dir, entries)) {
+      const comparablePath = await normalizeRealComparablePathAsync(artifactPath);
+      if (seen.has(comparablePath)) {
+        continue;
+      }
+      seen.add(comparablePath);
+      let contentRevision: string | undefined;
+      if (options.includeContentRevision !== false) {
+        try {
+          contentRevision = fileContentRevisionFromStat(
+            await fs.stat(artifactPath, { bigint: true }),
+          );
+        } catch {
+          contentRevision = undefined;
+        }
+      }
+      artifacts.push({ path: artifactPath, contentRevision });
+    }
+  }
+  return artifacts;
+}
+
 /**
  * Lists transcript corpus entries for memory indexing.
  *
@@ -514,42 +557,7 @@ export async function listSessionTranscriptCorpusEntriesForAgent(
   if (incognito) {
     return incognito;
   }
-  const artifactDirs = new Map<string, string>();
-  for (const dir of scope.artifactDirs) {
-    artifactDirs.set(await normalizeRealComparablePathAsync(dir), dir);
-  }
-  const artifacts: SessionTranscriptCorpusArtifact[] = [];
-  const seen = new Set<string>();
-  // Keep filesystem preparation sequential; none of it may block Gateway callbacks.
-  for (const dir of artifactDirs.values()) {
-    let entries: Dirent[];
-    try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch (error) {
-      if (isFileMissingError(error) && error.code === "ENOENT") {
-        continue;
-      }
-      throw error;
-    }
-    for (const artifactPath of sessionTranscriptArtifactPaths(dir, entries)) {
-      const comparablePath = await normalizeRealComparablePathAsync(artifactPath);
-      if (seen.has(comparablePath)) {
-        continue;
-      }
-      seen.add(comparablePath);
-      let contentRevision: string | undefined;
-      if (capturedOptions.includeContentRevision !== false) {
-        try {
-          contentRevision = fileContentRevisionFromStat(
-            await fs.stat(artifactPath, { bigint: true }),
-          );
-        } catch {
-          contentRevision = undefined;
-        }
-      }
-      artifacts.push({ path: artifactPath, contentRevision });
-    }
-  }
+  const prepareArtifacts = () => readSessionTranscriptCorpusArtifacts(scope, capturedOptions);
   if (
     isIncognitoOpenClawAgentSqlitePath(scope.storePath, {
       agentId: scope.normalizedAgentId,
@@ -559,11 +567,11 @@ export async function listSessionTranscriptCorpusEntriesForAgent(
     return projectSessionTranscriptCorpusEntries(
       scope,
       capturedOptions,
-      artifacts,
+      await prepareArtifacts(),
       readCorpusSessionEntries(scope, capturedOptions),
     );
   }
-  return readSessionTranscriptCorpusInWorker(scope, capturedOptions, artifacts);
+  return readSessionTranscriptCorpusInWorker(scope, capturedOptions, prepareArtifacts);
 }
 
 /** Project inventory in the admitted reader; only corpus metadata crosses the worker boundary. */

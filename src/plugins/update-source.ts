@@ -539,6 +539,36 @@ export function resolveClawHubUpdateSpecs(params: {
   });
 }
 
+/** Only a catalog-declared alternate may satisfy an implicit exact ClawHub target. */
+export function resolveClawHubNpmUpdateFallback(
+  officialInstall: ReturnType<
+    typeof officialInstallRecords.resolveTrustedSourceLinkedOfficialClawHubInstall
+  >,
+  clawhubSpecs: { installSpec?: string; recordSpec?: string } | undefined,
+) {
+  const { npmSpec, expectedIntegrity } = officialInstall ?? {};
+  const target = parseClawHubPluginSpec(clawhubSpecs?.installSpec ?? "");
+  if (
+    !npmSpec ||
+    clawhubSpecs?.installSpec === clawhubSpecs?.recordSpec ||
+    !target?.version ||
+    !isExactSemverVersion(target.version)
+  ) {
+    return undefined;
+  }
+  const installSpec = resolveDefaultNpmSpec(npmSpec)
+    ? `${resolveNpmSpecPackageName(npmSpec)}@${target.version}`
+    : npmSpec;
+  if (resolveExactNpmSpecVersion(installSpec) !== target.version) {
+    return undefined;
+  }
+  return {
+    installSpec,
+    recordSpec: npmSpec,
+    expectedIntegrity: installSpec === npmSpec ? expectedIntegrity : undefined,
+  };
+}
+
 /** Identity matching permits id/path cleanup, never an implicit registry-source switch. */
 export function isBridgeRegistryInstall(
   bridge: ExternalizedBundledPluginBridge,

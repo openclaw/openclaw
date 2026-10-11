@@ -7,7 +7,7 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import { chatOutboxOwner, listChatOutboxAttention } from "./chat-outbox-owner.ts";
 import {
   admitStoredChatComposerQueueItem,
-  loadChatComposerSnapshot,
+  loadChatComposerState,
   removeStoredChatComposerQueueItem,
 } from "./composer-persistence.ts";
 
@@ -129,7 +129,7 @@ it("retains incidents through failed removal and clears them only after canonica
       input,
     ),
   ).toBe(true);
-  const row = loadChatComposerSnapshot(host, host.sessionKey)!.queue[0]!;
+  const row = loadChatComposerState(host, host.sessionKey).snapshot!.queue[0]!;
   expect(listChatOutboxAttention(host)).toHaveLength(1);
   const write = vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
     throw new Error("quota");

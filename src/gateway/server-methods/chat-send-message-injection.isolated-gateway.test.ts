@@ -2,14 +2,22 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RawData, WebSocket } from "ws";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { installQueueRuntimeErrorSilencer } from "../../auto-reply/reply/queue.test-helpers.js";
 import type { ReplyBackendMessageInjectionV2 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.operation.js";
 import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.registry.js";
 import { forceClearReplyOperation } from "../../auto-reply/reply/reply-run-registry.state.js";
+import {
+  areDiagnosticsEnabledForProcess,
+  onTrustedInternalDiagnosticEvent,
+  setDiagnosticsEnabledForProcess,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
 import {
   dispatchInboundMessageMock,
   installGatewayTestHooks,
@@ -182,6 +190,63 @@ afterAll(async () => {
 });
 
 describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => {
+  it.for([9_400, 15_800, 120_001])(
+    "classifies an accepted steer waiting %sms as steering over the real transport",
+    async (durationMs, { signal }) => {
+      const queueMessage = await seedActiveTurn({
+        sessionKey: SESSION_KEY,
+        sessionId: "session-slow-steer",
+        runId: "live-run-slow-steer",
+        terminalRunId: "source-old",
+        sourceTurnId: SOURCE_TURN_ID,
+      });
+      const commit = createDeferred();
+      const reported = createDeferred<DiagnosticEventPayload>();
+      const previousDiagnostics = areDiagnosticsEnabledForProcess();
+      setDiagnosticsEnabledForProcess(true);
+      const stop = onTrustedInternalDiagnosticEvent(
+        (event) => {
+          if (event.type === "diagnostic.phase.completed" && event.name === "chat.send.dispatch") {
+            reported.resolve(event);
+          }
+        },
+        { include: ["diagnostic.phase.completed"] },
+      );
+      let clock = 0;
+      const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
+      queueMessage.mockImplementation(async (_text, options, assertCurrent) => {
+        assertCurrent();
+        options?.onQueueAccepted?.(true);
+        await commit.promise;
+        assertCurrent();
+      });
+      try {
+        const response = (await rpcReq(ws, "chat.send", {
+          sessionKey: SESSION_KEY,
+          message: "Synthetic steer awaiting the active run boundary.",
+          idempotencyKey: `slow-steer-${durationMs}`,
+          queueMode: "steer",
+        })) as WireResponse;
+        expect(response).toMatchObject({ ok: true, payload: { status: "started" } });
+        expect(queueMessage).toHaveBeenCalledOnce();
+        expect(dispatchCapture.calls).toBe(0);
+        clock = durationMs;
+        commit.resolve();
+        expect(await withinTest(reported.promise, signal)).toMatchObject({
+          name: "chat.send.dispatch",
+          durationMs,
+          details: { stage: "steer" },
+        });
+        expect(dispatchCapture.calls).toBe(0);
+      } finally {
+        commit.resolve();
+        now.mockRestore();
+        stop();
+        setDiagnosticsEnabledForProcess(previousDiagnostics);
+      }
+    },
+  );
+
   it.each([
     {
       name: "a tombstone for the active source",

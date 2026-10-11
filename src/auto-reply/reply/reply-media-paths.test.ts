@@ -202,6 +202,7 @@ describe("createReplyMediaPathNormalizer", () => {
 
     expect(ensureSandboxWorkspaceForSession).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "finance" }),
+      undefined,
     );
     expectMedia(result, "/tmp/outbound-media/photo.png", [
       "/tmp/outbound-media/photo.png",

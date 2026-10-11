@@ -38,8 +38,7 @@ function normalizeWorkspaceAliasPath(workspaceRoot: Root, requestedPath: string)
   if (!isPathInside(workspaceRoot.rootDir, normalizedRequest)) {
     return requestedPath;
   }
-  const relativePath = path.relative(workspaceRoot.rootDir, normalizedRequest);
-  return relativePath || requestedPath;
+  return path.relative(workspaceRoot.rootDir, normalizedRequest) || requestedPath;
 }
 
 export async function writeSessionExportFile(params: {

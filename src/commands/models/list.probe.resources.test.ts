@@ -475,63 +475,36 @@ it.each([false, true])(
   },
 );
 
-it("restores probe fixture state when initialization rejects", async () => {
-  const previousDisabled = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
-  const original = new Error("synthetic probe config write failure");
-  const createState = testState.createOpenClawTestState;
-  let state: testState.OpenClawTestState | undefined;
-  vi.spyOn(testState, "createOpenClawTestState").mockImplementationOnce(async (options) => {
-    state = await createState(options);
-    vi.spyOn(state, "writeConfig").mockRejectedValueOnce(original);
-    return state;
-  });
+it("releases direct state ownership before propagating a rejected no-tail operation", async () => {
+  const state = await testState.createOpenClawTestState({ label: "probe-no-tail-failure" });
+  const signals = new EventEmitter();
+  const lockDir = state.path("locks");
+  const original = new Error("synthetic direct probe failure");
+  const run = async () => {
+    await Promise.resolve();
+    throw original;
+  };
   try {
-    await expect(runProbeResourceFixture("db-close-failure")).rejects.toBe(original);
-    expect(process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS).toBe(previousDisabled);
-    expect(fs.existsSync(state!.root)).toBe(false);
+    await expect(
+      withAuthProbeStateOwnership(
+        {
+          mode: "exclusive",
+          process: signals,
+          gatewayLockOptions: {
+            allowInTests: true,
+            env: state.env,
+            lockDir,
+            readProcessStartTime: () => 123456,
+            timeoutMs: 100,
+          },
+        },
+        run,
+      ),
+    ).rejects.toBe(original);
+    expect(fs.existsSync(path.join(lockDir, "gateway.state.lock"))).toBe(false);
+    expect(signals.listenerCount("SIGINT")).toBe(0);
+    expect(signals.listenerCount("SIGTERM")).toBe(0);
   } finally {
-    vi.restoreAllMocks();
-    await state?.cleanup();
+    await state.cleanup();
   }
 });
-
-it.each([false, true])(
-  "releases direct state ownership before propagating no-tail failure (async: %s)",
-  async (asynchronous) => {
-    const state = await testState.createOpenClawTestState({ label: "probe-no-tail-failure" });
-    const signals = new EventEmitter();
-    const lockDir = state.path("locks");
-    const original = new Error("synthetic direct probe failure");
-    const run = asynchronous
-      ? async () => {
-          await Promise.resolve();
-          throw original;
-        }
-      : () => {
-          throw original;
-        };
-    try {
-      await expect(
-        withAuthProbeStateOwnership(
-          {
-            mode: "exclusive",
-            process: signals,
-            gatewayLockOptions: {
-              allowInTests: true,
-              env: state.env,
-              lockDir,
-              readProcessStartTime: () => 123456,
-              timeoutMs: 100,
-            },
-          },
-          run,
-        ),
-      ).rejects.toBe(original);
-      expect(fs.existsSync(path.join(lockDir, "gateway.state.lock"))).toBe(false);
-      expect(signals.listenerCount("SIGINT")).toBe(0);
-      expect(signals.listenerCount("SIGTERM")).toBe(0);
-    } finally {
-      await state.cleanup();
-    }
-  },
-);

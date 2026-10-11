@@ -58,6 +58,8 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     params.runtimePlan = createCodexRuntimePlanFixture();
     setCodexTestModelSupportsTools(params, true);
     const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+    // Keep fixture I/O from spending the attempt clock before the command starts.
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const run = runCodexAppServerAttempt(params);
     let response: ReturnType<typeof callTool> | undefined;
     try {
@@ -66,17 +68,16 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       response = callTool(harness, "sandbox_exec", "required-command", {
         command: "verify-required",
         awaitResults: true,
+        yieldMs: 10,
       }).then((value) => {
         collected = true;
         return value;
       });
       await command.started;
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(20);
       expect(collected).toBe(false);
       expect(command.spawn).toHaveBeenCalledOnce();
       expect(harness.requests.filter(({ method }) => method === "turn/start")).toHaveLength(1);
-      vi.useRealTimers();
       command.finish();
       await expect(response).resolves.toMatchObject({
         success: true,

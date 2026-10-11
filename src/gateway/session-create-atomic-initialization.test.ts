@@ -54,12 +54,12 @@ describe("atomic Gateway session initialization", () => {
 
       expect(created).toMatchObject({
         ok: true,
-        entry: { initializationPending: undefined },
         postCommit: { status: "completed" },
       });
       if (!created.ok) {
         throw new Error(created.error.message);
       }
+      expect(created.entry.initializationPending).toBeUndefined();
       expect(loadSessionEntryReadOnly({ sessionKey: created.key })?.initializationPending).toBe(
         undefined,
       );

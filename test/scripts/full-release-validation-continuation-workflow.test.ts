@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
   copyFileSync,
@@ -11,6 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
+import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { releaseChildDispatchInputs } from "../../scripts/lib/full-release-child-request.mjs";
@@ -395,8 +397,22 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
       ["candidate_acquisition", "Dispatch immutable validation candidate producer"],
     ] as const) {
       expect(String(workflow.jobs[job]?.if), job).not.toContain("github.run_attempt");
-      expect(step(job, dispatch).if).toBe("github.run_attempt == 1");
-      expect(step(job, "Recover original artifact producer").if).toBeUndefined();
+      const dispatchCondition = step(job, dispatch).if;
+      const recoveryCondition = step(job, "Recover original artifact producer").if ?? "true";
+      assert(typeof dispatchCondition === "string");
+      assert(typeof recoveryCondition === "string");
+      for (const reused of job === "candidate_acquisition" ? [undefined] : ["false", "true"]) {
+        for (const attempt of [1, 2]) {
+          const context = {
+            github: { run_attempt: attempt },
+            env: { PUBLICATION_ARTIFACTS_REUSED: reused },
+          };
+          expect(runInNewContext(dispatchCondition, context)).toBe(
+            attempt === 1 && reused !== "true",
+          );
+          expect(runInNewContext(recoveryCondition, context)).toBe(reused !== "true");
+        }
+      }
     }
     expect(String(workflow.jobs.qualify_npm_package?.if)).not.toContain("github.run_attempt");
     expect(source).not.toContain("continuationSource");

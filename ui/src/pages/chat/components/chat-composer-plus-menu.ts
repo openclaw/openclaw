@@ -436,6 +436,15 @@ function handleMenuSelection(
       menu.querySelector<HTMLElement>("wa-dropdown-item:not([disabled])")?.focus(),
     );
   };
+  const toggleCapability = (
+    group: "skills" | "mcpServers",
+    name: string,
+    enabled: boolean,
+    baseEnabled: boolean,
+  ) =>
+    props.onPatchToolOverrides(
+      nextBooleanToolOverrides(props.toolOverrides, group, name, !enabled, baseEnabled),
+    );
   if (value === "back") {
     event.preventDefault();
     changeView(
@@ -458,15 +467,10 @@ function handleMenuSelection(
   }
   if (value === "toggle-web-search") {
     event.preventDefault();
-    if (props.mutationBlockedReason) {
-      return;
-    }
-    if (!props.webSearchBaseEnabled) {
-      if (props.toolOverrides?.webSearch === true) {
-        props.onPatchToolOverrides(
-          nextWebSearchToolOverrides(props.toolOverrides, false, props.webSearchBaseEnabled),
-        );
-      }
+    if (
+      props.mutationBlockedReason ||
+      (!props.webSearchBaseEnabled && props.toolOverrides?.webSearch !== true)
+    ) {
       return;
     }
     const enabled = resolveWebSearchToolOverrideState(
@@ -474,7 +478,11 @@ function handleMenuSelection(
       props.toolOverrides?.webSearch,
     );
     props.onPatchToolOverrides(
-      nextWebSearchToolOverrides(props.toolOverrides, !enabled, props.webSearchBaseEnabled),
+      nextWebSearchToolOverrides(
+        props.toolOverrides,
+        props.webSearchBaseEnabled && !enabled,
+        props.webSearchBaseEnabled,
+      ),
     );
     return;
   }
@@ -489,15 +497,7 @@ function handleMenuSelection(
     event.preventDefault();
     const skill = props.skills?.[Number(value.slice("skill:".length))];
     if (skill && !skill.missingDeps && !skill.blocked && !props.mutationBlockedReason) {
-      props.onPatchToolOverrides(
-        nextBooleanToolOverrides(
-          props.toolOverrides,
-          "skills",
-          skill.key,
-          !skill.enabled,
-          skill.baseEnabled,
-        ),
-      );
+      toggleCapability("skills", skill.key, skill.enabled, skill.baseEnabled);
     }
     return;
   }
@@ -509,15 +509,7 @@ function handleMenuSelection(
         server.enabled,
         readOwnEntry(props.toolOverrides?.mcpServers, server.name),
       );
-      props.onPatchToolOverrides(
-        nextBooleanToolOverrides(
-          props.toolOverrides,
-          "mcpServers",
-          server.name,
-          !enabled,
-          server.enabled,
-        ),
-      );
+      toggleCapability("mcpServers", server.name, enabled, server.enabled);
     }
     return;
   }

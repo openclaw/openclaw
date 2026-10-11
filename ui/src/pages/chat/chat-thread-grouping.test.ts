@@ -347,6 +347,45 @@ describe("content classification", () => {
 });
 
 describe("answer visibility across continuations", () => {
+  it.each([true, false])(
+    "keeps work with its answer above a trailing steer (working=%s)",
+    (runWorking) => {
+      const runId = "target-run";
+      const prompt = message("user", "Inspect the file", 1, {
+        __openclaw: { idempotencyKey: `${runId}:user` },
+      });
+      const evidence = tool("read-file", 2, { runId });
+      const answer = message("assistant", "File inspected", 3, { runId });
+      const queued = message("user", "Queued follow-up", 4, {
+        __openclaw: { idempotencyKey: "queued-run:user" },
+      });
+      const steer = message("user", "Also check permissions", 5, {
+        __openclaw: {
+          idempotencyKey: "steer-run:user",
+          steerTargetRunId: runId,
+        },
+      });
+      const ordered = [prompt, evidence, answer, queued, steer];
+      const groups = groupMessages(
+        ordered.map((entry, index) => ({
+          kind: "message",
+          key: `message:${index}`,
+          message: entry,
+        })),
+      );
+      const items = collapseCompletedTurnWork(groups, {
+        sessionKey,
+        runWorking,
+        session: { key: sessionKey, lastRunId: runId, status: "done", runtimeMs: 321 },
+      });
+      expect(visible(items)).toEqual(runWorking ? ordered : [prompt, answer, queued, steer]);
+      expect(work(items)).toEqual(runWorking ? [] : [evidence]);
+      if (!runWorking) {
+        expect(items[1]).toMatchObject({ kind: "work-group", replyRunId: runId, durationMs: 321 });
+      }
+    },
+  );
+
   const terminalCases = [
     { name: "settled terminal", terminal: true, preserved: true },
     { name: "intermediate text", terminal: false, preserved: false },

@@ -28,10 +28,10 @@ import {
   resolveCodeModeConfig,
 } from "./code-mode-runtime.js";
 import { recordCodeModeToolOutcome } from "./code-mode-tool-outcome.js";
+import { isCoreCodingSurfaceToolName } from "./core-tool-factory-descriptors.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { executionTitleSchema } from "./schema/typebox.js";
-import { isToolExecutionAllowed } from "./tool-policy-shared.js";
 import { resolveToolResultBudget } from "./tool-result-limits.js";
 import {
   applyToolCatalogCompaction,
@@ -85,14 +85,16 @@ function renderCodeModeCatalogIndex(lines: readonly string[], total: number): st
 }
 
 function formatCodeModeCatalogIndex(bindings: readonly CodeModeCatalogBinding[]): string {
+  const priority = (entry: CodeModeCatalogBinding) =>
+    entry.id === `openclaw:core:${entry.name}` && isCoreCodingSurfaceToolName(entry.name)
+      ? 0
+      : entry.output
+        ? 1
+        : 2;
   const lines = bindings
-    // Declared-output entries sort first so byte truncation drops `-> ?`
-    // lines, which stay fully discoverable through catalog.search, before it drops
-    // contracts the model can one-pass on. Deterministic within each tier.
-    .toSorted(
-      (a, b) =>
-        (a.output ? 0 : 1) - (b.output ? 0 : 1) || a.callableName.localeCompare(b.callableName),
-    )
+    // Keep the same core file/shell contracts visible as Tool Search, even without
+    // declared outputs. Otherwise catalog growth hides their input argument names.
+    .toSorted((a, b) => priority(a) - priority(b) || a.callableName.localeCompare(b.callableName))
     .map(
       (entry) => `- ${entry.callableName} ${entry.input ?? "unknown"} -> ${entry.output ?? "?"}`,
     );
@@ -104,13 +106,7 @@ function formatCodeModeCatalogIndex(bindings: readonly CodeModeCatalogBinding[])
     return fullIndex;
   }
 
-  // Greedily pack lines in the deterministic sorted order, skipping any single
-  // line too large to fit rather than dropping the whole tail after it. A prefix
-  // cut let one oversized entry — a pathological plugin id or input hint — blank
-  // the entire index; skipping it keeps every other declared contract visible
-  // and fits more of them when the declared tier alone overflows. Skipped
-  // entries stay discoverable through catalog.search, and the stable input order
-  // keeps prompt bytes deterministic for provider caches.
+  // Skip oversized entries instead of letting one blank the remaining index.
   const included: string[] = [];
   let includedLineLength = 0;
   for (const line of lines) {
@@ -137,17 +133,19 @@ function createCodeModeExecDescription(
   // Native tools have schema-derived declarations too; keep remote schemas deferred.
   const catalogKnown = catalog !== undefined;
   const hasMcp = catalog?.some((entry) => entry.source === "mcp") ?? false;
-  const swarmEnabled = isCodeModeSwarmAvailable(ctx, catalog);
+  // Detached reviews retain the admitted catalog. Execution-only restrictions
+  // belong to the bridge; applying them here rewrites the shared prompt prefix.
+  const swarmEnabled = isCodeModeSwarmAvailable({ ...ctx, toolExecutionAllow: undefined }, catalog);
   const apiGuidance =
     !catalogKnown || (catalog?.length ?? 0) > 0 || swarmEnabled
-      ? " Read types with `API.list(prefix?)` and `API.read(path)`; native tools: `tools/`. Types are documentation; write plain JavaScript."
+      ? " Read types with `API.list(prefix?)` and `API.read(path)`; read returns `{ path, description, content, bytes }`, not a string. Use `.content` for declaration text. Native tools: `tools/`. Types are documentation; write plain JavaScript."
       : "";
   const mcpGuidance =
     !catalogKnown || hasMcp
       ? " MCP tools use the `MCP` namespace or callable `catalog.search` handles."
       : "";
   const swarmGuidance = swarmEnabled
-    ? " Swarm globals `agents.run`, `phase`, and `log` are available; read `agents.d.ts` for types and orchestration idioms."
+    ? " Swarm globals `agents.run`, `phase`, and `log` support orchestration when this run permits spawning; read `agents.d.ts` for types and orchestration idioms."
     : "";
   // Nodes ride the owner-only core tool; advertising the namespace to a run
   // whose catalog cannot resolve it turns the hint into hallucination bait.
@@ -157,8 +155,7 @@ function createCodeModeExecDescription(
       ? "\n- nodes: paired Gateway nodes; nodes.list(), (await nodes.get(id)).invoke(command, params)\n"
       : "";
   const hasSkillTool = (name: string) =>
-    catalog?.some((entry) => entry.source === "openclaw" && entry.name === name) &&
-    (!ctx.toolExecutionAllow || isToolExecutionAllowed(ctx.toolExecutionAllow, name));
+    catalog?.some((entry) => entry.source === "openclaw" && entry.name === name);
   const skillsGuidance =
     (hasSkillTool("skills_search")
       ? " Installed skills: use `await skills.search(query, limit)` to find relevant skills. `await skills.list()` lists up to 20 entries; pass an offset for later pages."

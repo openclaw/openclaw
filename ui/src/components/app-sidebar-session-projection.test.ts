@@ -296,6 +296,37 @@ describe("SidebarSessionProjection created order", () => {
 });
 
 describe("SidebarSessionProjection child expansion", () => {
+  it("preserves restored expansion through the live handoff but clears it on a later connection", () => {
+    const projection = new SidebarSessionProjection();
+    const rows = [
+      sessionRow("expanded"),
+      sessionRow("fully-shown"),
+      sessionRow("collapsed", { containsActiveDescendant: true }),
+      sessionRow("untouched", { containsActiveDescendant: true }),
+    ];
+    projection.project(projectionInput([]));
+    projection.restoreChildrenDisplay([
+      { key: "expanded", childrenDisplayMode: "expanded" },
+      { key: "fully-shown", childrenDisplayMode: "expanded-fully" },
+      { key: "collapsed", childrenDisplayMode: "collapsed-by-user" },
+      { key: "untouched", childrenDisplayMode: projection.captureChildrenDisplay("untouched") },
+    ]);
+    expect(projection.isChildrenExpanded("expanded")).toBe(true);
+    expect(projection.isChildrenFullyShown("fully-shown")).toBe(true);
+    const liveConnection = {};
+    projection.project(
+      projectionInput(rows, { connectionIdentity: liveConnection, listSource: {} }),
+    );
+    expect(projection.isChildrenExpanded("expanded")).toBe(true);
+    expect(projection.isChildrenFullyShown("fully-shown")).toBe(true);
+    expect(projection.isChildrenExpanded("collapsed")).toBe(false);
+    expect(projection.isChildrenExpanded("untouched")).toBe(true);
+    projection.project(projectionInput(rows, { connectionIdentity: {} }));
+    expect(projection.isChildrenExpanded("expanded")).toBe(false);
+    expect(projection.isChildrenFullyShown("fully-shown")).toBe(false);
+    expect(projection.isChildrenExpanded("collapsed")).toBe(true);
+  });
+
   it("latches an active descendant's expansion after that descendant returns to idle", () => {
     const projection = new SidebarSessionProjection();
     projection.project(projectionInput([sessionRow("parent", { containsActiveDescendant: true })]));
@@ -404,6 +435,7 @@ describe("SidebarSessionProjection running subtitle hold", () => {
                 attention: {
                   kind: "error" as const,
                   reason: "Child validation failed",
+                  sourceSessionKey: "agent:main:validation",
                   childLabel: "Validation",
                 },
               }

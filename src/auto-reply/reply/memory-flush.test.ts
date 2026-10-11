@@ -6,7 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   createEmptyAgentDiscoveryStores,
-  resolveModelWithRegistry,
+  resolveModelAsync,
 } from "../../agents/embedded-agent-runner/model.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -287,18 +287,11 @@ describe("configured model consumer parity", () => {
         createPluginMetadataSnapshotFixture(),
         async () => {
           const transportId = modelId === "MODEL" ? upper.id : modelId;
-          const { modelRegistry } = createEmptyAgentDiscoveryStores();
-          const transportModel = expectDefined(
-            await resolveModelWithRegistry({
-              cfg,
-              provider: "openai",
-              modelId: transportId,
-              modelRegistry,
-              agentDir: run.agentDir,
-              workspaceDir: run.workspaceDir,
-            }),
-            "configured transport model",
-          );
+          const { model } = await resolveModelAsync("openai", transportId, run.agentDir, cfg, {
+            ...createEmptyAgentDiscoveryStores(),
+            workspaceDir: run.workspaceDir,
+          });
+          const transportModel = expectDefined(model, "configured transport model");
           const policy = resolveOpenAIResponsesPayloadPolicy(transportModel, {
             storeMode: "provider-policy",
             enableServerCompaction: true,
@@ -330,7 +323,7 @@ describe("Anthropic server compaction host threshold", () => {
 
   it.each([
     {
-      name: "keeps Anthropic disabled by default",
+      name: "keeps the local threshold for default-on Anthropic compaction",
       params: {},
       contextWindowTokens: 200_000,
       expected: undefined,

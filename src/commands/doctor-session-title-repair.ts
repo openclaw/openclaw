@@ -5,14 +5,13 @@ import {
   patchSessionEntryCore,
   readSessionTranscriptBoundedMessageTailPage,
   readSessionTranscriptMessageEventPage,
-  readSessionTranscriptWatermark,
   scanDoctorSessionEntriesTolerant,
 } from "../config/sessions/session-accessor.js";
 import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { deriveGoalSessionTitle } from "../gateway/derive-goal-session-title.js";
 import { projectSessionDisplayMessage } from "../gateway/session-display-projection.js";
-import { hasExplicitSessionName, sessionTitleRequests } from "../gateway/session-title-state.js";
+import { hasExplicitSessionName } from "../gateway/session-title-state.js";
 import { sqliteMessageEventWithSeq } from "../gateway/session-transcript-entry-message.js";
 import {
   listExistingAgentDatabaseTargets,
@@ -22,8 +21,6 @@ import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
 import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
-
-export type SessionTitleRepairReport = Awaited<ReturnType<typeof repairLegacySessionTitles>>;
 
 function readLegacySessionTitle(
   scope: Parameters<typeof readSessionTranscriptBoundedMessageTailPage>[0],
@@ -50,9 +47,7 @@ function readLegacySessionTitle(
       const projected = projectSessionDisplayMessage(message);
       if (projected?.role === "user" && !hasInterSessionUserProvenance(message)) {
         const displayName = deriveGoalSessionTitle(projected.text);
-        return displayName
-          ? { displayName, generation: head.snapshot.generation ?? null }
-          : undefined;
+        return displayName || undefined;
       }
     }
     return undefined;
@@ -132,9 +127,6 @@ export async function repairLegacySessionTitles(params: {
           continue;
         }
         const session = { ...scope, sessionKey, sessionId: entry.sessionId, sessionEntry: entry };
-        if (sessionTitleRequests.get(session)) {
-          continue;
-        }
         const title = readLegacySessionTitle(session);
         if (!title) {
           continue;
@@ -143,22 +135,14 @@ export async function repairLegacySessionTitles(params: {
         if (!params.apply) {
           continue;
         }
+        // Offline Doctor owns these stores; concurrent title changes are best effort.
         await patchSessionEntryCore(
           session,
-          (current) =>
-            current.sessionId === entry.sessionId &&
-            current.lifecycleRevision === entry.lifecycleRevision &&
-            !current.incognito &&
-            !hasExplicitSessionName(current)
-              ? { displayName: Buffer.from(title.displayName, "utf16le").toString("utf16le") }
-              : null,
+          () => ({ displayName: Buffer.from(title, "utf16le").toString("utf16le") }),
           {
             preserveActivity: true,
             skipMaintenance: true,
             assertCommitAllowed: assertRepairAuthority,
-            shouldCommit: () =>
-              !sessionTitleRequests.get(session) &&
-              readSessionTranscriptWatermark(session).generation === title.generation,
             onCommitted: () => {
               report.repaired++;
             },

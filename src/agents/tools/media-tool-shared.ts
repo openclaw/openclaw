@@ -164,27 +164,22 @@ export function resolveSelectedCapabilityProvider<T extends CapabilityProvider>(
   modelConfig: ToolModelConfig;
   modelOverride?: string;
 }): T | undefined {
-  const selectedRef =
-    resolveCapabilityModelRefForProviders({
+  for (const raw of [params.modelOverride, params.modelConfig.primary]) {
+    const selectedRef = resolveCapabilityModelRefForProviders({
       providers: params.providers,
-      raw: params.modelOverride,
-      parseModelRef: parseGenerationModelRef,
-      normalizeProviderId,
-    }) ??
-    resolveCapabilityModelRefForProviders({
-      providers: params.providers,
-      raw: params.modelConfig.primary,
+      raw,
       parseModelRef: parseGenerationModelRef,
       normalizeProviderId,
     });
-  if (!selectedRef) {
-    return undefined;
+    if (selectedRef) {
+      return findCapabilityProviderById({
+        providers: params.providers,
+        providerId: selectedRef.provider,
+        normalizeProviderId,
+      });
+    }
   }
-  return findCapabilityProviderById({
-    providers: params.providers,
-    providerId: selectedRef.provider,
-    normalizeProviderId,
-  });
+  return undefined;
 }
 
 function resolveCapabilityModelCandidatesForTool(params: {

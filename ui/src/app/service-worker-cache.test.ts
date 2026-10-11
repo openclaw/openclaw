@@ -39,6 +39,7 @@ describe("Control UI service worker HTTP recovery", () => {
         "fonts/custom.woff2",
         "assets/app-AbCd1234.js?token=synthetic",
         "fonts/custom.woff2?v=other-build&token=synthetic",
+        "fonts/custom.woff2?v=previous-build",
       ].map((route) => ({ route })),
       {
         route: "assets/app-AbCd1234.js",
@@ -106,8 +107,10 @@ describe("Control UI service worker HTTP recovery", () => {
     "assets/app-AbCd1234.js",
     "assets/background-AbCd1234.webp",
     "fonts/custom.woff2?v=public-fixture",
+    "themes/custom.css?v=public-fixture",
+    "manifest.webmanifest?v=public-fixture",
   ])(
-    "preserves cached %s and returns a network error when no offline copy exists",
+    "serves %s without a second network request and fails offline without a copy",
     async (route) => {
       const worker = createFetchServiceWorker();
       const url = `${worker.scope}${route}`;
@@ -118,6 +121,7 @@ describe("Control UI service worker HTTP recovery", () => {
       expect(await (await worker.dispatch({ url }))?.text()).toBe("offline asset");
       expect(await (await worker.dispatch({ url }))?.text()).toBe("offline asset");
       expect(worker.windowClients[0].postMessage).not.toHaveBeenCalled();
+      expect(worker.fetch).toHaveBeenCalledOnce();
 
       worker.cache.clear();
       expect((await worker.dispatch({ url }))?.type).toBe("error");
@@ -373,23 +377,23 @@ describe("Control UI offline app shell", () => {
     }
     expect(worker.fetch).toHaveBeenCalledTimes(offlineBootFixture.assets.length);
     expect([...worker.cache.keys()]).toEqual([
-      base + "__offline_assets__",
       ...offlineBootFixture.assets.map((asset) => base + asset.path),
       base + "__offline_shell__",
     ]);
   });
 
-  it("does not substitute an old shell but still serves its exact hashed assets", async () => {
+  it("does not substitute a prior build's shell or hashed assets", async () => {
     const worker = createFetchServiceWorker(undefined, { online: false });
     worker.priorCache.set(worker.scope + "__offline_shell__", new Response("old shell"));
     worker.priorCache.set(worker.scope + "assets/old-AbCd1234.js", new Response("old asset"));
+    worker.fetch.mockRejectedValue(new TypeError("Offline"));
     expect((await worker.dispatch({ url: worker.scope + "chat", mode: "navigate" }))?.type).toBe(
       "error",
     );
-    expect(
-      await (await worker.dispatch({ url: worker.scope + "assets/old-AbCd1234.js" }))?.text(),
-    ).toBe("old asset");
-    expect(worker.fetch).not.toHaveBeenCalled();
+    expect((await worker.dispatch({ url: worker.scope + "assets/old-AbCd1234.js" }))?.type).toBe(
+      "error",
+    );
+    expect(worker.fetch).toHaveBeenCalledOnce();
   });
 
   it.each<ResponseInit>([
@@ -429,28 +433,6 @@ describe("Control UI offline app shell", () => {
     expect(worker.fetch).toHaveBeenCalledTimes(offlineBootFixture.assets.length);
   });
 
-  it("admits an old public asset only from its retained build inventory", async () => {
-    const worker = createFetchServiceWorker();
-    const priorUrl = worker.scope + "fonts/old-only.woff2?v=previous-build";
-    worker.priorCache.set(
-      worker.scope + "__offline_assets__",
-      Response.json({
-        version: "previous-build",
-        assets: ["fonts/old-only.woff2"],
-      }),
-    );
-    worker.priorCache.set(priorUrl, new Response("previous font"));
-    worker.fetch.mockRejectedValue(new TypeError("Offline"));
-    expect(await (await worker.dispatch({ url: priorUrl }))?.text()).toBe("previous font");
-    expect(
-      (await worker.dispatch({ url: priorUrl.replace("previous-build", "unknown-build") }))?.type,
-    ).toBe("error");
-    expect(
-      (await worker.dispatch({ url: priorUrl.replace("old-only", "unknown-asset") }))?.type,
-    ).toBe("error");
-    expect(worker.cachePut).not.toHaveBeenCalled();
-  });
-
   it.each(["cacheMatch", "cachePut"] as const)(
     "preserves delivery and the fetch lifetime when %s fails",
     async (operation) => {
@@ -483,7 +465,7 @@ const offlineBootFixture = {
     },
   ] as const,
   publicAssetVersion: "public-fixture",
-  publicAssets: ["fonts/custom.woff2"],
+  publicAssets: ["fonts/custom.woff2", "themes/custom.css", "manifest.webmanifest"],
 };
 type ServiceWorkerFetchEventStub = {
   request: ServiceWorkerFetchRequest;

@@ -3,7 +3,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
-import { readSqliteDataVersion } from "../../infra/sqlite-schema-facts.js";
+import { readSqliteDatabaseWriteRevision } from "../../infra/sqlite-database-admission.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type {
@@ -20,6 +20,7 @@ import {
 } from "./session-accessor.sqlite-participant-projection.js";
 import { parseSessionEntryJson, selectSessionEntryRows } from "./session-accessor.sqlite-status.js";
 import type { ValidatedSessionMetadata } from "./session-canonical-key.js";
+import type { SessionEntrySnapshot } from "./session-entry-snapshots.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionEntryCacheTables = Pick<OpenClawAgentKyselyDatabase, "session_nodes">;
@@ -30,10 +31,12 @@ export function loadSessionEntrySnapshot(
   prepared?: ValidatedSessionMetadata,
   deferParticipants = false,
 ): SessionEntryCacheSnapshot {
-  // Validation lends complete parsed facts only within this read. A concurrent external commit
-  // requires the ordinary fresh SELECT, never a stale snapshot stamped with its newer version.
+  // Only the same settled writer receipt can certify the parsed validation rows.
   const metadata =
-    prepared && prepared.dataVersion === readSqliteDataVersion(database.db) ? prepared : undefined;
+    prepared?.writeRevision !== undefined &&
+    prepared.writeRevision === readSqliteDatabaseWriteRevision(database.db)
+      ? prepared
+      : undefined;
   const parsedEntries = metadata?.entries ?? new Map<string, SessionEntry>();
   const keys = metadata?.keys ?? [];
   // Stream raw JSON so a full read never holds both serialized and parsed store-wide payloads.
@@ -94,8 +97,30 @@ export function readSessionEntrySideMetadata(
 export function projectSessionEntryCacheUpdate(
   entryJson: string,
   sideMetadata: SessionEntrySideMetadata | undefined,
+  snapshotEntry?: SessionEntry,
+  snapshots?: readonly SessionEntrySnapshot[],
 ): SessionEntry | undefined {
   // The writer supplies its persisted bytes; the cache owns the decoded metadata graph.
   const parsedEntry = parseSessionEntryJson({ entry_json: entryJson }, "list");
+  if (parsedEntry && snapshotEntry) {
+    // Changed snapshots reuse persisted bytes; unchanged snapshots are already decoded.
+    const cold =
+      snapshots !== undefined
+        ? Object.fromEntries(
+            snapshots.map(({ field, valueJson }) => [field, JSON.parse(valueJson)]),
+          )
+        : structuredClone({
+            ...(snapshotEntry.sessionDiffBaseline !== undefined
+              ? { sessionDiffBaseline: snapshotEntry.sessionDiffBaseline }
+              : {}),
+            ...(snapshotEntry.skillsSnapshot !== undefined
+              ? { skillsSnapshot: snapshotEntry.skillsSnapshot }
+              : {}),
+            ...(snapshotEntry.systemPromptReport !== undefined
+              ? { systemPromptReport: snapshotEntry.systemPromptReport }
+              : {}),
+          });
+    Object.assign(parsedEntry, cold);
+  }
   return parsedEntry ? freezeJsonSnapshot({ ...parsedEntry, ...sideMetadata }) : undefined;
 }

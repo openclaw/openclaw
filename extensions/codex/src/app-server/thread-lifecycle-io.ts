@@ -15,14 +15,12 @@ import {
   isCodexAppServerOverloadError,
   resolveCodexAppServerClientInstanceId,
 } from "./client.js";
-import { assertCodexInferenceRouteConfig } from "./inference-routing.js";
-import { applyCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
   attestCodexThreadToolSurface,
   discardUnattestedCodexPluginThread,
 } from "./plugin-thread-attestation.js";
-import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
+import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
 import {
   assertCodexThreadAcceptsDirectInput,
   assertCodexThreadStartResponse,
@@ -42,21 +40,41 @@ import {
 } from "./thread-lifecycle-errors.js";
 import {
   buildCodexThreadBindingPolicy,
+  buildCodexThreadRequestConfig,
   prepareCodexThreadFinalConfigPatch,
   resolveCodexThreadAgentDir,
+  type CodexThreadRequestContext,
 } from "./thread-lifecycle-preflight.js";
 import type {
   CodexAppServerThreadLifecycleBinding,
   CodexStartOrResumeThreadParams,
-  CodexResumeThreadContext,
-  CodexStartThreadContext,
+  CodexThreadFinalConfigPatchResult,
   CodexThreadResumePreparation,
 } from "./thread-lifecycle-types.js";
 import { resolveCodexAppServerModelProvider } from "./thread-model-selection.js";
 import { CodexThreadPolicyHandoffError, refreshCodexThreadPolicy } from "./thread-policy.js";
-import { buildThreadResumeParams, buildThreadStartParams } from "./thread-requests.js";
+import { buildThreadStartParams } from "./thread-requests.js";
 import { resumeCodexAppServerThread } from "./thread-resume.js";
 import { hasCodexAppServerSiblingRouteWork } from "./turn-router.js";
+
+type CodexResumeThreadContext = CodexThreadRequestContext & {
+  binding: CodexAppServerThreadBinding;
+  stageBindingReplacement: (operation: string) => void;
+  prebuiltPluginThreadConfig?: CodexPluginThreadConfig;
+  buildLoadedPluginThreadConfig?: (
+    binding: CodexAppServerThreadBinding,
+  ) => Promise<CodexPluginThreadConfig | undefined>;
+  prebuiltFinalConfigPatch?: CodexThreadFinalConfigPatchResult;
+  prepareResume: () => Promise<CodexThreadResumePreparation>;
+  releaseRetainedThread: (assertCurrent: () => void) => Promise<void>;
+};
+
+type CodexStartThreadContext = CodexThreadRequestContext & {
+  prebuiltPluginThreadConfig?: CodexPluginThreadConfig;
+  preserveExistingBinding: boolean;
+  rotatedContextEngineBinding: boolean;
+  replacementPredecessor?: CodexAppServerThreadBinding;
+};
 
 function recordCodexThreadReady(
   params: CodexStartOrResumeThreadParams,
@@ -90,17 +108,12 @@ export async function resumeExistingCodexThread(
   const {
     binding: resumeBinding,
     bindingIdentity,
-    startModelSelection,
     startModelProvider,
-    userMcpServersConfigPatch,
     dynamicToolsFingerprint,
     webSearchThreadConfigFingerprint,
     ringZeroConfigFingerprint,
     ringZeroClientInstanceId,
-    hostSystemAgentActive,
     restrictedToolSurface,
-    restrictedToolSurfaceInheritedMcpServerNames,
-    nativeSkillIsolation,
     lifecycleTiming,
     normalizeBindingModelProvider,
     throwIfAborted,
@@ -161,27 +174,14 @@ export async function resumeExistingCodexThread(
             params.pluginThreadConfig?.build(),
           )
         : undefined);
-    const resumeConfig = applyCodexNativeSkillIsolation(
-      mergeCodexThreadConfigs(
-        params.config,
-        userMcpServersConfigPatch,
-        pluginThreadConfig?.configPatch,
-        finalConfigPatch.configPatch,
-      ),
-      nativeSkillIsolation,
+    const resumeConfig = buildCodexThreadRequestConfig(
+      params,
+      context,
+      pluginThreadConfig?.configPatch,
+      finalConfigPatch.configPatch,
     );
     const resumeParams = lifecycleTiming.measureSync("thread-resume-params", () =>
-      buildThreadResumeParams(params.params, {
-        ...params,
-        threadId: resumeBinding.threadId,
-        authProfileId,
-        model: startModelSelection.model,
-        modelProvider: startModelProvider,
-        preserveNativeModel: resumeBinding.preserveNativeModel === true,
-        config: resumeConfig,
-        hostSystemAgentActive,
-        restrictedToolSurfaceInheritedMcpServerNames,
-      }),
+      context.buildResumeParams(resumeBinding, authProfileId, resumeConfig),
     );
     const requestModelProvider =
       typeof resumeParams.modelProvider === "string" && resumeParams.modelProvider.trim()
@@ -202,15 +202,12 @@ export async function resumeExistingCodexThread(
         withCurrent: params.authority?.withCurrent,
         assertCurrent: () => {
           configuration.assertCurrent();
-          assertCodexInferenceRouteConfig(
-            params.client,
-            params.inferenceRoute,
+          context.assertInferenceConfig(
             resumeParams.config,
             requestModelProvider ??
               (resumeBinding.preserveNativeModel
                 ? (configuration.modelProvider ?? undefined)
                 : undefined),
-            params.inferenceProviderRoutes,
           );
         },
       }),
@@ -323,23 +320,14 @@ export async function resumeExistingCodexThread(
       threadId: response.thread.id,
       ...resumePatch,
       liveThreadConfigFingerprint: fingerprintCodexThreadConfig(
-        {
-          ...resumeParams,
-          model:
-            resumeBinding.preserveNativeModel === true
-              ? null
-              : (response.model ?? resumeParams.model ?? null),
-          requestedModel:
-            resumeBinding.preserveNativeModel === true ? null : (resumeParams.model ?? null),
-          modelProvider:
-            resumeBinding.preserveNativeModel === true ? null : (resumePatch.modelProvider ?? null),
-          requestedModelProvider:
-            resumeBinding.preserveNativeModel === true
-              ? null
-              : (resumeParams.modelProvider ?? resumePatch.modelProvider ?? null),
-        },
+        resumeParams,
         authProfileId,
         dynamicToolsFingerprint,
+        {
+          model: response.model,
+          modelProvider: resumePatch.modelProvider ?? null,
+          preserveNativeModel: resumeBinding.preserveNativeModel,
+        },
       ),
       lifecycle: {
         action: "resumed",
@@ -434,7 +422,6 @@ export async function startFreshCodexThread(
     bindingIdentity,
     startModelSelection,
     startModelProvider,
-    userMcpServersConfigPatch,
     dynamicToolsFingerprint,
     webSearchThreadConfigFingerprint,
     ringZeroConfigFingerprint,
@@ -443,7 +430,6 @@ export async function startFreshCodexThread(
     hostSystemAgentActive,
     restrictedToolSurface,
     restrictedToolSurfaceInheritedMcpServerNames,
-    nativeSkillIsolation,
     lifecycleTiming,
     normalizeBindingModelProvider,
     throwIfAborted,
@@ -463,14 +449,11 @@ export async function startFreshCodexThread(
     context.nativeModelInputTools,
   );
   const config = lifecycleTiming.measureSync("merge-thread-config", () =>
-    applyCodexNativeSkillIsolation(
-      mergeCodexThreadConfigs(
-        params.config,
-        userMcpServersConfigPatch,
-        pluginThreadConfig?.configPatch,
-        finalConfigPatch.configPatch,
-      ),
-      nativeSkillIsolation,
+    buildCodexThreadRequestConfig(
+      params,
+      context,
+      pluginThreadConfig?.configPatch,
+      finalConfigPatch.configPatch,
     ),
   );
   const startParams = lifecycleTiming.measureSync("thread-start-params", () =>
@@ -494,13 +477,7 @@ export async function startFreshCodexThread(
   };
   const assertInferenceCurrent = () => {
     assertCurrent();
-    assertCodexInferenceRouteConfig(
-      params.client,
-      params.inferenceRoute,
-      startParams.config,
-      requestModelProvider,
-      params.inferenceProviderRoutes,
-    );
+    context.assertInferenceConfig(startParams.config, requestModelProvider);
   };
   const threadStartResponse = await lifecycleTiming.measure("thread-start-request", async () => {
     try {
@@ -653,15 +630,10 @@ export async function startFreshCodexThread(
     ...(!preserveExistingBinding
       ? {
           liveThreadConfigFingerprint: fingerprintCodexThreadConfig(
-            {
-              ...startParams,
-              model: response.model ?? startParams.model ?? null,
-              requestedModel: startParams.model ?? null,
-              modelProvider: bindingModelProvider ?? null,
-              requestedModelProvider: startParams.modelProvider ?? bindingModelProvider ?? null,
-            },
+            startParams,
             params.params.authProfileId,
             dynamicToolsFingerprint,
+            { model: response.model, modelProvider: bindingModelProvider ?? null },
           ),
         }
       : {}),

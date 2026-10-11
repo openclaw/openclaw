@@ -128,16 +128,18 @@ export function createPdfTool(options?: {
 
   const shouldDeferAutoModelResolution =
     options?.deferAutoModelResolution === true && !hasExplicitModelConfig;
+  const resolveInitialModelConfig = (authProfileStoreSource: boolean | undefined) =>
+    resolvePdfModelConfigForTool({
+      cfg: options?.config,
+      agentDir,
+      workspaceDir: options?.workspaceDir,
+      authStore: options?.authProfileStore,
+      authProfileStoreSource,
+      activeModel: options?.activeModel,
+    });
   const registrationPdfModelConfig = shouldDeferAutoModelResolution
     ? null
-    : resolvePdfModelConfigForTool({
-        cfg: options?.config,
-        agentDir,
-        workspaceDir: options?.workspaceDir,
-        authStore: options?.authProfileStore,
-        authProfileStoreSource: options?.authProfileStoreSource,
-        activeModel: options?.activeModel,
-      });
+    : resolveInitialModelConfig(options?.authProfileStoreSource);
   if (!registrationPdfModelConfig && !shouldDeferAutoModelResolution) {
     return null;
   }
@@ -191,14 +193,7 @@ export function createPdfTool(options?: {
       signal?.throwIfAborted();
       assertResourcesOpen?.();
       operatorAuthority?.assertCurrent();
-      pdfModelConfig = resolvePdfModelConfigForTool({
-        cfg: options?.config,
-        agentDir,
-        workspaceDir: options?.workspaceDir,
-        authStore: options?.authProfileStore,
-        authProfileStoreSource,
-        activeModel: options?.activeModel,
-      });
+      pdfModelConfig = resolveInitialModelConfig(authProfileStoreSource);
     }
     if (!pdfModelConfig) {
       throw new ToolInputError("No PDF model configured.");
@@ -252,22 +247,22 @@ export function createPdfTool(options?: {
         throw new Error("PDF reference resolved without a path.");
       }
 
-      const media = sandboxConfig
-        ? await loadWebMediaRaw(resolvedPath, {
-            maxBytes,
-            sandboxValidated: true,
-            readFile: createSandboxBridgeReadFile({ sandbox: sandboxConfig }),
-          })
-        : await loadWebMediaRaw(resolvedPath, {
-            maxBytes,
-            localRoots,
-            ...(options?.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
-            ...(isHttpUrl ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS } : {}),
-            ssrfPolicy: remoteMediaSsrfPolicy,
-            // Forward the run abort signal into the fetch layer so an abort
-            // mid-download disconnects the in-flight socket.
-            ...(signal ? { requestInit: { signal } } : {}),
-          });
+      const media = await loadWebMediaRaw(resolvedPath, {
+        maxBytes,
+        ...(sandboxConfig
+          ? {
+              sandboxValidated: true,
+              readFile: createSandboxBridgeReadFile({ sandbox: sandboxConfig }),
+            }
+          : {
+              localRoots,
+              ...(options?.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
+              ...(isHttpUrl ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS } : {}),
+              ssrfPolicy: remoteMediaSsrfPolicy,
+              // An aborted run must disconnect its in-flight download.
+              ...(signal ? { requestInit: { signal } } : {}),
+            }),
+      });
 
       if (normalizeMimeType(media.contentType) !== "application/pdf") {
         throw new Error(`Expected PDF but got ${media.contentType ?? media.kind}: ${pdfRaw}`);

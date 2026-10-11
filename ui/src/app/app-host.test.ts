@@ -16,6 +16,7 @@ import {
 import { i18n } from "../i18n/index.ts";
 import { SESSION_FACE_PREFERENCE_PARAM } from "../lib/sessions/route-navigation.ts";
 import { createSessionCapabilityHarness } from "../lib/sessions/session-capability.test-support.ts";
+import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
 import {
@@ -28,6 +29,7 @@ import {
   stubRenderedWhenDefined,
 } from "./app-host.test-support.ts";
 import { ShellGatewayOwner, type ShellGatewayHost } from "./app-shell-gateway.ts";
+import type { ShellNavigationOwner } from "./app-shell-navigation.ts";
 import { createApplicationNavigationPreferences } from "./bootstrap-navigation-preferences.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
 import { createChatSubmissions } from "./chat-submissions.ts";
@@ -93,7 +95,7 @@ type I18nRecoveryWiring = {
 
 type ShellServerPreferencesState = {
   runtime: { context: ApplicationContext };
-  reconcileServerUiPrefs: (runtimeConfig: ApplicationContext["runtimeConfig"]) => void;
+  shellGateway: ShellGatewayOwner;
 };
 
 type ShellLifecycle = Pick<ShellChromeEventState, "connectedCallback" | "disconnectedCallback">;
@@ -198,12 +200,12 @@ type ShellRouteCommitState = {
   runtime: { context: ApplicationContext };
   activeSessionKey: string;
   didConsiderNativeRouteRestore: boolean;
-  updateRouteState: (state: ReturnType<typeof selectShellRouteState>) => void;
+  shellNavigation: ShellNavigationOwner;
 };
 
 type ShellCustodianRouteState = {
   custodianMinimizeRequestId: number;
-  updateRouteState: (state: { routeId?: RouteId }) => void;
+  shellNavigation: ShellNavigationOwner;
 };
 
 type ShellSessionNavigationState = {
@@ -465,8 +467,10 @@ describe("OpenClaw shell route session commits", () => {
     shell.activeSessionKey = "agent:main:session-a";
     shell.didConsiderNativeRouteRestore = true;
 
-    shell.updateRouteState(selectShellRouteState(committedRouterState("cron", "/cron")));
-    shell.updateRouteState(
+    shell.shellNavigation.updateRouteState(
+      selectShellRouteState(committedRouterState("cron", "/cron")),
+    );
+    shell.shellNavigation.updateRouteState(
       selectShellRouteState(
         committedRouterState("chat", "/chat/main/session-b-12345678", {
           kind: "session",
@@ -485,23 +489,31 @@ describe("OpenClaw shell route session commits", () => {
       "openclaw-app-shell",
     ) as unknown as ShellCustodianRouteState;
 
-    shell.updateRouteState({ routeId: "custodian" });
-    shell.updateRouteState({});
+    shell.shellNavigation.updateRouteState({ routeId: "custodian" });
+    shell.shellNavigation.updateRouteState({});
     expect(shell.custodianMinimizeRequestId).toBe(0);
 
-    shell.updateRouteState({ routeId: "appearance" });
+    shell.shellNavigation.updateRouteState({ routeId: "appearance" });
     expect(shell.custodianMinimizeRequestId).toBe(1);
   });
 });
 
 describe("OpenClaw shell server preferences", () => {
-  it("refreshes live navigation when a sidebar preference arrives from the gateway", () => {
+  it("refreshes live navigation from profile preferences rather than shared config", async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     resetServerUiPrefsSync();
     const sidebarEntries = ["route:usage", "session:agent:main:test"];
+    const request = vi.fn(async (method: string) => {
+      expect(method).toBe("users.prefs.get");
+      return {
+        status: "ok",
+        entries: { "ui.sidebarEntries": sidebarEntries },
+      };
+    });
+    const client = createTestGatewayClient(request);
     const gateway = {
       connection: { gatewayUrl: "ws://sidebar.test" },
-      snapshot: { phase: "connected" },
+      snapshot: { phase: "connected", client, selfUser: { id: "profile-a" } },
       subscribe: () => () => undefined,
     } as unknown as ApplicationGateway;
     const theme = createApplicationTheme(loadSettings(gateway.connection.gatewayUrl), gateway);
@@ -516,7 +528,7 @@ describe("OpenClaw shell server preferences", () => {
     const runtimeConfig = {
       state: {
         configSnapshot: {
-          config: { ui: { prefs: { sidebarEntries } } },
+          config: { ui: { prefs: { sidebarEntries: ["route:plugins"] } } },
           hash: "sidebar-config-hash",
         },
       },
@@ -533,8 +545,9 @@ describe("OpenClaw shell server preferences", () => {
     ) as unknown as ShellServerPreferencesState;
     shell.runtime = { context };
 
-    shell.reconcileServerUiPrefs(runtimeConfig);
+    await shell.shellGateway.reconcileServerUiPrefs(runtimeConfig);
 
+    expect(request).toHaveBeenCalledWith("users.prefs.get", expect.any(Object));
     expect(navigation.snapshot.sidebarEntries).toEqual(sidebarEntries);
     expect(navigationChanged).toHaveBeenCalledWith(expect.objectContaining({ sidebarEntries }));
     expect(loadSettings(gateway.connection.gatewayUrl).sidebarEntries).toEqual(sidebarEntries);

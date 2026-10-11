@@ -64,7 +64,6 @@ import {
   type QaSuiteResult,
   type QaSuiteRunParams,
   type QaSuiteScenarioResult,
-  type QaSuiteSummaryJson,
   writeQaSuiteProgress,
 } from "./suite.js";
 import * as dockerBatch from "./test-file-scenario-docker-batch.js";
@@ -390,11 +389,9 @@ function createQaPartitionEvidenceOwner(params: {
 }
 
 function summarizeQaEvidenceChannel(
-  summaries: readonly QaEvidenceSummaryJson[],
+  summary: QaEvidenceSummaryJson,
 ): { id?: string; driver: QaTransportDriver } | undefined {
-  const channels = summaries.flatMap((summary) =>
-    summary.entries.map((entry) => entry.execution?.channel),
-  );
+  const channels = summary.entries.map((entry) => entry.execution?.channel);
   const first = channels[0];
   if (
     !first?.driver ||
@@ -672,12 +669,10 @@ async function runWeightedUnifiedPartitionTasks(
   let activeWeight = 0;
   return await new Promise<QaUnifiedPartitionResult[]>((resolve, reject) => {
     let firstError: Error | undefined;
-    let finished = false;
     const finishIfSettled = () => {
-      if (finished || activeWeight > 0) {
+      if (activeWeight > 0) {
         return;
       }
-      finished = true;
       if (firstError) {
         reject(firstError);
         return;
@@ -710,26 +705,25 @@ async function runWeightedUnifiedPartitionTasks(
         if (task.exclusiveKey) {
           activeExclusiveKeys.add(task.exclusiveKey);
         }
+        const settle = () => {
+          activeWeight -= taskWeight;
+          if (task.exclusiveKey) {
+            activeExclusiveKeys.delete(task.exclusiveKey);
+          }
+          if (firstError || pending.length === 0) {
+            finishIfSettled();
+          } else {
+            launch();
+          }
+        };
         task.run().then(
           (result) => {
             results[index] = result;
-            activeWeight -= taskWeight;
-            if (task.exclusiveKey) {
-              activeExclusiveKeys.delete(task.exclusiveKey);
-            }
-            if (pending.length === 0 && activeWeight === 0) {
-              finishIfSettled();
-              return;
-            }
-            launch();
+            settle();
           },
           (error: unknown) => {
             firstError = error instanceof Error ? error : new Error(String(error));
-            activeWeight -= taskWeight;
-            if (task.exclusiveKey) {
-              activeExclusiveKeys.delete(task.exclusiveKey);
-            }
-            finishIfSettled();
+            settle();
           },
         );
       }
@@ -821,7 +815,7 @@ async function writeUnifiedQaSuiteArtifacts(params: {
   const summary = buildQaSuiteSummaryJson({
     ...params,
     scenarios: [...params.scenarios],
-  }) satisfies QaSuiteSummaryJson;
+  });
   await publishQaSuiteArtifactFiles({
     outputDir: params.outputDir,
     files: [
@@ -1245,9 +1239,7 @@ async function runUnifiedQaSuite(params: {
       testFilePartitionTasks.push(createTestFilePartitionTask(concurrentTestFileScenariosByKind));
     }
   }
-  const scriptScenarios = params.plan.testFileScenariosByKind
-    .get("script")
-    ?.filter((scenario) => scenario.execution.kind === "script");
+  const scriptScenarios = params.plan.testFileScenariosByKind.get("script");
   if (scriptScenarios?.length) {
     const isParallelSafeScript = (scenario: QaTestFileScenario) =>
       scenario.execution.kind === "script" && scenario.execution.parallelSafe === true;
@@ -1415,7 +1407,7 @@ async function runUnifiedQaSuite(params: {
       ),
     ],
   };
-  const channel = summarizeQaEvidenceChannel([evidence]);
+  const channel = summarizeQaEvidenceChannel(evidence);
   const resultsByOccurrence = new Map(
     partitionResults.flatMap((partition) =>
       partition.scenarioResults.map(({ result }) => [result.evidenceOccurrenceId, result] as const),
@@ -1482,8 +1474,7 @@ async function runUnifiedQaSuite(params: {
   };
 }
 
-export async function runQaSuite(...args: [QaSuiteRunParams?]): Promise<QaSuiteRuntimeResult> {
-  const runParams = args[0];
+export async function runQaSuite(runParams?: QaSuiteRunParams): Promise<QaSuiteRuntimeResult> {
   rejectRemovedQaChannelDriverSelection(runParams);
   const plan = await resolveSuiteExecutionPlan(runParams);
   if (plan.kind === "unified") {
@@ -1555,11 +1546,8 @@ export async function runQaSuite(...args: [QaSuiteRunParams?]): Promise<QaSuiteR
   };
 }
 
-export async function runQaFlowSuiteFromRuntime(
-  ...args: [QaSuiteRunParams?]
-): Promise<QaSuiteResult> {
-  return await (
-    await loadQaFlowSuiteRuntime()
-  )(args[0]);
+export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Promise<QaSuiteResult> {
+  const runFlowSuite = await loadQaFlowSuiteRuntime();
+  return runFlowSuite(params);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

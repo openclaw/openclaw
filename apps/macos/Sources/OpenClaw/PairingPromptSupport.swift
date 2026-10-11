@@ -94,6 +94,19 @@ enum PairingPromptSupport {
         }
     }
 
+    static func decodeEventPayload<T: Decodable>(
+        _ payload: AnyCodable?, context: String, logger: Logger) -> T?
+    {
+        guard let payload else { return nil }
+        do {
+            return try GatewayPayloadDecoding.decode(payload)
+        } catch {
+            logger
+                .error("failed to decode \(context, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
     static func decide(
         requestId: String,
         kind: PairingApprovalCenter.Kind,

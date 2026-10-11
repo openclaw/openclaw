@@ -1,5 +1,5 @@
 import { Agent, Server, request } from "node:http";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as mutableFileBinding from "../../infra/system-run-approval-binding.js";
 import {
   initializeGlobalHookRunner,
@@ -22,6 +22,10 @@ import {
   resolveNativeHookRelayDeferredToolApproval,
   testing,
 } from "./native-hook-relay.js";
+import {
+  clearNativeHookRelayBridgeRecordsForTests,
+  clearNativeHookRelaysForTests,
+} from "./native-hook-relay.test-support.js";
 
 function relayParams(runId: string, sessionId = runId) {
   return { provider: "codex", sessionId, runId } satisfies Parameters<
@@ -84,7 +88,7 @@ function bridgeInvocation({ relayId, generation }: RelayIdentity) {
 }
 
 afterEach(async () => {
-  await testing.clearNativeHookRelaysForTests();
+  await clearNativeHookRelaysForTests();
   resetGlobalHookRunner();
   vi.restoreAllMocks();
 });
@@ -414,43 +418,9 @@ it("joins unregister when listener startup has not completed", async () => {
   });
 });
 
-it("preserves the exact publication error while admitting logical hook policy", async () => {
-  await withOpenClawTestState({ label: "relay-publication-failure" }, async () => {
-    await store.clearNativeHookRelayBridgeRecordsForTests();
-    const failure = new Error("fixture publication failed");
-    vi.spyOn(store, "writeNativeHookRelayBridgeRecord").mockRejectedValueOnce(failure);
-    const policy = vi.fn(async () => ({
-      kind: "veto" as const,
-      blocked: true as const,
-      reason: "fixture policy denied",
-    }));
-    const relay = registerOwnedNativeHookRelay({
-      ...relayParams("publication-failure"),
-      allowedEvents: ["pre_tool_use"],
-      runBeforeToolCall: policy,
-    });
-    try {
-      await expect(relay.ready).rejects.toBe(failure);
-      await relay.prepareInvocation();
-      const response = await invokeNativeHookRelay(policyInvocation(relay));
-      expect(JSON.parse(response.stdout)).toMatchObject({
-        hookSpecificOutput: {
-          permissionDecision: "deny",
-          permissionDecisionReason: "fixture policy denied",
-        },
-      });
-      expect(policy).toHaveBeenCalledOnce();
-      expect(await readRecord(relay)).toBeUndefined();
-    } finally {
-      relay.unregister();
-      await relay.drain();
-    }
-  });
-});
-
 it("renews logical invocation beyond its original expiry when the listener is unavailable", async () => {
   await withOpenClawTestState({ label: "relay-logical-renewal" }, async () => {
-    await store.clearNativeHookRelayBridgeRecordsForTests();
+    clearNativeHookRelayBridgeRecordsForTests();
     const failure = new Error("fixture listener failed");
     vi.spyOn(Server.prototype, "listen").mockImplementation(function (this: Server) {
       queueMicrotask(() => this.emit("error", failure));
@@ -618,13 +588,13 @@ it("rejects oversized direct bridge responses", async () => {
       });
 
       // Cold locator startup must not consume this byte-limit fixture's caller deadline.
-      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
       try {
         await expect(invokeNativeHookRelayBridge(bridgeInvocation(relay))).rejects.toThrow(
           "native hook relay bridge response too large",
         );
       } finally {
-        clock.mockRestore();
+        vi.useRealTimers();
       }
     } finally {
       await new Promise<void>((resolve) => {
@@ -658,14 +628,14 @@ it("binds direct bridge tokens to the relay they were issued for", async () => {
         record: { ...firstRecord, relayId: second.relayId, expiresAtMs: Date.now() + 10_000 },
       });
       // Cold locator startup must not consume this token-binding fixture's caller deadline.
-      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
       try {
         await expect(invokeNativeHookRelayBridge(bridgeInvocation(second))).rejects.toThrow(
           "native hook relay bridge target mismatch",
         );
         expect(testing.getNativeHookRelayInvocationsForTests()).toStrictEqual([]);
       } finally {
-        clock.mockRestore();
+        vi.useRealTimers();
       }
     } finally {
       first.unregister();
@@ -690,8 +660,8 @@ it("does not start transport when locator lookup consumes the caller deadline", 
         return record;
       },
     );
-    const startedAt = Date.now();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(startedAt);
+    const startedAt = performance.now();
+    const clock = vi.spyOn(performance, "now").mockReturnValue(startedAt);
     const invocation = invokeNativeHookRelayBridge({
       provider: "codex",
       relayId: relay.relayId,
@@ -817,7 +787,192 @@ it("does not restore an old locator when renewal finishes after unregister", asy
     } finally {
       resume.resolve();
       relay.unregister();
-      await testing.clearNativeHookRelaysForTests();
+      await clearNativeHookRelaysForTests();
     }
+  });
+});
+
+describe("native hook execution admission", () => {
+  it("waits for async native admission and preserves a preparation rejection", async () => {
+    const entered = createDeferredCore();
+    const prepared = createDeferredCore();
+    const relay = registerOwnedNativeHookRelay({
+      provider: "codex",
+      sessionId: "async-admission",
+      runId: "async-admission",
+      assertActive: () => {},
+      executionAdmission: {
+        toolNames: ["exec"],
+        admit: async (_invocation, assertCurrent) => {
+          entered.resolve();
+          await prepared.promise;
+          assertCurrent();
+          throw new Error("native provider is not qualified");
+        },
+      },
+    });
+    const accepted = vi.fn();
+    const invocation = invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        session_id: "native-thread",
+        turn_id: "native-turn",
+        tool_use_id: "native-call",
+        tool_name: "exec_command",
+        tool_input: { command: "true" },
+      },
+    }).then(accepted);
+    await Promise.race([
+      entered.promise,
+      invocation.then(() => {
+        throw new Error("Native admission returned before preparation");
+      }),
+    ]);
+    prepared.resolve();
+    await expect(invocation).rejects.toThrow("native provider is not qualified");
+    expect(accepted).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { registration: "owned", work: "none", matcher: ["exec"] },
+    { registration: "public", work: "none", matcher: undefined },
+    { registration: "owned", work: "loop detection", matcher: undefined },
+  ] as const)(
+    "selects native execution custody for $registration registration with $work",
+    async ({ registration, work, matcher }) => {
+      const admit = vi.fn();
+      const params = {
+        provider: "codex" as const,
+        sessionId: "openclaw-session",
+        runId: "execution-admission",
+        ...(work !== "none" ? { sessionKey: "agent:main:execution-admission" } : {}),
+        ...(work === "loop detection"
+          ? { config: { tools: { loopDetection: { enabled: true } } } }
+          : {}),
+        executionAdmission: { toolNames: [work === "none" ? "exec_command" : "exec"], admit },
+      };
+      const relay =
+        registration === "owned"
+          ? registerOwnedNativeHookRelay(params)
+          : registerNativeHookRelay(params);
+      expect(relay.shouldRelayEvent("pre_tool_use")).toBe(registration === "owned");
+      expect(relay.toolMatcherForEvent("pre_tool_use")).toEqual(matcher);
+      if (work !== "none") {
+        return;
+      }
+      const rawPayload = {
+        session_id: "native-root",
+        turn_id: "native-turn",
+        tool_use_id: "native-call",
+        tool_name: "Bash",
+        tool_input: { command: "true" },
+      };
+      await expect(
+        invokeNativeHookRelay({
+          provider: "codex",
+          relayId: relay.relayId,
+          event: "pre_tool_use",
+          rawPayload,
+        }),
+      ).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
+      if (registration === "owned") {
+        expect(admit).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            sessionId: "openclaw-session",
+            turnId: "native-turn",
+            toolUseId: "native-call",
+            rawPayload,
+          }),
+          expect.any(Function),
+          expect.objectContaining({ assertCurrent: expect.any(Function) }),
+        );
+      } else {
+        expect(admit).not.toHaveBeenCalled();
+      }
+      admit.mockClear();
+      await invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "pre_tool_use",
+        rawPayload: { ...rawPayload, tool_name: "apply_patch" },
+      });
+      expect(admit).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["blocked", "rewritten", "failed"] as const)(
+    "does not retain execution custody for a %s policy result",
+    async (result) => {
+      const admit = vi.fn();
+      const relay = registerOwnedNativeHookRelay({
+        provider: "codex",
+        sessionId: "execution-admission",
+        runId: "execution-admission",
+        executionAdmission: { toolNames: ["exec"], admit },
+        runBeforeToolCall: async () => {
+          if (result === "failed") {
+            throw new Error("fixture policy failed");
+          }
+          return result === "blocked"
+            ? { blocked: true, kind: "veto", reason: "fixture policy blocked" }
+            : { blocked: false, params: { command: "rewritten" } };
+        },
+      });
+      const invocation = invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "pre_tool_use",
+        rawPayload: { tool_name: "Bash", tool_use_id: "call", tool_input: { command: "true" } },
+      });
+      if (result === "failed") {
+        await expect(invocation).rejects.toThrow("fixture policy failed");
+      } else {
+        const response = await invocation;
+        expect(JSON.parse(response.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
+      }
+      expect(admit).not.toHaveBeenCalled();
+    },
+  );
+
+  it("cancels deferred approval when execution custody is retired", async () => {
+    const onResolution = vi.fn();
+    const relay = registerOwnedNativeHookRelay({
+      provider: "codex",
+      sessionId: "execution-admission",
+      runId: "execution-admission",
+      runBeforeToolCall: async () => ({
+        blocked: false,
+        params: { command: "true" },
+        deferredApproval: {
+          approval: { title: "fixture", description: "fixture", onResolution },
+          toolName: "exec",
+          baseParams: { command: "true" },
+        },
+      }),
+      executionAdmission: {
+        toolNames: ["exec"],
+        admit: () => {
+          relay.unregister();
+        },
+      },
+    });
+    const invocation = invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        tool_name: "Bash",
+        tool_use_id: "call",
+        tool_input: { command: "true" },
+        openclaw_approval_mode: "report",
+      },
+    });
+    await expect(invocation).rejects.toThrow(/inactive|foreground/);
+    expect(onResolution).toHaveBeenCalledExactlyOnceWith("cancelled");
+    await expect(
+      resolveNativeHookRelayDeferredToolApproval({ relayId: relay.relayId, toolUseId: "call" }),
+    ).resolves.toBeUndefined();
   });
 });

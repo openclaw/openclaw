@@ -3,20 +3,17 @@ import { constants, DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import { readExactSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
 import { readSessionEntryCacheValidityToken } from "../config/sessions/session-accessor.sqlite-entry-revision.js";
-import {
-  readSessionEntrySelectionSnapshot,
-  readUnchangedLifecycleTargetSnapshot,
-  writeSessionEntry,
-} from "../config/sessions/session-accessor.sqlite-entry-store.js";
+import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "./openclaw-agent-db.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
+import { OPENCLAW_AGENT_SCHEMA_V24_SQL } from "./openclaw-agent-schema-v24.test-support.js";
 import { withoutSessionEntrySnapshotsSchema } from "./openclaw-agent-session-snapshots-schema.js";
 
 function largeEntry(index: number): SessionEntry {
@@ -50,7 +47,7 @@ function largeEntry(index: number): SessionEntry {
 }
 
 function seedV23(database: DatabaseSync, count: number) {
-  database.exec(withoutSessionEntrySnapshotsSchema(OPENCLAW_AGENT_SCHEMA_SQL));
+  database.exec(withoutSessionEntrySnapshotsSchema(OPENCLAW_AGENT_SCHEMA_V24_SQL));
   database.exec(`PRAGMA user_version = 23;
     INSERT INTO schema_meta(meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
     VALUES ('primary', 'agent', 23, 'main', '2026.9.4', 1, 1)`);
@@ -81,7 +78,11 @@ function seedV23(database: DatabaseSync, count: number) {
 }
 
 function transcriptRows(database: DatabaseSync) {
-  return database.prepare("SELECT rowid, * FROM transcript_events ORDER BY rowid").all();
+  return database
+    .prepare(
+      "SELECT rowid, session_id, seq, event_json, event_zstd, event_utf8_bytes, navigation_json, created_at FROM transcript_events ORDER BY rowid",
+    )
+    .all();
 }
 
 function snapshotRows(database: DatabaseSync) {
@@ -145,9 +146,11 @@ it("migrates a copied large v23 store without losing snapshots or rewriting tran
           env: state.env,
         });
       });
-      expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 24 });
+      expect(database.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+      });
       expect(database.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
-        schema_version: 24,
+        schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
       });
       expect(transcriptRows(database)).toEqual(beforeTranscript);
       const reader = { agentId: "main", db: database };
@@ -208,7 +211,6 @@ it("migrates a copied large v23 store without losing snapshots or rewriting tran
       expect(snapshotRows(opened.db)).toEqual(coldRows);
       expect(readRevision()).toEqual(migratedRevision);
       expect(transcriptRows(opened.db)).toEqual(beforeTranscript);
-      const prepared = readSessionEntrySelectionSnapshot(opened, "agent:main:fixture-0", true);
       const revision = readSessionEntryCacheValidityToken(opened.db);
       opened.db.exec("BEGIN");
       try {
@@ -216,7 +218,6 @@ it("migrates a copied large v23 store without losing snapshots or rewriting tran
           .prepare(`UPDATE session_entry_snapshots SET value_json = ?
             WHERE session_key = 'agent:main:fixture-0' AND field = 'skillsSnapshot'`)
           .run(JSON.stringify({ prompt: "Changed outside the entry writer", skills: [] }));
-        expect(readUnchangedLifecycleTargetSnapshot(opened, prepared)).toBeUndefined();
         expect(readSessionEntryCacheValidityToken(opened.db)).not.toEqual(revision);
         expect(
           readExactSessionEntryRow(opened, "agent:main:fixture-0")?.entry.skillsSnapshot?.prompt,
@@ -224,8 +225,9 @@ it("migrates a copied large v23 store without losing snapshots or rewriting tran
       } finally {
         opened.db.exec("ROLLBACK");
       }
-      expect(readUnchangedLifecycleTargetSnapshot(opened, prepared)).toBe(prepared);
-      expect(readSessionEntryCacheValidityToken(opened.db)).toEqual(revision);
+      const rolledBackRevision = readSessionEntryCacheValidityToken(opened.db);
+      expect(rolledBackRevision).not.toEqual(revision);
+      expect(readSessionEntryCacheValidityToken(opened.db)).toEqual(rolledBackRevision);
       expect(readRevision()).toEqual(migratedRevision);
       expect(snapshotRows(opened.db)).toEqual(coldRows);
     } finally {
@@ -250,7 +252,11 @@ it("rolls back extracted snapshots and version markers when schema publication i
       };
       let reachedPublication = false;
       database.setAuthorizer((action, name, value) => {
-        if (action === constants.SQLITE_PRAGMA && name === "user_version" && value === "24") {
+        if (
+          action === constants.SQLITE_PRAGMA &&
+          name === "user_version" &&
+          value === String(OPENCLAW_AGENT_SCHEMA_VERSION)
+        ) {
           reachedPublication = true;
           return constants.SQLITE_DENY;
         }

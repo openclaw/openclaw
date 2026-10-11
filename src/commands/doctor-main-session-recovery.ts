@@ -11,14 +11,6 @@ export type MainSessionRecoveryIntegrityCandidate = {
   reason: string;
 };
 
-type MainSessionRecoveryDoctorParams = {
-  storePath: string;
-  wedged: MainSessionRecoveryIntegrityCandidate[];
-  warnings: string[];
-  changes: string[];
-  confirmRepair: (params: { message: string; initialValue?: boolean }) => Promise<boolean>;
-};
-
 export function inspectMainSessionRecoveryEntry(
   key: string,
   entry: SessionEntry,
@@ -35,9 +27,13 @@ export function inspectMainSessionRecoveryEntry(
     : undefined;
 }
 
-export async function noteMainSessionRecoveryIntegrity(
-  params: MainSessionRecoveryDoctorParams,
-): Promise<void> {
+export async function noteMainSessionRecoveryIntegrity(params: {
+  storePath: string;
+  wedged: MainSessionRecoveryIntegrityCandidate[];
+  warnings: string[];
+  changes: string[];
+  confirmRepair: (params: { message: string; initialValue?: boolean }) => Promise<boolean>;
+}): Promise<void> {
   const { wedged } = params;
   if (wedged.length === 0) {
     return;
@@ -83,13 +79,11 @@ export async function noteMainSessionRecoveryIntegrity(
       sessionKeys,
       storePath: params.storePath,
       update: (currentEntries) => {
-        const replacements = currentEntries.flatMap(({ sessionKey, entry }) => {
-          const transition = transitionMainSessionRecovery(entry, {
-            kind: "doctor_repair",
-            now: repairedAt,
-          });
-          return transition.kind === "doctor_repaired" ? [{ sessionKey, entry }] : [];
-        });
+        const replacements = currentEntries.filter(
+          ({ entry }) =>
+            transitionMainSessionRecovery(entry, { kind: "doctor_repair", now: repairedAt })
+              .kind === "doctor_repaired",
+        );
         return { replacements, result: replacements.length };
       },
     });

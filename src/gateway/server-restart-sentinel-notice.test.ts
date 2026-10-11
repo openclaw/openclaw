@@ -1,10 +1,8 @@
 // Exercises restart-notice retries against the real SQLite outbound queue.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import {
-  captureDeliveryQueueStateContext,
-  getDeliveryQueueEntryStatus,
-} from "../infra/delivery-queue-sqlite.js";
+import { captureDeliveryQueueStateContext } from "../infra/delivery-queue-sqlite.js";
+import { getDeliveryQueueEntryStatus } from "../infra/delivery-queue-sqlite.test-support.js";
 import { runOutboundDeliveryInternal } from "../infra/outbound/deliver-queue.js";
 import { PlatformMessageNotDispatchedError } from "../infra/outbound/deliver-types.js";
 import { attachOutboundDeliveryCommitHook } from "../infra/outbound/delivery-commit-hooks.js";

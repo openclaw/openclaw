@@ -1,3 +1,4 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -22,10 +23,7 @@ export function shouldQueueAsPendingForegroundAction(params: {
   ) {
     return false;
   }
-  const error =
-    params.error && typeof params.error === "object"
-      ? (params.error as { code?: unknown; message?: unknown })
-      : null;
+  const error = asOptionalObjectRecord(params.error);
   const code = normalizeOptionalString(error?.code)?.toUpperCase() ?? "";
   const message = normalizeOptionalString(error?.message)?.toUpperCase() ?? "";
   return code === "NODE_BACKGROUND_UNAVAILABLE" || message.includes("BACKGROUND_UNAVAILABLE");

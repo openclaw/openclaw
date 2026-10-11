@@ -117,7 +117,6 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
       ws.emitClose(1008, `pairing ${decision}`);
       await vi.advanceTimersByTimeAsync(60_000);
       expect(wsInstances).toHaveLength(1);
-      expect(client.pairingRetryPaused).toBe(true);
       expect(client.needsWakeReconnect).toBe(false);
       expect(onClose).toHaveBeenLastCalledWith(
         expect.objectContaining({

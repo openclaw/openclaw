@@ -30,17 +30,18 @@ import {
 
 type ApprovalPhase = "pending" | "resolved" | "expired";
 
+function buildMetadata(
+  entries: [label: string, value: string | null | undefined][],
+): ApprovalMetadataView[] {
+  return entries.flatMap(([label, value]) => (value ? [{ label, value }] : []));
+}
+
 function buildExecMetadata(request: ExecApprovalRequest): ApprovalMetadataView[] {
-  const metadata: ApprovalMetadataView[] = [];
-  if (request.request.agentId) {
-    metadata.push({ label: "Agent", value: request.request.agentId });
-  }
-  if (request.request.cwd) {
-    metadata.push({ label: "CWD", value: request.request.cwd });
-  }
-  if (request.request.host) {
-    metadata.push({ label: "Host", value: request.request.host });
-  }
+  const metadata = buildMetadata([
+    ["Agent", request.request.agentId],
+    ["CWD", request.request.cwd],
+    ["Host", request.request.host],
+  ]);
   if (Array.isArray(request.request.envKeys) && request.request.envKeys.length > 0) {
     metadata.push({ label: "Env Overrides", value: request.request.envKeys.join(", ") });
   }
@@ -51,21 +52,13 @@ function buildExecMetadata(request: ExecApprovalRequest): ApprovalMetadataView[]
 }
 
 function buildPluginMetadata(request: PluginApprovalRequest): ApprovalMetadataView[] {
-  const metadata: ApprovalMetadataView[] = [];
   const severity = request.request.severity ?? "warning";
-  metadata.push({
-    label: "Severity",
-    value: severity === "critical" ? "Critical" : severity === "info" ? "Info" : "Warning",
-  });
-  if (request.request.toolName) {
-    metadata.push({ label: "Tool", value: request.request.toolName });
-  }
-  if (request.request.pluginId) {
-    metadata.push({ label: "Plugin", value: request.request.pluginId });
-  }
-  if (request.request.agentId) {
-    metadata.push({ label: "Agent", value: request.request.agentId });
-  }
+  const metadata = buildMetadata([
+    ["Severity", severity === "critical" ? "Critical" : severity === "info" ? "Info" : "Warning"],
+    ["Tool", request.request.toolName],
+    ["Plugin", request.request.pluginId],
+    ["Agent", request.request.agentId],
+  ]);
   if (request.request.scope) {
     metadata.push({ label: "Scope", value: summarizeApprovalScope(request.request.scope) });
   }

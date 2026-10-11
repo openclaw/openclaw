@@ -63,18 +63,19 @@ export function readAsyncStartedTaskIds(result: unknown): {
   };
 }
 
-function truncateToolText(text: string): string {
-  if (text.length <= TOOL_RESULT_MAX_CHARS) {
+function truncateToolText(
+  text: string,
+  maxChars = TOOL_RESULT_MAX_CHARS,
+  suffix = "\n…(truncated)…",
+): string {
+  if (text.length <= maxChars) {
     return text;
   }
-  return `${truncateUtf16Safe(text, TOOL_RESULT_MAX_CHARS)}\n…(truncated)…`;
+  return `${truncateUtf16Safe(text, maxChars)}${suffix}`;
 }
 
 export function truncateLiveExecOutput(text: string): string {
-  if (text.length <= LIVE_EXEC_OUTPUT_MAX_CHARS) {
-    return text;
-  }
-  return `${truncateUtf16Safe(text, LIVE_EXEC_OUTPUT_MAX_CHARS)}\n...(live output truncated)...`;
+  return truncateToolText(text, LIVE_EXEC_OUTPUT_MAX_CHARS, "\n...(live output truncated)...");
 }
 
 export function capLiveExecResult(result: unknown): unknown {
@@ -86,7 +87,7 @@ export function capLiveExecResult(result: unknown): unknown {
   if (aggregated === details.aggregated) {
     return result;
   }
-  if (!result || typeof result !== "object" || Array.isArray(result)) {
+  if (Array.isArray(result)) {
     return result;
   }
   return {
@@ -103,9 +104,7 @@ function normalizeToolErrorText(text: string): string | undefined {
   if (!firstLine) {
     return undefined;
   }
-  return firstLine.length > TOOL_ERROR_MAX_CHARS
-    ? `${truncateUtf16Safe(firstLine, TOOL_ERROR_MAX_CHARS)}…`
-    : firstLine;
+  return truncateToolText(firstLine, TOOL_ERROR_MAX_CHARS, "…");
 }
 
 function readErrorCandidate(value: unknown): string | undefined {
@@ -152,31 +151,18 @@ function readDenialErrorCodeFromMessage(value: unknown): string | undefined {
   if (!message) {
     return undefined;
   }
-  for (const code of TOOL_DENIAL_ERROR_CODES) {
-    if (message === code || message.startsWith(`${code}:`)) {
-      return code;
-    }
-  }
-  return undefined;
+  return TOOL_DENIAL_ERROR_CODES.find((code) => message === code || message.startsWith(`${code}:`));
 }
 
-function readNestedErrorCodeField(value: unknown): string | undefined {
+function extractErrorCodeField(value: unknown, nested = false): string | undefined {
   const record = asOptionalObjectRecord(value);
+  const cause = nested
+    ? (readDenialErrorCodeFromMessage(record?.message) ??
+      readDenialErrorCodeFromMessage(record?.error))
+    : (extractErrorCodeField(record?.error, true) ??
+      extractErrorCodeField(record?.nodeError, true));
   return (
-    readDenialErrorCodeFromMessage(record?.message) ??
-    readDenialErrorCodeFromMessage(record?.error) ??
-    normalizeOptionalString(record?.code) ??
-    normalizeOptionalString(record?.gatewayCode)
-  );
-}
-
-function extractDirectErrorCodeField(value: unknown): string | undefined {
-  const record = asOptionalObjectRecord(value);
-  return (
-    readNestedErrorCodeField(record?.error) ??
-    readNestedErrorCodeField(record?.nodeError) ??
-    normalizeOptionalString(record?.code) ??
-    normalizeOptionalString(record?.gatewayCode)
+    cause ?? normalizeOptionalString(record?.code) ?? normalizeOptionalString(record?.gatewayCode)
   );
 }
 
@@ -201,32 +187,8 @@ export function buildToolLifecycleErrorResult(error: unknown): {
   };
 }
 
-function redactStringsDeep(value: unknown, seen = new WeakSet<object>()): unknown {
-  if (typeof value === "string") {
-    return redactToolPayloadText(value);
-  }
-  if (value && typeof value === "object") {
-    if (seen.has(value)) {
-      return "[Circular]";
-    }
-    seen.add(value);
-    if (Array.isArray(value)) {
-      return value.map((item) => redactStringsDeep(item, seen));
-    }
-    const entries = Object.entries(value as Record<string, unknown>);
-    for (const entry of entries) {
-      entry[1] =
-        typeof entry[1] === "string"
-          ? redactSensitiveFieldValue(entry[0], entry[1])
-          : redactStringsDeep(entry[1], seen);
-    }
-    return Object.fromEntries(entries);
-  }
-  return value;
-}
-
 export function sanitizeToolArgs(args: unknown): unknown {
-  return redactStringsDeep(args);
+  return redactToolPayloadValue(args, "args");
 }
 
 /** A string result keeps its string type: only model-visible redaction is applied to it. */
@@ -320,28 +282,35 @@ function carriesBinaryData(record: Record<string, unknown>): boolean {
   );
 }
 
-function sanitizeStructuredToolResultValue(
+function redactToolPayloadValue(
   value: unknown,
-  key = "",
+  mode: "args" | "result",
+  key?: string,
   parentCarriesBinaryData = false,
   seen = new WeakSet<object>(),
 ): unknown {
   if (typeof value === "string") {
-    if (SENSITIVE_STRUCTURED_HEADER_FIELDS.has(key.toLowerCase())) {
+    if (mode === "args") {
+      return key === undefined
+        ? redactToolPayloadText(value)
+        : redactSensitiveFieldValue(key, value);
+    }
+    const field = key ?? "";
+    if (SENSITIVE_STRUCTURED_HEADER_FIELDS.has(field.toLowerCase())) {
       return "***";
     }
-    if (key === "blob" || (key === "data" && parentCarriesBinaryData)) {
+    if (field === "blob" || (field === "data" && parentCarriesBinaryData)) {
       return `[binary omitted: ${value.length} chars]`;
     }
     // Claude CLI result blocks carry replay-only ciphertext that is not useful display text.
-    if (OPAQUE_STRUCTURED_RESULT_FIELDS.has(key)) {
+    if (OPAQUE_STRUCTURED_RESULT_FIELDS.has(field)) {
       return `[opaque data omitted: ${value.length} chars]`;
     }
     return truncateToolText(
-      redactInlineDataUriValue(redactModelVisibleSensitiveFieldValueWithConfig(key, value)),
+      redactInlineDataUriValue(redactModelVisibleSensitiveFieldValueWithConfig(field, value)),
     );
   }
-  if (typeof value === "bigint") {
+  if (mode === "result" && typeof value === "bigint") {
     return value.toString();
   }
   if (!value || typeof value !== "object") {
@@ -352,17 +321,19 @@ function sanitizeStructuredToolResultValue(
   }
   seen.add(value);
   if (Array.isArray(value)) {
-    // Keep the owning key so arrays of credentials inherit the same redaction policy.
+    // Structured results retain credential keys through arrays; argument arrays
+    // use the same free-text policy as root argument strings.
+    const arrayKey = mode === "result" ? key : undefined;
     return value.map((item) =>
-      sanitizeStructuredToolResultValue(item, key, parentCarriesBinaryData, seen),
+      redactToolPayloadValue(item, mode, arrayKey, parentCarriesBinaryData, seen),
     );
   }
   const record = value as Record<string, unknown>;
-  const hasBinaryData = carriesBinaryData(record);
+  const hasBinaryData = mode === "result" && carriesBinaryData(record);
   return Object.fromEntries(
     Object.entries(record).map(([childKey, child]) => [
       childKey,
-      sanitizeStructuredToolResultValue(child, childKey, hasBinaryData, seen),
+      redactToolPayloadValue(child, mode, childKey, hasBinaryData, seen),
     ]),
   );
 }
@@ -377,7 +348,7 @@ function stringifyStructuredToolResultContent(block: unknown): string | undefine
     return undefined;
   }
   try {
-    const serialized = JSON.stringify(sanitizeStructuredToolResultValue(record));
+    const serialized = JSON.stringify(redactToolPayloadValue(record, "result"));
     const redacted = serialized ? redactModelVisibleToolPayloadText(serialized) : serialized;
     return redacted && redacted !== "{}" ? redacted : undefined;
   } catch {
@@ -415,16 +386,14 @@ export function extractToolResultText(result: unknown): string | undefined {
   const texts = collectTextContentBlocks(content)
     .map((item) => item.trim())
     .filter(Boolean);
-  if (texts.length > 0) {
-    return truncateToolText(texts.join("\n"));
-  }
-  const structuredTexts = content.map(stringifyStructuredToolResultContent).filter(Boolean);
-  return structuredTexts.length > 0 ? truncateToolText(structuredTexts.join("\n")) : undefined;
+  const selected =
+    texts.length > 0 ? texts : content.map(stringifyStructuredToolResultContent).filter(Boolean);
+  return selected.length > 0 ? truncateToolText(selected.join("\n")) : undefined;
 }
 
 export function extractToolErrorCode(result: unknown): string | undefined {
   const record = asOptionalObjectRecord(result);
-  return extractDirectErrorCodeField(record?.details) ?? extractDirectErrorCodeField(record);
+  return extractErrorCodeField(record?.details) ?? extractErrorCodeField(record);
 }
 
 export function isToolResultTimedOut(result: unknown): boolean {

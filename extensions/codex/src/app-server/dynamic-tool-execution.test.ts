@@ -12,8 +12,6 @@ import {
   handleDynamicToolCallWithTimeout,
   resolveDynamicToolCallTimeoutMs,
   resolveDynamicToolServerRequestTimeoutMs,
-  resolveTerminalDynamicToolBatchAction,
-  shouldReleaseTurnAfterTerminalDynamicTool,
   toCodexDynamicToolProgressResponse,
   toCodexDynamicToolProtocolResponse,
 } from "./dynamic-tool-execution.js";
@@ -593,83 +591,6 @@ describe("dynamic tool execution helpers", () => {
       details: { mcpAppPreview, async: true, status: "started" },
       success: true,
     });
-  });
-
-  it("allows turn release after successful terminal dynamic tool responses", () => {
-    expect(
-      shouldReleaseTurnAfterTerminalDynamicTool({
-        completed: false,
-        aborted: false,
-        responseSuccess: true,
-        currentTurnHadNonTerminalDynamicToolResult: false,
-        activeAppServerTurnRequests: 0,
-        activeTurnItemIdsCount: 0,
-        pendingOpenClawDynamicToolCompletionIdsCount: 0,
-      }),
-    ).toBe(true);
-    expect(
-      shouldReleaseTurnAfterTerminalDynamicTool({
-        completed: false,
-        aborted: false,
-        responseSuccess: true,
-        currentTurnHadNonTerminalDynamicToolResult: true,
-        activeAppServerTurnRequests: 0,
-        activeTurnItemIdsCount: 0,
-        pendingOpenClawDynamicToolCompletionIdsCount: 0,
-      }),
-    ).toBe(false);
-    expect(
-      shouldReleaseTurnAfterTerminalDynamicTool({
-        completed: false,
-        aborted: false,
-        responseSuccess: true,
-        currentTurnHadNonTerminalDynamicToolResult: false,
-        activeAppServerTurnRequests: 1,
-        activeTurnItemIdsCount: 0,
-        pendingOpenClawDynamicToolCompletionIdsCount: 0,
-      }),
-    ).toBe(false);
-    expect(
-      shouldReleaseTurnAfterTerminalDynamicTool({
-        completed: false,
-        aborted: false,
-        responseSuccess: true,
-        currentTurnHadNonTerminalDynamicToolResult: false,
-        activeAppServerTurnRequests: 0,
-        activeTurnItemIdsCount: 0,
-        pendingOpenClawDynamicToolCompletionIdsCount: 1,
-      }),
-    ).toBe(false);
-  });
-
-  it("resolves terminal dynamic tool batch state", () => {
-    expect(
-      resolveTerminalDynamicToolBatchAction({
-        activeAppServerTurnRequests: 1,
-        activeTurnItemIdsCount: 0,
-        pendingOpenClawDynamicToolCompletionIdsCount: 0,
-        currentTurnHadNonTerminalDynamicToolResult: false,
-        hasPendingTerminalDynamicToolRelease: true,
-      }),
-    ).toBe("wait");
-    expect(
-      resolveTerminalDynamicToolBatchAction({
-        activeAppServerTurnRequests: 0,
-        activeTurnItemIdsCount: 0,
-        pendingOpenClawDynamicToolCompletionIdsCount: 0,
-        currentTurnHadNonTerminalDynamicToolResult: true,
-        hasPendingTerminalDynamicToolRelease: true,
-      }),
-    ).toBe("clear-nonterminal-batch");
-    expect(
-      resolveTerminalDynamicToolBatchAction({
-        activeAppServerTurnRequests: 0,
-        activeTurnItemIdsCount: 0,
-        pendingOpenClawDynamicToolCompletionIdsCount: 0,
-        currentTurnHadNonTerminalDynamicToolResult: false,
-        hasPendingTerminalDynamicToolRelease: true,
-      }),
-    ).toBe("release-pending-terminal");
   });
 
   it.each([{ timeoutSeconds: 900, executionTimeoutMs: 910_000, completionMs: 690_000 }])(

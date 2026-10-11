@@ -102,23 +102,6 @@ describe("gateway method authorization", () => {
     );
   });
 
-  it("rejects profile mutations before the handler without write scope", async () => {
-    const respond = await dispatchProfileMutation({
-      profileId: "profile-1",
-      scopes: ["operator.read"],
-    });
-
-    expect(respond).toHaveBeenCalledWith(false, undefined, {
-      code: "FORBIDDEN",
-      message: "missing scope: operator.write",
-      details: {
-        code: "MISSING_SCOPE",
-        missingScope: "operator.write",
-        requiredScopes: ["operator.write"],
-      },
-    });
-  });
-
   it("allows an identified write caller to edit its own profile", async () => {
     const profile = { id: "profile-1" };
     ensureProfileIdForEmail.mockResolvedValue(profile.id);

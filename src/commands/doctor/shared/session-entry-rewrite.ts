@@ -1,5 +1,5 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { sql } from "kysely";
 import type { DoctorSessionScanScope } from "../../../config/sessions/session-accessor.sqlite-canonical-inventory.js";
@@ -11,14 +11,16 @@ import {
   toDatabaseOptions,
 } from "../../../config/sessions/session-accessor.sqlite-scope.js";
 import { normalizeStatus } from "../../../config/sessions/session-accessor.sqlite-status.js";
+import { markCanonicalSessionValidationPending } from "../../../config/sessions/session-canonical-key.js";
 import { parseSqliteSessionEntryRecord } from "../../../config/sessions/session-entry-json.js";
+import { attachSessionEntrySnapshots } from "../../../config/sessions/session-entry-snapshot-values.js";
 import {
-  attachSessionEntrySnapshots,
   sessionEntrySnapshotColumns,
   splitSessionEntrySnapshots,
   writeSessionEntrySnapshots,
 } from "../../../config/sessions/session-entry-snapshots.js";
 import { LEGACY_SESSION_ENTRY_STATE_FIELDS } from "../../../config/sessions/session-entry-state-format.js";
+import { deriveSessionPredicateColumns } from "../../../config/sessions/session-predicate-columns.js";
 import { stripRuntimeOnlySessionSkillsFields } from "../../../config/sessions/store-entry-shape.js";
 import { assertSupportedSessionStoreEntry } from "../../../config/sessions/supported-session-store.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
@@ -47,15 +49,6 @@ export function iterateDoctorSessionKeyBatches(sessionKeys: readonly string[]): 
   return chunkItems(uniqueStrings(sessionKeys).toSorted(), DOCTOR_SESSION_REWRITE_BATCH_SIZE);
 }
 
-function parseDoctorSessionEntryRecord(entryJson: string): Record<string, unknown> | undefined {
-  try {
-    const entry: unknown = JSON.parse(entryJson);
-    return isRecord(entry) ? entry : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 /** Select legacy state before loading raw rows into canonical validation or runtime projection. */
 export function scanDoctorSessionEntryRecords(
   scope: DoctorSessionScanScope,
@@ -81,7 +74,7 @@ export function scanDoctorSessionEntryRecords(
           ) ELSE 1 END`,
         ),
     )) {
-      const entry = parseDoctorSessionEntryRecord(row.entry_json);
+      const entry = safeParseJsonRecord(row.entry_json);
       if (entry) {
         assertSupportedSessionStoreEntry(entry);
         visit({ sessionKey: row.session_key, entry });
@@ -161,10 +154,13 @@ export function rewriteDoctorSessionEntries(
     params.assertCurrent?.();
     rewritten += runOpenClawAgentWriteTransaction(
       (database) => {
-        params.assertCurrent?.();
-        if (params.expectedIdentity) {
-          assertOpenClawAgentDatabaseIdentity(database, params.expectedIdentity);
-        }
+        const assertRepairCurrent = () => {
+          params.assertCurrent?.();
+          if (params.expectedIdentity) {
+            assertOpenClawAgentDatabaseIdentity(database, params.expectedIdentity);
+          }
+        };
+        assertRepairCurrent();
         const db = getSessionKysely(database.db);
         let batchRewritten = 0;
         for (const sessionKey of batch) {
@@ -192,7 +188,7 @@ export function rewriteDoctorSessionEntries(
           let snapshots: ReturnType<typeof splitSessionEntrySnapshots>["snapshots"] | undefined;
           let entryValid = row.entry_valid;
           if (params.rawTransform) {
-            const entry = parseDoctorSessionEntryRecord(row.entry_json);
+            const entry = safeParseJsonRecord(row.entry_json);
             if (!entry) {
               continue;
             }
@@ -265,23 +261,27 @@ export function rewriteDoctorSessionEntries(
               runOutcome = nextEntry;
             }
           }
-          params.assertCurrent?.();
-          if (params.expectedIdentity) {
-            assertOpenClawAgentDatabaseIdentity(database, params.expectedIdentity);
-          }
+          assertRepairCurrent();
           invalidateSessionEntryMaintenanceAgeFact(database.db);
+          markCanonicalSessionValidationPending(database, [sessionKey]);
           const runProjection = runOutcome
             ? {
                 status: normalizeStatus(runOutcome.status),
                 ended_at: asFiniteNumber(runOutcome.endedAt) ?? null,
               }
             : undefined;
+          const predicateColumns = deriveSessionPredicateColumns(entryJson);
           executeSqliteQuerySync(
             database.db,
             db
               .updateTable("session_nodes")
               .set({
                 entry_json: entryJson,
+                ...predicateColumns,
+                session_started_at: /* kysely-allow-raw: exact int64 bind; generated INTEGER reads are numbers. */ sql<
+                  number | null
+                >`${predicateColumns.session_started_at}`,
+                entry_valid: entryValid,
                 ...(runProjection ? { status: runProjection.status } : {}),
               })
               .where("session_key", "=", sessionKey),
@@ -289,13 +289,6 @@ export function rewriteDoctorSessionEntries(
           if (snapshots) {
             writeSessionEntrySnapshots(database, sessionKey, snapshots);
           }
-          executeSqliteQuerySync(
-            database.db,
-            db
-              .updateTable("session_nodes")
-              .set({ entry_valid: entryValid })
-              .where("session_key", "=", sessionKey),
-          );
           const projected = deliveryProjectionEntry ?? nextEntry;
           const deliveryProjection =
             projected && params.updateDeliveryProjection
@@ -317,10 +310,7 @@ export function rewriteDoctorSessionEntries(
           publishSessionEntryCacheInvalidation(database, { sessionKey });
           batchRewritten += 1;
         }
-        params.assertCurrent?.();
-        if (params.expectedIdentity) {
-          assertOpenClawAgentDatabaseIdentity(database, params.expectedIdentity);
-        }
+        assertRepairCurrent();
         return batchRewritten;
       },
       databaseOptions,

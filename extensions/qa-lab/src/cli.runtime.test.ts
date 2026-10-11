@@ -1715,12 +1715,12 @@ describe("qa cli", () => {
       stop,
     });
 
-    await expect(
-      parseQa(["run"], {
-        "repo-root": "/tmp/openclaw-repo",
-        output: ".artifacts/qa/self-check.md",
-      }),
-    ).rejects.toThrow("QA self-check failed. See /tmp/failed-report.md.");
+    await parseQa(["run"], {
+      "repo-root": "/tmp/openclaw-repo",
+      output: ".artifacts/qa/self-check.md",
+    });
+    expectWriteContains(stderrWrite, "QA self-check failed. See /tmp/failed-report.md.");
+    expect(process.exitCode).toBe(1);
 
     expect(startQaLabServer).toHaveBeenCalledWith({
       repoRoot: path.resolve("/tmp/openclaw-repo"),
@@ -1734,9 +1734,12 @@ describe("qa cli", () => {
     const payloadPath = path.join(suiteArtifactsDir, "oversized-credential.json");
     await fs.writeFile(payloadPath, JSON.stringify({ blob: "x".repeat(64) }), "utf8");
     vi.stubEnv("OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES", "32");
-    await expect(
-      parseQa(["credentials", "add"], { kind: "telegram", "payload-file": payloadPath }),
-    ).rejects.toThrow("Payload file exceeds OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES (32 bytes).");
+    await parseQa(["credentials", "add"], { kind: "telegram", "payload-file": payloadPath });
+    expectWriteContains(
+      stderrWrite,
+      "Payload file exceeds OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES (32 bytes).",
+    );
+    expect(process.exitCode).toBe(1);
   });
 
   it("routes image builds to the requested repository", async () => {

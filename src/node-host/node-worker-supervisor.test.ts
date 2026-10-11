@@ -697,6 +697,7 @@ describe("node worker admission re-arm journal", () => {
             enabled: true,
             environmentSession: 1,
             capturedExecPolicy: true,
+            promptContext: 1,
             capacity: { total: 1, available: 1 },
           },
           commands: [],

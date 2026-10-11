@@ -18,9 +18,7 @@ ANDROID_RELEASE_SIGNING_GRADLE_PROPERTIES = [
   "OPENCLAW_ANDROID_KEY_PASSWORD"
 ].freeze
 
-def load_env_file(path)
-  return unless File.exist?(path)
-
+def each_android_property(path)
   File.foreach(path) do |line|
     stripped = line.strip
     next if stripped.empty? || stripped.start_with?("#")
@@ -28,6 +26,14 @@ def load_env_file(path)
     key, value = stripped.split("=", 2)
     next if key.nil? || key.empty? || value.nil?
 
+    yield key, value
+  end
+end
+
+def load_env_file(path)
+  return unless File.exist?(path)
+
+  each_android_property(path) do |key, value|
     ENV[key] = value if ENV[key].nil? || ENV[key].strip.empty?
   end
 end
@@ -378,16 +384,10 @@ def validate_android_screenshots!
   end
 end
 
-def release_artifact_path(version)
-  File.join(android_root, "build", "release-artifacts", "openclaw-#{version}-play-release.aab")
-end
-
-def wear_release_artifact_path(version)
-  File.join(android_root, "build", "release-artifacts", "openclaw-#{version}-wear-release.aab")
-end
-
 def play_release_artifact_paths(version)
-  [release_artifact_path(version), wear_release_artifact_path(version)]
+  %w(play wear).map do |flavor|
+    File.join(android_root, "build", "release-artifacts", "openclaw-#{version}-#{flavor}-release.aab")
+  end
 end
 
 def build_release_artifacts!
@@ -427,15 +427,7 @@ def read_android_release_signing_properties!(path)
   UI.user_error!("Missing materialized Android release signing properties at #{path}.") unless File.exist?(path)
 
   properties = {}
-  File.foreach(path) do |line|
-    stripped = line.strip
-    next if stripped.empty? || stripped.start_with?("#")
-
-    key, value = stripped.split("=", 2)
-    next if key.nil? || key.empty? || value.nil?
-
-    properties[key] = value.strip
-  end
+  each_android_property(path) { |key, value| properties[key] = value.strip }
 
   missing = ANDROID_RELEASE_SIGNING_GRADLE_PROPERTIES.reject { |key| env_present?(properties[key]) }
   UI.user_error!("Materialized Android release signing properties are missing: #{missing.join(', ')}.") unless missing.empty?
@@ -619,7 +611,7 @@ platform :android do
     build_release_artifacts!
   end
 
-  desc "Generate deterministic Android screenshots for Google Play metadata"
+  desc "Generate repeatable Android screenshots for Google Play metadata"
   lane :screenshots do
     capture_android_screenshots!
   end

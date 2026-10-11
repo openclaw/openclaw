@@ -1,5 +1,6 @@
 import type { SessionsGoalMutationResult } from "../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import type { SessionEntry } from "./types.js";
 
 type SessionGoalOperationIdentity = {
   operationId: string;
@@ -69,4 +70,17 @@ export type SessionTranscriptTurnMutation = {
 export type SessionTranscriptTurnMutationResult = {
   result: SessionGoalOperationResult;
   replayed: boolean;
+};
+
+export type SessionGoalManagementInput = {
+  sessionKey: string;
+  expectedSessionId: string;
+  operation: Exclude<SessionGoalOperation, { action: "start" }> & {
+    action: "edit" | "pause" | "block" | "complete" | "clear";
+  };
+};
+
+export type SessionGoalManagementCommit = SessionTranscriptTurnMutationResult & {
+  sessionEntry?: SessionEntry;
+  previous?: SessionEntry;
 };

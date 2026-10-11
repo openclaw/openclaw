@@ -1,10 +1,12 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { inspectRuntimeConversationBindingRoute } from "openclaw/plugin-sdk/conversation-binding-runtime";
+import type { ConversationBindingInspection } from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
 import {
+  inspectRuntimeConversationBindingRoute,
   resolveConfiguredBindingRoute,
   resolveRuntimeConversationBindingRoute,
+  resolveRuntimeConversationBindingRouteAsync,
   type RuntimeConversationBindingRouteResult,
-} from "openclaw/plugin-sdk/conversation-runtime";
+} from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { parseSlackTarget } from "./targets.js";
 
 type SlackRouteBinding = NonNullable<OpenClawConfig["bindings"]>[number];
@@ -75,7 +77,7 @@ export function normalizeSlackRouteBindingConfig(cfg: OpenClawConfig): OpenClawC
   return normalizedCfg;
 }
 
-export function resolveSlackConversationBindingRoute(params: {
+type SlackConversationBindingRouteParams = {
   cfg: OpenClawConfig;
   resolveRoute: NonNullable<
     Parameters<typeof resolveRuntimeConversationBindingRoute>[0]["resolveRoute"]
@@ -85,20 +87,84 @@ export function resolveSlackConversationBindingRoute(params: {
   runtimeBindingThreadId?: string;
   bindingsEnabled: boolean;
   touchBinding?: boolean;
-}) {
+  inspections?: Record<"base" | "thread", ConversationBindingInspection>;
+};
+
+export function resolveSlackConversationBindingRoute(params: SlackConversationBindingRouteParams) {
   const { resolveRoute } = params;
+  const resolveRuntime = (
+    input: Parameters<typeof resolveRuntimeConversationBindingRoute>[0],
+    role: "base" | "thread",
+  ) =>
+    params.inspections
+      ? inspectRuntimeConversationBindingRoute({ ...input, inspection: params.inspections[role] })
+      : resolveRuntimeConversationBindingRoute(input);
   let baseRuntimeRoute: RuntimeConversationBindingRouteResult | undefined;
   const resolveBaseRoute = (
     threadInspection?: Parameters<typeof inspectRuntimeConversationBindingRoute>[0]["inspection"],
   ) =>
-    (baseRuntimeRoute ??= resolveRuntimeConversationBindingRoute({
+    (baseRuntimeRoute ??= resolveRuntime(
+      {
+        resolveRoute: threadInspection
+          ? (selection) =>
+              inspectRuntimeConversationBindingRoute({
+                route: resolveRoute(selection),
+                inspection: threadInspection,
+              }).route
+          : resolveRoute,
+        touchBinding: params.touchBinding,
+        conversation: {
+          channel: "slack",
+          accountId: params.accountId,
+          conversationId: params.baseConversationId,
+        },
+      },
+      "base",
+    ));
+  const boundThreadRoute =
+    params.bindingsEnabled && params.runtimeBindingThreadId
+      ? resolveRuntime(
+          {
+            resolveRoute: (selection) =>
+              selection.bindingRecord || !selection.bindingOwnerAvailable
+                ? resolveRoute(selection)
+                : resolveBaseRoute(selection.inspection).route,
+            touchBinding: params.touchBinding,
+            conversation: {
+              channel: "slack",
+              accountId: params.accountId,
+              conversationId: params.runtimeBindingThreadId,
+              parentConversationId: params.baseConversationId,
+            },
+          },
+          "thread",
+        )
+      : null;
+  const runtimeRoute: RuntimeConversationBindingRouteResult = !params.bindingsEnabled
+    ? resolveUnboundSlackRoute(params)
+    : boundThreadRoute &&
+        (boundThreadRoute.bindingRecord || boundThreadRoute.bindingOwnerAvailable === false)
+      ? boundThreadRoute
+      : resolveBaseRoute();
+  return applySlackConfiguredBindingRoute(params, runtimeRoute);
+}
+
+export async function resolveSlackConversationBindingRouteAsync(
+  params: Omit<SlackConversationBindingRouteParams, "inspections">,
+) {
+  if (!params.bindingsEnabled) {
+    return applySlackConfiguredBindingRoute(params, resolveUnboundSlackRoute(params));
+  }
+  let baseRuntimeRoute: Promise<RuntimeConversationBindingRouteResult> | undefined;
+  const resolveBaseRoute = (threadInspection?: ConversationBindingInspection) =>
+    (baseRuntimeRoute ??= resolveRuntimeConversationBindingRouteAsync({
       resolveRoute: threadInspection
         ? (selection) =>
             inspectRuntimeConversationBindingRoute({
-              route: resolveRoute(selection),
+              route: params.resolveRoute(selection),
               inspection: threadInspection,
             }).route
-        : resolveRoute,
+        : params.resolveRoute,
       touchBinding: params.touchBinding,
       conversation: {
         channel: "slack",
@@ -106,37 +172,48 @@ export function resolveSlackConversationBindingRoute(params: {
         conversationId: params.baseConversationId,
       },
     }));
-  const boundThreadRoute =
-    params.bindingsEnabled && params.runtimeBindingThreadId
-      ? resolveRuntimeConversationBindingRoute({
-          resolveRoute: (selection) =>
-            selection.bindingRecord || !selection.bindingOwnerAvailable
-              ? resolveRoute(selection)
-              : resolveBaseRoute(selection.inspection).route,
-          touchBinding: params.touchBinding,
-          conversation: {
-            channel: "slack",
-            accountId: params.accountId,
-            conversationId: params.runtimeBindingThreadId,
-            parentConversationId: params.baseConversationId,
-          },
-        })
-      : null;
-  const runtimeRoute: RuntimeConversationBindingRouteResult = !params.bindingsEnabled
-    ? {
-        bindingOwnerAvailable: true,
-        route: resolveRoute({
-          inspection: { status: "available", binding: null },
-          bindingOwnerAvailable: true,
-          bindingRecord: null,
-        }),
-        bindingRecord: null,
-        boundSessionKey: undefined,
-      }
-    : boundThreadRoute &&
-        (boundThreadRoute.bindingRecord || boundThreadRoute.bindingOwnerAvailable === false)
+  const boundThreadRoute = params.runtimeBindingThreadId
+    ? await resolveRuntimeConversationBindingRouteAsync({
+        resolveRoute: async (selection) =>
+          selection.bindingRecord || !selection.bindingOwnerAvailable
+            ? params.resolveRoute(selection)
+            : (await resolveBaseRoute(selection.inspection)).route,
+        touchBinding: params.touchBinding,
+        conversation: {
+          channel: "slack",
+          accountId: params.accountId,
+          conversationId: params.runtimeBindingThreadId,
+          parentConversationId: params.baseConversationId,
+        },
+      })
+    : null;
+  const runtimeRoute =
+    boundThreadRoute &&
+    (boundThreadRoute.bindingRecord || boundThreadRoute.bindingOwnerAvailable === false)
       ? boundThreadRoute
-      : resolveBaseRoute();
+      : await resolveBaseRoute();
+  return applySlackConfiguredBindingRoute(params, runtimeRoute);
+}
+
+function resolveUnboundSlackRoute(
+  params: SlackConversationBindingRouteParams,
+): RuntimeConversationBindingRouteResult {
+  return {
+    bindingOwnerAvailable: true,
+    route: params.resolveRoute({
+      inspection: { status: "available", binding: null },
+      bindingOwnerAvailable: true,
+      bindingRecord: null,
+    }),
+    bindingRecord: null,
+    boundSessionKey: undefined,
+  };
+}
+
+function applySlackConfiguredBindingRoute(
+  params: SlackConversationBindingRouteParams,
+  runtimeRoute: RuntimeConversationBindingRouteResult,
+) {
   const configuredRoute =
     params.bindingsEnabled && !runtimeRoute.boundSessionKey && !runtimeRoute.bindingRecord
       ? resolveConfiguredBindingRoute({

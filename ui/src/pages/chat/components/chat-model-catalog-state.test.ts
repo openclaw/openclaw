@@ -152,4 +152,47 @@ describe("model catalog refresh presentation", () => {
       expect(input.value).toBe("model");
     }
   });
+
+  // missing-auth on a Claude CLI row also means a disabled anthropic plugin or a missing
+  // account pin, so the hint must stay true for a user who is already signed in.
+  it.each([
+    ["anthropic", "claude-cli", "Claude Code isn't ready. If signed out, run claude auth login."],
+    ["openai", undefined, "No models available"],
+  ] as const)(
+    "explains an empty picker of missing-auth %s rows (runtime %s)",
+    (provider, agentRuntimeId, label) => {
+      const container = document.createElement("div");
+      render(
+        renderChatModelPicker({
+          disabled: false,
+          modelSelectionLocked: false,
+          modelCatalogState: { hasSnapshot: true, status: "ready" },
+          modelOptions: [
+            {
+              agentRuntimeId,
+              commitValue: `${provider}/model`,
+              disabled: true,
+              unavailableReason: "missing-auth",
+              isDefault: true,
+              label: "Model",
+              provider,
+              value: `${provider}/model`,
+            },
+          ],
+          open: true,
+          selectedModelValue: `${provider}/model`,
+          sessionModelPinned: false,
+          sessionKey: "main",
+          triggerModelLabel: "Model",
+          onModelSelect: async () => {},
+          onModelSetup: () => {},
+        }),
+        container,
+      );
+      expect(
+        container.querySelector(".chat-controls__model-catalog-state-label")?.textContent?.trim(),
+      ).toBe(label);
+      expect(container.querySelector("[data-chat-model-setup]")).not.toBeNull();
+    },
+  );
 });

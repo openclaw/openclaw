@@ -327,7 +327,7 @@ it.each([
           scenario === "unsettled" ? "awaiting a GitHub effect" : "differs from its recorded push",
         );
         expect(loadSessionEntry(scope)?.repositoryWorkspaceId).toBe(repository.workspaceId);
-        expect(managedWorktrees.findLiveByOwner("session", scope.sessionKey)).toBeUndefined();
+        expect(await managedWorktrees.findLiveByOwner("session", scope.sessionKey)).toBeUndefined();
         if (scenario === "foreign head") {
           return;
         }
@@ -352,7 +352,7 @@ it.each([
         });
         await expect(move()).rejects.toThrow("move revoked");
         expect(loadSessionEntry(scope)?.repositoryWorkspaceId).toBe(repository.workspaceId);
-        expect(managedWorktrees.findLiveByOwner("session", scope.sessionKey)).toBeUndefined();
+        expect(await managedWorktrees.findLiveByOwner("session", scope.sessionKey)).toBeUndefined();
         expect(await fs.readFile(path.join(source, "file.txt"), "utf8")).toBe("base\n");
         return;
       }
@@ -362,7 +362,7 @@ it.each([
       expect(readRepositoryGitHubPublication(row.request_id)?.pushed_head_commit).toBe(
         publishedHead,
       );
-      const worktree = managedWorktrees.findLiveByOwner("session", scope.sessionKey)!;
+      const worktree = (await managedWorktrees.findLiveByOwner("session", scope.sessionKey))!;
       const moveHead = git(worktree.path, "rev-parse", "HEAD");
       if (scenario === "shifted membership") {
         expect(await fs.readFile(path.join(worktree.path, "published-only.ignored"), "utf8")).toBe(

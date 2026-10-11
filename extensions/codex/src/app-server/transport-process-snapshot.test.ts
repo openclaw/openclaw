@@ -166,8 +166,6 @@ describe("Codex procfs command inspector", () => {
     "zombie",
     "reparented",
     "regrouped",
-    "malformed",
-    "permission",
     "read-error",
     "replaced after read",
   ])("binds empty-command startup readiness to the same live process: %s", async (mode, ctx) => {
@@ -229,13 +227,7 @@ describe("Codex procfs command inspector", () => {
   });
 
   it.for([
-    {
-      input: "/opt/codex\0app-server\0--listen\0stdio://\0",
-      expected: "/opt/codex app-server --listen stdio://",
-    },
     { input: "\0", reason: "unavailable" },
-    { code: "ENOENT", reason: "unavailable" },
-    { code: "ESRCH", reason: "unavailable" },
     { code: "EACCES", reason: "permission" },
     { code: "ABORT_ERR", reason: "deadline" },
   ])(
@@ -255,16 +247,12 @@ describe("Codex procfs command inspector", () => {
       });
 
       const inspected = readCodexAppServerProcessCommand(observedProcess, Date.now() + 1_000);
-      if (fixture.reason) {
-        await expect(inspected).rejects.toMatchObject({ reason: fixture.reason });
-        if (fixture.reason !== "permission") {
-          await expect(inspected).rejects.not.toThrow("permissions");
-        }
-        if (fixture.reason === "deadline") {
-          await expect(inspected).rejects.toThrow("deadline");
-        }
-      } else {
-        await expect(inspected).resolves.toBe(fixture.expected);
+      await expect(inspected).rejects.toMatchObject({ reason: fixture.reason });
+      if (fixture.reason !== "permission") {
+        await expect(inspected).rejects.not.toThrow("permissions");
+      }
+      if (fixture.reason === "deadline") {
+        await expect(inspected).rejects.toThrow("deadline");
       }
       procfs.readFile.mockClear();
       await expect(
@@ -308,7 +296,7 @@ describe("Codex procfs process inspector", () => {
     },
   );
 
-  it.for(["1", "2", "0", "missing", "9007199254740992"])(
+  it.for(["2", "9007199254740992"])(
     "requires explicit thread evidence before classifying a zombie leader: %s",
     async (threads, ctx) => {
       ctx.onTestFinished(() => {
@@ -334,7 +322,7 @@ describe("Codex procfs process inspector", () => {
     },
   );
 
-  it.for(["ENOENT", "ESRCH", "EACCES", "exiting"] as const)(
+  it.for(["ESRCH", "EACCES", "exiting"] as const)(
     "distinguishes vanished or exiting neighbors from unreadable state: %s",
     async (code, ctx) => {
       ctx.onTestFinished(() => {

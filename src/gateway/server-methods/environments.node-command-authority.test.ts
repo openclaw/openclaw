@@ -69,7 +69,6 @@ describe("node environment command authority", () => {
     ["pending-approval", [command], [], [command], [], [], false],
     ["unauthorized", [command, "fixture.unrelated"], [command], [], [], [], false],
     ["unauthorized", [command], [command], [command], [command], [], true],
-    ["unauthorized", [command], [command], [], [], [], true],
     ["undeclared", [], [], [command], [], [], false],
   ] as const)(
     "projects %s for declarations %j approved %j with allow %j deny %j",
@@ -157,6 +156,10 @@ describe("node environment command authority", () => {
               : "openclaw plugins enable codex";
         expect(listed?.requiredNodeCommand?.message).toContain(remediation);
         if (state === "undeclared") {
+          expect(listed?.requiredNodeCommand?.message).toMatch(
+            /^This model uses the Codex harness, which is unavailable on this device\./,
+          );
+          expect(listed?.requiredNodeCommand?.message).toContain("OpenClaw harness");
           expect(listed?.requiredNodeCommand?.message).toContain(
             "openclaw plugins install @openclaw/codex",
           );

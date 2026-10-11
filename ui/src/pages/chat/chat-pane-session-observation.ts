@@ -171,14 +171,11 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
       refreshFailed = false;
       reading = (async () => {
         const observation = binding.observation;
-        while (current() && observation?.isCurrent()) {
+        if (observation?.isCurrent()) {
           const reconcile = observation.captureReconcile();
           const { session } = await sessions.describe({ key, agentId }, { client });
-          if (!current()) {
-            return;
-          }
-          if (reconcile(session ?? undefined).status !== "invalidated") {
-            return;
+          if (current()) {
+            reconcile(session ?? undefined);
           }
         }
       })()

@@ -1,5 +1,3 @@
-// QA Lab mock provider output event builders.
-
 import { stripInboundMetadata } from "openclaw/plugin-sdk/qa-runtime";
 import {
   type MockAssistantMessageSpec,
@@ -120,70 +118,47 @@ export function buildReleaseHandoffMarkdown() {
   ].join("\n");
 }
 
-function* plannedToolItems(events: StreamEvent[]) {
-  for (const event of events) {
-    if (event.type !== "response.output_item.done") {
-      continue;
-    }
-    const item = event.item;
-    if (item.type === "function_call" || item.type === "custom_tool_call") {
-      yield item;
-    }
-  }
-}
-
-export function extractPlannedToolName(events: StreamEvent[]) {
-  for (const item of plannedToolItems(events)) {
-    if (typeof item.name === "string") {
-      return item.name;
-    }
-  }
-  return undefined;
-}
-
-export function extractPlannedToolIdentity(events: StreamEvent[]): {
-  callId?: string;
-  itemId?: string;
-} {
-  for (const item of plannedToolItems(events)) {
-    if (typeof item.call_id === "string") {
-      return {
-        callId: item.call_id,
-        itemId: typeof item.id === "string" ? item.id : undefined,
-      };
-    }
-  }
-  return {};
-}
-
-export function extractPlannedToolArgs(events: StreamEvent[]) {
-  for (const item of plannedToolItems(events)) {
-    if (item.type === "custom_tool_call") {
-      return typeof item.input === "string" ? { input: item.input } : undefined;
-    }
-    if (typeof item.arguments !== "string") {
-      continue;
-    }
+export function extractPlannedTool(events: StreamEvent[]) {
+  const items = events.flatMap((event) =>
+    event.type === "response.output_item.done" &&
+    (event.item.type === "function_call" || event.item.type === "custom_tool_call")
+      ? [event.item]
+      : [],
+  );
+  const named = items.find((item) => typeof item.name === "string");
+  const identified = items.find((item) => typeof item.call_id === "string");
+  const argumentsItem = items.find(
+    (item) => item.type === "custom_tool_call" || typeof item.arguments === "string",
+  );
+  let args: Record<string, unknown> | undefined;
+  if (argumentsItem?.type === "custom_tool_call") {
+    args = typeof argumentsItem.input === "string" ? { input: argumentsItem.input } : undefined;
+  } else if (typeof argumentsItem?.arguments === "string") {
     try {
-      const parsed = JSON.parse(item.arguments);
-      return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
+      const parsed: unknown = JSON.parse(argumentsItem.arguments);
+      args = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
     } catch {
-      return undefined;
+      // Malformed arguments remain unavailable in the debug projection.
     }
   }
-  return undefined;
+  return {
+    name: typeof named?.name === "string" ? named.name : undefined,
+    callId: typeof identified?.call_id === "string" ? identified.call_id : undefined,
+    itemId: typeof identified?.id === "string" ? identified.id : undefined,
+    args,
+  };
 }
 
-export function splitMockStreamingText(text: string, parts = 3) {
+export function splitMockStreamingText(text: string) {
   if (text.length <= 1) {
     return [text];
   }
-  const chunkSize = Math.max(1, Math.ceil(text.length / parts));
+  const chunkSize = Math.ceil(text.length / 3);
   const chunks: string[] = [];
   for (let index = 0; index < text.length; index += chunkSize) {
     chunks.push(text.slice(index, index + chunkSize));
   }
-  return chunks.length > 1 ? chunks : [text.slice(0, 1), text.slice(1)];
+  return chunks;
 }
 
 function buildQaLongFinalText({

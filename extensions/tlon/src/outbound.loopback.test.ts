@@ -281,4 +281,29 @@ describe("tlon outbound loopback", () => {
     expect(delivered.every((part) => part.length <= TEXT_LIMIT)).toBe(true);
     expect(delivered.join("")).toBe(text);
   });
+
+  it("redacts a reflected session cookie from a rejected poke", async () => {
+    const cookie = "urbauth-~zod=0v1g.abcde.ijklm.prst";
+    const port = await listenLoopback((req, res) => {
+      if (req.url === "/~/login") {
+        res.writeHead(200, { "set-cookie": cookie });
+        res.end("ok");
+        return;
+      }
+      res.writeHead(500, { "Content-Type": "text/plain" });
+      res.end(`invalid session: ${req.headers.cookie}`);
+    });
+
+    const error = await textSender({
+      cfg: loopbackConfig(port),
+      to: "~nec",
+      text: "reflected credentials",
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain("Poke failed: 500");
+    expect(message).toContain("invalid session");
+    expect(message).not.toContain(cookie);
+  });
 });

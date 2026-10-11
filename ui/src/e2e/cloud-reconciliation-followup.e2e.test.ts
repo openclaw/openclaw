@@ -119,8 +119,8 @@ suite.define(() => {
 
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await gateway.waitForRequest("chat.startup");
-        await page.getByRole("button", { name: "Cloud · syncing files" }).waitFor();
-        await page.getByText("Safely applying cloud edits", { exact: false }).waitFor();
+        await page.getByRole("button", { name: "Worker · syncing files" }).waitFor();
+        await page.getByText("Finalizing worker workspace", { exact: false }).waitFor();
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         await expect.poll(() => composer.isEnabled()).toBe(true);
         await page.getByText("your message starts automatically", { exact: false }).waitFor();

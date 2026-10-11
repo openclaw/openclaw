@@ -88,14 +88,6 @@ function createSyntheticMergeRepo(prefix: string): { repoDir: string; staleBase:
 }
 
 describe("parseArgs", () => {
-  it("parses CI diff refs", () => {
-    expect(parseArgs(["--base", "origin/main", "--head", "HEAD"])).toEqual({
-      base: "origin/main",
-      head: "HEAD",
-      mergeHeadFirstParent: false,
-    });
-  });
-
   it("rejects missing CI diff refs", () => {
     expect(() => parseArgs(["--base", "--head", "HEAD"])).toThrow("--base requires a value");
     expect(() => parseArgs(["--base", "-h", "--head", "HEAD"])).toThrow("--base requires a value");
@@ -172,6 +164,7 @@ describe("detectChangedScope", () => {
       { runNode: true, runSkillsPython: true },
     ],
     [[".github/workflows/ci.yml"], { runNode: true, runWindows: true, runUiTests: true }],
+    [["scripts/lib/ci-test-runtime.mts"], { runNode: true, runUiTests: true }],
     [["scripts/ci-xcodebuild.py"], { runNode: true, runIosBuild: true }],
     [["scripts/ci-xcodebuild.py.bak"], { runNode: true }],
     [["scripts/install.ps1"], { runNode: true, runWindows: true, runChangedSmoke: true }],

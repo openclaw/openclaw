@@ -1,5 +1,7 @@
 import path from "node:path";
+import { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { prepareSessionMaintenancePreservation } from "../../../config/sessions/store-maintenance-preserve.js";
 import {
@@ -7,6 +9,10 @@ import {
   openOpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import {
+  mutateSubagentRuns,
+  restoreSubagentRunsFromDisk,
+} from "./subagent-registry-persistence.js";
 import {
   persistRegistryFixture,
   saveSubagentRegistryToSqlite,
@@ -184,6 +190,57 @@ describe("subagent maintenance protection", () => {
     }
   });
 
+  it("uses committed registry writes for prepared protection without rereading SQLite", async () => {
+    const first = createRun({
+      runId: "first",
+      childSessionKey: "agent:main:subagent:first",
+      cleanupCompletedAt: 3,
+    });
+    const second = createRun({
+      runId: "second",
+      childSessionKey: "agent:main:subagent:second",
+      cleanupCompletedAt: 3,
+    });
+    saveSubagentRegistryToSqlite(new Map([first, second].map((entry) => [entry.runId, entry])));
+    const runs = new Map<string, SubagentRunRecord>();
+    await restoreSubagentRunsFromDisk({ runs });
+    const prepared = await prepareSessionMaintenancePreservation(storePath, { native: true });
+    try {
+      expect(prepared.capture().providerKeys).toEqual([]);
+      await mutateSubagentRuns(
+        [first.runId, second.runId],
+        () => ({
+          value: undefined,
+          postimages: new Map(
+            [first, second].map((entry) => [
+              entry.runId,
+              { ...entry, cleanupCompletedAt: undefined },
+            ]),
+          ),
+        }),
+        { runs },
+      );
+      const observation = observeSqliteReadSql(StatementSync.prototype);
+      try {
+        expect(prepared.refreshCandidates([first.childSessionKey]).providerKeys).toEqual([
+          first.childSessionKey,
+          second.childSessionKey,
+        ]);
+        expect(observation.queries).toEqual([]);
+      } finally {
+        observation.restore();
+      }
+      await mutateSubagentRuns(
+        [first.runId],
+        () => ({ value: undefined, postimages: new Map([[first.runId, null]]) }),
+        { runs },
+      );
+      expect(prepared.capture().providerKeys).toEqual([second.childSessionKey]);
+    } finally {
+      prepared.dispose();
+    }
+  });
+
   it("retains live overlays and acknowledged row publications", async () => {
     const run = createRun();
     saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
@@ -211,12 +268,7 @@ describe("subagent maintenance protection", () => {
       const cleaned = { ...changed, cleanupCompletedAt: 4 };
       saveSubagentRegistryToSqlite(new Map([[cleaned.runId, cleaned]]));
       subagentRuns.set(cleaned.runId, cleaned);
-      const events: Array<() => void> = [];
-      publishSubagentRunsAfterAtomicStore(
-        new Map([[cleaned.runId, cleaned]]),
-        [cleaned.runId],
-        events,
-      );
+      publishSubagentRunsAfterAtomicStore(new Map([[cleaned.runId, cleaned]]), [cleaned.runId]);
       expect(prepared.capture().providerKeys).toEqual([]);
     } finally {
       prepared.dispose();

@@ -20,10 +20,7 @@ import {
   tempDir,
 } from "./run-attempt-test-harness.js";
 import { activeRunRegistrationMocks } from "./run-attempt.steering.test-helpers.js";
-import {
-  createSteeringParams,
-  waitAndQueueActiveRunMessage,
-} from "./run-attempt.steering.test-support.js";
+import { createSteeringParams } from "./run-attempt.steering.test-support.js";
 import { readCodexAppServerBinding } from "./session-binding.test-helpers.js";
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
@@ -214,40 +211,23 @@ describe("runCodexAppServerAttempt steering", () => {
   });
 
   it.each([
-    ...["commandExecution"].map((barrierType) => ({
-      name: `Gateway steering across a ${barrierType} barrier`,
-      barrierType,
-      isInboundUserMessage: true,
-      provenance: undefined,
-      unfinishedAnswer: false,
-      completionId: "unfinished-answer",
-      secondSteer: false,
-    })),
-    ...[
-      { completionId: "unfinished-answer", secondSteer: false },
-      { completionId: "completed-answer", secondSteer: false },
-      { completionId: "unfinished-answer", secondSteer: true },
-    ].map(({ completionId, secondSteer }) => ({
-      name: `unfinished answer (${completionId}, second steer: ${secondSteer})`,
+    {
+      name: "unfinished answer (completed-answer, second steer: false)",
       barrierType: "none",
       isInboundUserMessage: true,
       provenance: undefined,
       unfinishedAnswer: true,
-      completionId,
-      secondSteer,
-    })),
-    {
-      name: "inter-session steering with provenance",
-      barrierType: "none",
-      isInboundUserMessage: false,
-      unfinishedAnswer: false,
-      completionId: "unfinished-answer",
+      completionId: "completed-answer",
       secondSteer: false,
-      provenance: {
-        kind: "inter_session",
-        sourceSessionKey: "agent:sender:main",
-        sourceTool: "sessions_send",
-      },
+    },
+    {
+      name: "unfinished answer (unfinished-answer, second steer: true)",
+      barrierType: "none",
+      isInboundUserMessage: true,
+      provenance: undefined,
+      unfinishedAnswer: true,
+      completionId: "unfinished-answer",
+      secondSteer: true,
     },
   ])(
     "persists already visible output before $name",
@@ -759,39 +739,6 @@ describe("runCodexAppServerAttempt steering", () => {
       params.sessionFile,
     );
   });
-  it("accepts message-tool-only steering for active Codex app-server source replies", async () => {
-    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
-    const params = createSteeringParams();
-    params.sourceReplyDeliveryMode = "message_tool_only";
-
-    const run = runCodexAppServerAttempt(params);
-    await waitForMethod("turn/start");
-
-    await waitAndQueueActiveRunMessage(params.sessionId, "subagent complete", {
-      debounceMs: 0,
-      steeringMode: "all",
-      sourceReplyDeliveryMode: "message_tool_only",
-    });
-
-    await vi.waitFor(
-      () =>
-        expect(requests.filter((entry) => entry.method === "turn/steer")).toEqual([
-          {
-            method: "turn/steer",
-            params: {
-              threadId: "thread-1",
-              expectedTurnId: "turn-1",
-              input: [{ type: "text", text: "subagent complete", text_elements: [] }],
-              clientUserMessageId: "openclaw:turn-1:steer:1",
-            },
-          },
-        ]),
-      { interval: 1 },
-    );
-
-    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
-  });
 
   it("seals unsent steering without erasing an earlier consumed dispatch", async () => {
     const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness(
@@ -802,9 +749,13 @@ describe("runCodexAppServerAttempt steering", () => {
     );
     const params = createSteeringParams();
 
+    // This tests receipt ordering, not elapsed time during SQLite preparation.
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const run = runCodexAppServerAttempt(params);
-    await waitForMethod("turn/start");
-    let handle:
+    await run.waitForTurnAccepted();
+    const handle = activeRunRegistrationMocks.setActiveEmbeddedRun.mock.calls.findLast(
+      (call) => call[0] === params.sessionId,
+    )?.[1] as
       | {
           queueMessage: (
             text: string,
@@ -812,12 +763,7 @@ describe("runCodexAppServerAttempt steering", () => {
           ) => Promise<void>;
         }
       | undefined;
-    await vi.waitFor(() => {
-      handle = activeRunRegistrationMocks.setActiveEmbeddedRun.mock.calls.findLast(
-        (call) => call[0] === params.sessionId,
-      )?.[1] as typeof handle;
-      expect(handle).toBeDefined();
-    }, fastWait);
+    expect(handle).toBeDefined();
     const onDispatchedAccepted = vi.fn();
     const onUnsentAccepted = vi.fn();
     const onLateAccepted = vi.fn();
@@ -825,10 +771,8 @@ describe("runCodexAppServerAttempt steering", () => {
       debounceMs: 0,
       onQueueAccepted: onDispatchedAccepted,
     });
-    await vi.waitFor(
-      () => expect(requests.filter((entry) => entry.method === "turn/steer")).toHaveLength(1),
-      fastWait,
-    );
+    await waitForMethod("turn/steer");
+    expect(requests.filter((entry) => entry.method === "turn/steer")).toHaveLength(1);
     const steer = requests.find((entry) => entry.method === "turn/steer");
     const clientUserMessageId = (steer?.params as { clientUserMessageId?: string } | undefined)
       ?.clientUserMessageId;

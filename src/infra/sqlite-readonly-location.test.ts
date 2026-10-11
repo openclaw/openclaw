@@ -112,17 +112,55 @@ describe("prepareSqliteReadOnlyLocation", () => {
         code: "ERR_SQLITE_ERROR",
         errcode,
       });
-      vi.spyOn(sqlite, "backup").mockRejectedValueOnce(quotaError);
+      vi.spyOn(sqlite, "backup").mockImplementationOnce(async (_source, destination) => {
+        fs.writeFileSync(String(destination), "partial snapshot");
+        throw quotaError;
+      });
+      const space = fs.statfsSync(cacheRoot);
+      space.bsize = 4096;
+      space.bavail = 2;
+      vi.spyOn(fs, "statfsSync").mockReturnValue(space);
 
       await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, async () => {
-        await expect(prepareSqliteReadOnlyLocationInProcess(databasePath)).rejects.toMatchObject({
+        const failure = await prepareSqliteReadOnlyLocationInProcess(databasePath).catch(
+          (error: unknown) => error,
+        );
+        expect(failure).toMatchObject({
           cause: quotaError,
           message: expect.stringContaining(`SQLite errcode=${errcode}`),
         });
+        if (errcode === 13) {
+          expect((failure as Error).message).toContain(
+            `estimated ${fs.statSync(databasePath).size} bytes needed; 8192 bytes available`,
+          );
+          expect((failure as Error).message).not.toContain("doctor --fix");
+          expect((failure as Error).message).toContain("source has no live WAL sidecars");
+        }
       });
       expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
     },
   );
+
+  it("reports live WAL capacity without retrying or retaining an incomplete backup", async () => {
+    const databasePath = createTempDatabasePath("CREATE TABLE writes(id INTEGER PRIMARY KEY)");
+    const cacheRoot = tempDirs.make("openclaw-live-snapshot-full-");
+    const writer = startSqliteConcurrentWriter(databasePath, "WAL");
+    writers.push(writer);
+    await writer.waitFor("ready");
+    const backup = vi
+      .spyOn(sqlite, "backup")
+      .mockImplementationOnce(async (_source, destination) => {
+        fs.writeFileSync(String(destination), "partial snapshot");
+        throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+      });
+    await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, async () => {
+      await expect(prepareSqliteReadOnlyLocationInProcess(databasePath)).rejects.toThrow(
+        /estimated \d+ bytes needed; \d+ bytes available; source has live WAL sidecars/,
+      );
+    });
+    expect(backup).toHaveBeenCalledOnce();
+    expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
+  });
 
   it.each([
     {
@@ -280,6 +318,12 @@ describe("prepareSqliteReadOnlyLocation", () => {
       const databasePath = createTempDatabasePath("CREATE TABLE probe (value TEXT);");
       const before = readFamily(databasePath);
       const quotaError = Object.assign(new Error("Disk quota exceeded"), { code });
+      const statfs = fs.statfsSync.bind(fs);
+      let measuredBeforeCleanup = false;
+      vi.spyOn(fs, "statfsSync").mockImplementation((...args) => {
+        measuredBeforeCleanup = fs.readdirSync(path.join(cacheRoot, "openclaw")).length > 0;
+        return statfs(...args);
+      });
       vi.spyOn(fs, "writeSync").mockImplementationOnce(() => {
         throw quotaError;
       });
@@ -292,6 +336,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
           }),
         );
       });
+      expect(measuredBeforeCleanup).toBe(true);
       expect(readFamily(databasePath)).toEqual(before);
       expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
     },

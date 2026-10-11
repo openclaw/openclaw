@@ -289,6 +289,14 @@ export function createClickClackClient(options: ClientOptions) {
     }
   }
 
+  function messageList(resource: "channels" | "dms") {
+    return async (id: string, afterSeq: number, limit = 20): Promise<ClickClackMessage[]> =>
+      requestObject(
+        "messages",
+        `/api/${resource}/${encodeURIComponent(id)}/messages?after_seq=${afterSeq}&limit=${limit}`,
+      );
+  }
+
   return {
     me: async (): Promise<ClickClackUser> => requestObject("user", "/api/me"),
     setBotCommands: async (
@@ -334,15 +342,7 @@ export function createClickClackClient(options: ClientOptions) {
         method: "PATCH",
         body: JSON.stringify(patch),
       }),
-    channelMessages: async (
-      channelId: string,
-      afterSeq: number,
-      limit = 20,
-    ): Promise<ClickClackMessage[]> =>
-      requestObject(
-        "messages",
-        `/api/channels/${encodeURIComponent(channelId)}/messages?after_seq=${afterSeq}&limit=${limit}`,
-      ),
+    channelMessages: messageList("channels"),
     latestChannelMessages: async (
       channelId: string,
       limit = 30,
@@ -415,15 +415,7 @@ export function createClickClackClient(options: ClientOptions) {
         beforeSeq = page.oldest_seq;
       }
     },
-    directMessages: async (
-      conversationId: string,
-      afterSeq: number,
-      limit = 20,
-    ): Promise<ClickClackMessage[]> =>
-      requestObject(
-        "messages",
-        `/api/dms/${encodeURIComponent(conversationId)}/messages?after_seq=${afterSeq}&limit=${limit}`,
-      ),
+    directMessages: messageList("dms"),
     thread: async (
       messageId: string,
     ): Promise<{ root: ClickClackMessage; replies: ClickClackMessage[] }> =>

@@ -135,6 +135,7 @@ export async function prepareAmbientAgentCredentialsForDiscovery(
   options: Omit<AmbientAgentCredentialOptions, "resolveSyntheticAuth"> & {
     resolveSyntheticAuth?: (provider: string) => Promise<SyntheticAuth>;
     signal?: AbortSignal;
+    preparationOwner?: object;
   } = {},
 ): Promise<AgentCredentialMap> {
   const { credentials, providers } = resolveAmbientCredentialInputs(options);
@@ -145,6 +146,7 @@ export async function prepareAmbientAgentCredentialsForDiscovery(
       : await prepareProviderSyntheticAuthWithPlugin({
           ...syntheticAuthParams(options, provider),
           signal: options.signal,
+          preparationOwner: options.preparationOwner,
         });
     options.signal?.throwIfAborted();
     addSyntheticCredential(credentials, provider, resolved);

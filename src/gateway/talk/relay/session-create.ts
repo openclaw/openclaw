@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../../talk/agent-consult-tool.js";
 import { buildRealtimeVoiceAgentCancelProviderResult } from "../../../talk/agent-run-control-shared.js";
-import { createClientVoiceConfirmationReadiness } from "../../../talk/client-voice-confirmation-readiness.js";
+import { createClientVoiceTranscriptReadiness } from "../../../talk/client-voice-transcript-readiness.js";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   type RealtimeVoiceAudioClearReason,
@@ -17,7 +16,10 @@ import {
 } from "../../../talk/voice-transcript.js";
 import { createTalkClientAgentConsultRunner } from "../client-agent-consult.js";
 import { createTalkRealtimeRunControlOwner } from "../realtime-run-control.js";
-import { closeExpiredTalkRelaySessions } from "../relay-session-lifecycle.js";
+import {
+  assertTalkRelaySessionCapacity,
+  closeExpiredTalkRelaySessions,
+} from "../relay-session-lifecycle.js";
 import { markTalkVoiceSessionReady } from "../voice-selection.js";
 import { bindTalkRealtimeRelayAgentConsult } from "./agent-consult.js";
 import {
@@ -30,24 +32,23 @@ import {
   adoptTalkRealtimeRelaySession,
   cancelTalkRealtimeRelayProviderToolCall,
   closeRelaySession,
-  pruneInactiveRelayAgentRuns,
   registerTalkRealtimeRelayAgentRun,
-  resetTalkRealtimeRelayContinuity,
   prepareTalkRealtimeRelayAgentControl,
 } from "./operations.js";
 import { submitFinalProviderToolResult, suppressedToolResultOptions } from "./provider-results.js";
 import {
+  pruneInactiveRelayAgentRuns,
+  resetTalkRealtimeRelayContinuity,
   RELAY_SESSION_TTL_MS,
   RELAY_TRANSCRIPT_ECHO_LOOKBACK_MS,
   adoptRelayProviderToolCallId,
-  assertRelaySessionCapacity,
+  drainingRelaySessions,
   broadcastToOwner,
   ensureRelayTurn,
   relaySessions,
   type CreateTalkRealtimeRelaySessionParams,
   type RelaySession,
   TalkRealtimeRelayOutputOwnership,
-  type TalkRealtimeRelayEventPayload,
   type TalkRealtimeRelaySessionResult,
 } from "./state.js";
 import {
@@ -68,14 +69,15 @@ export function createTalkRealtimeRelaySession(
     sessions: relaySessions.values(),
     closeSession: (session) => void closeRelaySession(session, "completed"),
   });
-  assertRelaySessionCapacity(params.connId);
+  assertTalkRelaySessionCapacity(
+    [...relaySessions.values(), ...drainingRelaySessions],
+    params.connId,
+    "realtime relay",
+  );
   const { publicModel, publicError, voice, ...voiceSelection } =
     resolveTalkRealtimeRelayPresentation(params);
   const relaySessionId = randomUUID();
-  const expiresAtMs = resolveExpiresAtMsFromDurationMs(RELAY_SESSION_TTL_MS);
-  if (expiresAtMs === undefined) {
-    throw new Error("Realtime relay session expiry is outside the supported Date range");
-  }
+  const expiresAtMs = Date.now() + RELAY_SESSION_TTL_MS;
   const harness = createRealtimeVoiceSessionHarness({
     talk: {
       sessionId: relaySessionId,
@@ -97,11 +99,14 @@ export function createTalkRealtimeRelaySession(
     transcriptLookbackMs: RELAY_TRANSCRIPT_ECHO_LOOKBACK_MS,
     captureBridgeEvents: false,
   });
-  const emit = (event: TalkRealtimeRelayEventPayload, talkEvent?: TalkEventInput) =>
-    broadcastToOwner(params.context, params.connId, {
-      ...event,
-      ...(talkEvent ? { talkEvent: harness.emit(talkEvent) } : {}),
-    });
+  const eventOwner = {
+    id: relaySessionId,
+    context: params.context,
+    connId: params.connId,
+    harness,
+  };
+  const emit = (event: Parameters<typeof broadcastToOwner>[1], talkEvent?: TalkEventInput) =>
+    broadcastToOwner(eventOwner, event, talkEvent);
   const realtimeRelayIssue = (message: string, phase: string) => ({
     code: "realtime_unavailable" as const,
     message,
@@ -111,10 +116,7 @@ export function createTalkRealtimeRelaySession(
     phase,
   });
   const emitError = (issue: { message: string }) =>
-    emit(
-      { relaySessionId, type: "error", ...issue },
-      { type: "session.error", payload: issue, final: true },
-    );
+    emit({ type: "error", ...issue }, { type: "session.error", payload: issue, final: true });
   let currentOutputItemId: string | undefined;
   let playbackTurnId: string | undefined;
   let ready = false;
@@ -135,7 +137,7 @@ export function createTalkRealtimeRelaySession(
     const turnId = playbackTurnId;
     playbackTurnId = undefined;
     emit(
-      { relaySessionId, type: "clear", ...(reason ? { reason } : {}) },
+      { type: "clear", ...(reason ? { reason } : {}) },
       turnId
         ? { type: "output.audio.done", turnId, payload: { reason: reason ?? "clear" }, final: true }
         : undefined,
@@ -154,9 +156,7 @@ export function createTalkRealtimeRelaySession(
     },
   );
   const { agentId: relayAgentId, canonicalKey } = params.sessionTarget;
-  const confirmationReadiness = createClientVoiceConfirmationReadiness({
-    agentId: relayAgentId,
-    voiceSessionId: relaySessionId,
+  const transcriptReadiness = createClientVoiceTranscriptReadiness({
     flushTranscript: async () => {
       await getActiveRelay()?.voiceTranscriptQueue.flush();
     },
@@ -167,27 +167,33 @@ export function createTalkRealtimeRelaySession(
     sessionTarget: params.sessionTarget,
     ownerConnId: params.connId,
     authority: params.consultAuthority,
+    runAuthority: params.runAuthority,
     getVoiceSessionId: () => relaySessionId,
     initialItems: params.initialItems ?? [],
     runIdPrefix: "talk-realtime-relay-consult",
     surface: "a gateway-relay Talk session",
-    registerRun: ({ runId }) => {
+    registerRun: async ({ runId, assertCurrent }) => {
       if (!getActiveRelay()) {
         throw new Error("Realtime gateway-relay session is closed");
       }
-      registerTalkRealtimeRelayAgentRun({
+      const registration = await registerTalkRealtimeRelayAgentRun({
         relaySessionId,
         connId: params.connId,
         sessionKey: canonicalKey,
         runId,
+        assertCurrent,
       });
+      if (!getActiveRelay() || !registration.isCurrent()) {
+        registration.release();
+        throw new Error("Realtime gateway-relay session is closed");
+      }
+      return registration;
     },
-    isRunCurrent: (runId) => getActiveRelay()?.activeAgentRuns.get(runId) === canonicalKey,
   });
   const runAgentConsult = bindTalkRealtimeRelayAgentConsult(
     consultRunner.runPrompt,
     () => getActiveRelay() !== undefined,
-    (signal) => confirmationReadiness.wait(signal),
+    (signal) => transcriptReadiness.wait(signal),
   );
   const runControl = createTalkRealtimeRunControlOwner({
     controlSource: params.controlSource,
@@ -272,7 +278,6 @@ export function createTalkRealtimeRelaySession(
           playbackTurnId = outputTurnId;
           emit(
             {
-              relaySessionId,
               type: "audio",
               audioBase64: frame.toString("base64"),
               ...(currentOutputItemId ? { itemId: currentOutputItemId } : {}),
@@ -299,7 +304,7 @@ export function createTalkRealtimeRelaySession(
           return;
         }
         // A playback checkpoint is not the end of the provider's response.
-        emit({ relaySessionId, type: "mark", markName });
+        emit({ type: "mark", markName });
       },
     },
     onEvent: (event) => {
@@ -327,8 +332,7 @@ export function createTalkRealtimeRelaySession(
         }
         playbackTurnId = undefined;
         if (talkEvent) {
-          broadcastToOwner(params.context, params.connId, {
-            relaySessionId,
+          emit({
             type: "clear",
             talkEvent,
           });
@@ -342,7 +346,7 @@ export function createTalkRealtimeRelaySession(
         // Response admission owns work status; asynchronous input transcripts do not.
         const turnId = outputOwnership.resolve(false);
         if (turnId) {
-          emit({ relaySessionId, type: "responseStarted", turnId });
+          emit({ type: "responseStarted", turnId });
         }
         return;
       }
@@ -359,8 +363,7 @@ export function createTalkRealtimeRelaySession(
       if (event.type === "tool.call.cancelled" && event.itemId) {
         const relayCallId = cancelTalkRealtimeRelayProviderToolCall(relay, event.itemId);
         if (relayCallId) {
-          broadcastToOwner(params.context, params.connId, {
-            relaySessionId,
+          emit({
             type: "toolCallCancelled",
             callId: relayCallId,
           });
@@ -390,8 +393,7 @@ export function createTalkRealtimeRelaySession(
         return;
       }
       const terminalTalkEvent = harness.talk.recentEvents.at(-1);
-      broadcastToOwner(params.context, params.connId, {
-        relaySessionId,
+      emit({
         type: "audioDone",
         ...(currentOutputItemId ? { itemId: currentOutputItemId } : {}),
         ...(responseId ? { responseId } : {}),
@@ -406,8 +408,7 @@ export function createTalkRealtimeRelaySession(
         const errorTalkEvent = harness.talk.recentEvents.findLast(
           (event) => event.type === "session.error" && event.payload === outcome,
         );
-        broadcastToOwner(params.context, params.connId, {
-          relaySessionId,
+        emit({
           type: "error",
           ...issue,
           ...(errorTalkEvent ? { talkEvent: { ...errorTalkEvent, payload: issue } } : {}),
@@ -422,11 +423,14 @@ export function createTalkRealtimeRelaySession(
       if (role === "assistant" && outputOwnership.suppressingOutput) {
         return;
       }
-      if (!relay.closing && role === "user" && !final) {
-        confirmationReadiness.observeUserTranscript(text, false);
-      }
       const previousTranscriptSeq = relay.voiceTranscriptSeq;
-      if (final && !enqueueRelayVoiceTranscript(relay, role, text)) {
+      const enqueueTranscript = () => enqueueRelayVoiceTranscript(relay, role, text);
+      if (
+        final &&
+        !(relay.closing?.runTranscript
+          ? relay.closing.runTranscript(enqueueTranscript)
+          : enqueueTranscript())
+      ) {
         return;
       }
       const transcriptIdentity =
@@ -436,7 +440,6 @@ export function createTalkRealtimeRelaySession(
             }
           : {};
       const transcriptEvent = {
-        relaySessionId,
         type: "transcript" as const,
         role,
         text,
@@ -519,7 +522,6 @@ export function createTalkRealtimeRelaySession(
       }
       emit(
         {
-          relaySessionId,
           type: "toolCall",
           itemId: toolCall.itemId,
           callId: relayCallId,
@@ -545,7 +547,7 @@ export function createTalkRealtimeRelaySession(
       ready = true;
       markTalkVoiceSessionReady(relaySessionId, params.connId, relayAgentId);
       continuityResetActive = false;
-      emit({ relaySessionId, type: "ready" }, { type: "session.ready", payload: null });
+      emit({ type: "ready" }, { type: "session.ready", payload: null });
     },
     onError: (error) => {
       const active = getActiveRelay();
@@ -580,13 +582,13 @@ export function createTalkRealtimeRelaySession(
   try {
     bridge = harness.createBridge(bridgeRequest);
   } catch (error) {
-    confirmationReadiness.close();
+    transcriptReadiness.close();
     throw publicError(error);
   }
   bridgeRef.current = bridge;
   const earlyTerminal = constructionTerminal.current;
   if (earlyTerminal) {
-    confirmationReadiness.close();
+    transcriptReadiness.close();
     harness.close();
     const reportCloseFailure = () =>
       params.context.logGateway.warn(
@@ -651,7 +653,8 @@ export function createTalkRealtimeRelaySession(
     voiceSessionCreated: false,
     voiceTranscriptSeq: 0,
     voiceTranscriptQueue: VOICE_TRANSCRIPT_QUEUE_POLICY.createQueue(),
-    confirmationReadiness,
+    transcriptReadiness,
+    runAuthority: params.runAuthority,
     failSession,
   };
   relayRef.current = relay;

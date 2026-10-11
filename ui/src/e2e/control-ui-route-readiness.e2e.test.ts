@@ -50,7 +50,10 @@ suite.define(() => {
               ? {
                   presenceUsers: [{ self: true, id: "history-profile", name: "Fixture user" }],
                   featureMethods: [...defaultControlUiFeatureMethods, "system.info"],
-                  methodResponses: { "system.info": { platform: "darwin" } },
+                  methodResponses: {
+                    "config.get": { config: {}, hash: "history-profile-config" },
+                    "system.info": { platform: "darwin" },
+                  },
                 }
               : {}),
             sessions: [

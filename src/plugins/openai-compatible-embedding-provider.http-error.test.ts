@@ -101,7 +101,9 @@ describe("OpenAI-compatible embedding HTTP errors", () => {
         errorType,
         retryAfterMs,
       });
-      expect((error as Error).message).toContain("openai-compatible embeddings failed: HTTP 429");
+      expect((error as Error).message).toContain(
+        "openai-compatible embeddings failed (model: text-embedding-bge-m3, batch size: 1): HTTP 429",
+      );
       expect((error as Error).message).not.toContain(tokenPrefix);
       expect((error as ProviderHttpError).errorBody).not.toContain(tokenPrefix);
       if (credentialPadding) {

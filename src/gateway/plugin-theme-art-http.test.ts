@@ -29,6 +29,7 @@ function snapshot(svg = SVG, enabled = true) {
             id: "neon",
             definition: createThemeDefinitionFixture(),
             artwork: {
+              icons: { rocket: { svg } },
               hats: { beret: { svg } },
               critters: { ferris: { svg, title: "a crab, allegedly", crossMs: 15000 } },
             },
@@ -72,9 +73,13 @@ describe("plugin theme artwork HTTP", () => {
     expect(authorize).toHaveBeenCalledWith(expect.objectContaining({ auth: AUTH_TOKEN }));
   });
 
-  it("serves captured hats and critters with private caching, SVG sandboxing, HEAD and ETags", async () => {
+  it("serves captured icons, hats and critters with private caching, SVG sandboxing, HEAD and ETags", async () => {
     await withPluginMetadataSnapshotScope(snapshot(), async () => {
-      for (const pathname of [ART_PATH, ART_PATH.replace("hat/beret", "critter/ferris")]) {
+      for (const pathname of [
+        ART_PATH,
+        ART_PATH.replace("hat/beret", "critter/ferris"),
+        ART_PATH.replace("hat/beret", "icon/rocket"),
+      ]) {
         const get = await request(`${pathname}?v=content-hash`);
         expect(get.res.statusCode).toBe(200);
         expect(get.end).toHaveBeenCalledExactlyOnceWith(Buffer.from(SVG));
@@ -109,6 +114,8 @@ describe("plugin theme artwork HTTP", () => {
     ART_PATH.replace("%40scope%2Fpack", "unknown"),
     ART_PATH.replace("hat", "unknown"),
     ART_PATH.replace("beret", "constructor"),
+    ART_PATH.replace("hat/beret", "icon/constructor"),
+    ART_PATH.replace("hat/beret", "icon/beret"),
     ART_PATH.replace("beret", "%zz"),
     ART_PATH.replace("beret", "%2F"),
     `${ART_PATH}/extra`,

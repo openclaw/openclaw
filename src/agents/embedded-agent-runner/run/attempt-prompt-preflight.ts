@@ -1,5 +1,5 @@
 import { CompactionReplayRefreshRequiredError } from "@openclaw/ai/transports";
-import type { AssembleResult, ContextEngine } from "../../../context-engine/types.js";
+import type { AssembleResult } from "../../../context-engine/types.js";
 import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
@@ -137,14 +137,13 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
   appendOnlyRuntimeContext?: boolean;
   attempt: AttemptPromptPreflightParams &
     Pick<EmbeddedRunAttemptParams, "model" | "runtimePlan" | "authProfileId">;
-  activeContextEngine?: Pick<ContextEngine, "info">;
   compactionReplayEnabled: boolean;
-  contextEngineAssemblySucceeded: boolean;
   contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]>;
   contextTokenBudget: number;
   hookMessagesForCurrentPrompt: AgentMessage[];
   includeBoundaryTimestamp: boolean;
   promptForPrecheck: string;
+  pendingInputTokens?: number;
   reserveTokens: number;
   sessionMessageCount: number;
   state: AttemptPromptPreflightState;
@@ -160,16 +159,24 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
     ...(input.timezone ? { timezone: input.timezone } : {}),
     ...(input.includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
   };
-  const unwindowedLlmBoundaryMessagesForPrecheck =
-    input.contextEnginePromptAuthority === "preassembly_may_overflow" &&
-    input.unwindowedContextEngineMessagesForPrecheck
-      ? normalizeMessagesForLlmBoundary(
-          input.unwindowedContextEngineMessagesForPrecheck,
-          boundaryOptions,
-        )
+  const unwindowedMessages =
+    input.contextEnginePromptAuthority === "preassembly_may_overflow"
+      ? input.unwindowedContextEngineMessagesForPrecheck
       : undefined;
+  const unwindowedLlmBoundaryMessagesForPrecheck = unwindowedMessages
+    ? normalizeMessagesForLlmBoundary(unwindowedMessages, boundaryOptions)
+    : undefined;
   if (input.state.skipPromptSubmission) {
     return { ...input.state };
+  }
+  if ((input.pendingInputTokens ?? 0) >= input.contextTokenBudget) {
+    return {
+      ...input.state,
+      preflightRecovery: { route: "compact_only" },
+      promptError: new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT),
+      promptErrorSource: "precheck",
+      skipPromptSubmission: true,
+    };
   }
   let preemptiveCompaction: ReturnType<typeof shouldPreemptivelyCompactBeforePrompt>;
   try {
@@ -202,18 +209,6 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
       skipPromptSubmission: true,
     };
   }
-  if (
-    input.contextEngineAssemblySucceeded &&
-    input.activeContextEngine?.info.ownsCompaction &&
-    input.contextEnginePromptAuthority !== "preassembly_may_overflow" &&
-    !preemptiveCompaction.compactionReplay
-  ) {
-    log.info(
-      `[context-overflow-precheck] skipped: context engine "${input.activeContextEngine.info.id}" owns compaction`,
-    );
-    return { ...input.state };
-  }
-
   const precheckSummary = {
     result: preemptiveCompaction,
     provider: attempt.provider,
@@ -222,10 +217,7 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
     contextTokenBudget: input.contextTokenBudget,
     reserveTokens: input.reserveTokens,
     ...(attempt.sessionId ? { sessionId: attempt.sessionId } : {}),
-    ...(input.contextEnginePromptAuthority === "preassembly_may_overflow" &&
-    input.unwindowedContextEngineMessagesForPrecheck
-      ? { unwindowedMessageCount: input.unwindowedContextEngineMessagesForPrecheck.length }
-      : {}),
+    ...(unwindowedMessages ? { unwindowedMessageCount: unwindowedMessages.length } : {}),
   };
   const contextBudgetStatus = buildPrePromptContextBudgetStatus(precheckSummary);
   log.debug(

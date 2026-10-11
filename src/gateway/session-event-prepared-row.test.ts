@@ -135,7 +135,17 @@ it("retains canonical deferral and rejects asynchronous prepared consumers", asy
   const projection = createSessionRowProjectionFixture({ cfg: {}, store: {} });
   projection.withPreparedExactRows = (queries, consume) =>
     withPreparedSessionRows(projection, () => true, queries, consume);
-  const database = { agentId: "main", path: "/synthetic/pending.sqlite" };
+  const database = {
+    agentId: "main",
+    path: "/synthetic/pending.sqlite",
+    initializeCanonicalValidation: true,
+    assertStateCurrent: () => {},
+    source: {
+      key: "file:synthetic",
+      canonicalPath: "/synthetic/pending.sqlite",
+      incarnation: "test",
+    },
+  };
   vi.spyOn(projection, "withPreparedExactRows").mockResolvedValueOnce({
     kind: "pending",
     database,

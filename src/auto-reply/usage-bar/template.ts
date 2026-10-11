@@ -52,54 +52,50 @@ function hasOutputPieces(output: unknown): boolean {
   return isPlainObject(surfaces) && Object.values(surfaces).some(hasPieces);
 }
 
-function isEmptyTemplate(value: unknown): boolean {
-  if (!isPlainObject(value)) {
-    return false;
-  }
-  if (Object.keys(value).length === 0) {
-    return true;
-  }
-  if (Array.isArray(value.segments)) {
-    return value.segments.length === 0;
-  }
-  const output = value.output;
-  return isPlainObject(output) && !hasOutputPieces(output);
-}
-
-function isUsableTemplate(value: unknown): value is UsageBarTemplate {
-  if (!isPlainObject(value)) {
-    return false;
-  }
-  if (hasOutputPieces(value.output) || hasPieces(value.segments)) {
-    return true;
-  }
-  const surfaces = value.surfaces;
-  return (
-    isPlainObject(surfaces) &&
-    Object.values(surfaces).some((surface) => isPlainObject(surface) && hasPieces(surface.segments))
-  );
-}
-
 type InvalidTemplateReason = "invalid-json" | "unreadable" | "unsupported-shape";
 type TemplateReadResult = { template?: UsageBarTemplate; reason?: InvalidTemplateReason };
 
-function warnInvalidUsageTemplate(source: "inline" | "file", reason: string, path?: string): void {
-  const key = `${source}:${reason}:${path ?? ""}`;
-  if (warnedTemplateOverrides.check(key)) {
-    return;
+function resolveTemplateOrWarn(
+  result: TemplateReadResult,
+  source: "inline" | "file",
+  path?: string,
+): UsageBarTemplate | undefined {
+  const reason = result.reason;
+  if (reason && !warnedTemplateOverrides.check(`${source}:${reason}:${path ?? ""}`)) {
+    usageTemplateLog.warn("configured usage template could not be used; using built-in footer", {
+      source,
+      reason,
+      ...(path ? { path } : {}),
+    });
   }
-  usageTemplateLog.warn("configured usage template could not be used; using built-in footer", {
-    source,
-    reason,
-    ...(path ? { path } : {}),
-  });
+  return result.template;
 }
 
 function parseTemplate(value: unknown): TemplateReadResult {
-  if (isUsableTemplate(value)) {
-    return { template: value };
+  if (isPlainObject(value)) {
+    const usable = hasOutputPieces(value.output) || hasPieces(value.segments);
+    const surfaces = usable ? undefined : value.surfaces;
+    if (
+      usable ||
+      (isPlainObject(surfaces) &&
+        Object.values(surfaces).some(
+          (surface) => isPlainObject(surface) && hasPieces(surface.segments),
+        ))
+    ) {
+      return { template: value };
+    }
+    if (Object.keys(value).length === 0) {
+      return {};
+    }
+    if (Array.isArray(value.segments)) {
+      return value.segments.length === 0 ? {} : { reason: "unsupported-shape" };
+    }
+    const output = value.output;
+    if (isPlainObject(output) && !hasOutputPieces(output)) {
+      return {};
+    }
   }
-  return isEmptyTemplate(value) ? {} : { reason: "unsupported-shape" };
+  return { reason: "unsupported-shape" };
 }
 
 function readTemplateFile(path: string): TemplateReadResult {
@@ -120,10 +116,7 @@ function readTemplateFile(path: string): TemplateReadResult {
 }
 
 function cacheTemplateFile(path: string): UsageBarTemplate | undefined {
-  const result = readTemplateFile(path);
-  if (result.reason) {
-    warnInvalidUsageTemplate("file", result.reason, path);
-  }
+  const template = resolveTemplateOrWarn(readTemplateFile(path), "file", path);
   // Evict before allocating a watcher, but preserve other entries on same-path retries.
   if (!fileCache.has(path) && fileCache.size >= MAX_CACHED_TEMPLATE_FILES) {
     const oldestKey = fileCache.keys().next().value;
@@ -132,7 +125,7 @@ function cacheTemplateFile(path: string): UsageBarTemplate | undefined {
       fileCache.delete(oldestKey);
     }
   }
-  const entry: CacheEntry = { template: result.template, abort: new AbortController() };
+  const entry: CacheEntry = { template, abort: new AbortController() };
   if (entry.template) {
     entry.watcher = (async () => {
       // Preserve configured symlink targets, including links in parent directories.
@@ -147,12 +140,9 @@ function cacheTemplateFile(path: string): UsageBarTemplate | undefined {
         scopes: [{ path: basename(canonical), kind: "entry" }],
         signal: entry.abort.signal,
         onInvalidate: () => {
-          const next = readTemplateFile(path);
-          if (next.reason) {
-            warnInvalidUsageTemplate("file", next.reason, path);
-          }
-          if (JSON.stringify(next.template) !== JSON.stringify(entry.template)) {
-            entry.template = next.template;
+          const next = resolveTemplateOrWarn(readTemplateFile(path), "file", path);
+          if (JSON.stringify(next) !== JSON.stringify(entry.template)) {
+            entry.template = next;
           }
         },
         onHealth: (health) => {
@@ -181,11 +171,7 @@ export function loadUsageBarTemplate(configured: UsageTemplateConfig): UsageBarT
     return DEFAULT_USAGE_BAR_TEMPLATE;
   }
   if (typeof configured === "object") {
-    const result = parseTemplate(configured);
-    if (result.reason) {
-      warnInvalidUsageTemplate("inline", result.reason);
-    }
-    return result.template ?? DEFAULT_USAGE_BAR_TEMPLATE;
+    return resolveTemplateOrWarn(parseTemplate(configured), "inline") ?? DEFAULT_USAGE_BAR_TEMPLATE;
   }
   const path = expandPath(configured);
   const cached = fileCache.get(path);

@@ -5,6 +5,7 @@ import { useSqliteWorkerFault } from "../../../../test/helpers/sqlite-worker-fau
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/io.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../../../shared/detached-async-context.js";
 import { writeConfigMachineState } from "../../../state/config-machine-state-write.js";
 import { closeOpenClawAgentDatabases } from "../../../state/openclaw-agent-db-lifecycle.js";
 import {
@@ -215,31 +216,37 @@ async function fixture(state: OpenClawTestState, owner: Owner, empty = false) {
     derived = { agentDir: childDir, durable: child, profiles: structuredClone(runtime.profiles) };
   }
   const controller = createEmbeddedRunFailoverRetryController({
-    runParams: {
-      runId: "inline-auth-failure-run",
-      sessionId: "inline-auth-failure-session",
-      sessionFile: state.path("synthetic-session.jsonl"),
-      workspaceDir: state.workspaceDir,
-      prompt: "synthetic inline-key failure",
-      timeoutMs: 60_000,
-      config,
+    runInput: {
+      runParams: {
+        runId: "inline-auth-failure-run",
+        sessionId: "inline-auth-failure-session",
+        sessionFile: state.path("synthetic-session.jsonl"),
+        workspaceDir: state.workspaceDir,
+        prompt: "synthetic inline-key failure",
+        timeoutMs: 60_000,
+        config,
+      },
+      globalLane: "inline-auth-failure-test",
+      agentDir,
+      fallbackConfigured: false,
     },
-    provider,
-    modelId: "synthetic-model",
-    globalLane: "inline-auth-failure-test",
-    agentDir,
-    fallbackConfigured: false,
-    profileFailureStore: store,
-    getLastProfileId: () => undefined,
+    preparedRuntime: {
+      provider,
+      modelId: "synthetic-model",
+      profileFailureStore: store,
+      snapshot: () => ({
+        lastProfileId: undefined,
+        pluginHarnessOwnsTransport: false,
+        agentHarness: { id: "embedded" },
+      }),
+      getApiKeyInfo: () => ({
+        apiKey: "synthetic-inline-key",
+        mode: "api-key",
+        source: "models.json",
+      }),
+      advanceAttemptAuthProfile: async () => false,
+    },
     getSessionId: () => "inline-auth-failure-session",
-    harnessOwnsTransport: () => false,
-    getRuntimeAuthOwnerId: () => "embedded",
-    getApiKeyInfo: () => ({
-      apiKey: "synthetic-inline-key",
-      mode: "api-key",
-      source: "models.json",
-    }),
-    advanceAuthProfile: async () => false,
   });
   return { agentDir, initial, store, database, controller, sharedBefore, derived };
 }
@@ -580,7 +587,9 @@ it.each(["local-agent", "legacy-main"] as const)(
             const revision = original(...args);
             if (args[2]?.databasePath === database.path && args[1].stateChanged) {
               commits++;
-              closing ??= closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
+              closing ??= runInDetachedAsyncContext(() =>
+                closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId),
+              );
               void closing.catch(() => {});
             }
             return revision;

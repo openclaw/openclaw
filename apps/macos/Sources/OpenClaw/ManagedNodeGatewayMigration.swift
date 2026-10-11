@@ -384,17 +384,11 @@ enum ManagedNodeGatewayMigration {
         cli: GatewayLaunchAgentManager.InstalledServiceCLI,
         profile: AppProfile) async throws -> String
     {
-        let environment = GatewayLaunchAgentManager.daemonEnvironment(
-            runtime: nil,
+        guard case let .ready(_, version) = await CLIInstaller.managedStatus(
+            expectedVersion: nil,
             installedCLI: cli,
-            environment: ProcessInfo.processInfo.environment,
-            profile: profile,
-            searchPaths: CommandResolver.preferredPaths())
-        let response = await ShellExecutor.runDetailed(
-            command: cli.prefix + ["--version"], cwd: nil, env: environment, timeout: 15)
-        guard response.success,
-              let version = GatewayEnvironment.normalizeGatewayVersionOutput(response.stdout),
-              Semver.parse(version) != nil
+            serviceProfile: profile,
+            usesBundledRuntime: false)
         else { throw Failure(message: "The installed Node Gateway version could not be verified.") }
         return version
     }

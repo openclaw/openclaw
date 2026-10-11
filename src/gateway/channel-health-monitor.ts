@@ -93,7 +93,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
       }
 
       if (channelManager.getAutostartSuppression() !== null) {
-        await channelManager.recoverAutostartSuppression();
+        await channelManager.recoverAutostartSuppression(scheduler.signal);
       }
       const snapshot = channelManager.getRuntimeSnapshot();
       const globalAutostartSuppression = channelManager.getAutostartSuppression();
@@ -228,14 +228,16 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
               continue;
             }
             channelManager.resetRestartAttempts(channelId, accountId);
-            await channelManager.startChannel(channelId, accountId);
+            await channelManager.startChannel(channelId, accountId, { reason: "health-monitor" });
           } catch (err) {
             log.error(`[${channelId}:${accountId}] health-monitor: restart failed: ${String(err)}`);
           }
         }
       }
     } catch (err) {
-      log.error(`health-monitor: check failed: ${String(err)}`);
+      if (!scheduler.signal.aborted) {
+        log.error(`health-monitor: check failed: ${String(err)}`);
+      }
     }
   }
 

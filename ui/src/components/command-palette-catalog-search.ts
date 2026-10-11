@@ -8,7 +8,6 @@ import type {
 } from "../api/types.ts";
 import {
   SETTINGS_SEARCHABLE_SUBPAGE_ROUTES,
-  settingsNavigationLabelForRoute,
   subtitleForRoute,
   visibleSettingsNavigationGroups,
 } from "../app-navigation.ts";
@@ -19,8 +18,10 @@ import { registerAppsEnglish } from "../i18n/locales/en-apps.ts";
 import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palette.ts";
 import { loadCronCatalog } from "../lib/cron/catalog.ts";
 import type { PluginListResult } from "../lib/plugins/index.ts";
+import { settingsNavigationLabelForRoute } from "../lib/settings-navigation.ts";
 import { SETTINGS_SEARCH_TARGETS } from "../pages/config/settings-targets.ts";
 import type { IconName } from "./icons.ts";
+import { askBrandLabel } from "./theme-brand-label.ts";
 
 registerCommandPaletteEnglish();
 
@@ -117,28 +118,24 @@ function getCommandPaletteBaseItems(
       action: "/verbose full",
       description: t("palette.descriptions.verboseMode"),
     },
-    ...(desktopAvailable
-      ? [
-          {
-            id: "panel-desktop",
-            label: t("palette.items.desktop"),
-            icon: "monitor" as const,
-            category: "navigation" as const,
-            action: "panel:desktop",
-          },
-        ]
-      : []),
-    ...(custodianAvailable
-      ? [
-          {
-            id: "panel-custodian",
-            label: t("nav.askOpenClaw"),
-            icon: "lobster" as const,
-            category: "navigation" as const,
-            action: "panel:custodian",
-          },
-        ]
-      : []),
+    ...(
+      [
+        [desktopAvailable, "desktop", "palette.items.desktop", "monitor"],
+        [custodianAvailable, "custodian", "nav.askOpenClaw", "lobster"],
+      ] as const
+    ).flatMap(([available, panel, labelKey, icon]) =>
+      available
+        ? [
+            {
+              id: `panel-${panel}`,
+              label: panel === "custodian" ? askBrandLabel() : t(labelKey),
+              icon,
+              category: "navigation" as const,
+              action: `panel:${panel}`,
+            },
+          ]
+        : [],
+    ),
   ];
 }
 

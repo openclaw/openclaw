@@ -20,44 +20,56 @@ import type {
 import type { SessionLifecyclePlanningOperations } from "./session-lifecycle-projection.worker.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 
-/** Keep builders outside SQL while retaining the caller's physical FIFO and exact source. */
-export async function projectSessionEntryLifecycleMutationInWorker(params: {
+type SessionLifecyclePlanningOwner = {
   database: ReclamationDatabaseOptions;
-  input: LifecycleRemovalProjectionInput;
-  upserts: readonly SessionEntryLifecycleUpsert[];
   execution: OpenClawAgentDatabaseExecution;
-}) {
-  const run = <Key extends keyof SessionLifecyclePlanningOperations>(
-    type: Key,
-    input: SessionLifecyclePlanningOperations[Key]["input"],
-  ): Promise<SessionLifecyclePlanningOperations[Key]["output"]> =>
-    withSessionEntryWorker(
-      params.database,
-      undefined,
-      () => params.execution.assertCurrent(),
-      async (execution, source) => {
-        const result = await execution.runExisting(source, async (worker) => ({
-          value: await executeOpenClawAgentWorkerPublication<
-            SessionLifecyclePlanningOperations,
-            Key
-          >(worker, {
+};
+
+function runSessionLifecyclePlanningInWorker<Key extends keyof SessionLifecyclePlanningOperations>(
+  params: SessionLifecyclePlanningOwner,
+  type: Key,
+  input: SessionLifecyclePlanningOperations[Key]["input"],
+): Promise<SessionLifecyclePlanningOperations[Key]["output"]> {
+  return withSessionEntryWorker(
+    params.database,
+    undefined,
+    () => params.execution.assertCurrent(),
+    async (execution, source) => {
+      const result = await execution.runExisting(source, async (worker) => ({
+        value: await executeOpenClawAgentWorkerPublication<SessionLifecyclePlanningOperations, Key>(
+          worker,
+          {
             id: randomUUID(),
             moduleUrl: resolveRuntimeWorkerUrl(
               runtimeProcessEntrypoints.sessionLifecyclePlanningDomain,
             ).href,
             input: { agentId: params.database.agentId },
             command: { type, input },
-          }),
-        }));
-        if (!result) {
-          throw new Error("Session database disappeared before lifecycle planning");
-        }
-        return result.value;
-      },
-      undefined,
-      params.execution,
-    );
-  const prepared = await run("prepare", {
+          },
+        ),
+      }));
+      if (!result) {
+        throw new Error("Session database disappeared before lifecycle planning");
+      }
+      return result.value;
+    },
+    undefined,
+    params.execution,
+  );
+}
+
+export function readSessionEntryLifecycleCountInWorker(params: SessionLifecyclePlanningOwner) {
+  return runSessionLifecyclePlanningInWorker(params, "count", undefined);
+}
+
+/** Keep builders outside SQL while retaining the caller's physical FIFO and exact source. */
+export async function projectSessionEntryLifecycleMutationInWorker(
+  params: SessionLifecyclePlanningOwner & {
+    input: LifecycleRemovalProjectionInput;
+    upserts: readonly SessionEntryLifecycleUpsert[];
+  },
+) {
+  const prepared = await runSessionLifecyclePlanningInWorker(params, "prepare", {
     ...params.input,
     upsertSessionKeys: params.upserts.map((upsert) => upsert.sessionKey.trim()),
   });
@@ -67,7 +79,15 @@ export async function projectSessionEntryLifecycleMutationInWorker(params: {
     params.upserts,
   );
   params.execution.assertCurrent();
-  return run("finish", {
+  if (prepared.selected.projectedRemovals.length === 0) {
+    return {
+      deletePlans: [],
+      removals: [],
+      upsertedEntries,
+      archiveRecovery: prepared.archiveRecovery,
+    };
+  }
+  return runSessionLifecyclePlanningInWorker(params, "finish", {
     ...prepared,
     upsertedEntries,
     archiveDirectory: params.input.archiveDirectory,

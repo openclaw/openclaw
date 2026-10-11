@@ -27,8 +27,6 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
@@ -1091,7 +1089,7 @@ class SettingsDetailInsetsTest {
                 drawerState = rememberDrawerState(initialValue = DrawerValue.Closed),
                 drawerContent = {},
               ) {
-                SettingsDetailFrame(title = "Gateway", subtitle = "", icon = Icons.Default.Settings, onBack = {}) {
+                SettingsDetailFrame(route = SettingsRoute.Gateway, title = "Gateway", subtitle = "", onBack = {}) {
                   repeat(20) { index -> ClawTextField("Field $index", {}, "") }
                   ClawTextField("Unsubmitted draft", {}, "Password", modifier = Modifier.testTag("last-field"))
                   ClawPrimaryButton(text = "Save", onClick = {})

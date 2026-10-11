@@ -68,12 +68,13 @@ describe("CallManager verification on restore", () => {
   async function initializeManager(params?: {
     callOverrides?: Parameters<typeof makePersistedCall>[0];
     configOverrides?: Partial<{ maxDurationSeconds: number }>;
+    provider?: FakeProvider;
   }) {
     const storePath = createTestStorePath();
     const call = makePersistedCall(params?.callOverrides);
     await writeCallsToStore(storePath, [call]);
 
-    const provider = new FakeProvider();
+    const provider = params?.provider ?? new FakeProvider();
 
     const config = VoiceCallConfigSchema.parse({
       enabled: true,
@@ -233,6 +234,54 @@ describe("CallManager verification on restore", () => {
     expect(requireSingleHangupCall(provider).reason).toBe("timeout");
     expect((await loadActiveCallsFromStore(storePath)).activeCalls.size).toBe(0);
   });
+
+  it("restores the remaining brief duration without charging time spent ringing", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const now = Date.now();
+    const { manager, provider, storePath } = await initializeManager({
+      callOverrides: {
+        startedAt: now - 35_000,
+        answeredAt: now - 10_000,
+        metadata: { maxDurationSeconds: 30 },
+      },
+    });
+    requireSingleActiveCall(manager);
+    expect(provider.hangupCalls).toEqual([]);
+    await vi.advanceTimersByTimeAsync(19_999);
+    expect(provider.hangupCalls).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    await manager.stop();
+    expect(requireSingleHangupCall(provider).reason).toBe("timeout");
+    expect(manager.getActiveCalls()).toEqual([]);
+    expect((await loadActiveCallsFromStore(storePath)).activeCalls.size).toBe(0);
+  });
+
+  it.each([0, 2_000])(
+    "hangs up a call that reaches its deadline during a %ims restore probe",
+    async (probeDelay) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      const now = Date.now();
+      const answeredAt = now - (probeDelay ? 29_000 : 30_000);
+      const provider = new FakeProvider();
+      provider.getCallStatus = async () => {
+        vi.setSystemTime(now + probeDelay);
+        return { status: "in-progress", isTerminal: false };
+      };
+      const { manager, storePath } = await initializeManager({
+        provider,
+        callOverrides: {
+          startedAt: answeredAt,
+          answeredAt,
+          metadata: { maxDurationSeconds: 30 },
+        },
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      await manager.stop();
+      expect(requireSingleHangupCall(provider).reason).toBe("timeout");
+      expect(manager.getActiveCalls()).toEqual([]);
+      expect((await loadActiveCallsFromStore(storePath)).activeCalls.size).toBe(0);
+    },
+  );
 
   it("summarizes repeated restored-call verification outcomes", async () => {
     const now = Date.now();

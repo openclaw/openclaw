@@ -23,7 +23,7 @@ type CatalogSubscriber = {
     signal?: AbortSignal;
     trackWork: ReturnType<typeof captureAsyncWorkTracker>;
   };
-  queued: Map<string, Map<string, CatalogPublication>>;
+  queued: Map<string, CatalogPublication>;
   preparing: boolean;
   remove: () => void;
 };
@@ -118,20 +118,14 @@ export class SessionCatalogListLifetime {
   private readonly subscribers = new Map<string, CatalogSubscriber>();
   private readonly publishers = new Set<() => void>();
   private removeAbortListener: (() => void) | undefined;
-  private isCurrent: (() => boolean) | undefined;
   private listing = true;
   private pending = 0;
   private readonly work = new CatalogListWork();
   private readonly deadline: ReturnType<typeof setTimeout>;
   private readonly sourceSignal: AbortSignal;
 
-  constructor(
-    isCurrent: () => boolean,
-    signals: readonly AbortSignal[],
-    catalogIds: readonly string[],
-  ) {
+  constructor(signals: readonly AbortSignal[], catalogIds: readonly string[]) {
     this.catalogIds = new Set(catalogIds);
-    this.isCurrent = isCurrent;
     // This bounds delivery captures, not custody of native work that ignores abort.
     this.deadline = setTimeout(
       () => this.retire(new Error("Session catalog list expired")),
@@ -152,15 +146,7 @@ export class SessionCatalogListLifetime {
       this.retire(this.sourceSignal.reason);
       return false;
     }
-    try {
-      if (this.isCurrent?.()) {
-        return true;
-      }
-    } catch {
-      // A lost context is retirement, never permission to use a successor.
-    }
-    this.retire();
-    return false;
+    return !this.controller.signal.aborted;
   }
 
   readonly assertCurrent = (): void => {
@@ -199,35 +185,30 @@ export class SessionCatalogListLifetime {
     if (!this.active() || !this.catalogIds.has(catalog.id)) {
       return;
     }
-    for (const [key, subscriber] of this.subscribers) {
-      if (!this.currentSubscriber(key, subscriber)) {
+    for (const subscriber of this.subscribers.values()) {
+      if (!this.currentSubscriber(subscriber)) {
         subscriber.remove();
         continue;
       }
       // Retain one frame per selected catalog/observed host, independent of update churn.
-      const hosts = subscriber.queued.get(catalog.id) ?? new Map<string, CatalogPublication>();
       for (const host of catalog.hosts) {
-        hosts.set(host.hostId, { catalog: { ...catalog, hosts: [host] }, instances });
-      }
-      if (hosts.size) {
-        subscriber.queued.set(catalog.id, hosts);
+        subscriber.queued.set(JSON.stringify([catalog.id, host.hostId]), {
+          catalog: { ...catalog, hosts: [host] },
+          instances,
+        });
       }
       if (!subscriber.preparing) {
-        this.deliverSubscriber(key, subscriber);
+        this.deliverSubscriber(subscriber);
       }
     }
   }
 
-  private currentSubscriber(key: string, subscriber: CatalogSubscriber): boolean {
-    return (
-      this.subscribers.get(key) === subscriber &&
-      this.active() &&
-      subscriber.current?.isCurrent() === true
-    );
+  private currentSubscriber(subscriber: CatalogSubscriber): boolean {
+    return this.active() && subscriber.current?.isCurrent() === true;
   }
 
-  private deliverSubscriber(key: string, subscriber: CatalogSubscriber): void {
-    while (!subscriber.preparing && this.currentSubscriber(key, subscriber)) {
+  private deliverSubscriber(subscriber: CatalogSubscriber): void {
+    while (!subscriber.preparing && this.currentSubscriber(subscriber)) {
       const current = subscriber.current;
       if (!current) {
         return;
@@ -238,7 +219,7 @@ export class SessionCatalogListLifetime {
         this.pending++;
         this.work.begin();
         void current.trackWork(() =>
-          this.deliverPreparedSubscriber(key, subscriber, preparation).catch(() => undefined),
+          this.deliverPreparedSubscriber(subscriber, preparation).catch(() => undefined),
         );
         return;
       }
@@ -251,34 +232,21 @@ export class SessionCatalogListLifetime {
   }
 
   private takeQueuedPublication(subscriber: CatalogSubscriber): CatalogPublication | undefined {
-    for (const [catalogId, hosts] of subscriber.queued) {
-      const next = hosts.entries().next().value;
-      if (next) {
-        hosts.delete(next[0]);
-      }
-      if (!hosts.size) {
-        subscriber.queued.delete(catalogId);
-      }
-      if (next) {
-        return next[1];
-      }
+    const next = subscriber.queued.entries().next().value;
+    if (next) {
+      subscriber.queued.delete(next[0]);
+      return next[1];
     }
     return undefined;
   }
 
   private async deliverPreparedSubscriber(
-    key: string,
     subscriber: CatalogSubscriber,
     preparation: Promise<void>,
   ): Promise<void> {
     try {
       await preparation;
-      while (this.currentSubscriber(key, subscriber)) {
-        const next = subscriber.current?.prepare?.();
-        if (next) {
-          await next;
-          continue;
-        }
+      while (this.currentSubscriber(subscriber)) {
         const publication = this.takeQueuedPublication(subscriber);
         if (!publication) {
           return;
@@ -366,7 +334,7 @@ export class SessionCatalogListLifetime {
 
   private releaseUnusedPublishers(): void {
     // Active lists can gain followers; settled lists cannot. Retirement clears every capture.
-    if (this.isCurrent && (this.listing || this.subscribers.size > 0)) {
+    if (!this.controller.signal.aborted && (this.listing || this.subscribers.size > 0)) {
       return;
     }
     for (const release of this.publishers) {
@@ -384,13 +352,12 @@ export class SessionCatalogListLifetime {
   retire(reason?: unknown): void {
     clearTimeout(this.deadline);
     // Clear captured clients and snapshots immediately, even when a producer ignores abort.
-    this.isCurrent = undefined;
+    this.controller.abort(reason);
     for (const subscriber of this.subscribers.values()) {
       subscriber.remove();
     }
     this.releaseUnusedPublishers();
     this.removeAbortListener?.();
     this.removeAbortListener = undefined;
-    this.controller.abort(reason);
   }
 }

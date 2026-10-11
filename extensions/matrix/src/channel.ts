@@ -69,7 +69,9 @@ import {
 } from "./matrix/target-ids.js";
 import {
   setMatrixThreadBindingIdleTimeoutBySessionKey,
+  setMatrixThreadBindingIdleTimeoutBySessionKeyAsync,
   setMatrixThreadBindingMaxAgeBySessionKey,
+  setMatrixThreadBindingMaxAgeBySessionKeyAsync,
 } from "./matrix/thread-bindings-shared.js";
 import { matrixPresentationCapabilities } from "./presentation-capabilities.js";
 import { matrixResolverAdapter } from "./resolver.js";
@@ -103,49 +105,60 @@ const matrixDoctor: ChannelDoctorAdapter = {
   normalizeCompatibilityConfig: normalizeMatrixCompatibilityConfig,
 };
 
+function resolveMatrixDirectoryAccount(cfg: CoreConfig, accountId?: string | null) {
+  return resolveMatrixAccountConfig({
+    cfg,
+    accountId: accountId ?? resolveDefaultMatrixAccountId(cfg),
+  });
+}
+
+function normalizeMatrixDirectoryId(entry: string, kind: "user" | "group") {
+  const raw = entry.replace(/^matrix:/i, "").trim();
+  if (!raw || raw === "*") {
+    return null;
+  }
+  const lowered = normalizeLowercaseStringOrEmpty(raw);
+  if (kind === "user") {
+    const cleaned = lowered.startsWith("user:") ? raw.slice("user:".length).trim() : raw;
+    return cleaned.startsWith("@") ? `user:${cleaned}` : cleaned;
+  }
+  if (lowered.startsWith("room:") || lowered.startsWith("channel:")) {
+    return raw;
+  }
+  return raw.startsWith("!") ? `room:${raw}` : raw;
+}
+
 const listMatrixDirectoryPeersFromConfig = createResolvedDirectoryEntriesLister<MatrixConfig>({
   kind: "user",
-  resolveAccount: (cfg, accountId) =>
-    resolveMatrixAccountConfig({
-      cfg,
-      accountId: accountId ?? resolveDefaultMatrixAccountId(cfg),
-    }),
+  resolveAccount: resolveMatrixDirectoryAccount,
   resolveSources: (account) => [
     account.dm?.allowFrom ?? [],
     account.groupAllowFrom ?? [],
     ...Object.values(account.groups ?? account.rooms ?? {}).map((room) => room.users ?? []),
   ],
-  normalizeId: (entry) => {
-    const raw = entry.replace(/^matrix:/i, "").trim();
-    if (!raw || raw === "*") {
-      return null;
-    }
-    const lowered = normalizeLowercaseStringOrEmpty(raw);
-    const cleaned = lowered.startsWith("user:") ? raw.slice("user:".length).trim() : raw;
-    return cleaned.startsWith("@") ? `user:${cleaned}` : cleaned;
-  },
+  normalizeId: (entry) => normalizeMatrixDirectoryId(entry, "user"),
 });
 
 const listMatrixDirectoryGroupsFromConfig = createResolvedDirectoryEntriesLister<MatrixConfig>({
   kind: "group",
-  resolveAccount: (cfg, accountId) =>
-    resolveMatrixAccountConfig({
-      cfg,
-      accountId: accountId ?? resolveDefaultMatrixAccountId(cfg),
-    }),
+  resolveAccount: resolveMatrixDirectoryAccount,
   resolveSources: (account) => [Object.keys(account.groups ?? account.rooms ?? {})],
-  normalizeId: (entry) => {
-    const raw = entry.replace(/^matrix:/i, "").trim();
-    if (!raw || raw === "*") {
-      return null;
-    }
-    const lowered = normalizeLowercaseStringOrEmpty(raw);
-    if (lowered.startsWith("room:") || lowered.startsWith("channel:")) {
-      return raw;
-    }
-    return raw.startsWith("!") ? `room:${raw}` : raw;
-  },
+  normalizeId: (entry) => normalizeMatrixDirectoryId(entry, "group"),
 });
+
+async function sendMatrixHeartbeatTyping(
+  to: string,
+  isTyping: boolean,
+  cfg: CoreConfig,
+  accountId?: string | null,
+): Promise<void> {
+  await (
+    await loadMatrixChannelRuntime()
+  ).sendTypingMatrix(to, isTyping, {
+    cfg,
+    ...(accountId ? { accountId } : {}),
+  });
+}
 
 function projectMatrixConversationBinding(binding: {
   boundAt: number;
@@ -362,7 +375,7 @@ const matrixChannelOutbound: ChannelOutboundAdapter = {
     },
   },
   presentationCapabilities: matrixPresentationCapabilities,
-  shouldSuppressLocalPayloadPrompt: shouldSuppressLocalMatrixExecApprovalPrompt,
+  shouldSuppressLocalPayloadPromptAsync: shouldSuppressLocalMatrixExecApprovalPrompt,
   ...createRuntimeOutboundDelegates({
     getRuntime: loadMatrixChannelRuntime,
     renderPresentation: {
@@ -427,6 +440,22 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
             accountId: accountId ?? "",
             maxAgeMs,
           }).map(projectMatrixConversationBinding),
+        setIdleTimeoutBySessionKeyAsync: async ({ targetSessionKey, accountId, idleTimeoutMs }) =>
+          (
+            await setMatrixThreadBindingIdleTimeoutBySessionKeyAsync({
+              targetSessionKey,
+              accountId: accountId ?? "",
+              idleTimeoutMs,
+            })
+          ).map(projectMatrixConversationBinding),
+        setMaxAgeBySessionKeyAsync: async ({ targetSessionKey, accountId, maxAgeMs }) =>
+          (
+            await setMatrixThreadBindingMaxAgeBySessionKeyAsync({
+              targetSessionKey,
+              accountId: accountId ?? "",
+              maxAgeMs,
+            })
+          ).map(projectMatrixConversationBinding),
       },
       messaging: {
         defaultMarkdownTableMode: "block",
@@ -557,22 +586,10 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
       },
       doctor: matrixDoctor,
       heartbeat: {
-        sendTyping: async ({ cfg, to, accountId }) => {
-          await (
-            await loadMatrixChannelRuntime()
-          ).sendTypingMatrix(to, true, {
-            cfg: cfg as CoreConfig,
-            ...(accountId ? { accountId } : {}),
-          });
-        },
-        clearTyping: async ({ cfg, to, accountId }) => {
-          await (
-            await loadMatrixChannelRuntime()
-          ).sendTypingMatrix(to, false, {
-            cfg: cfg as CoreConfig,
-            ...(accountId ? { accountId } : {}),
-          });
-        },
+        sendTyping: ({ cfg, to, accountId }) =>
+          sendMatrixHeartbeatTyping(to, true, cfg as CoreConfig, accountId),
+        clearTyping: ({ cfg, to, accountId }) =>
+          sendMatrixHeartbeatTyping(to, false, cfg as CoreConfig, accountId),
       },
     },
     security: {

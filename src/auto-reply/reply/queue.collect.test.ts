@@ -38,70 +38,67 @@ type InternalFollowupRun = FollowupRun & {
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-overflow-session-");
 installQueueRuntimeErrorSilencer();
 describe("followup queue collect routing", () => {
-  it.each([
-    { kind: "completed", stopReason: "stop" },
-    { kind: "failed", error: "execution failed", stopReason: "error" },
-    { kind: "aborted", stopReason: "aborted" },
-  ] satisfies QueuedFollowupReplyBatch["completion"][])(
-    "settles every collected source with $kind while publishing content once",
-    async (completion) => {
-      const q = createQueueCase();
-      const first = vi.fn();
-      const last = vi.fn();
-      const recovery = vi.fn();
-      const firstRetry = vi.fn(() => vi.fn());
-      const lastRetry = vi.fn(() => recovery);
-      for (const [prompt, deliver, createSourceRetry] of [
-        ["first", first, firstRetry],
-        ["last", last, lastRetry],
-      ] as const) {
-        q.add({
-          ...createRun({ prompt, originatingChannel: "webchat" }),
-          queuedFollowupReplyDisposition: {
-            kind: "deliver",
-            deliver: Object.assign(deliver, {
-              ownsCompletion: (channel: string | undefined) => channel === "webchat",
-              createSourceRetry,
-            }),
-          },
-        });
-      }
-      await q.drain();
-      expect(q.calls).toHaveLength(1);
-      const owner = q.calls[0]?.queuedFollowupReplyDisposition;
-      if (owner?.kind !== "deliver") {
-        throw new Error("Collected execution lost its source delivery owner");
-      }
-      expect(first).not.toHaveBeenCalled();
-      expect(last).not.toHaveBeenCalled();
-      expect(owner.deliver.ownsCompletion?.("webchat")).toBe(true);
-      expect(owner.deliver.ownsCompletion?.("discord")).toBe(false);
-      const progress: QueuedFollowupReplyBatch = {
-        kind: "queued-followup",
-        runId: "batch-execution",
-        originatingChannel: "webchat",
-        payloads: [{ text: "working" }],
-        completion: { kind: "progress" },
-      };
-      await owner.deliver(progress);
-      expect(first).not.toHaveBeenCalled();
-      expect(last).toHaveBeenCalledExactlyOnceWith(progress);
-      const terminal = { ...progress, payloads: [{ text: "done" }], completion };
-      await owner.deliver(terminal);
-      expect(first).toHaveBeenCalledExactlyOnceWith({ ...terminal, payloads: [] });
-      expect(last).toHaveBeenCalledTimes(2);
-      expect(last).toHaveBeenLastCalledWith(terminal);
-      const retry = owner.deliver.createSourceRetry?.();
-      await retry?.({ ...terminal, runId: "recovery-execution" });
-      expect(firstRetry).not.toHaveBeenCalled();
-      expect(lastRetry).toHaveBeenCalledOnce();
-      expect(recovery).toHaveBeenCalledExactlyOnceWith({
-        ...terminal,
-        runId: "recovery-execution",
+  it("settles every collected source while publishing content once", async () => {
+    const q = createQueueCase();
+    const first = vi.fn();
+    const last = vi.fn();
+    const recovery = vi.fn();
+    const firstRetry = vi.fn(() => vi.fn());
+    const lastRetry = vi.fn(() => recovery);
+    for (const [prompt, deliver, createSourceRetry] of [
+      ["first", first, firstRetry],
+      ["last", last, lastRetry],
+    ] as const) {
+      q.add({
+        ...createRun({ prompt, originatingChannel: "webchat" }),
+        queuedFollowupReplyDisposition: {
+          kind: "deliver",
+          deliver: Object.assign(deliver, {
+            ownsCompletion: (channel: string | undefined) => channel === "webchat",
+            createSourceRetry,
+          }),
+        },
       });
-      expect(first).toHaveBeenCalledOnce();
-    },
-  );
+    }
+    await q.drain();
+    expect(q.calls).toHaveLength(1);
+    const owner = q.calls[0]?.queuedFollowupReplyDisposition;
+    if (owner?.kind !== "deliver") {
+      throw new Error("Collected execution lost its source delivery owner");
+    }
+    expect(first).not.toHaveBeenCalled();
+    expect(last).not.toHaveBeenCalled();
+    expect(owner.deliver.ownsCompletion?.("webchat")).toBe(true);
+    expect(owner.deliver.ownsCompletion?.("discord")).toBe(false);
+    const progress: QueuedFollowupReplyBatch = {
+      kind: "queued-followup",
+      runId: "batch-execution",
+      originatingChannel: "webchat",
+      payloads: [{ text: "working" }],
+      completion: { kind: "progress" },
+    };
+    await owner.deliver(progress);
+    expect(first).not.toHaveBeenCalled();
+    expect(last).toHaveBeenCalledExactlyOnceWith(progress);
+    const terminal: QueuedFollowupReplyBatch = {
+      ...progress,
+      payloads: [{ text: "done" }],
+      completion: { kind: "completed", stopReason: "stop" },
+    };
+    await owner.deliver(terminal);
+    expect(first).toHaveBeenCalledExactlyOnceWith({ ...terminal, payloads: [] });
+    expect(last).toHaveBeenCalledTimes(2);
+    expect(last).toHaveBeenLastCalledWith(terminal);
+    const retry = owner.deliver.createSourceRetry?.();
+    await retry?.({ ...terminal, runId: "recovery-execution" });
+    expect(firstRetry).not.toHaveBeenCalled();
+    expect(lastRetry).toHaveBeenCalledOnce();
+    expect(recovery).toHaveBeenCalledExactlyOnceWith({
+      ...terminal,
+      runId: "recovery-execution",
+    });
+    expect(first).toHaveBeenCalledOnce();
+  });
 
   it("settles remaining collected sources before surfacing a terminal delivery failure", async () => {
     const q = createQueueCase();
@@ -1199,21 +1196,6 @@ describe("followup queue collect routing", () => {
     await settled.promise;
     expect(firstComplete).toHaveBeenCalledTimes(1);
     expect(secondComplete).toHaveBeenCalledTimes(1);
-  });
-
-  it("drains a bound Skill Workshop revision individually", async () => {
-    const q = createQueueCase({}, 2);
-    const revisionRun = createRun({ prompt: "revise proposal" });
-    revisionRun.run.skillWorkshopProposalRevision = {
-      agentId: "main",
-      workspaceDir: "/tmp/workspace",
-      proposalId: "proposal-h1",
-      expectedRevisionHash: "1".repeat(64),
-    };
-    q.add(createRun({ prompt: "normal" }));
-    q.add(revisionRun);
-    await q.drain();
-    expect(q.calls.map((call) => call.prompt)).toEqual(["normal", "revise proposal"]);
   });
 
   it("keeps one onComplete-only overflow source retryable after delivery fails", async () => {

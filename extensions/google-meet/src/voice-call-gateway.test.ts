@@ -29,14 +29,15 @@ const gatewayMocks = vi.hoisted(() => ({
   actualClients: [] as GatewayClientInstance[],
 }));
 
-vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => ({
+  ...(await importOriginal<GatewayRuntime>()),
   GatewayClient: vi.fn(function MockGatewayClient(params: GatewayClientOptions) {
     gatewayMocks.clientOptions = params;
     if (gatewayMocks.constructorError) {
       throw gatewayMocks.constructorError;
     }
     if (gatewayMocks.actualGatewayClient) {
-      const client = new gatewayMocks.actualGatewayClient(params);
+      const client = new gatewayMocks.actualGatewayClient({ ...params, deviceIdentity: null });
       gatewayMocks.actualClients.push(client);
       return client;
     }

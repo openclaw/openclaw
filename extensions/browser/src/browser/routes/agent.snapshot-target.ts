@@ -26,14 +26,14 @@ export async function captureBrowserOperationTarget(opts: {
     throw new Error("Browser operation profile is unavailable");
   }
   const lifecycle = getProfileLifecycle(runtime);
-  const generation = lifecycle.generation;
+  const profileSignal = lifecycle.controller.signal;
   let released = false;
   const isCurrent = () =>
     !released &&
     opts.ctx.state() === state &&
     state.extensionRelays?.get(opts.profileName) === relay &&
     state.profiles.get(opts.profileName) === runtime &&
-    lifecycle.generation === generation;
+    !profileSignal.aborted;
   const reference =
     relay.ownership === "borrowed"
       ? await relay.client.capture(opts.targetId, () => {

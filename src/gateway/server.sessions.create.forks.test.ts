@@ -59,7 +59,6 @@ test("sessions.create parents dashboard sessions to agent main by default", asyn
         providerOverride: "anthropic",
         modelOverride: "parent-model",
         modelOverrideSource: "user",
-        conversationLink: { url: "https://chat.example.test/main", label: "Main Conversation" },
       },
     },
   });
@@ -83,7 +82,6 @@ test("sessions.create parents dashboard sessions to agent main by default", asyn
     loadSessionEntry({ sessionKey: "agent:main:main", storePath }),
     "grouping parent session",
   );
-  expect(child.conversationLink).toBeUndefined();
   const { createModelSelectionState } = await import("../auto-reply/reply/model-selection.js");
   const cfg = getRuntimeConfig();
   const reply = await createModelSelectionState({
@@ -151,13 +149,11 @@ test("sessions.create forks the parent transcript into the new session", async (
   const { dir, storePath } = await createSessionStoreDir();
   testState.sessionConfig = { scope: "per-sender" };
   const parent = await createCompactedSessionFixture(dir);
-  const conversationLink = { url: "https://chat.example.test/thread/fork", label: "Source Thread" };
   const projectRoot = path.join(dir, "qa-writer");
   await fs.mkdir(projectRoot);
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry(parent.sessionId, {
-        conversationLink,
         sessionFile: parent.sessionFile,
         projectId: "qa-writer",
         spawnedCwd: projectRoot,
@@ -265,13 +261,9 @@ test("sessions.create forks the parent transcript into the new session", async (
     sessions?: Array<{
       key: string;
       forkedFromParent?: boolean;
-      conversationLink?: typeof conversationLink;
     }>;
   }>("sessions.list", {});
   expect(listed.payload?.sessions?.find((row) => row.key === key)?.forkedFromParent).toBe(true);
-  expect(listed.payload?.sessions?.find((row) => row.key === key)?.conversationLink).toEqual(
-    conversationLink,
-  );
   testState.sessionConfig = undefined;
 });
 

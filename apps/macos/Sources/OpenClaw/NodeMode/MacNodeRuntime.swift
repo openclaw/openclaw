@@ -126,8 +126,8 @@ actor MacNodeRuntime {
     private let canvasHostedSurfaceResolver: MacNodeCanvasHostedSurfaceResolver
     private let codexThreadCatalogEnabled: @Sendable () -> Bool
     private let codexThreadCatalogClient: MacNodeCodexThreadCatalogClient
-    private let codexThreadListRequest: (@Sendable (String?) async throws -> String)?
-    private let codexThreadTurnsRequest: (@Sendable (String?) async throws -> String)?
+    private let codexThreadListRequest: @Sendable (String?) async throws -> String
+    private let codexThreadTurnsRequest: @Sendable (String?) async throws -> String
     private let claudeSessionCatalogEnabled: @Sendable () -> Bool
     private let claudeSessionListRequest: @Sendable (String?) async throws -> String
     private let claudeSessionReadRequest: @Sendable (String?) async throws -> String
@@ -185,8 +185,12 @@ actor MacNodeRuntime {
             refreshSurfaceURL: refreshCanvasSurfaceUrl)
         self.codexThreadCatalogEnabled = codexThreadCatalogEnabled
         self.codexThreadCatalogClient = codexThreadCatalogClient
-        self.codexThreadListRequest = codexThreadListRequest
-        self.codexThreadTurnsRequest = codexThreadTurnsRequest
+        self.codexThreadListRequest = codexThreadListRequest ?? { paramsJSON in
+            try await codexThreadCatalogClient.list(paramsJSON: paramsJSON)
+        }
+        self.codexThreadTurnsRequest = codexThreadTurnsRequest ?? { paramsJSON in
+            try await codexThreadCatalogClient.turns(paramsJSON: paramsJSON)
+        }
         self.claudeSessionCatalogEnabled = claudeSessionCatalogEnabled
         self.claudeSessionListRequest = claudeSessionListRequest
         self.claudeSessionReadRequest = claudeSessionReadRequest
@@ -448,19 +452,10 @@ actor MacNodeRuntime {
                 code: .unavailable,
                 message: "UNAVAILABLE: Codex session catalog is disabled")
         }
-        let payload: String = if req.command == MacNodeCodexThreadCatalogContract.listCommand {
-            if let request = codexThreadListRequest {
-                try await request(req.paramsJSON)
-            } else {
-                try await self.codexThreadCatalogClient.list(paramsJSON: req.paramsJSON)
-            }
-        } else {
-            if let request = codexThreadTurnsRequest {
-                try await request(req.paramsJSON)
-            } else {
-                try await self.codexThreadCatalogClient.turns(paramsJSON: req.paramsJSON)
-            }
-        }
+        let request = req.command == MacNodeCodexThreadCatalogContract.listCommand
+            ? self.codexThreadListRequest
+            : self.codexThreadTurnsRequest
+        let payload = try await request(req.paramsJSON)
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
     }
 
@@ -709,42 +704,36 @@ extension MacNodeRuntime {
             let payload = try Self.encodePayload(result)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
         } catch let error as ComputerActionService.ComputerActionError {
-            switch error {
+            let (code, message): (OpenClawNodeErrorCode, String) = switch error {
             case .accessibilityNotTrusted:
-                return Self.errorResponse(
-                    req,
-                    code: .unavailable,
-                    message: "ACCESSIBILITY_REQUIRED: grant Accessibility permission to OpenClaw")
+                (.unavailable, "ACCESSIBILITY_REQUIRED: grant Accessibility permission to OpenClaw")
             case .accessibilityGrantMayBeStale:
-                return Self.errorResponse(
-                    req,
-                    code: .unavailable,
-                    message: "ACCESSIBILITY_REQUIRED: "
+                (
+                    .unavailable,
+                    "ACCESSIBILITY_REQUIRED: "
                         + ComputerControlPermissionSnapshot.Diagnostic.staleAccessibilityRemediation)
             case .postEventAccessDenied:
-                return Self.errorResponse(
-                    req,
-                    code: .unavailable,
-                    message: "POST_EVENT_REQUIRED: macOS denied Event Posting access; re-grant OpenClaw "
+                (
+                    .unavailable,
+                    "POST_EVENT_REQUIRED: macOS denied Event Posting access; re-grant OpenClaw "
                         + "under System Settings → Privacy & Security → Accessibility")
             case .noDisplays, .invalidScreenIndex, .missingDisplayFrameId, .displayFrameChanged,
                  .missingCoordinate, .coordinateOutOfBounds, .invalidReferenceWidth, .missingKeys,
                  .emptyText, .invalidScroll, .invalidModifier, .buttonAlreadyHeld, .buttonNotHeld,
                  .invalidRequest, .staleObservation, .unsupportedAction:
-                return Self.errorResponse(
-                    req,
-                    code: .invalidRequest,
-                    message: error.localizedDescription.hasPrefix("COMPUTER_")
+                (
+                    .invalidRequest,
+                    error.localizedDescription.hasPrefix("COMPUTER_")
                         ? error.localizedDescription
                         : "INVALID_REQUEST: \(error.localizedDescription)")
             case .eventCreationFailed, .lifecycleChanged, .refused:
-                return Self.errorResponse(
-                    req,
-                    code: .unavailable,
-                    message: error.localizedDescription.hasPrefix("COMPUTER_")
+                (
+                    .unavailable,
+                    error.localizedDescription.hasPrefix("COMPUTER_")
                         ? error.localizedDescription
                         : "UNAVAILABLE: \(error.localizedDescription)")
             }
+            return Self.errorResponse(req, code: code, message: message)
         }
     }
 
@@ -807,24 +796,16 @@ extension MacNodeRuntime {
                 quality: params.quality,
                 format: params.format,
                 desktopPermit: desktopPermit)
-        } catch let error as ScreenSnapshotService.ScreenSnapshotError {
-            switch error {
-            case .noDisplays:
-                return Self.errorResponse(
-                    req,
-                    code: .invalidRequest,
-                    message: "INVALID_REQUEST: no displays available for screen snapshot")
-            case let .invalidScreenIndex(idx):
-                return Self.errorResponse(
-                    req,
-                    code: .invalidRequest,
-                    message: "INVALID_REQUEST: invalid screen index \(idx)")
-            case .captureFailed, .encodeFailed:
-                return Self.errorResponse(
-                    req,
-                    code: .unavailable,
-                    message: "UNAVAILABLE: screen snapshot failed")
-            }
+        } catch ScreenSnapshotService.ScreenSnapshotError.noDisplays {
+            return Self.errorResponse(
+                req,
+                code: .invalidRequest,
+                message: "INVALID_REQUEST: no displays available for screen snapshot")
+        } catch let ScreenSnapshotService.ScreenSnapshotError.invalidScreenIndex(idx) {
+            return Self.errorResponse(
+                req,
+                code: .invalidRequest,
+                message: "INVALID_REQUEST: invalid screen index \(idx)")
         } catch {
             return Self.errorResponse(
                 req,

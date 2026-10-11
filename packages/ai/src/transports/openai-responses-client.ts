@@ -7,6 +7,7 @@ import { codeModeToolSurfaceObserver } from "../provider-options.js";
 import { resolveAzureDeploymentNameFromMap } from "../providers/azure-deployment-map.js";
 import { isOpenAICompatibleAzureResponsesBaseUrl } from "../providers/azure-openai-responses-client-compat.js";
 import { applyResponsesServiceTierPricing } from "../providers/openai-responses-shared.js";
+import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import {
   createFirstStreamEventAbortController,
   getFirstStreamEventTimeoutHandler,
@@ -14,7 +15,7 @@ import {
 } from "../utils/stream-first-event-timeout.js";
 import { buildGuardedModelFetch } from "./host-policy.js";
 import { prepareModelRequestBody } from "./model-request-body.js";
-import { emitModelTransportDebug } from "./model-transport-debug.js";
+import { emitModelTransportDebug, emitModelTransportError } from "./model-transport-debug.js";
 import { formatModelTransportDebugBaseUrl } from "./model-transport-url.js";
 import { isOpenAICodexResponsesModel } from "./openai-completions-compat.js";
 import { postOpenAIResponsesCompaction } from "./openai-responses-compact-client.js";
@@ -225,6 +226,8 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           compact: Boolean(compactRequest),
           stream: config.streamRequest,
           lifecycle: requestLifecycle,
+          // The SDK replaces the fetch signal; retain the watchdog caller signal.
+          onSseComment: () => notifyLlmRequestActivity(options?.signal, false),
         });
         const client = config.createClient(model, apiKey, httpHeaders, fetchOverride);
         const nativeAstra =
@@ -263,8 +266,13 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             params.multi_agent?.enabled !== true &&
             params.tools
           ) {
+            const synchronousTools = new Set(
+              context.tools?.flatMap((tool) => (tool.async === false ? [tool.name] : [])),
+            );
             params.tools = params.tools.map((tool) =>
-              tool.type === "function" ? { ...tool, async: true } : tool,
+              tool.type === "function" && !synchronousTools.has(tool.name)
+                ? { ...tool, async: true }
+                : tool,
             );
           }
           return params;
@@ -313,19 +321,18 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           (params.store === true || supportsResponsesReasoningUpdate(params)) &&
           !params.previous_response_id
         ) {
+          const restoreRequest = () =>
+            restoreResponsesReasoningState(context, model, responsesOptions, params);
           continuationClaim = claimOpenAIResponsesHttpContinuation({
             sessionId,
             apiKey,
             baseUrl: model.baseUrl,
             headers: httpHeaders,
             request: params as ResponsesContinuationRequest,
-            restoreRequest: () =>
-              restoreResponsesReasoningState(context, model, responsesOptions, params),
+            restoreRequest,
           });
-          if (continuationClaim) {
-            // SAFETY: The owner preserves the request; SDK inputs predate configuration_update.
-            params = continuationClaim.fullRequest as typeof params;
-          }
+          // SAFETY: Restoration preserves SDK parameters and adds validated reasoning input controls.
+          params = (continuationClaim?.fullRequest ?? restoreRequest()) as typeof params;
         }
         const observePrompt = createResponsesPromptEgressObserver(
           responsesOptions,
@@ -587,10 +594,13 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         const incompleteReason = output.diagnostics?.find(
           ({ type }) => type === "openai_responses_terminal",
         )?.details?.incompleteReason;
-        log.warn(
-          `[responses] error provider=${model.provider} api=${model.api} model=${model.id} ` +
+        emitModelTransportError(
+          log,
+          "responses",
+          `provider=${model.provider} api=${model.api} model=${model.id} ` +
             summarizeOpenAITransportError(error) +
             (typeof incompleteReason === "string" ? ` incompleteReason=${incompleteReason}` : ""),
+          options?.signal,
         );
         failTransportStream({ stream, output, signal: options?.signal, error });
       } finally {

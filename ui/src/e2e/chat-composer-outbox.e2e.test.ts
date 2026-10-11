@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { waitForControlUiGatewayReconnecting } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway, reconnectMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -16,7 +17,7 @@ suite.define(() => {
       await gateway.waitForRequest("chat.startup");
       await gateway.setOnline(false);
       await page.locator(".agent-chat__input--offline").waitFor();
-      await page.locator(".gateway-status__label").filter({ hasText: "Reconnecting…" }).waitFor();
+      await waitForControlUiGatewayReconnecting(page);
 
       const statusBand = page.locator(".agent-chat__composer-status-band");
       const composer = page.locator(".agent-chat__composer-combobox textarea");

@@ -32,9 +32,8 @@ extension OnboardingView {
                 self.gatewayDiscovery.start()
                 await self.refreshLocalGatewayProbe()
             }
-        } else if !shouldMonitor, monitoringDiscovery {
-            monitoringDiscovery = false
-            gatewayDiscovery.stop()
+        } else if !shouldMonitor {
+            self.stopDiscovery()
         }
     }
 
@@ -145,12 +144,7 @@ extension OnboardingView {
     }
 
     func finishExistingCLIActivation() async {
-        defer {
-            installingCLI = false
-            cliInstallPhase = .idle
-            OnboardingController.shared.setWindowCloseEnabled(true)
-            OnboardingController.shared.busyReason = nil
-        }
+        defer { self.finishCLIInstallProgress() }
 
         if BundledRuntime.isBundledApp {
             await self.prepareBundledGateway(afterFreshInstall: false)
@@ -194,12 +188,7 @@ extension OnboardingView {
 
     func runCLIInstall() async {
         await GatewayProcessManager.shared.waitForStartupAttempt()
-        defer {
-            self.installingCLI = false
-            self.cliInstallPhase = .idle
-            OnboardingController.shared.setWindowCloseEnabled(true)
-            OnboardingController.shared.busyReason = nil
-        }
+        defer { self.finishCLIInstallProgress() }
         guard self.requiresLocalCLI else { return }
         guard GatewayProcessManager.shared.installation == .managed else {
             self.cliStatus = GatewayProcessManager.Installation.ownershipFailure
@@ -238,6 +227,13 @@ extension OnboardingView {
         (cliInstalled, cliStatus) = await Self.localGatewayActivationOutcome(
             CLIInstaller.activateLocalGateway(),
             afterFreshInstall: true)
+    }
+
+    private func finishCLIInstallProgress() {
+        self.installingCLI = false
+        self.cliInstallPhase = .idle
+        OnboardingController.shared.setWindowCloseEnabled(true)
+        OnboardingController.shared.busyReason = nil
     }
 
     private func prepareBundledGateway(afterFreshInstall: Bool = true) async {

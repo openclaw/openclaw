@@ -1,19 +1,20 @@
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { registerListener } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentIdentityResult } from "../../api/types.ts";
-import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
-import { resolveGatewayReadRetryDelayMs } from "../gateway-availability.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { isGatewayAvailable, resolveGatewayReadRetryDelayMs } from "../gateway-availability.ts";
 
-type AgentIdentityGatewaySnapshot = {
-  client: GatewayBrowserClient | null;
-  phase: ApplicationGatewayPhase;
-};
+type AgentIdentityGatewaySnapshot = Pick<
+  ApplicationGatewaySnapshot,
+  "client" | "phase" | "restartPending" | "suspensionPhase"
+>;
 
 type AgentIdentityGateway = {
   readonly snapshot: AgentIdentityGatewaySnapshot;
   subscribe: (listener: (snapshot: AgentIdentityGatewaySnapshot) => void) => () => void;
-  subscribeEvents?: (listener: (event: { event: string }) => void) => () => void;
+  subscribeEvents?: (listener: (event: { event: string; payload?: unknown }) => void) => () => void;
 };
 
 type AgentIdentityCacheEntry = {
@@ -24,8 +25,6 @@ type AgentIdentityCacheEntry = {
 };
 
 const AGENT_IDENTITY_CACHE_LIMIT = 128;
-// Workspace avatars can change in place without a config or roster event.
-const AGENT_IDENTITY_CACHE_TTL_MS = 60_000;
 const identityRequests = new WeakMap<GatewayBrowserClient, Map<string, AgentIdentityCacheEntry>>();
 
 /** Retire every UI surface's cached request when its connection or roster revision changes. */
@@ -44,10 +43,6 @@ function invalidateAgentIdentityCache(
   } else {
     identityRequests.delete(client);
   }
-}
-
-function hasFreshAgentIdentityResult(entry: AgentIdentityCacheEntry | undefined): boolean {
-  return Boolean(entry?.result && Date.now() < entry.refreshAt);
 }
 
 export function fetchAgentIdentity(
@@ -80,8 +75,6 @@ export function fetchAgentIdentity(
           return null;
         }
         entry.result = { identity };
-        entry.refreshAt = Date.now() + AGENT_IDENTITY_CACHE_TTL_MS;
-        entry.failures = 0;
         return identity;
       },
       (error: unknown) => {
@@ -95,7 +88,7 @@ export function fetchAgentIdentity(
         if (cache.size <= AGENT_IDENTITY_CACHE_LIMIT) {
           break;
         }
-        if (Number.isFinite(candidate.refreshAt)) {
+        if (candidate.result || Number.isFinite(candidate.refreshAt)) {
           cache.delete(id);
         }
       }
@@ -139,7 +132,27 @@ export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
 
   gateway.subscribe(resetForGateway);
 
+  const invalidate = (agentIds: readonly (string | null | undefined)[]) => {
+    const ids = normalizeUniqueTrimmedStringList(agentIds);
+    invalidateAgentIdentityCache(cachedClient, ids);
+    for (const agentId of ids) {
+      invalidationEpochs.set(agentId, (invalidationEpochs.get(agentId) ?? 0) + 1);
+      identities.delete(agentId);
+    }
+    // Chat can hold a shared request without a capability snapshot.
+    if (ids.length > 0) {
+      publish();
+    }
+  };
+
   gateway.subscribeEvents?.((event) => {
+    if (event.event === "agent.identity.changed") {
+      const agentId = asNonArrayRecord(event.payload).agentId;
+      if (typeof agentId === "string") {
+        invalidate([agentId]);
+      }
+      return;
+    }
     if (event.event !== "config.changed") {
       return;
     }
@@ -162,16 +175,13 @@ export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
       const snapshot = gateway.snapshot;
       resetForGateway(snapshot);
       const client = snapshot.client;
-      if (!client || snapshot.phase !== "connected") {
+      if (!client || !isGatewayAvailable(snapshot)) {
         return;
       }
       const generation = connectionGeneration;
       const missing = normalizeUniqueTrimmedStringList(agentIds).filter((agentId) => {
         const cached = identityRequests.get(client)?.get(agentId);
-        return (
-          !hasFreshAgentIdentityResult(cached) ||
-          identities.get(agentId) !== cached?.result?.identity
-        );
+        return !cached?.result || identities.get(agentId) !== cached?.result?.identity;
       });
       if (missing.length === 0) {
         return;
@@ -210,20 +220,7 @@ export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
         publish();
       }
     },
-    invalidate(agentIds: readonly (string | null | undefined)[]) {
-      let changed = false;
-      const ids = normalizeUniqueTrimmedStringList(agentIds);
-      invalidateAgentIdentityCache(cachedClient, ids);
-      for (const agentId of ids) {
-        invalidationEpochs.set(agentId, (invalidationEpochs.get(agentId) ?? 0) + 1);
-        if (identities.delete(agentId)) {
-          changed = true;
-        }
-      }
-      if (changed) {
-        publish();
-      }
-    },
+    invalidate,
     subscribe: (listener: () => void) => registerListener(listeners, listener),
   };
 }

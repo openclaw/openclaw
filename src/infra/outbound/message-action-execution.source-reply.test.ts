@@ -5,7 +5,7 @@ import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { annotateSourceDelivery } from "./message-action-execution.js";
+import { annotateSourceDelivery } from "./message-action-result-acceptance.js";
 import { runMessageAction } from "./message-action-runner.js";
 
 const ttsMocks = vi.hoisted(() => ({

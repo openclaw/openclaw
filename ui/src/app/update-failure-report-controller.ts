@@ -24,25 +24,20 @@ export function createUpdateFailureReportController(params: {
   setBusy: (busy: boolean) => void;
   setResult: (attemptId: string, result: ReportResult) => void;
 }) {
-  let generation = 0;
-  let activeGeneration: number | null = null;
+  let activeRequest: object | null = null;
 
   return {
     invalidate: () => {
-      generation += 1;
-      activeGeneration = null;
+      activeRequest = null;
     },
     report: async (attemptId: string): Promise<void> => {
       const client = params.getClient();
-      if (!client || activeGeneration !== null || !params.isCurrent(attemptId, client)) {
+      if (!client || activeRequest !== null || !params.isCurrent(attemptId, client)) {
         return;
       }
-      const currentGeneration = ++generation;
-      activeGeneration = currentGeneration;
-      const isCurrent = () =>
-        activeGeneration === currentGeneration &&
-        generation === currentGeneration &&
-        params.isCurrent(attemptId, client);
+      const request = {};
+      activeRequest = request;
+      const isCurrent = () => activeRequest === request && params.isCurrent(attemptId, client);
       params.setBusy(true);
       try {
         const { reportUpdateFailure } = await import("./update-failure-report.ts");
@@ -55,8 +50,8 @@ export function createUpdateFailureReportController(params: {
           params.setResult(attemptId, { status: "error", message: formatUiError(error) });
         }
       } finally {
-        if (activeGeneration === currentGeneration) {
-          activeGeneration = null;
+        if (activeRequest === request) {
+          activeRequest = null;
           params.setBusy(false);
         }
       }

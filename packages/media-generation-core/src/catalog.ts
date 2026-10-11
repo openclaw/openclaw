@@ -1,16 +1,13 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 
-/** Catalog kind for generated media model entries. */
 export type MediaGenerationCatalogKind =
   | "image_generation"
   | "video_generation"
   | "music_generation";
 
-/** Source for a media generation catalog entry. */
 export type MediaGenerationCatalogSource = "static" | "live" | "cache" | "configured";
 
-/** Media generation model catalog entry. */
 export type MediaGenerationCatalogEntry<TCapabilities = unknown> = {
   kind: MediaGenerationCatalogKind;
   provider: string;
@@ -45,7 +42,6 @@ export type MediaGenerationCatalogProvider<TCapabilities = unknown> = {
   catalogByModel?: Readonly<Record<string, MediaGenerationCatalogModelEntry<TCapabilities>>>;
 };
 
-/** Synthesize static catalog entries from provider metadata. */
 export function synthesizeMediaGenerationCatalogEntries<TCapabilities>(params: {
   kind: MediaGenerationCatalogKind;
   provider: MediaGenerationCatalogProvider<TCapabilities>;

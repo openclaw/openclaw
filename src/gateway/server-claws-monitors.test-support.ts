@@ -27,7 +27,6 @@ import type { CronServiceDeps } from "../cron/service/state.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as sleep from "../utils/sleep.js";
-import { reconcileSkillCollectionReviewJobs } from "./server-cron-skill-review-jobs.js";
 import { clawsMonitorHandlers } from "./server-methods/claws-monitors.js";
 import type { RespondFn } from "./server-methods/types.js";
 
@@ -72,7 +71,8 @@ export function useClawMonitorFixture() {
 
   return async function fixture(
     enabled: boolean,
-    runner?: CronServiceDeps["runIsolatedAgentJob"],
+    /** Runs forced isolated jobs and the heartbeat monitor. */
+    runner?: (params: { abortSignal?: AbortSignal }) => Promise<{ status: "ok" }>,
     withCron = false,
   ) {
     const state = await createOpenClawTestState({ label: "claw-monitor-removal" });
@@ -114,7 +114,6 @@ export function useClawMonitorFixture() {
     expect(addPlan.blockers).toEqual([]);
     let config: OpenClawConfig = {
       agents: { defaults: { heartbeat: { every: enabled ? "30m" : "0m" } } },
-      skills: { workshop: { autonomous: { mode: enabled ? "auto" : "off" } } },
     };
     const storePath = state.statePath("cron", "jobs.json");
     const cronDeps: CronServiceDeps = {
@@ -132,6 +131,10 @@ export function useClawMonitorFixture() {
         listAgentEntries(config).some((agent) => agent.id === agentId),
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
+      requestHeartbeatAndWait: async (_wake, lifecycle) => {
+        await runner?.({ abortSignal: lifecycle.abortSignal });
+        return { status: "ran", durationMs: 0 };
+      },
       runIsolatedAgentJob: runner ?? vi.fn(async () => ({ status: "ok" as const })),
     };
     const cron = new CronService(cronDeps);
@@ -158,10 +161,6 @@ export function useClawMonitorFixture() {
     let reconcilePending = false;
     const reconcile = async () => {
       expect((await applyHeartbeatMonitorJobs({ cron, cfg: config })).ok).toBe(true);
-      expect(
-        (await reconcileSkillCollectionReviewJobs({ cron, cfg: config, logger })).ok,
-        JSON.stringify(logger.warn.mock.calls.slice(-3)),
-      ).toBe(true);
       reconcilePending = false;
     };
     await reconcile();

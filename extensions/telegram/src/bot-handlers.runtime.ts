@@ -16,7 +16,8 @@ export const createTelegramHandlers = (
 ) => {
   const message = createTelegramMessagePipeline(params);
   const authorization = createTelegramHandlerAuthorization(params);
-  const inboundPipeline = createTelegramInboundPipeline({ params, message, authorization });
+  const pipelineContext = { params, message, authorization };
+  const inboundPipeline = createTelegramInboundPipeline(pipelineContext);
   return {
     register(nativeCommandCallbackDispatcher?: TelegramNativeCommandCallbackDispatcher) {
       const callbackRouter = createTelegramCallbackRouter({
@@ -24,11 +25,7 @@ export const createTelegramHandlers = (
         message,
         authorization,
       });
-      const eventBindings = createTelegramEventBindings({
-        params,
-        message,
-        authorization,
-      });
+      const eventBindings = createTelegramEventBindings(pipelineContext);
       eventBindings.registerChatMembership();
       eventBindings.registerReaction();
       eventBindings.registerPolls();

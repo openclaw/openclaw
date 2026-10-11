@@ -2,7 +2,6 @@ import SwiftUI
 
 struct UsageMenuLabelView: View {
     let row: UsageRow
-    var showsChevron: Bool = false
     @Environment(\.menuItemHighlighted) private var isHighlighted
 
     var body: some View {
@@ -27,13 +26,6 @@ struct UsageMenuLabelView: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .layoutPriority(2)
-
-                if self.showsChevron {
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(MenuItemHighlightColors.secondary(self.isHighlighted))
-                        .padding(.leading, 2)
-                }
             }
         }
         .padding(.vertical, 10)

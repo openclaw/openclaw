@@ -336,8 +336,8 @@ export function createMattermostDraftStream(params: {
 
     let remainingText = text.trim();
     for (const sealedText of sealedAssistantTexts) {
-      const completed = sealedText.text.trim();
-      if (!completed || !remainingText.startsWith(completed)) {
+      const completed = sealedText.text;
+      if (!remainingText.startsWith(completed)) {
         return { kind: "full", text, publishedParts };
       }
       const suffix = remainingText.slice(completed.length);

@@ -135,6 +135,7 @@ const { maybeWakeRequesterAfterAllChildrenSettled: wakeRequester } = await vi.im
 
 function createGatewayContext() {
   const recoveryRuntime: GatewayRequestContext["recoveryRuntime"] = {
+    prepareRestartRecovery: () => undefined,
     dispatchAgent: (params, timeoutMs) => callGateway({ method: "agent", params, timeoutMs }),
     waitForAgent: (params, timeoutMs, signal) =>
       callGateway({ method: "agent.wait", params, timeoutMs, signal }),
@@ -261,10 +262,10 @@ describe("requester settle wake product flow", () => {
     );
     vi.useFakeTimers();
     settleRootWork = observeRootWork();
-    const settle = completionStore.settleRequesterCompletionBatch;
-    vi.spyOn(completionStore, "settleRequesterCompletionBatch").mockImplementation(
+    const settle = completionStore.mutateRequesterCompletionBatch;
+    vi.spyOn(completionStore, "mutateRequesterCompletionBatch").mockImplementation(
       async (params) => {
-        if (rejectNextRequesterWakePersistence) {
+        if (params.operation.kind === "settle" && rejectNextRequesterWakePersistence) {
           rejectNextRequesterWakePersistence = false;
           throw new Error("database is locked");
         }

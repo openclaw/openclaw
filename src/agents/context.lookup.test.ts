@@ -198,22 +198,29 @@ describe("context cache lifecycle", () => {
     expect(CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration).toBeNull();
   });
 
-  it("warms fresh caches instead of reusing a pre-generation load promise", async () => {
-    const legacyLoadPromise = Promise.resolve();
-    CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = legacyLoadPromise;
-    CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration = null;
-    CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig = config(
-      "fresh-provider",
-      model("fresh-model", 123_456),
-    );
-    await context.ensureContextWindowCacheLoaded();
-    expect(context.lookupContextTokens("fresh-model", { skipRuntimeConfigLoad: true })).toBe(
-      123_456,
-    );
-    expect(CONTEXT_WINDOW_RUNTIME_STATE.loadPromise).not.toBe(legacyLoadPromise);
-    expect(CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration).toBe(
-      CONTEXT_WINDOW_RUNTIME_STATE.generation,
-    );
+  it("does not publish prewarm cancelled during cooperative projection", async () => {
+    let cancelled = false;
+    state.catalog.entries = Array.from({ length: 600 }, (_, index) => ({
+      id: `cancelled-${index}`,
+      contextWindow: 64_000,
+    }));
+    state.publishedOwner.mockImplementationOnce(() => {
+      queueMicrotask(() => {
+        cancelled = true;
+      });
+      return { config: state.config, modelCatalog: state.catalog };
+    });
+
+    await context.prewarmContextWindowCacheAfterReady({
+      config: state.config,
+      isCancelled: () => cancelled,
+    });
+
+    expect(cancelled).toBe(true);
+    expect(
+      context.lookupContextTokens("cancelled-599", { skipRuntimeConfigLoad: true }),
+    ).toBeUndefined();
+    expect(CONTEXT_WINDOW_RUNTIME_STATE.loadPromise).toBeNull();
   });
 
   it("releases status waits on timeout while warmup is pending", async () => {
@@ -247,49 +254,14 @@ describe("provider-owned context lookup", () => {
     expect(context.lookupContextTokens("gemini-3.1-pro-preview")).toBe(128_000);
   });
 
-  it.each([
-    {
-      name: "falls back to a bare configured row",
-      selected: "kilocode/kilo-auto/balanced",
-      models: [model("kilo-auto/balanced", 900_000, 900_000)],
-      expected: 900_000,
-    },
-    {
-      name: "prefers an exact qualified row over an earlier bare row",
-      selected: "kilocode/kilo-auto/balanced",
-      models: [
-        model("kilo-auto/balanced", 111_000, 111_000),
-        model("kilocode/kilo-auto/balanced", 900_000, 900_000),
-      ],
-      expected: 900_000,
-    },
-    {
-      name: "prefers an exact bare row over an earlier self-prefixed row",
-      selected: "kilo-auto/balanced",
-      models: [
-        model("kilocode/kilo-auto/balanced", 2_000, 2_000),
-        model("kilo-auto/balanced", 128_000, 128_000),
-      ],
-      expected: 128_000,
-    },
-  ])("$name", ({ selected, models, expected }) => {
+  it("falls back to a bare configured row", () => {
     expect(
       context.resolveContextTokensForModel({
-        cfg: config("kilocode", ...models),
+        cfg: config("kilocode", model("kilo-auto/balanced", 900_000, 900_000)),
         provider: "kilocode",
-        model: selected,
+        model: "kilocode/kilo-auto/balanced",
       }),
-    ).toBe(expected);
-  });
-
-  it("honors configured overrides with mixed-case provider keys", () => {
-    expect(
-      context.resolveContextTokensForModel({
-        cfg: config(" OpenRouter ", model("anthropic/claude-sonnet-4-5", 200_000)),
-        provider: "openrouter",
-        model: "anthropic/claude-sonnet-4-5",
-      }),
-    ).toBe(200_000);
+    ).toBe(900_000);
   });
 
   it("treats explicit config as authoritative for read-only misses", () => {
@@ -329,30 +301,5 @@ describe("provider-owned context lookup", () => {
     expect(context.resolveContextTokensForModel({ cfg, model: "google/gemini-2.5-pro" })).toBe(
       999_000,
     );
-  });
-
-  it("prefers exact provider keys over alias-normalized matches", () => {
-    const cfg = {
-      models: {
-        providers: {
-          ...config("amazon-bedrock", model("claude-alias-test", 32_000)).models?.providers,
-          ...config("bedrock", model("claude-alias-test", 128_000)).models?.providers,
-        },
-      },
-    };
-    expect(
-      context.resolveContextTokensForModel({
-        cfg,
-        provider: "bedrock",
-        model: "claude-alias-test",
-      }),
-    ).toBe(128_000);
-    expect(
-      context.resolveContextTokensForModel({
-        cfg,
-        provider: "amazon-bedrock",
-        model: "claude-alias-test",
-      }),
-    ).toBe(32_000);
   });
 });

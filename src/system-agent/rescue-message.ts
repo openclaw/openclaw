@@ -1,4 +1,3 @@
-// OpenClaw rescue messages expose approved setup-helper commands over message channels.
 import { createHash } from "node:crypto";
 import {
   asDateTimestampMs,
@@ -8,7 +7,10 @@ import { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-c
 import { listAgentRoles } from "../agents/agent-roles.js";
 import type { CommandContext } from "../auto-reply/reply/commands-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createCorePluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
+import {
+  createCorePluginStateKeyedStore,
+  replaceCorePluginStateEntry,
+} from "../plugin-state/plugin-state-store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   executeSystemAgentOperation,
@@ -22,8 +24,6 @@ import { classifySystemAgentApprovalText } from "./operator-approval.js";
 import { resolveSystemAgentRescuePolicy } from "./rescue-policy.js";
 
 /**
- * Message-channel rescue command handling for OpenClaw.
- *
  * Rescue mode accepts `/openclaw` commands from approved message contexts,
  * stores pending persistent operations for explicit confirmation, and captures
  * command output without exposing local TUI or plugin-install flows remotely.
@@ -33,7 +33,6 @@ type RescuePendingOperation = {
   operation: SystemAgentOperation;
 };
 
-/** Input required to process one possible `/openclaw` rescue message. */
 type SystemAgentRescueMessageInput = {
   cfg: OpenClawConfig;
   command: CommandContext;
@@ -42,6 +41,7 @@ type SystemAgentRescueMessageInput = {
   isGroup: boolean;
   env?: NodeJS.ProcessEnv;
   deps?: SystemAgentCommandDeps;
+  assertCurrent?: () => void;
 };
 
 const SYSTEM_AGENT_COMMAND = "/openclaw";
@@ -110,14 +110,14 @@ function resolveAccountDiscriminator(command: CommandContext): string {
   return command.accountId?.trim() || command.to?.trim() || "default";
 }
 
-function openPendingStore(env?: NodeJS.ProcessEnv) {
-  return createCorePluginStateSyncKeyedStore<unknown>({
-    ownerId: "core:system-agent",
+function pendingStoreOptions(env?: NodeJS.ProcessEnv) {
+  return {
+    ownerId: "core:system-agent" as const,
     namespace: RESCUE_PENDING_NAMESPACE,
     maxEntries: RESCUE_PENDING_MAX_ENTRIES,
-    overflowPolicy: "reject-new",
+    overflowPolicy: "reject-new" as const,
     ...(env ? { env } : {}),
-  });
+  };
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -242,15 +242,25 @@ export async function runSystemAgentRescueMessage(
     return policy.message;
   }
 
-  const pendingStore = openPendingStore(input.env);
+  const assertOwnerCurrent = input.command.assertOwnerCurrent;
+  const assertInvocationCurrent = input.assertCurrent;
+  const assertCurrent = () => {
+    assertOwnerCurrent?.();
+    assertInvocationCurrent?.();
+  };
+  const options = pendingStoreOptions(input.env);
+  const pendingStore = createCorePluginStateKeyedStore<unknown>(options).withCurrent({
+    assertCurrent,
+  });
   const pendingKey = resolvePendingKey(input);
   const approvalIntent = classifySystemAgentApprovalText(rescueMessage);
   // Remote rescue never consults a model (a broken/compromised agent path must
   // not become a config editor); approval stays on the closed deterministic list.
   if (approvalIntent === "approve") {
-    // Consume before any async execution. Concurrent approvals get at most one
+    // The worker consumes before execution. Concurrent approvals get at most one
     // capability, and a failed execution cannot leave a replayable write.
-    const operation = parsePendingOperation(pendingStore.consume(pendingKey));
+    const operation = parsePendingOperation(await pendingStore.consume(pendingKey));
+    assertCurrent();
     if (!operation) {
       return "No pending OpenClaw rescue change is waiting for approval.";
     }
@@ -263,12 +273,14 @@ export async function runSystemAgentRescueMessage(
       approved: true,
       auditDetails: buildAuditDetails(input),
       deps: input.deps,
+      beforePersistentApply: assertCurrent,
     });
     return capture.read() || "OpenClaw rescue change applied.";
   }
 
   if (approvalIntent === "decline") {
-    const pending = parsePendingOperation(pendingStore.consume(pendingKey));
+    const pending = parsePendingOperation(await pendingStore.consume(pendingKey));
+    assertCurrent();
     return pending
       ? "Dropped the pending OpenClaw rescue change."
       : "No pending OpenClaw rescue change is waiting for approval.";
@@ -276,12 +288,13 @@ export async function runSystemAgentRescueMessage(
 
   // Any fresh command revokes the previous capability for this exact route.
   // Persistent commands below replace it with their newly rendered plan.
-  // Keep parse and registration below synchronous: invocation order must stay
-  // publication order. Async validation begins only after approval consumes the row.
-  pendingStore.delete(pendingKey);
+  // Prepare before yielding; replacement owns revocation and registration in one
+  // worker request so a later approval cannot overtake publication.
   const operation = parseSystemAgentOperation(rescueMessage);
   const unsupported = formatUnsupportedRemoteOperation(operation);
   if (unsupported) {
+    await pendingStore.delete(pendingKey);
+    assertCurrent();
     return unsupported;
   }
   if (isPersistentSystemAgentOperation(operation)) {
@@ -293,20 +306,26 @@ export async function runSystemAgentRescueMessage(
         ? undefined
         : resolveExpiresAtMsFromDurationMs(RESCUE_PENDING_TTL_MS, { nowMs });
     if (nowMs === undefined || expiresAtMs === undefined) {
+      await pendingStore.delete(pendingKey);
+      assertCurrent();
       return "OpenClaw rescue could not create a pending approval because the expiry clock is invalid.";
     }
     const ttlMs = expiresAtMs - nowMs;
-    pendingStore.register(
+    await replaceCorePluginStateEntry(
+      options,
       pendingKey,
       {
         version: 1,
         operation,
       } satisfies RescuePendingOperation,
-      { ttlMs },
+      { ttlMs, assertCurrent },
     );
+    assertCurrent();
     return formatPersistentPlan(operation);
   }
 
+  await pendingStore.delete(pendingKey);
+  assertCurrent();
   const capture = createCaptureRuntime();
   await executeSystemAgentOperation(operation, capture.runtime, {
     approved: true,

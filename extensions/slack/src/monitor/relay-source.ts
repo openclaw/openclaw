@@ -285,9 +285,8 @@ export function parseRelayFrame(data: RawData): unknown {
 }
 
 function extractRelaySlackMessageEvent(
-  frame: unknown,
+  record: Record<string, unknown> | undefined,
 ): { deliveryId: string; message: SlackMessageEvent; route: SlackRelayRoute } | undefined {
-  const record = asOptionalRecord(frame);
   if (!record || record.type !== "slack_event") {
     return undefined;
   }

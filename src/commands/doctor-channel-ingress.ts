@@ -3,13 +3,8 @@ import { countFailedChannelIngressQueueEntries } from "../channels/message/ingre
 import { formatCliCommand } from "../cli/command-format.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 
-type NoteChannelIngressDeadLettersOptions = {
-  stateDir?: string;
-  noteFn?: typeof note;
-};
-
 export async function noteChannelIngressDeadLetters(
-  options: NoteChannelIngressDeadLettersOptions = {},
+  options: { stateDir?: string; noteFn?: typeof note } = {},
 ): Promise<void> {
   const failed = await countFailedChannelIngressQueueEntries(options.stateDir);
   const first = failed[0];

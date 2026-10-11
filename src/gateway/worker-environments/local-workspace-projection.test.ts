@@ -8,6 +8,7 @@ import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { deleteRegistryWorktree } from "../../agents/worktrees/registry.js";
+import { getRegistryWorktree } from "../../agents/worktrees/registry.test-support.js";
 import {
   closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseAsync,
@@ -128,7 +129,7 @@ afterEach(async () => {
       await fs.rm(path.dirname(row.projection_path), { recursive: true, force: true });
     }
   });
-  deleteRegistryWorktree(process.env, owner.worktree.id);
+  await deleteRegistryWorktree(process.env, owner.worktree.id);
   if (process.env.OPENCLAW_STATE_DIR !== stateRoot) {
     await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath());
   }
@@ -596,12 +597,7 @@ describe("local sandbox workspace reconciliation", () => {
     "preserves accepted ignored files, symlinks and empty directories through archive: %s",
     async (mode) => {
       const [
-        {
-          insertRegistryWorktree,
-          getRegistryWorktree,
-          getRegistryWorktreeProvisionedState,
-          updateRegistryWorktree,
-        },
+        { insertRegistryWorktree, getRegistryWorktreeProvisionedState, updateRegistryWorktree },
         { ManagedWorktreeService, SNAPSHOT_RETENTION_MS },
         { restoreProvisionedFiles },
       ] = await Promise.all([

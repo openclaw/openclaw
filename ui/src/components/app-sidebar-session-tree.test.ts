@@ -195,3 +195,51 @@ describe("hidden run unread acknowledgement", () => {
     expect(parent?.children.map((row) => row.key)).toEqual([conversationKey]);
   });
 });
+
+describe("independent persistent sessions", () => {
+  it("promotes a child without rewriting origin or moving its own descendants", () => {
+    const parent: GatewaySessionRow = {
+      key: "parent",
+      kind: "direct",
+      childSessions: [conversationKey],
+    };
+    const child: GatewaySessionRow = {
+      key: conversationKey,
+      kind: "direct",
+      parentSessionKey: parent.key,
+      spawnedBy: parent.key,
+      sidebarRoot: true,
+      childSessions: ["grandchild"],
+    };
+    const grandchild: GatewaySessionRow = {
+      key: "grandchild",
+      kind: "direct",
+      parentSessionKey: child.key,
+    };
+    const tree = project([parent, child, grandchild]);
+    expect(tree.map((row) => row.key)).toEqual([parent.key, child.key]);
+    expect(tree[0]?.childSessionKeys).toEqual([]);
+    expect(tree[1]?.children.map((row) => row.key)).toEqual([grandchild.key]);
+    expect(child).toMatchObject({ parentSessionKey: parent.key, spawnedBy: parent.key });
+  });
+
+  it("keeps an unarchived direct child at the top level when its parent is archived", () => {
+    const parent: GatewaySessionRow = {
+      key: "parent",
+      kind: "direct",
+      archived: true,
+      childSessions: [conversationKey],
+    };
+    const child: GatewaySessionRow = {
+      key: conversationKey,
+      kind: "direct",
+      parentSessionKey: parent.key,
+    };
+    const tree = project([parent, child]);
+    expect(tree.map((row) => row.key)).toEqual([parent.key, child.key]);
+    expect(tree[1]?.isChild).toBe(false);
+    expect(project([{ ...parent, archived: false }, child]).map((row) => row.key)).toEqual([
+      parent.key,
+    ]);
+  });
+});

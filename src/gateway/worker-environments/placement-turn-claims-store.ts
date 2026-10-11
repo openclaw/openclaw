@@ -7,6 +7,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { preparePlacementProjectionPublication } from "./placement-read-publication.js";
 import { isCurrentPlacementTurnClaim, type WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementState } from "./placement-state.js";
 import {
@@ -30,6 +31,10 @@ import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-acce
 const log = createSubsystemLogger("gateway/placement");
 
 type Claims = ReturnType<typeof createPlacementTurnClaimOps>;
+type OperationInput<Key extends keyof PlacementTurnClaimWorkerOperations> = Omit<
+  PlacementTurnClaimWorkerOperations[Key]["input"],
+  "nowMs"
+>;
 
 function isReceipt(value: unknown): value is PlacementTurnClaimReceipt {
   return (
@@ -127,7 +132,9 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
     for (;;) {
       let prepared: PlacementTurnClaimReceipt | undefined;
       let previousState: WorkerSessionPlacementState | null | undefined;
-      let published = false;
+      let projectionPublication:
+        | ReturnType<typeof preparePlacementProjectionPublication>
+        | undefined;
       const mutation = createPlacementWorkerMutation({
         context,
         label: "Placement claim",
@@ -153,6 +160,12 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
             throw new Error("Placement claim commit has no receipt");
           }
           prepared = facts;
+          if (facts.projection) {
+            projectionPublication = preparePlacementProjectionPublication(
+              context.admission.identity,
+              facts.projection,
+            );
+          }
           if (command.type === "placementTurns.releaseIfOwned" && !facts.placement) {
             return undefined;
           }
@@ -195,6 +208,10 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
                   facts.placement,
                   resultFacts,
                   previousState,
+                  facts.placement,
+                  facts.projection
+                    ? { projection: facts.projection, conflictSessionIds: new Set() }
+                    : undefined,
                 )
               : stagePlacementWorkspaceResultWorkerPublication(
                   context.admission.identity,
@@ -218,10 +235,6 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
           };
         },
         publish(receipt) {
-          if (published) {
-            return;
-          }
-          published = true;
           if (receipt.placement) {
             close?.();
             if (receipt.environmentActivation) {
@@ -234,14 +247,21 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
               (command.type !== "placementTurns.startDrain" ||
                 command.input.workspaceBaseManifestRef !== undefined);
             if (notifySession) {
-              sessionChanges.emit({
+              const change = {
                 agentId: receipt.placement.agentId,
                 sessionKey: receipt.placement.sessionKey,
-              });
+              };
+              try {
+                projectionPublication?.publish(change);
+                sessionChanges.emit(change);
+              } finally {
+                projectionPublication?.release();
+              }
             }
           }
         },
         async recoverUnknown(error, publication) {
+          projectionPublication?.release();
           if (
             command.type !== "placementTurns.claim" &&
             command.type !== "placementTurns.release" &&
@@ -338,59 +358,47 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
           throw new ActiveTurnClaimError(sessionId);
         }
         throw error;
+      } finally {
+        projectionPublication?.release();
       }
     }
   }
+  const placementOperation =
+    <Input>(
+      operation: string,
+      command: (input: Input) => SqliteWorkerCommand<PlacementTurnClaimWorkerOperations>,
+    ) =>
+    async (input: Input, assertCurrent?: () => void) =>
+      requirePlacement(await execute(command(input), assertCurrent), operation);
   return {
-    async transition(
-      input: Omit<
-        PlacementTurnClaimWorkerOperations["placementTurns.transition"]["input"],
-        "nowMs"
-      >,
-      assertCurrent?: () => void,
-    ) {
-      const receipt = await execute(
-        { type: "placementTurns.transition", input: { ...input, nowMs: runtime.now?.() } },
-        assertCurrent,
-      );
-      return requirePlacement(receipt, "Placement transition");
-    },
-    async startDrain(
-      input: Omit<
-        PlacementTurnClaimWorkerOperations["placementTurns.startDrain"]["input"],
-        "nowMs"
-      >,
-      assertCurrent?: () => void,
-    ) {
-      const receipt = await execute(
-        { type: "placementTurns.startDrain", input: { ...input, nowMs: runtime.now?.() } },
-        assertCurrent,
-      );
-      return requirePlacement(receipt, "Placement drain");
-    },
-    async startReconcile(
-      input: Omit<
-        PlacementTurnClaimWorkerOperations["placementTurns.startReconcile"]["input"],
-        "nowMs"
-      >,
-      assertCurrent?: () => void,
-    ) {
-      const receipt = await execute(
-        { type: "placementTurns.startReconcile", input: { ...input, nowMs: runtime.now?.() } },
-        assertCurrent,
-      );
-      return requirePlacement(receipt, "Placement reconciliation");
-    },
-    async fail(
-      input: Omit<PlacementTurnClaimWorkerOperations["placementTurns.fail"]["input"], "nowMs">,
-      assertCurrent?: () => void,
-    ) {
-      const receipt = await execute(
-        { type: "placementTurns.fail", input: { ...input, nowMs: runtime.now?.() } },
-        assertCurrent,
-      );
-      return requirePlacement(receipt, "Placement failure");
-    },
+    transition: placementOperation(
+      "Placement transition",
+      (input: OperationInput<"placementTurns.transition">) => ({
+        type: "placementTurns.transition",
+        input: { ...input, nowMs: runtime.now?.() },
+      }),
+    ),
+    startDrain: placementOperation(
+      "Placement drain",
+      (input: OperationInput<"placementTurns.startDrain">) => ({
+        type: "placementTurns.startDrain",
+        input: { ...input, nowMs: runtime.now?.() },
+      }),
+    ),
+    startReconcile: placementOperation(
+      "Placement reconciliation",
+      (input: OperationInput<"placementTurns.startReconcile">) => ({
+        type: "placementTurns.startReconcile",
+        input: { ...input, nowMs: runtime.now?.() },
+      }),
+    ),
+    fail: placementOperation(
+      "Placement failure",
+      (input: OperationInput<"placementTurns.fail">) => ({
+        type: "placementTurns.fail",
+        input: { ...input, nowMs: runtime.now?.() },
+      }),
+    ),
     async failWorkspaceResultAndReleaseTurn(
       pending: WorkerWorkspacePendingResult,
       error: unknown,
@@ -484,13 +492,13 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
     ) {
       await execute({ type: "placementTurns.abandonResult", input: { pending } }, assertCurrent);
     },
-    async startWorkspaceResultDrain(claim: WorkerSessionTurnClaim, assertCurrent?: () => void) {
-      const receipt = await execute(
-        { type: "placementTurns.drainResult", input: { claim, nowMs: runtime.now?.() } },
-        assertCurrent,
-      );
-      return requirePlacement(receipt, "Workspace result drain");
-    },
+    startWorkspaceResultDrain: placementOperation(
+      "Workspace result drain",
+      (claim: WorkerSessionTurnClaim) => ({
+        type: "placementTurns.drainResult",
+        input: { claim, nowMs: runtime.now?.() },
+      }),
+    ),
     async completeWorkspaceResultAndReleaseTurn(
       claim: WorkerSessionTurnClaim,
       assertCurrent?: () => void,
@@ -582,31 +590,22 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
         assertCurrent,
       );
     },
-    async handoffRuntimeRefreshResult(
-      {
+    handoffRuntimeRefreshResult: placementOperation(
+      "Worker runtime refresh handoff",
+      ({
         claim,
         expectedGeneration,
         gatewayInstanceId,
-      }: Omit<
-        PlacementTurnClaimWorkerOperations["placementTurns.handoffRuntimeRefreshResult"]["input"],
-        "nowMs"
-      >,
-      assertCurrent?: () => void,
-    ) {
-      const receipt = await execute(
-        {
-          type: "placementTurns.handoffRuntimeRefreshResult",
-          input: {
-            claim,
-            expectedGeneration,
-            gatewayInstanceId,
-            nowMs: runtime.now?.() ?? Date.now(),
-          },
+      }: OperationInput<"placementTurns.handoffRuntimeRefreshResult">) => ({
+        type: "placementTurns.handoffRuntimeRefreshResult",
+        input: {
+          claim,
+          expectedGeneration,
+          gatewayInstanceId,
+          nowMs: runtime.now?.() ?? Date.now(),
         },
-        assertCurrent,
-      );
-      return requirePlacement(receipt, "Worker runtime refresh handoff");
-    },
+      }),
+    ),
     async claimTurn(input: Parameters<Claims["claimTurn"]>[0], assertCurrent?: () => void) {
       const receipt = await execute(
         { type: "placementTurns.claim", input: { claim: input, nowMs: runtime.now?.() } },
@@ -617,13 +616,10 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
       }
       return receipt.claim;
     },
-    async releaseTurn(claim: Parameters<Claims["releaseTurn"]>[0], assertCurrent?: () => void) {
-      const receipt = await execute(
-        { type: "placementTurns.release", input: { claim, nowMs: runtime.now?.() } },
-        assertCurrent,
-      );
-      return requirePlacement(receipt, "Placement turn release");
-    },
+    releaseTurn: placementOperation("Placement turn release", (claim: WorkerSessionTurnClaim) => ({
+      type: "placementTurns.release",
+      input: { claim, nowMs: runtime.now?.() },
+    })),
     async releaseTurnIfOwned(claim: Parameters<Claims["releaseTurn"]>[0]) {
       await execute({
         type: "placementTurns.releaseIfOwned",

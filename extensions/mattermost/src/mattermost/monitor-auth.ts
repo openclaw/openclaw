@@ -115,7 +115,7 @@ export async function resolveMattermostMonitorInboundAccess(params: {
   const readStoreAllowFrom =
     params.readStoreAllowFrom ??
     (storeAllowFrom != null ? async () => [...storeAllowFrom] : undefined);
-  const ingress = await getMattermostRuntime().channel.inbound.ingress.resolveStable({
+  return await getMattermostRuntime().channel.inbound.ingress.resolveStable({
     channelId: "mattermost",
     accountId: account.accountId,
     identity: mattermostIngressIdentity,
@@ -149,7 +149,6 @@ export async function resolveMattermostMonitorInboundAccess(params: {
       directGroupAllowFrom: kind === "direct" ? "effective" : "none",
     },
   });
-  return ingress;
 }
 
 /** Live and recovered history share the same trigger-versus-visibility policy. */

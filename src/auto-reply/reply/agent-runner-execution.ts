@@ -13,7 +13,6 @@ import {
   type DeferredEmbeddedRunLifecycleManager,
 } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
-import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { renderRateLimitOrOverloadedCopy } from "../../agents/failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { leaseMcpAppModelContextForSessionTurn } from "../../agents/mcp-ui-resource.js";
@@ -22,6 +21,7 @@ import { createAgentPatchedSessionModelRunGuard } from "../../agents/session-mod
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { logVerbose } from "../../globals.js";
 import {
   captureAgentRunLifecycleGeneration,
@@ -29,7 +29,10 @@ import {
 } from "../../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
-import { drainAgentRunTerminalWrites } from "../../infra/agent-run-terminal-writes.js";
+import {
+  bindAgentRunTerminalWriteSettlement,
+  drainAgentRunTerminalWrites,
+} from "../../infra/agent-run-terminal-writes.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";
@@ -51,22 +54,27 @@ import {
   applyMcpAppModelContext,
   type AppContextTurnParams,
 } from "./agent-runner-execution-mcp-context.js";
-import { recordAgentTurnExecutionOutcome } from "./agent-runner-execution-outcome.js";
+import { runAgentTurnWithOutcome } from "./agent-runner-execution-outcome.js";
 import type {
   AgentTurnCompaction,
   AgentTurnExecutionResult,
   AgentTurnInternalResult,
   AgentTurnParams,
   InternalFollowupRun,
-  RuntimeFallbackAttempt,
 } from "./agent-runner-execution.types.js";
 import {
   buildTerminalAgentRunFailureReplyPayload,
   markAgentRunFailureReplyPayload,
 } from "./agent-runner-failure-reply.js";
-import { executeAgentFallbackCycle } from "./agent-runner-fallback-cycle.js";
-import type { AgentFallbackCycleState } from "./agent-runner-fallback-cycle.types.js";
+import { runAgentFallbackCandidates } from "./agent-runner-fallback-candidate.js";
+import type {
+  AgentFallbackCycleParams,
+  AgentFallbackCycleResult,
+  AgentFallbackCycleState,
+} from "./agent-runner-fallback-cycle.types.js";
+import { settleAgentFallbackCycle } from "./agent-runner-fallback-settlement.js";
 import { createAgentTurnPresentation } from "./agent-runner-presentation.js";
+import { buildReplyMediaContextParams } from "./agent-runner-run-params.js";
 import {
   createAgentTurnTimingTracker,
   resolveRunStartupPhase,
@@ -78,14 +86,15 @@ import { type CurrentTurnImages, resolveCurrentTurnImages } from "./current-turn
 import type { FollowupRun } from "./queue.js";
 import { resolveFollowupAbortSignal } from "./queue/types.js";
 import { resolveReplyFailureVisibility, type DirectBlockDelivery } from "./reply-delivery.js";
-import type { ReplyMediaContext } from "./reply-media-paths.js";
-import { createReplyMediaContext } from "./reply-media-paths.runtime.js";
+import { createReplyMediaContext, type ReplyMediaContext } from "./reply-media-paths.js";
 import { resolveReplyOperationAbortReason } from "./reply-operation-abort.js";
+import { resolveReplySessionEventDelivery } from "./reply-operation-run-state.js";
 import {
   markReplyOperationExecutionStarted,
   retainReplyOperationUntilComplete,
 } from "./reply-run-registry.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
+import { resolveReplyRunTrigger } from "./reply-turn-kind.js";
 
 async function executeAgentTurnInternalLoop(
   inputParams: AppContextTurnParams,
@@ -101,11 +110,17 @@ async function executeAgentTurnInternalLoop(
   const heartbeatState = { didLogStrip: false };
   // Direct delivery receipts retain settlement facts across fallback candidates.
   const directBlockDeliveries: DirectBlockDelivery[] = [];
-  const runnableRun = resolveRunAfterAutoFallbackPrimaryProbeRecheck({
-    run: params.followupRun.run,
-    entry: params.activeSessionStore?.[params.sessionKey ?? ""] ?? params.getActiveSessionEntry(),
-    sessionKey: params.sessionKey,
-  });
+  // Queued turns reconciled their probe at admission. Rechecking it against
+  // current preferences here would replace their already-owned model/auth route.
+  const runnableRun =
+    params.replyOperation?.turnKind === "queued_followup"
+      ? params.followupRun.run
+      : resolveRunAfterAutoFallbackPrimaryProbeRecheck({
+          run: params.followupRun.run,
+          entry:
+            params.activeSessionStore?.[params.sessionKey ?? ""] ?? params.getActiveSessionEntry(),
+          sessionKey: params.sessionKey,
+        });
   if (runnableRun !== params.followupRun.run) {
     params.followupRun.run = runnableRun;
   }
@@ -140,11 +155,11 @@ async function executeAgentTurnInternalLoop(
   const agentTurnTiming = createAgentTurnTimingTracker({
     profilerEnabled: isReplyProfilerEnabled({ config: runtimeConfig }),
   });
-  const shouldSurfaceToControlUi = isInternalMessageChannel(
+  const messageProvider =
     params.followupRun.run.messageProvider ??
-      params.sessionCtx.Surface ??
-      params.sessionCtx.Provider,
-  );
+    params.sessionCtx.Surface ??
+    params.sessionCtx.Provider;
+  const shouldSurfaceToControlUi = isInternalMessageChannel(messageProvider);
   const lifecycleGeneration = captureAgentRunLifecycleGeneration(runId);
   if (params.sessionKey) {
     registerAgentRunContext(runId, {
@@ -157,7 +172,9 @@ async function executeAgentTurnInternalLoop(
       isControlUiVisible: shouldSurfaceToControlUi,
       ...progressCardRefreshRunProjection(params.followupRun.run.inputProvenance),
       completionSource: params.completionSource,
+      sessionEventDelivery: resolveReplySessionEventDelivery(params.opts, params.followupRun.run),
     });
+    bindAgentRunTerminalWriteSettlement(preparedRunAdmission.operationalRunInstance);
   }
   if (isDiagnosticsEnabled(runtimeConfig)) {
     logSessionTurnCreated({
@@ -165,11 +182,8 @@ async function executeAgentTurnInternalLoop(
       sessionKey: params.sessionKey,
       sessionId: params.followupRun.run.sessionId,
       agentId: params.followupRun.run.agentId,
-      channel:
-        params.followupRun.run.messageProvider ??
-        params.sessionCtx.Surface ??
-        params.sessionCtx.Provider,
-      trigger: params.isHeartbeat ? "heartbeat" : "user",
+      channel: messageProvider,
+      trigger: resolveReplyRunTrigger(params),
     });
   }
   let replyMediaContext: ReplyMediaContext;
@@ -179,23 +193,9 @@ async function executeAgentTurnInternalLoop(
     replyMediaContext =
       params.replyMediaContext ??
       agentTurnTiming.measureSync("reply_media_context", () =>
-        createReplyMediaContext({
-          cfg: runtimeConfig,
-          agentId: params.followupRun.run.agentId,
-          sessionKey: params.sessionKey,
-          workspaceDir: params.followupRun.run.workspaceDir,
-          mediaNormalizationOwner: params.followupRun.run.mediaNormalizationOwner,
-          messageProvider: params.followupRun.run.messageProvider,
-          accountId:
-            params.followupRun.originatingAccountId ?? params.followupRun.run.agentAccountId,
-          groupId: params.followupRun.run.groupId,
-          groupChannel: params.followupRun.run.groupChannel,
-          groupSpace: params.followupRun.run.groupSpace,
-          requesterSenderId: params.followupRun.run.senderId,
-          requesterSenderName: params.followupRun.run.senderName,
-          requesterSenderUsername: params.followupRun.run.senderUsername,
-          requesterSenderE164: params.followupRun.run.senderE164,
-        }),
+        createReplyMediaContext(
+          buildReplyMediaContextParams(params.followupRun, params.sessionKey, runtimeConfig),
+        ),
       );
     const internalFollowupRun = params.followupRun as InternalFollowupRun;
     const hasQueuedCurrentTurnImages =
@@ -292,6 +292,7 @@ async function executeAgentTurnInternalLoop(
       if (params.replyOperation) {
         markReplyOperationExecutionStarted(params.replyOperation);
       }
+      params.followupRun.run.internalEventExecution?.onStarted(runId);
       params.opts?.onAgentRunStart?.(
         runId,
         admittedRunContext.current?.executionIdentityToken,
@@ -349,12 +350,7 @@ async function executeAgentTurnInternalLoop(
     };
   };
   const notifyUserAboutCompaction = shouldNotifyUserAboutCompaction(runtimeConfig);
-  let runResult: Awaited<ReturnType<typeof runEmbeddedAgent>>;
-  let fallbackProvider = params.followupRun.run.provider;
-  let fallbackModel = params.followupRun.run.model;
-  let fallbackAttempts: RuntimeFallbackAttempt[] = [];
-  let fallbackExhausted = false;
-  let terminalRunFailed = false;
+  let cycle: AgentFallbackCycleResult;
   let liveModelSwitchRetries = 0;
   const fallbackCycleState: AgentFallbackCycleState = {
     deferredLifecycle,
@@ -362,8 +358,8 @@ async function executeAgentTurnInternalLoop(
     turnStartedAtMs: Date.now(),
     compaction,
     postCompactionModelAttempted: false,
-    attemptedRuntimeProvider: fallbackProvider,
-    attemptedRuntimeModel: fallbackModel,
+    attemptedRuntimeProvider: params.followupRun.run.provider,
+    attemptedRuntimeModel: params.followupRun.run.model,
     bootstrapPromptWarningSignaturesSeen: resolveBootstrapWarningSignaturesSeen(
       params.getActiveSessionEntry()?.systemPromptReport,
     ),
@@ -389,7 +385,7 @@ async function executeAgentTurnInternalLoop(
         directBlockDeliveries,
         heartbeatState,
       });
-      const cycle = await executeAgentFallbackCycle({
+      const cycleParams: AgentFallbackCycleParams = {
         preparedRunAdmission,
         turn: params,
         effectiveRun,
@@ -408,26 +404,15 @@ async function executeAgentTurnInternalLoop(
         shouldSurfaceToControlUi,
         commitTerminalOutcome,
         clearRecoveredAutoFallbackPrimaryProbe,
+      };
+      const fallbackResult = await runAgentFallbackCandidates(cycleParams);
+      cycleParams.timing.logIfSlow({
+        runId: cycleParams.runId,
+        sessionId: cycleParams.turn.followupRun.run.sessionId,
+        sessionKey: cycleParams.turn.sessionKey,
+        outcome: "completed",
       });
-      if (cycle.kind === "aborted") {
-        return cycle;
-      }
-      if (cycle.kind === "final") {
-        return {
-          ...cycle,
-          resolved: {
-            provider: fallbackCycleState.attemptedRuntimeProvider,
-            model: fallbackCycleState.attemptedRuntimeModel,
-          },
-        };
-      }
-      runResult = cycle.runResult;
-      fallbackProvider = cycle.fallbackProvider;
-      fallbackModel = cycle.fallbackModel;
-      fallbackExhausted = cycle.fallbackExhausted;
-      fallbackAttempts = cycle.fallbackAttempts;
-      terminalRunFailed = cycle.terminalRunFailed;
-      break;
+      cycle = await settleAgentFallbackCycle({ cycle: cycleParams, fallbackResult });
     } catch (err) {
       if (err instanceof LiveSessionModelSwitchError) {
         liveModelSwitchRetries += 1;
@@ -445,30 +430,39 @@ async function executeAgentTurnInternalLoop(
         resolveVisibleReplyDelivery: () =>
           resolveReplyFailureVisibility(params.resolveVisibleReplyDelivery, directBlockDeliveries),
       });
-      if (action.kind === "aborted") {
-        return action;
-      }
-      if (action.kind === "final") {
-        return {
-          ...action,
-          resolved: {
-            provider: fallbackCycleState.attemptedRuntimeProvider,
-            model: fallbackCycleState.attemptedRuntimeModel,
-          },
-        };
-      }
-      if (action.liveModelSwitchError) {
-        const switchError = action.liveModelSwitchError;
-        applyLiveModelSwitchToRun(params.followupRun.run, switchError);
-        if (runnableRun !== params.followupRun.run) {
-          applyLiveModelSwitchToRun(runnableRun, switchError);
+      if (action.kind !== "retry") {
+        cycle = action;
+      } else {
+        if (action.liveModelSwitchError) {
+          for (const run of new Set([params.followupRun.run, runnableRun, effectiveRun])) {
+            applyLiveModelSwitchToRun(run, action.liveModelSwitchError);
+          }
         }
-        if (effectiveRun !== runnableRun && effectiveRun !== params.followupRun.run) {
-          applyLiveModelSwitchToRun(effectiveRun, switchError);
-        }
+        continue;
       }
     }
+    if (cycle.kind === "aborted") {
+      return cycle;
+    }
+    if (cycle.kind === "final") {
+      return {
+        ...cycle,
+        resolved: {
+          provider: fallbackCycleState.attemptedRuntimeProvider,
+          model: fallbackCycleState.attemptedRuntimeModel,
+        },
+      };
+    }
+    break;
   }
+  const {
+    runResult,
+    fallbackProvider,
+    fallbackModel,
+    fallbackExhausted,
+    fallbackAttempts,
+    terminalRunFailed,
+  } = cycle;
 
   // Preserve successful content and formatted tool errors. Mid-turn provider failures
   // still pass through normal payload filtering and accounting (#36142).
@@ -519,6 +513,7 @@ async function executeAgentTurnInternalLoop(
 
   return {
     kind: "settled",
+    sessionWriter: fallbackCycleState.sessionWriter,
     maintenanceAuthProfile: fallbackCycleState.maintenanceAuthProfile,
     compactionRequestBudget: fallbackCycleState.compactionRequestBudget,
     result: runResult,
@@ -540,70 +535,6 @@ async function executeAgentTurnInternalLoop(
         }
       : { status: "ok" as const }),
   };
-}
-
-async function executeAgentTurnInternal(
-  params: AppContextTurnParams,
-  runId: string,
-  commitTerminalOutcome: () => void,
-  prepareMcpAppModelContext: () => Promise<AppContextTurnParams["mcpAppContextLease"]>,
-  compaction: AgentTurnCompaction,
-): Promise<AgentTurnInternalResult> {
-  const admittedRunContext: { current?: AdmittedRunContext } = {};
-  const gatewayContextResolver =
-    readChannelContextGatewayContextResolver(params.sessionCtx) ??
-    getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
-  const preparedRunAdmission = prepareChannelRunAdmission({
-    sourceContext: params.followupRun.run,
-    cfg: resolveQueuedReplyRuntimeConfig(params.followupRun.run.config),
-    runId,
-    agentId: params.followupRun.run.agentId,
-    ingressKind: "channel",
-    boundary: "auto-reply.agent-runner",
-    operatorAuthority: params.followupRun.operatorAuthority,
-    evidence: params.followupRun.channelAdmissionEvidence,
-    gatewayLocalUserIngress: params.followupRun.gatewayLocalUserIngress,
-    assertSourceCurrent:
-      params.followupRun.run.senderIsOwner === true
-        ? captureCommandOwnerAssertion(params.followupRun.run)
-        : undefined,
-    onAdmitted: (context) => {
-      bindGatewayContextResolver(context, gatewayContextResolver);
-      admittedRunContext.current = context;
-      params.followupRun.run.skillLibraryAuthoring?.bind(context);
-    },
-  });
-  const deferredLifecycle = createDeferredEmbeddedRunLifecycleManager({
-    runId,
-    agentId: params.followupRun.run.agentId,
-    sessionId: params.followupRun.run.sessionId,
-    sessionKey: params.sessionKey,
-    sessionFile: params.followupRun.run.sessionFile,
-    abortSignal: resolveFollowupAbortSignal({
-      abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
-      operatorAuthority: params.followupRun.operatorAuthority,
-    }),
-  });
-  try {
-    return await executeAgentTurnInternalLoop(
-      params,
-      runId,
-      commitTerminalOutcome,
-      prepareMcpAppModelContext,
-      preparedRunAdmission,
-      admittedRunContext,
-      deferredLifecycle,
-      compaction,
-    );
-  } finally {
-    try {
-      await deferredLifecycle.complete();
-    } finally {
-      await drainAgentRunTerminalWrites(preparedRunAdmission.operationalRunInstance).finally(
-        preparedRunAdmission.close,
-      );
-    }
-  }
 }
 
 async function executeAgentTurnOutcome(
@@ -648,42 +579,89 @@ async function executeAgentTurnOutcome(
   try {
     const internal = await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
       try {
-        return await executeAgentTurnInternal(
-          executionParams,
+        const admittedRunContext: { current?: AdmittedRunContext } = {};
+        const gatewayContextResolver =
+          readChannelContextGatewayContextResolver(executionParams.sessionCtx) ??
+          getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
+        const preparedRunAdmission = prepareChannelRunAdmission({
+          sourceContext: executionParams.followupRun.run,
+          cfg: resolveQueuedReplyRuntimeConfig(executionParams.followupRun.run.config),
           runId,
-          commitTerminalOutcome,
-          prepareMcpAppModelContext,
-          compaction,
-        );
+          agentId: executionParams.followupRun.run.agentId,
+          ingressKind: "channel",
+          boundary: "auto-reply.agent-runner",
+          operatorAuthority: executionParams.followupRun.operatorAuthority,
+          evidence: executionParams.followupRun.channelAdmissionEvidence,
+          gatewayLocalUserIngress: executionParams.followupRun.gatewayLocalUserIngress,
+          assertSourceCurrent: composeSessionSourceAssertion([
+            executionParams.followupRun.run.senderIsOwner === true
+              ? captureCommandOwnerAssertion(executionParams.followupRun.run)
+              : undefined,
+            executionParams.followupRun.run.internalEventExecution?.assertCurrent,
+          ]),
+          onAdmitted: (context) => {
+            bindGatewayContextResolver(context, gatewayContextResolver);
+            admittedRunContext.current = context;
+            executionParams.followupRun.run.skillLibraryAuthoring?.bind(context);
+          },
+        });
+        const deferredLifecycle = createDeferredEmbeddedRunLifecycleManager({
+          runId,
+          agentId: executionParams.followupRun.run.agentId,
+          sessionId: executionParams.followupRun.run.sessionId,
+          sessionKey: executionParams.sessionKey,
+          sessionFile: executionParams.followupRun.run.sessionFile,
+          abortSignal: resolveFollowupAbortSignal({
+            abortSignal:
+              executionParams.replyOperation?.abortSignal ?? executionParams.opts?.abortSignal,
+            operatorAuthority: executionParams.followupRun.operatorAuthority,
+          }),
+        });
+        try {
+          return await executeAgentTurnInternalLoop(
+            executionParams,
+            runId,
+            commitTerminalOutcome,
+            prepareMcpAppModelContext,
+            preparedRunAdmission,
+            admittedRunContext,
+            deferredLifecycle,
+            compaction,
+          );
+        } finally {
+          try {
+            await deferredLifecycle.complete();
+          } finally {
+            await drainAgentRunTerminalWrites(preparedRunAdmission.operationalRunInstance).finally(
+              preparedRunAdmission.close,
+            );
+          }
+        }
       } finally {
         modelContextLease?.rollback();
         commitTerminalOutcome();
       }
     });
-    if (internal.kind === "aborted") {
-      return { runId, outcome: { ...internal, ...completedCompaction() } };
-    }
-    const abortReason = resolveReplyOperationAbortReason(executionParams.replyOperation);
+    const abortReason =
+      internal.kind !== "aborted" &&
+      resolveReplyOperationAbortReason(executionParams.replyOperation);
     if (abortReason) {
       return { runId, outcome: { kind: "aborted", reason: abortReason, ...completedCompaction() } };
     }
-    if (internal.kind === "final") {
-      return {
-        runId,
-        outcome: {
-          kind: "rejected",
-          payload: internal.payload,
-          resolved: internal.resolved,
-          ...(internal.postCompactionModelFailure
-            ? { postCompactionModelFailure: internal.postCompactionModelFailure }
-            : {}),
-          ...completedCompaction(),
-        },
-      };
-    }
+    const outcome: AgentTurnExecutionResult["outcome"] =
+      internal.kind === "final"
+        ? {
+            kind: "rejected",
+            payload: internal.payload,
+            resolved: internal.resolved,
+            ...(internal.postCompactionModelFailure
+              ? { postCompactionModelFailure: internal.postCompactionModelFailure }
+              : {}),
+          }
+        : internal;
     return {
       runId,
-      outcome: { ...internal, ...completedCompaction() },
+      outcome: { ...outcome, ...completedCompaction() },
     };
   } catch (error) {
     const abortReason = resolveReplyOperationAbortReason(executionParams.replyOperation, error);
@@ -706,12 +684,7 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
   const runId = params.opts?.runId ?? crypto.randomUUID();
   const executionParams =
     params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };
-  try {
-    const result = await executeAgentTurnOutcome(executionParams, runId);
-    await recordAgentTurnExecutionOutcome(executionParams, result);
-    return result;
-  } catch (error) {
-    await recordAgentTurnExecutionOutcome(executionParams, undefined);
-    throw error;
-  }
+  return await runAgentTurnWithOutcome(executionParams, runId, () =>
+    executeAgentTurnOutcome(executionParams, runId),
+  );
 }

@@ -16,19 +16,12 @@ import { SESSION_PARTICIPANTS_TABLE } from "../../state/openclaw-agent-db-contra
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { readCurrentSessionEntryCacheParticipants } from "./session-accessor.sqlite-entry-cache-state.js";
-import {
-  readParticipantIdentity,
-  type SessionParticipantIdentity,
-} from "./session-participant-identity.js";
+import type { SessionParticipantRecord } from "./session-membership-facts.types.js";
+import { readParticipantIdentity } from "./session-participant-identity.js";
 import { readPreparedSessionParticipants } from "./session-participant-prepared-read.js";
 import type { SessionEntry } from "./types.js";
 
-export type SessionParticipantRecord = {
-  identity: SessionParticipantIdentity;
-  contributionCount: number;
-  firstPromptedAt: number | null;
-  lastPromptedAt: number | null;
-};
+export type { SessionParticipantRecord } from "./session-membership-facts.types.js";
 
 type SessionParticipantRow = Selectable<OpenClawAgentKyselyDatabase["session_participants"]>;
 
@@ -88,7 +81,9 @@ function readParticipantRows(database: DatabaseSync, sessionKeys?: readonly stri
   return executeSqliteQuerySync(database, query).rows;
 }
 
-function readParticipantRecord(row: SessionParticipantRow): SessionParticipantRecord {
+export function readParticipantRecord(
+  row: Omit<SessionParticipantRow, "session_key">,
+): SessionParticipantRecord {
   return {
     identity: readParticipantIdentity(row.identity_namespace, row.actor_id),
     contributionCount: row.contribution_count,
@@ -127,7 +122,7 @@ function participantProjection(
   };
 }
 
-function withProjectedParticipants(
+export function withProjectedParticipants(
   entry: SessionEntry,
   records: readonly SessionParticipantRecord[],
 ): SessionEntry {

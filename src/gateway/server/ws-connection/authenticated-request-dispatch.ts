@@ -46,7 +46,8 @@ import type { GatewayWsClient } from "../ws-types.js";
 import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
 import { createGatewayRpcDiagnostics } from "./request-diagnostics.js";
 import { GatewayRequestStartTimeoutError, scheduleGatewayRequestStart } from "./request-start.js";
-import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-flood-guard.js";
+
+const MAX_UNAUTHORIZED_ROLE_FAILURES = 10;
 
 const loadGatewayServerMethods = createLazyPromise(
   () => import("./authenticated-request-dispatch.server-methods.runtime.js"),
@@ -76,7 +77,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     setCloseCause,
     logGateway,
   } = params.handler;
-  const unauthorizedFloodGuard = new UnauthorizedFloodGuard();
+  let unauthorizedRoleFailures = 0;
   let deviceCredentialMutationBarrier: Promise<void> | undefined;
 
   const closeInvalidatedClient = (
@@ -112,7 +113,6 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     admission?: "continuation",
     sendResponse: (frame: ResponseFrame) => ReturnType<typeof send> = send,
   ): Promise<void> => {
-    // After handshake, accept only req frames
     if (!validateRequestFrame(parsed)) {
       send({
         type: "res",
@@ -276,32 +276,38 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
             sendResult.kind === "sent" ? (responseOk ? "ok" : "error") : "unavailable",
             sendResult.kind === "sent" ? sendResult.bytes : undefined,
           );
-          const unauthorizedRoleError = isUnauthorizedRoleError(responseError);
           let logMeta = meta;
-          if (unauthorizedRoleError) {
-            const unauthorizedDecision = unauthorizedFloodGuard.registerUnauthorized();
-            if (unauthorizedDecision.suppressedSinceLastLog > 0) {
+          if (
+            responseError?.code === ErrorCodes.INVALID_REQUEST &&
+            typeof responseError.message === "string" &&
+            responseError.message.startsWith("unauthorized role:")
+          ) {
+            unauthorizedRoleFailures += 1;
+            if (unauthorizedRoleFailures === MAX_UNAUTHORIZED_ROLE_FAILURES + 1) {
               logMeta = {
                 ...logMeta,
-                suppressedUnauthorizedResponses: unauthorizedDecision.suppressedSinceLastLog,
+                suppressedUnauthorizedResponses: MAX_UNAUTHORIZED_ROLE_FAILURES - 1,
               };
             }
-            if (!unauthorizedDecision.shouldLog) {
+            if (
+              unauthorizedRoleFailures > 1 &&
+              unauthorizedRoleFailures <= MAX_UNAUTHORIZED_ROLE_FAILURES
+            ) {
               return;
             }
-            if (unauthorizedDecision.shouldClose) {
+            if (unauthorizedRoleFailures > MAX_UNAUTHORIZED_ROLE_FAILURES) {
               setCloseCause("repeated-unauthorized-requests", {
-                unauthorizedCount: unauthorizedDecision.count,
+                unauthorizedCount: unauthorizedRoleFailures,
                 method: req.method,
               });
               queueMicrotask(() => close(1008, "repeated unauthorized calls"));
             }
             logMeta = {
               ...logMeta,
-              unauthorizedCount: unauthorizedDecision.count,
+              unauthorizedCount: unauthorizedRoleFailures,
             };
           } else {
-            unauthorizedFloodGuard.reset();
+            unauthorizedRoleFailures = 0;
           }
           logWs("out", "res", () => ({
             connId,

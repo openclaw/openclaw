@@ -102,6 +102,7 @@ import { preflightRuntimeSnapshotWrite } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.js";
 import { validateConfigObjectRawWithPlugins } from "./validation.js";
 import { rejectConfigNonFiniteNumbers } from "./value-tree.js";
+import { composeConfigWriteAssertions } from "./write-authority.js";
 import { captureConfigWriteLockGuard } from "./write-lock.js";
 
 export async function writeConfigFileFromContext(
@@ -118,10 +119,10 @@ export async function writeConfigFileFromContext(
     const original = options;
     options = {
       ...options,
-      assertConfigPathForWrite: () => {
-        sourceGuard();
-        original.assertConfigPathForWrite?.();
-      },
+      assertConfigPathForWrite: composeConfigWriteAssertions(
+        sourceGuard,
+        original.assertConfigPathForWrite,
+      ),
       beforeCommit: async () => {
         await original.beforeCommit?.();
         sourceGuard();
@@ -165,7 +166,7 @@ export async function writeConfigFileFromContext(
     persistCanonicalAgentRoster,
     preserveLegacyAgentRoster,
     cronOwner,
-  } = prepareConfigWriteTopology({
+  } = await prepareConfigWriteTopology({
     ...snapshotRead,
     nextConfig: configForWrite,
     options,
@@ -315,6 +316,7 @@ export async function writeConfigFileFromContext(
     sourceConfig: snapshot.parsed,
     nextConfig: applyUnsetPathsForWrite(tildeRestoredOutputConfig, unsetPaths),
     pending: deferredPluginMigrations,
+    writeOptions: { unsetPaths: options.unsetPaths },
   });
   const stampedOutputConfig = stampConfigWriteMetadata(
     outputConfig,
@@ -555,7 +557,7 @@ export async function writeConfigFileFromContext(
     publication.phase = "accepted";
     recordUpdateDoctorConfigWrite(configPath, previousHash, nextHash, snapshot.parsed, json);
     try {
-      recordConfigWriteMetadata();
+      await recordConfigWriteMetadata();
     } catch (error) {
       deps.logger.warn(`Config metadata state update failed: ${formatErrorMessage(error)}`);
     }

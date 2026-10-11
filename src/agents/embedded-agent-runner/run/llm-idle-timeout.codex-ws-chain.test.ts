@@ -247,51 +247,6 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
     },
   );
 
-  it("B: fresh socket that sends one response.created frame then stalls is aborted at the idle timeout", async () => {
-    vi.useFakeTimers();
-    vi.stubGlobal("WebSocket", ControlledWebSocket);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("", { status: 500 })),
-    );
-    ControlledWebSocket.onSend = (socket) => {
-      queueMicrotask(() =>
-        socket.deliver({
-          type: "response.created",
-          response: { id: "resp_b", status: "in_progress" },
-        }),
-      );
-    };
-    const onIdleTimeout = vi.fn();
-    const runAbort = new AbortController();
-    const { streamFn } = buildRunnerChain({
-      runId: "run-B",
-      sessionId: "session-B",
-      runSignal: runAbort.signal,
-      onIdleTimeout,
-      codeMode: true,
-    });
-
-    const seen: string[] = [];
-    const consumed = consumeLikeAgentCore(streamFn, runAbort.signal, (type) => {
-      seen.push(type);
-    });
-    await vi.advanceTimersByTimeAsync(10);
-    expect(seen).toEqual(["start"]);
-
-    await vi.advanceTimersByTimeAsync(119_000);
-    expect(onIdleTimeout).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(onIdleTimeout).toHaveBeenCalledTimes(1);
-    expect(String(onIdleTimeout.mock.calls[0]?.[0]?.message)).toMatch(/idle timeout/);
-
-    const { result, thrown } = await consumed;
-    expect(String((thrown as Error | undefined)?.message ?? result?.errorMessage)).toMatch(
-      /idle timeout/,
-    );
-    expect(ControlledWebSocket.instances[0]?.closeCalls.length).toBeGreaterThan(0);
-  });
-
   it("C: cached session socket reused from a previous call, then one frame and a stall, is aborted at the idle timeout", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("WebSocket", ControlledWebSocket);

@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { captureSessionEntrySourceAssertion } from "../config/sessions/session-entry-source-authority.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "./agent-run-terminal-outcome.js";
@@ -28,7 +33,7 @@ vi.mock("./model-selection.js", () => ({
 
 describe("CLI binding settlement", () => {
   it.each(["publish", "clear"] as const)(
-    "settles a successful CLI binding %s in the cache and durable store",
+    "settles a successful CLI binding %s without caller-thread entry SQL",
     async (operation) => {
       await withTempSessionStore(async ({ storePath }) => {
         const sessionKey = "agent:main:explicit:cli-settlement";
@@ -58,16 +63,37 @@ describe("CLI binding settlement", () => {
                 cliSessionBinding: { sessionId: "cli-session-123" },
               }),
         });
-        const settled = await persistCliSessionBindingResult({
-          agentId: "main",
-          assertSettlementCurrent: () => {},
-          expectedSession: sessionStore[sessionKey],
-          provider: "claude-cli",
-          sessionKey,
-          storePath,
-          sessionStore,
-          result,
+        const refuse = (): never => {
+          throw new Error("CLI settlement source changed");
+        };
+        const assertSettlementCurrent = captureSessionEntrySourceAssertion({
+          scope: { agentId: "main", sessionKey, storePath },
+          expected: { sessionId },
+          fields: ["sessionId"],
+          assertCurrent: () => {
+            if (loadPersistedSessionEntry(storePath, sessionKey)?.sessionId !== sessionId) {
+              refuse();
+            }
+          },
+          refuse,
         });
+        const sql = observeHostDataSql();
+        let settled: EmbeddedAgentRunResult;
+        try {
+          settled = await persistCliSessionBindingResult({
+            agentId: "main",
+            assertSettlementCurrent,
+            expectedSession: sessionStore[sessionKey],
+            provider: "claude-cli",
+            sessionKey,
+            storePath,
+            sessionStore,
+            result,
+          });
+          expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+        } finally {
+          sql.restore();
+        }
         expect(settled).toBe(result);
         for (const entry of [
           sessionStore[sessionKey],

@@ -92,8 +92,7 @@ function resolveMatrixQaMessageContent(
   return content;
 }
 
-function normalizeMatrixQaRelation(value: unknown) {
-  const relation = asNullableObjectRecord(value);
+function normalizeMatrixQaRelation(relation: Record<string, unknown> | null) {
   if (!relation) {
     return undefined;
   }
@@ -124,20 +123,9 @@ function resolveMatrixQaObservedEventKind(params: { msgtype?: string; type: stri
 }
 
 function resolveMatrixQaAttachmentKind(msgtype: string | undefined) {
-  switch (msgtype) {
-    case "m.audio":
-      return "audio" as const;
-    case "m.file":
-      return "file" as const;
-    case "m.image":
-      return "image" as const;
-    case "m.sticker":
-      return "sticker" as const;
-    case "m.video":
-      return "video" as const;
-    default:
-      return undefined;
-  }
+  return (["audio", "file", "image", "sticker", "video"] as const).find(
+    (kind) => msgtype === `m.${kind}`,
+  );
 }
 
 function isLikelyMatrixQaFilenameBody(value: string) {
@@ -224,7 +212,7 @@ export function normalizeMatrixQaObservedEvent(
   // An edit's outer m.replace relation describes wire delivery, not the
   // logical relation of the edited message. Matrix ignores relations inside
   // m.new_content, so the observer must inherit the original event's relation.
-  const logicalRelation = replacesEventId ? undefined : normalizeMatrixQaRelation(relatesToRaw);
+  const logicalRelation = replacesEventId ? undefined : normalizeMatrixQaRelation(relatesTo);
   const normalizedMsgtype = readStringField(messageContent, "msgtype") ?? msgtype;
   const normalizedFilename =
     readStringField(messageContent, "filename") ?? readStringField(content, "filename");

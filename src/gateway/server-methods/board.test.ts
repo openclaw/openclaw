@@ -1,14 +1,24 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   BoardSnapshot,
   BoardWidgetPutParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { createDashboardTool } from "../../agents/tools/dashboard-tool.js";
+import type { InProcessGatewayCaller } from "../../agents/tools/in-process-gateway.js";
 import { resetBoardEventNoticeStateForTest } from "../../boards/board-notices.js";
 import { readBoardHtml } from "../../boards/board-store.test-support.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import {
   createBoardHarness as createHarness,
   createMcpAppDependencies,
@@ -516,5 +526,108 @@ describe("board gateway methods", () => {
         '[dashboard] {"count":1} on widget counter',
       ]);
     }
+  });
+});
+
+describe("website dashboard authoring", () => {
+  const sessionKey = "agent:main:website";
+
+  afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+  });
+
+  function createWebsiteHarness() {
+    const harness = createHarness();
+    const callGateway: InProcessGatewayCaller = async <T>(
+      method: string,
+      params: Record<string, unknown>,
+    ) => {
+      const respond = await harness.invoke(method, params);
+      const [ok, payload, error] = respond.mock.calls[0]!;
+      if (!ok) {
+        throw new Error(error?.message);
+      }
+      return payload as T;
+    };
+    const tool = createDashboardTool({ agentSessionKey: sessionKey, callGateway });
+    return { ...harness, tool };
+  }
+
+  it("creates, reopens, and updates the live URL through the agent tool without frame credentials", async () => {
+    const { tool, invoke, store } = createWebsiteHarness();
+    const create = {
+      action: "widget_put",
+      name: "status",
+      title: "Status",
+      pluginKind: "session:website",
+      props: { url: "https://status.example/overview?view=queue#active" },
+      size: "full",
+    };
+    const created = await tool.execute("create", create);
+    expect(created.details).toMatchObject({
+      sessionKey,
+      revision: 1,
+      widgets: [
+        {
+          name: "status",
+          title: "Status",
+          pluginKind: "session:website",
+          contentOwner: "plugin",
+          props: create.props,
+          sizeW: 12,
+          grantState: "none",
+        },
+      ],
+    });
+
+    await closeOpenClawAgentDatabasesAsync();
+    closeOpenClawAgentDatabasesForTest();
+    const reloaded = await invoke("board.get", { sessionKey });
+    const board = reloaded.mock.calls[0]?.[1];
+    expect(board).toMatchObject({ revision: 1, widgets: [{ props: create.props }] });
+    expect(JSON.stringify(board)).not.toMatch(/viewTicket|frameUrl|sandboxUrl|declared/);
+
+    const updatedProps = { url: "https://status.example/history" };
+    await tool.execute("update", { ...create, title: "History", props: updatedProps });
+    expect(await store.getSnapshot({ sessionKey })).toMatchObject({
+      revision: 2,
+      widgets: [{ name: "status", title: "History", revision: 2, props: updatedProps }],
+    });
+    await tool.execute("remove", { action: "widget_remove", name: "status" });
+    expect((await store.getSnapshot({ sessionKey })).widgets).toEqual([]);
+  });
+
+  it.each([
+    { name: "HTTP URL", props: { url: "http://status.example" } },
+    ...[{ name: "password-only", username: "", password: "example-password" }].map(
+      ({ name, username, password }) => {
+        const url = new URL("https://status.example");
+        url.username = username;
+        url.password = password;
+        return { name, props: { url: url.href } };
+      },
+    ),
+    {
+      name: "oversized URL shortened by normalization",
+      props: { url: `https://status.example/${"a/../".repeat(500)}` },
+    },
+  ])("rejects invalid website props without changing a saved board: $name", async (testCase) => {
+    const { props } = testCase;
+    const { tool, store, broadcast } = createWebsiteHarness();
+    const widget = {
+      action: "widget_put",
+      name: "status",
+      pluginKind: "session:website",
+      props: { url: "https://status.example" },
+    };
+    await tool.execute("create", widget);
+    const before = await store.getSnapshot({ sessionKey });
+    broadcast.mockClear();
+    await expect(tool.execute("invalid", { ...widget, props })).rejects.toThrow(/Website/);
+    expect(await store.getSnapshot({ sessionKey })).toEqual(before);
+    expect(broadcast).not.toHaveBeenCalled();
   });
 });

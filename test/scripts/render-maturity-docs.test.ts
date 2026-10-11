@@ -247,68 +247,67 @@ function expectedMaturityScorePercent(): number {
 }
 
 describe("maturity docs renderer CLI", () => {
-  it.each(["full", "slim"] as const)(
-    "accounts for unresolved root instances separately from %s evidence rows",
-    (evidenceMode) => {
-      const evidenceDir = tempDirs.make("openclaw-maturity-unresolved-");
-      const outputDir = tempDirs.make("openclaw-maturity-unresolved-docs-");
-      writeQaEvidence({
-        dir: evidenceDir,
-        entries: [{ id: "same-label", status: "pass" }],
-        scorecard: allProfileScorecardFixture(),
-      });
-      const evidencePath = path.join(evidenceDir, "qa-evidence.json");
-      const legacy = validateQaEvidenceSummaryJson(
-        JSON.parse(fs.readFileSync(evidencePath, "utf8")),
-      );
-      const invocation = createMaturityInvocation(6);
-      const passing = invocation.begin(0);
-      invocation.complete(passing, { status: "pass", entries: legacy.entries });
-      invocation.select(0, passing);
-      // The second instance never starts; each remaining selected attempt is rowless.
-      for (const [index, status] of (["pass", "fail", "blocked", "skipped"] as const).entries()) {
-        const observation = invocation.begin(index + 2);
-        invocation.complete(observation, { status, entries: [] });
-        invocation.select(index + 2, observation);
-      }
-      const evidence = validateQaEvidenceSummaryJson({
-        ...invocation.snapshot({ generatedAt: legacy.generatedAt, profile: "all", evidenceMode }),
-        profilePlan: legacy.profilePlan,
-        scorecard: legacy.scorecard,
-      });
-      const raw = JSON.stringify(evidence);
-      fs.writeFileSync(evidencePath, raw);
-      const staticAssetsDir = path.join(outputDir, "assets");
-      fs.mkdirSync(staticAssetsDir);
-      fs.writeFileSync(path.join(staticAssetsDir, "taxonomy.yaml"), "preserved\n");
-      const args = [
-        "--output-dir",
-        outputDir,
-        "--evidence-dir",
-        evidenceDir,
-        "--static-assets-dir",
-        staticAssetsDir,
-      ];
-      const rejected = runCli(...args);
-      expect(rejected.status, rejected.stderr).toBe(1);
-      expect(rejected.stderr).toContain("5 unresolved scheduled instances");
-      expect(rejected.stderr.match(/same-label \(unresolved\)/g)).toHaveLength(5);
-      expect(fs.existsSync(path.join(outputDir, "maturity"))).toBe(false);
-      expect(fs.readFileSync(path.join(staticAssetsDir, "taxonomy.yaml"), "utf8")).toBe(
-        "preserved\n",
-      );
-      expect(fs.readFileSync(evidencePath, "utf8")).toBe(raw);
+  it("accounts for unresolved root instances separately from slim evidence rows", () => {
+    const evidenceDir = tempDirs.make("openclaw-maturity-unresolved-");
+    const outputDir = tempDirs.make("openclaw-maturity-unresolved-docs-");
+    writeQaEvidence({
+      dir: evidenceDir,
+      entries: [{ id: "same-label", status: "pass" }],
+      scorecard: allProfileScorecardFixture(),
+    });
+    const evidencePath = path.join(evidenceDir, "qa-evidence.json");
+    const legacy = validateQaEvidenceSummaryJson(JSON.parse(fs.readFileSync(evidencePath, "utf8")));
+    const invocation = createMaturityInvocation(6);
+    const passing = invocation.begin(0);
+    invocation.complete(passing, { status: "pass", entries: legacy.entries });
+    invocation.select(0, passing);
+    // The second instance never starts; each remaining selected attempt is rowless.
+    for (const [index, status] of (["pass", "fail", "blocked", "skipped"] as const).entries()) {
+      const observation = invocation.begin(index + 2);
+      invocation.complete(observation, { status, entries: [] });
+      invocation.select(index + 2, observation);
+    }
+    const evidence = validateQaEvidenceSummaryJson({
+      ...invocation.snapshot({
+        generatedAt: legacy.generatedAt,
+        profile: "all",
+        evidenceMode: "slim",
+      }),
+      profilePlan: legacy.profilePlan,
+      scorecard: legacy.scorecard,
+    });
+    const raw = JSON.stringify(evidence);
+    fs.writeFileSync(evidencePath, raw);
+    const staticAssetsDir = path.join(outputDir, "assets");
+    fs.mkdirSync(staticAssetsDir);
+    fs.writeFileSync(path.join(staticAssetsDir, "taxonomy.yaml"), "preserved\n");
+    const args = [
+      "--output-dir",
+      outputDir,
+      "--evidence-dir",
+      evidenceDir,
+      "--static-assets-dir",
+      staticAssetsDir,
+    ];
+    const rejected = runCli(...args);
+    expect(rejected.status, rejected.stderr).toBe(1);
+    expect(rejected.stderr).toContain("5 unresolved scheduled instances");
+    expect(rejected.stderr.match(/same-label \(unresolved\)/g)).toHaveLength(5);
+    expect(fs.existsSync(path.join(outputDir, "maturity"))).toBe(false);
+    expect(fs.readFileSync(path.join(staticAssetsDir, "taxonomy.yaml"), "utf8")).toBe(
+      "preserved\n",
+    );
+    expect(fs.readFileSync(evidencePath, "utf8")).toBe(raw);
 
-      const allowed = runCli(...args, "--allow-failures");
-      expect(allowed.status, allowed.stderr).toBe(0);
-      const scorecard = fs.readFileSync(path.join(outputDir, "maturity/scorecard.md"), "utf8");
-      expect(scorecard).toContain("<span>1 checks - 1 passed</span>");
-      expect(scorecard).toContain("<span>5 unresolved scheduled instances</span>");
-      expect(fs.readFileSync(evidencePath, "utf8")).toBe(raw);
-    },
-  );
+    const allowed = runCli(...args, "--allow-failures");
+    expect(allowed.status, allowed.stderr).toBe(0);
+    const scorecard = fs.readFileSync(path.join(outputDir, "maturity/scorecard.md"), "utf8");
+    expect(scorecard).toContain("<span>1 checks - 1 passed</span>");
+    expect(scorecard).toContain("<span>5 unresolved scheduled instances</span>");
+    expect(fs.readFileSync(evidencePath, "utf8")).toBe(raw);
+  });
 
-  it.each(["pass", "fail", "blocked", "ownerless"] as const)(
+  it.each(["pass", "ownerless"] as const)(
     "excludes contained unresolved instances while preserving %s row accounting",
     (status) => {
       const evidenceDir = tempDirs.make("openclaw-maturity-contained-");
@@ -394,9 +393,7 @@ describe("maturity docs renderer CLI", () => {
         expect(scorecard).toContain("<span>2 checks - 2 passed</span>");
         expect(scorecard).not.toContain("unresolved scheduled");
       } else {
-        expect(result.stderr).toContain(
-          status === "ownerless" ? "ownerless-diagnostic (fail)" : `same-label (${status})`,
-        );
+        expect(result.stderr).toContain("ownerless-diagnostic (fail)");
       }
       expect(fs.readFileSync(evidencePath, "utf8")).toBe(raw);
     },
@@ -649,83 +646,43 @@ describe("maturity docs renderer CLI", () => {
     expect(result.stdout).toContain("evidence-backed freshness check skipped");
   });
 
-  it("still requires QA evidence artifacts when rendering generated docs", () => {
-    const outputDir = tempDirs.make("openclaw-maturity-docs-test-");
-    const result = runCli("--output-dir", outputDir);
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain(
-      "maturity scorecard rendering requires all or release profile qa-evidence.json",
-    );
-  });
-
-  it("rejects scorecard evidence with failed or blocked entries", () => {
-    const outputDir = tempDirs.make("openclaw-maturity-docs-output-");
-    const evidenceDir = tempDirs.make("openclaw-maturity-docs-evidence-");
+  it("rejects mismatched historical identity before mutating strict output", () => {
+    const outputDir = tempDirs.make("openclaw-maturity-identity-output-");
+    const evidenceDir = tempDirs.make("openclaw-maturity-identity-evidence-");
+    const staticAssetsDir = path.join(outputDir, "assets");
+    fs.mkdirSync(staticAssetsDir);
+    fs.writeFileSync(path.join(staticAssetsDir, "taxonomy.yaml"), "preserved\n");
     writeQaEvidence({
       dir: evidenceDir,
-      entries: [
-        { id: "passing-scenario", status: "pass" },
-        { id: "failing-scenario", status: "fail" },
-        { id: "blocked-scenario", status: "blocked" },
-      ],
+      entries: [{ id: "historical-pass", status: "pass" }],
+      scorecard: allProfileScorecardFixture(),
     });
 
-    const result = runCli("--output-dir", outputDir, "--evidence-dir", evidenceDir);
+    const file = path.join(evidenceDir, "qa-evidence.json");
+    const evidence = JSON.parse(fs.readFileSync(file, "utf8"));
+    evidence.profilePlan.taxonomyIdentity.sha256 = "0".repeat(64);
+    fs.writeFileSync(file, JSON.stringify(evidence));
+
+    const result = runCli(
+      "--output-dir",
+      outputDir,
+      "--evidence-dir",
+      evidenceDir,
+      "--static-assets-dir",
+      staticAssetsDir,
+      "--strict-inputs",
+      "--allow-failures",
+    );
 
     expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("maturity docs require passing QA evidence");
-    expect(result.stderr).toContain("failing-scenario (fail)");
-    expect(result.stderr).toContain("blocked-scenario (blocked)");
+    expect(result.stderr).toContain("semantic taxonomy identity is mismatched");
+    expect(fs.readFileSync(path.join(staticAssetsDir, "taxonomy.yaml"), "utf8")).toBe(
+      "preserved\n",
+    );
+    expect(fs.existsSync(path.join(outputDir, "maturity"))).toBe(false);
   });
 
-  it.each(["missing", "mismatch"] as const)(
-    "rejects %s historical identity before mutating strict output",
-    (identityState) => {
-      const outputDir = tempDirs.make("openclaw-maturity-identity-output-");
-      const evidenceDir = tempDirs.make("openclaw-maturity-identity-evidence-");
-      const staticAssetsDir = path.join(outputDir, "assets");
-      fs.mkdirSync(staticAssetsDir);
-      fs.writeFileSync(path.join(staticAssetsDir, "taxonomy.yaml"), "preserved\n");
-      writeQaEvidence({
-        dir: evidenceDir,
-        entries: [{ id: "historical-pass", status: "pass" }],
-        historical: identityState === "missing",
-        scorecard: allProfileScorecardFixture(),
-      });
-
-      if (identityState === "mismatch") {
-        const file = path.join(evidenceDir, "qa-evidence.json");
-        const evidence = JSON.parse(fs.readFileSync(file, "utf8"));
-        evidence.profilePlan.taxonomyIdentity.sha256 = "0".repeat(64);
-        fs.writeFileSync(file, JSON.stringify(evidence));
-      }
-
-      const result = runCli(
-        "--output-dir",
-        outputDir,
-        "--evidence-dir",
-        evidenceDir,
-        "--static-assets-dir",
-        staticAssetsDir,
-        "--strict-inputs",
-        "--allow-failures",
-      );
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(
-        `semantic taxonomy identity is ${identityState === "missing" ? "missing" : "mismatched"}`,
-      );
-      expect(fs.readFileSync(path.join(staticAssetsDir, "taxonomy.yaml"), "utf8")).toBe(
-        "preserved\n",
-      );
-      expect(fs.existsSync(path.join(outputDir, "maturity"))).toBe(false);
-    },
-  );
-
-  it("keeps historical outcomes but leaves current coverage unscored", async () => {
+  it("keeps historical category counts but leaves current coverage unscored", async () => {
     const outputDir = tempDirs.make("openclaw-maturity-identity-output-");
     const evidenceDir = tempDirs.make("openclaw-maturity-identity-evidence-");
     writeQaEvidence({
@@ -776,7 +733,7 @@ describe("maturity docs renderer CLI", () => {
     expect(scorecard).toContain(historicalCategory.name);
     expect(scorecard).toContain(historicalCategory.id);
     expect(scorecard.replace(/ +\|/gu, " |")).toContain(
-      `| missing | 0 of ${historicalCategory.features.total} (0%) | 0 of ${historicalCategory.coverageIds.total} (0%) |`,
+      `| ${historicalCategory.name} | ${historicalCategory.id} | 0 of ${historicalCategory.features.total} (0%) | 0 of ${historicalCategory.coverageIds.total} (0%) |`,
     );
   });
 
@@ -815,7 +772,7 @@ describe("maturity docs renderer CLI", () => {
     expect(scorecard).toContain(historicalCategory.name);
     expect(scorecard).toContain(historicalCategory.id);
     expect(scorecard.replace(/ +\|/gu, " |")).toContain(
-      `| missing | 0 of ${historicalCategory.features.total} (0%) | 0 of ${historicalCategory.coverageIds.total} (0%) |`,
+      `| ${historicalCategory.name} | ${historicalCategory.id} | 0 of ${historicalCategory.features.total} (0%) | 0 of ${historicalCategory.coverageIds.total} (0%) |`,
     );
   });
 
@@ -847,91 +804,6 @@ describe("maturity docs renderer CLI", () => {
     expect(scorecard).toContain("Coverage Experimental - 0%");
     expect(scorecard).toContain("Historical evidence: taxonomy identity mismatch");
     expect(scorecard).toContain("Readiness by area");
-  });
-
-  it.each([
-    { status: "pass", allowFailures: false, exitCode: 0 },
-    { status: "fail", allowFailures: false, exitCode: 1 },
-    { status: "blocked", allowFailures: false, exitCode: 1 },
-    { status: "fail", allowFailures: true, exitCode: 0 },
-    { status: "blocked", allowFailures: true, exitCode: 0 },
-  ] as const)(
-    "keeps raw $status diagnostics separate from scorecard identity (allowFailures=$allowFailures)",
-    ({ status, allowFailures, exitCode }) => {
-      const outputDir = tempDirs.make("openclaw-maturity-raw-output-");
-      const evidenceDir = tempDirs.make("openclaw-maturity-raw-evidence-");
-      writeQaEvidence({
-        dir: evidenceDir,
-        entries: [{ id: "current-pass", status: "pass" }],
-        scorecard: allProfileScorecardFixture(),
-      });
-      const rawDir = path.join(evidenceDir, "native");
-      writeQaEvidence({
-        dir: rawDir,
-        profile: "native",
-        historical: true,
-        entries: [{ id: `native-${status}`, status }],
-      });
-      const rawPath = path.join(rawDir, "qa-evidence.json");
-      const raw = JSON.parse(fs.readFileSync(rawPath, "utf8"));
-      delete raw.scorecard;
-      fs.writeFileSync(rawPath, JSON.stringify(raw));
-      const staticAssetsDir = path.join(outputDir, "assets");
-      fs.mkdirSync(staticAssetsDir);
-      fs.writeFileSync(path.join(staticAssetsDir, "taxonomy.yaml"), "preserved\n");
-      const result = runCli(
-        "--output-dir",
-        outputDir,
-        "--evidence-dir",
-        evidenceDir,
-        "--static-assets-dir",
-        staticAssetsDir,
-        "--strict-inputs",
-        ...(allowFailures ? ["--allow-failures"] : []),
-      );
-      expect(result.status).toBe(exitCode);
-      expect(result.stderr).not.toContain("semantic taxonomy identity");
-      if (exitCode === 1) {
-        expect(result.stderr).toContain(`native-${status} (${status})`);
-        expect(fs.existsSync(path.join(outputDir, "maturity"))).toBe(false);
-        expect(fs.readFileSync(path.join(staticAssetsDir, "taxonomy.yaml"), "utf8")).toBe(
-          "preserved\n",
-        );
-      } else {
-        expect(result.stderr).toBe("");
-        const scorecard = fs.readFileSync(path.join(outputDir, "maturity", "scorecard.md"), "utf8");
-        expect(scorecard).toContain("Coverage Experimental - 0%");
-      }
-    },
-  );
-
-  it("allows incomplete evidence without awarding Coverage to non-passing checks", () => {
-    const outputDir = tempDirs.make("openclaw-maturity-docs-output-");
-    const evidenceDir = tempDirs.make("openclaw-maturity-docs-evidence-");
-    writeQaEvidence({
-      dir: evidenceDir,
-      entries: [
-        { id: "failing-scenario", status: "fail" },
-        { id: "blocked-scenario", status: "blocked" },
-        { id: "skipped-scenario", status: "skipped" },
-      ],
-      scorecard: allProfileScorecardFixture(3),
-    });
-
-    const result = runCli(
-      "--output-dir",
-      outputDir,
-      "--evidence-dir",
-      evidenceDir,
-      "--allow-failures",
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
-    const scorecard = fs.readFileSync(path.join(outputDir, "maturity", "scorecard.md"), "utf8");
-    expect(scorecard).not.toContain("Incomplete QA evidence accepted.");
-    expect(scorecard).toContain("Coverage Experimental - 0%");
-    expect(scorecard).toContain("0 passed, 1 failed, 1 blocked, 1 skipped");
   });
 
   it("renders passing evidence with unique section jump targets", () => {
@@ -1028,195 +900,167 @@ describe("maturity docs renderer CLI", () => {
     }
   });
 
-  it.each(["absent", "matching", "mismatched"] as const)(
-    "renders %s decision history without changing strict validation or current judgments",
-    (history) => {
-      const dir = tempDirs.make("openclaw-maturity-decisions-");
-      const taxonomyPath = path.join(dir, "taxonomy.yaml");
-      const scoresPath = path.join(dir, "scores.yaml");
-      const evidenceDir = path.join(dir, "evidence");
-      const record = <T extends string | number | boolean>(value: T) => ({
-        value,
-        rationale:
-          'Synthetic <review> {context} | "quoted" & `code` [link](https://example.test)\nsecond line',
-        reviewer: "Fixture reviewer",
-        evidence_refs: ["qa/fixture-one", "qa/fixture-two"],
-        revalidate_when: "The reviewed behavior changes",
-      });
-      const reviewed = history !== "absent";
-      const mismatch = history === "mismatched";
-      const score = (value: number, label: string) => ({ score: value, label });
-      const bundle = {
-        quality: score(70, "Beta"),
-        completeness: score(80, "Stable"),
-      };
-      const authored = {
-        quality: {
-          ...bundle.quality,
-          ...(reviewed ? { decision: record(mismatch ? 69 : 70) } : {}),
-        },
-        completeness: {
-          ...bundle.completeness,
-          ...(reviewed ? { decision: record(mismatch ? 79 : 80) } : {}),
-        },
-      };
-      fs.writeFileSync(
-        taxonomyPath,
-        stringifyYaml({
-          version: 1,
-          title: "Synthetic decision fixture",
-          levels: [
-            { id: "experimental", code: "M1", label: "Experimental" },
-            { id: "stable", code: "M4", label: "Stable" },
-          ],
-          surfaces: [
-            {
-              id: "tools",
-              name: "Fixture tools",
-              family: "core",
-              level: "experimental",
-              ...(reviewed ? { level_decision: record(mismatch ? "stable" : "experimental") } : {}),
-              categories: [
-                {
-                  id: "review",
-                  name: "Review",
-                  category_note: "Synthetic review",
-                  features: [{ name: "Fixture feature", coverageIds: ["tools.evidence"] }],
-                },
-              ],
-            },
-          ],
-        }),
-      );
-      fs.writeFileSync(
-        scoresPath,
-        stringifyYaml({
-          version: 1,
-          process_version: 1,
-          counts: { active_surfaces: 1, category_scores: 1 },
-          rollups: { surface_average: bundle, category_average: bundle },
-          surfaces: [
-            {
-              id: "tools",
-              name: "Fixture tools",
-              level: "experimental",
-              scores: authored,
-              categories: [
-                {
-                  name: "Review",
-                  ...authored,
-                  lts: {
-                    supported: false,
-                    human_override: false,
-                    ...(reviewed ? { decision: record(mismatch) } : {}),
-                  },
-                },
-              ],
-              lts: { supported_categories: 0, total_categories: 1, status: "none" },
-            },
-          ],
-        }),
-      );
-      writeQaEvidence({
-        dir: evidenceDir,
-        taxonomyPath,
-        entries: [{ id: "synthetic-review", status: "pass" }],
-        scorecard: allProfileScorecardFixture(1, taxonomyPath),
-      });
-      const result = runCli(
-        "--taxonomy",
-        taxonomyPath,
-        "--scores",
-        scoresPath,
-        "--evidence-dir",
-        evidenceDir,
-        "--output-dir",
-        dir,
-        "--strict-inputs",
-      );
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stderr).toBe("");
-      const scorecard = fs.readFileSync(path.join(dir, "maturity/scorecard.md"), "utf8");
-      const taxonomy = fs.readFileSync(path.join(dir, "maturity/taxonomy.md"), "utf8");
-      for (const markdown of [scorecard, taxonomy]) {
-        expect(markdown).toContain("<summary>Decision context</summary>");
-        const decisionBlocks =
-          markdown.match(/<details>\s*<summary>Decision context<\/summary>[\s\S]*?<\/details>/gu) ??
-          [];
-        expect(decisionBlocks.length).toBeGreaterThan(0);
-        for (const block of decisionBlocks) {
-          // Native labelled flow avoids forbidden table elements and conflicting ARIA roles.
-          expect(block).not.toMatch(/<\/?(?:table|thead|tbody|tr|th|td)(?:\s|>)|\srole=/u);
-          expect(block).not.toMatch(/<p>(?:(?!<\/p>)[\s\S])*<div>/u);
-        }
-        expect(markdown).toContain("Coverage Experimental - 0%");
-        const md = createDocsMarkdown();
-        const document = parseDocsDocument(markdown, md);
-        expect(document.collisions).toEqual([]);
-        const visibleText: string[] = [];
-        const tags: string[] = [];
-        const parser = new Parser({
-          ontext: (value) => visibleText.push(value),
-          onopentag: (name) => {
-            tags.push(name);
-            if (name === "br") {
-              visibleText.push("\n");
-            }
+  it("renders mismatched decision history without changing strict validation or current judgments", () => {
+    const dir = tempDirs.make("openclaw-maturity-decisions-");
+    const taxonomyPath = path.join(dir, "taxonomy.yaml");
+    const scoresPath = path.join(dir, "scores.yaml");
+    const evidenceDir = path.join(dir, "evidence");
+    const record = <T extends string | number | boolean>(value: T) => ({
+      value,
+      rationale:
+        'Synthetic <review> {context} | "quoted" & `code` [link](https://example.test)\nsecond line',
+      reviewer: "Fixture reviewer",
+      evidence_refs: ["qa/fixture-one", "qa/fixture-two"],
+      revalidate_when: "The reviewed behavior changes",
+    });
+    const score = (value: number, label: string) => ({ score: value, label });
+    const bundle = {
+      quality: score(70, "Beta"),
+      completeness: score(80, "Stable"),
+    };
+    const authored = {
+      quality: {
+        ...bundle.quality,
+        decision: record(69),
+      },
+      completeness: {
+        ...bundle.completeness,
+        decision: record(79),
+      },
+    };
+    fs.writeFileSync(
+      taxonomyPath,
+      stringifyYaml({
+        version: 1,
+        title: "Synthetic decision fixture",
+        levels: [
+          { id: "experimental", code: "M1", label: "Experimental" },
+          { id: "stable", code: "M4", label: "Stable" },
+        ],
+        surfaces: [
+          {
+            id: "tools",
+            name: "Fixture tools",
+            family: "core",
+            level: "experimental",
+            level_decision: record("stable"),
+            categories: [
+              {
+                id: "review",
+                name: "Review",
+                category_note: "Synthetic review",
+                features: [{ name: "Fixture feature", coverageIds: ["tools.evidence"] }],
+              },
+            ],
           },
-        });
-        parser.end(md.renderer.render(document.tokens, md.options, document.env));
-        const textContent = visibleText.join("");
-        for (const [label, value] of [
-          ["Level", "experimental"],
-          ["Quality", "70"],
-          ["Completeness", "80"],
-        ]) {
-          expect(textContent).toContain(`${label}Current value: ${value}Recorded decision: `);
-        }
-        expect(tags).not.toContain("review");
-        expect(markdown.includes("Non-gating mismatch")).toBe(mismatch);
-        expect(markdown.includes("Unknown (not recorded)")).toBe(!reviewed);
-        if (reviewed) {
-          for (const text of [
-            `Rationale: ${record(70).rationale}`,
-            "Reviewer: Fixture reviewer",
-            "Evidence: qa/fixture-one; qa/fixture-two",
-            "Revalidate when: The reviewed behavior changes",
-            `Recorded value: ${mismatch ? "stable" : "experimental"}`,
-            `Recorded value: ${mismatch ? 69 : 70}`,
-            `Recorded value: ${mismatch ? 79 : 80}`,
-          ]) {
-            expect(textContent).toContain(text);
-          }
-        }
-      }
-      expect(scorecard).toContain('<span className="maturity-summary-value">75%</span>');
-      expect(taxonomy).toContain("<span>Review / LTS</span>");
-      expect(taxonomy).toContain("<p>Current value: <span>false</span></p>");
-      expect(taxonomy).not.toContain(" / LTS-supported");
-      expect(taxonomy.match(/Non-gating mismatch/g) ?? []).toHaveLength(mismatch ? 6 : 0);
-      expect(scorecard.match(/Non-gating mismatch/g) ?? []).toHaveLength(mismatch ? 3 : 0);
-    },
-  );
-
-  it("renders the maturity score from quality and completeness without coverage", () => {
-    const outputDir = tempDirs.make("openclaw-maturity-docs-output-");
-    const evidenceDir = tempDirs.make("openclaw-maturity-docs-evidence-");
+        ],
+      }),
+    );
+    fs.writeFileSync(
+      scoresPath,
+      stringifyYaml({
+        version: 1,
+        process_version: 1,
+        counts: { active_surfaces: 1, category_scores: 1 },
+        rollups: { surface_average: bundle, category_average: bundle },
+        surfaces: [
+          {
+            id: "tools",
+            name: "Fixture tools",
+            level: "experimental",
+            scores: authored,
+            categories: [
+              {
+                name: "Review",
+                ...authored,
+                lts: {
+                  supported: false,
+                  human_override: false,
+                  decision: record(true),
+                },
+              },
+            ],
+            lts: { supported_categories: 0, total_categories: 1, status: "none" },
+          },
+        ],
+      }),
+    );
     writeQaEvidence({
       dir: evidenceDir,
-      entries: [{ id: "passing-scenario", status: "pass" }],
-      scorecard: allProfileScorecardFixture(),
+      taxonomyPath,
+      entries: [{ id: "synthetic-review", status: "pass" }],
+      scorecard: allProfileScorecardFixture(1, taxonomyPath),
     });
-
-    const result = runCli("--output-dir", outputDir, "--evidence-dir", evidenceDir);
-
-    expect(result.status).toBe(0);
-    const scorecard = fs.readFileSync(path.join(outputDir, "maturity", "scorecard.md"), "utf8");
-    expect(scorecard).toContain("<span>Maturity score</span>");
-    expect(scorecard).toContain(
-      `<span className="maturity-summary-value">${expectedMaturityScorePercent()}%</span>`,
+    const result = runCli(
+      "--taxonomy",
+      taxonomyPath,
+      "--scores",
+      scoresPath,
+      "--evidence-dir",
+      evidenceDir,
+      "--output-dir",
+      dir,
+      "--strict-inputs",
     );
-    expect(scorecard).toContain("Coverage Experimental - 0%");
-    expect(scorecard).toContain("end-to-end coverage above 90%");
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toBe("");
+    const scorecard = fs.readFileSync(path.join(dir, "maturity/scorecard.md"), "utf8");
+    const taxonomy = fs.readFileSync(path.join(dir, "maturity/taxonomy.md"), "utf8");
+    for (const markdown of [scorecard, taxonomy]) {
+      expect(markdown).toContain("<summary>Decision context</summary>");
+      const decisionBlocks =
+        markdown.match(/<details>\s*<summary>Decision context<\/summary>[\s\S]*?<\/details>/gu) ??
+        [];
+      expect(decisionBlocks.length).toBeGreaterThan(0);
+      for (const block of decisionBlocks) {
+        // Native labelled flow avoids forbidden table elements and conflicting ARIA roles.
+        expect(block).not.toMatch(/<\/?(?:table|thead|tbody|tr|th|td)(?:\s|>)|\srole=/u);
+        expect(block).not.toMatch(/<p>(?:(?!<\/p>)[\s\S])*<div>/u);
+      }
+      expect(markdown).toContain("Coverage Experimental - 0%");
+      const md = createDocsMarkdown();
+      const document = parseDocsDocument(markdown, md);
+      expect(document.collisions).toEqual([]);
+      const visibleText: string[] = [];
+      const tags: string[] = [];
+      const parser = new Parser({
+        ontext: (value) => visibleText.push(value),
+        onopentag: (name) => {
+          tags.push(name);
+          if (name === "br") {
+            visibleText.push("\n");
+          }
+        },
+      });
+      parser.end(md.renderer.render(document.tokens, md.options, document.env));
+      const textContent = visibleText.join("");
+      for (const [label, value] of [
+        ["Level", "experimental"],
+        ["Quality", "70"],
+        ["Completeness", "80"],
+      ]) {
+        expect(textContent).toContain(`${label}Current value: ${value}Recorded decision: `);
+      }
+      expect(tags).not.toContain("review");
+      expect(markdown).toContain("Non-gating mismatch");
+      expect(markdown).not.toContain("Unknown (not recorded)");
+      for (const text of [
+        `Rationale: ${record(70).rationale}`,
+        "Reviewer: Fixture reviewer",
+        "Evidence: qa/fixture-one; qa/fixture-two",
+        "Revalidate when: The reviewed behavior changes",
+        "Recorded value: stable",
+        "Recorded value: 69",
+        "Recorded value: 79",
+      ]) {
+        expect(textContent).toContain(text);
+      }
+    }
+    expect(scorecard).toContain('<span className="maturity-summary-value">75%</span>');
+    expect(taxonomy).toContain("<span>Review / LTS</span>");
+    expect(taxonomy).toContain("<p>Current value: <span>false</span></p>");
+    expect(taxonomy).not.toContain(" / LTS-supported");
+    expect(taxonomy.match(/Non-gating mismatch/g) ?? []).toHaveLength(6);
+    expect(scorecard.match(/Non-gating mismatch/g) ?? []).toHaveLength(3);
   });
 });

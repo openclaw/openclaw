@@ -5,6 +5,7 @@ import {
 } from "../infra/diagnostic-events.js";
 import { markTrustedOtelDiagnosticListener } from "../infra/diagnostic-otel-listener-provenance.js";
 import { registerDiagnosticTracePropagationBridge } from "../infra/diagnostic-trace-propagation.js";
+import { onGatewayWorkMetrics } from "../infra/gateway-work-metrics.js";
 import {
   recordDiagnosticExporterHealth,
   type DiagnosticExporterHealthUpdate,
@@ -46,6 +47,10 @@ export function createPluginServiceDiagnostics(
     emit: (event, privateData) => {
       lease.assertActive("internal diagnostic emitter");
       emitTrustedDiagnosticEventWithPrivateData(event, privateData);
+    },
+    onGatewayWorkMetrics: (listener) => {
+      lease.assertActive("gateway work metrics listener");
+      return lease.retain(onGatewayWorkMetrics(listener));
     },
     onEvent: (listener, filter, options) => {
       lease.assertActive("internal diagnostic listener");

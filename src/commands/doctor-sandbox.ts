@@ -261,30 +261,24 @@ async function containerImageExists(command: "docker" | "podman", image: string)
       command === "docker"
         ? stderr.includes("No such image")
         : /No such image|image not known|image .* not found/iu.test(stderr);
-    if (imageMissing) {
-      return false;
-    }
-    if (command === "docker" && isDockerDaemonUnavailable(stderr)) {
+    if (imageMissing || (command === "docker" && isDockerDaemonUnavailable(stderr))) {
       return false;
     }
     throw error;
   }
 }
 
-type SandboxImageCheck = {
-  engineCommand: "docker" | "podman";
-  kind: string;
-  image: string;
-  buildScript?: string;
-};
-
 async function handleMissingSandboxImage(
-  params: SandboxImageCheck,
+  params: {
+    engineCommand: "docker" | "podman";
+    kind: string;
+    image: string;
+    buildScript?: string;
+  },
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
 ) {
-  const exists = await containerImageExists(params.engineCommand, params.image);
-  if (exists) {
+  if (await containerImageExists(params.engineCommand, params.image)) {
     return;
   }
 
@@ -313,10 +307,10 @@ export async function maybeRepairSandboxImages(
   cfg: OpenClawConfig,
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
-): Promise<OpenClawConfig> {
+): Promise<void> {
   const enabled = resolveEnabledSandboxBackend(cfg);
   if (!enabled) {
-    return cfg;
+    return;
   }
   const { sandbox, mode, backend, containerEngine } = enabled;
   if (!containerEngine) {
@@ -326,7 +320,7 @@ export async function maybeRepairSandboxImages(
         "Sandbox",
       );
     }
-    return cfg;
+    return;
   }
 
   const engineAvailable = await isContainerEngineAvailable(containerEngine.command);
@@ -344,7 +338,7 @@ export async function maybeRepairSandboxImages(
       "- Disable sandbox mode: openclaw config set agents.defaults.sandbox.mode off",
     ];
     note(lines.join("\n"), "Sandbox");
-    return cfg;
+    return;
   }
   await validateSandboxContainerEngineTarget(containerEngine);
 
@@ -384,8 +378,6 @@ export async function maybeRepairSandboxImages(
       "Sandbox",
     );
   }
-
-  return cfg;
 }
 
 type LegacySandboxRegistryInspection = {
@@ -503,10 +495,7 @@ export function noteSandboxScopeWarnings(cfg: OpenClawConfig) {
     const agentPath =
       source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list (id "${agentId}")`;
     warnings.push(
-      [
-        `- ${agentPath} sandbox ${overrides.join("/")} overrides ignored.`,
-        `  scope resolves to "shared".`,
-      ].join("\n"),
+      `- ${agentPath} sandbox ${overrides.join("/")} overrides ignored.\n  scope resolves to "shared".`,
     );
   }
 

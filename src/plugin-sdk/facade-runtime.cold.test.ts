@@ -1,3 +1,4 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -7,8 +8,7 @@ import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { createNodeEvalArgs } from "../test-utils/node-process.js";
 import {
   listImportedBundledPluginFacadeIds,
-  loadActivatedBundledPluginPublicSurfaceModuleSync,
-  loadBundledPluginPublicSurfaceModuleSync,
+  loadActivatedBundledPluginPublicSurfaceModule,
   resetFacadeRuntimeStateForTest,
 } from "./facade-runtime.js";
 
@@ -16,33 +16,35 @@ describe("cold facade runtime", () => {
   const fixtureLifetime = createFixtureLifetime();
   afterEach(() => fixtureLifetime.cleanup());
 
-  it("loads and tracks a light source facade without prewarming workspace dependencies", () => {
+  it("awaits cold activation before loading a tiny allowed source facade", async () => {
     const bundledRoot = path.resolve("dist-runtime", "extensions");
     fs.mkdirSync(bundledRoot, { recursive: true });
-    const fixtureRoot = fs.mkdtempSync(path.join(bundledRoot, ".cold-facade-"));
-    const pluginRoot = path.join(fixtureRoot, "fixture");
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(bundledRoot, ".async-activation-")));
+    const pluginRoot = path.join(root, "fixture");
     fs.mkdirSync(pluginRoot);
     fs.writeFileSync(path.join(pluginRoot, "package.json"), '{"type":"module"}\n');
-    fs.writeFileSync(path.join(pluginRoot, "openclaw.plugin.json"), '{"id":"cold-facade-owner"}\n');
+    fs.writeFileSync(
+      path.join(pluginRoot, "openclaw.plugin.json"),
+      '{"id":"async-cold-owner","enabledByDefault":true}\n',
+    );
     fs.writeFileSync(path.join(pluginRoot, "api.ts"), 'export const marker: string = "cold";\n');
-
     resetFacadeRuntimeStateForTest();
-    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", fixtureRoot);
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", root);
     try {
-      const params = { dirName: "fixture", artifactBasename: "api.js" };
-      const loaded = loadBundledPluginPublicSurfaceModuleSync<{ marker: string }>(params);
-      expect(loaded).toEqual({ marker: "cold" });
-      expect(loadBundledPluginPublicSurfaceModuleSync(params)).toBe(loaded);
-      expect(listImportedBundledPluginFacadeIds()).toEqual(["cold-facade-owner"]);
-      expect(() => loadActivatedBundledPluginPublicSurfaceModuleSync(params)).toThrow(
-        'Bundled plugin public surface access blocked for "cold-facade-owner"',
-      );
+      const pending = loadActivatedBundledPluginPublicSurfaceModule({
+        dirName: "fixture",
+        artifactBasename: "api.js",
+      });
+      expect(listImportedBundledPluginFacadeIds()).toEqual([]);
+      await expect(pending).resolves.toEqual({ marker: "cold" });
+      expect(listImportedBundledPluginFacadeIds()).toEqual(["async-cold-owner"]);
     } finally {
       resetFacadeRuntimeStateForTest();
       vi.unstubAllEnvs();
-      fs.rmSync(fixtureRoot, { recursive: true, force: true });
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
   it("uses the live source config snapshot during cold synchronous activation", async ({
     signal,
   }) => {
