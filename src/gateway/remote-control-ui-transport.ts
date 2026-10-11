@@ -124,6 +124,15 @@ export function createRemoteControlUiTransport(params: {
 
     const left = new PassThrough({ highWaterMark: 64 * 1024 });
     const right = new PassThrough({ highWaterMark: 64 * 1024 });
+    // Gateway owners treat upgrade sockets as net.Socket (WebSocket keepalive arms
+    // setTimeout), so the server side keeps net.Socket inactivity-timeout semantics.
+    let idleMs = 0;
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    const touch = () => {
+      clearTimeout(idleTimer);
+      idleTimer = idleMs > 0 ? setTimeout(() => serverSocket.emit("timeout"), idleMs) : undefined;
+      idleTimer?.unref();
+    };
     const makeSide = (readable: PassThrough, destination: PassThrough) =>
       Duplex.fromWeb({
         readable: Readable.toWeb(readable, {
@@ -133,6 +142,7 @@ export function createRemoteControlUiTransport(params: {
           new Writable({
             highWaterMark: 64 * 1024,
             write(chunk: Buffer, _encoding, callback) {
+              touch();
               try {
                 check();
                 destination.write(chunk, (error) => {
@@ -161,7 +171,22 @@ export function createRemoteControlUiTransport(params: {
         ),
       });
     const client = makeSide(left, right);
-    const serverSocket = makeSide(right, left);
+    const serverSocket = Object.defineProperties(makeSide(right, left), {
+      timeout: { get: () => idleMs },
+      setTimeout: {
+        value(ms: number, onTimeout?: () => void) {
+          idleMs = Math.max(ms, 0);
+          if (onTimeout) {
+            serverSocket.once("timeout", onTimeout);
+          }
+          touch();
+          return serverSocket;
+        },
+      },
+      setNoDelay: { value: () => serverSocket },
+      setKeepAlive: { value: () => serverSocket },
+    });
+    void done.then(() => clearTimeout(idleTimer));
     const releaseClientBytes = bindRemoteControlUiSocketBuffer({
       writer: client,
       reader: serverSocket,

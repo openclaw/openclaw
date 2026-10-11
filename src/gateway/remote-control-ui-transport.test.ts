@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import { maxHeaderSize } from "node:http";
+import { maxHeaderSize, type IncomingMessage } from "node:http";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "../../packages/gateway-client/src/websocket.js";
@@ -9,6 +9,7 @@ import { markGatewayIngressTransport, readGatewayIngressTransport } from "./ingr
 import type { RemoteControlUiIngressContext } from "./remote-control-ui-context.js";
 import type { GatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
 import { createRemoteControlUiTransport } from "./remote-control-ui-transport.js";
+import { startWebSocketKeepalive } from "./websocket-keepalive.js";
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -321,6 +322,45 @@ describe("remote Control UI memory transport", () => {
     await transport.close();
     await socket.closed;
     expect(reserved()).toBe(0);
+  });
+
+  it("gives upgraded sockets net.Socket timeouts so Gateway keepalive can arm them", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout"] });
+    try {
+      const wss = new WebSocketServer({ noServer: true });
+      cleanups.push(
+        () =>
+          new Promise<void>((resolve) => {
+            wss.close(() => resolve());
+          }),
+      );
+      const accepted = createDeferred<IncomingMessage["socket"]>();
+      const missedPong = vi.fn();
+      const { transport } = fixture({
+        handleUpgrade: async (req, socket, head) => {
+          wss.handleUpgrade(req, socket, head, (ws) => {
+            startWebSocketKeepalive(ws, missedPong, req.socket);
+            accepted.resolve(req.socket);
+          });
+        },
+      });
+      await transport.openWebSocket({
+        pathAndQuery: "/claw",
+        origin: "https://ui.example.test",
+        protocols: [],
+        signal: new AbortController().signal,
+      });
+      const upgraded = await accepted.promise;
+      // Before the fix, the first keepalive tick threw `transport.setTimeout is not a function`.
+      expect(() => vi.advanceTimersByTime(25_000)).not.toThrow();
+      expect(upgraded.timeout).toBe(25_000);
+      const timedOut = vi.fn();
+      upgraded.setTimeout(1_000, timedOut);
+      vi.advanceTimersByTime(1_000);
+      expect(timedOut).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("closes a WebSocket whose unread messages exceed the bounded receive queue", async () => {
