@@ -65,7 +65,9 @@ OpenClaw runtime. Before an eligible user turn, the configured Decision provider
 judges whether the request needs tools. A conversational result can omit optional
 tools for that turn. Other harnesses keep their normal tools and perform no
 automatic prefilter inference. The switch does not select a provider, provision
-credentials, download models, or enable unrelated consumer modes.
+credentials, download models, or enable unrelated consumer modes. Other automatic
+consumers also require their own opt-in, such as Active Memory's
+[`escalationDecision`](/concepts/active-memory/enabling#decision-model-escalation).
 
 The switch and manually authored config use the same global Boolean:
 

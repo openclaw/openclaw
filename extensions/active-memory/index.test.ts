@@ -41,6 +41,7 @@ import {
   setSetupGraceTimeoutMsForTests,
 } from "./config.js";
 import { registerActiveMemoryDiagnosticTests } from "./index.diagnostics.test-support.js";
+import { registerActiveMemoryEscalationIntegrationTests } from "./index.escalation.test-support.js";
 import plugin from "./index.js";
 import { registerActiveMemoryProviderTests } from "./index.memory-provider.test-support.js";
 import {
@@ -82,6 +83,7 @@ const hoisted = vi.hoisted(() => {
     },
   };
   return {
+    evaluateDecision: vi.fn(),
     closeActiveMemorySearchManager: vi.fn(async () => {}),
     getActiveMemorySearchManager: vi.fn(async () => ({ manager: null })),
     getActiveMemoryProvider: vi.fn(async () => ({ provider: null })),
@@ -336,6 +338,7 @@ describe("active-memory plugin", () => {
     name: "Active Memory",
     logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
     runtime: {
+      decisions: { evaluate: hoisted.evaluateDecision },
       agent: {
         runEmbeddedAgent: runtimeRunEmbeddedAgent,
         resolveCliBackendDispatchEligibility,
@@ -1590,35 +1593,19 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
-  it.each([
-    [
-      "Russian",
-      "Помнишь, что мы решили вчера?",
-      "Давай обсудим это завтра",
-      "Ты помнишь завтра отправить отчёт?",
-    ],
-  ])(
-    "escalates retrospective %s recall when recall mode is unset",
-    async (_language, prompt, ordinaryPrompt, futurePrompt) => {
-      registerPluginConfig({ mode: undefined });
-      expect(currentActiveMemoryConfig().mode).toBeUndefined();
-      const context = {
-        sessionKey: "agent:main:telegram:direct:owner",
-        messageProvider: "telegram",
-        channelId: "owner",
-      };
-      const ordinary = await runPromptBuild({ prompt: ordinaryPrompt }, context);
-      expectPrependContextContains(ordinary, skippedRecallContext);
-      expect(runEmbeddedAgent).not.toHaveBeenCalled();
-      const future = await runPromptBuild({ prompt: futurePrompt }, context);
-      expectPrependContextContains(future, skippedRecallContext);
-      expect(runEmbeddedAgent).not.toHaveBeenCalled();
-      const recall = await runPromptBuild({ prompt }, context);
-      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-      expectPrependContextContains(recall, "lemon pepper wings");
-      expectEmbeddedChannel("telegram");
-    },
-  );
+  registerActiveMemoryEscalationIntegrationTests({
+    currentActiveMemoryConfig,
+    expectEmbeddedChannel,
+    expectPrependContextContains,
+    hasDebugLine,
+    hasInfoLine,
+    registerPluginConfig,
+    runEmbeddedAgent,
+    runPromptBuild,
+    evaluateDecision: hoisted.evaluateDecision,
+    updateConfigFile: (update) => (configFile = update(configFile)),
+    skippedRecallContext,
+  });
 
   it("does not run for agents that are not explicitly targeted", async () => {
     const result = await runPromptBuild(
