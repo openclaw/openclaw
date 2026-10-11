@@ -68,6 +68,13 @@ export async function resolvePreparedRuntimeAuthAttempts<Model, Auth>(params: {
   forceCredentialScopedDirectModelResolve?: boolean;
   errorMessage: string;
 }): Promise<PreparedRuntimeAuthAttemptResolution<Model, Auth>> {
+  const hasAvailableCandidate = (attempt: PreparedAgentRuntimeAuthAttempt) =>
+    attempt.kind !== "profile" ||
+    preparedAgentRuntimeProfileAttemptHasCandidate({
+      attempt,
+      store: params.store,
+      modelId: params.modelId,
+    });
   let firstError: unknown;
   let priorProfileAttempted = false;
   for (const attempt of listDistinctPreparedRuntimeAuthAttempts(params.attempts)) {
@@ -80,14 +87,7 @@ export async function resolvePreparedRuntimeAuthAttempts<Model, Auth>(params: {
       firstError ??= new Error("Prepared direct auth cannot bypass unavailable profiles.");
       continue;
     }
-    if (
-      attempt.kind === "profile" &&
-      !preparedAgentRuntimeProfileAttemptHasCandidate({
-        attempt,
-        store: params.store,
-        modelId: params.modelId,
-      })
-    ) {
+    if (!hasAvailableCandidate(attempt)) {
       firstError ??= new Error("Prepared runtime auth candidates are temporarily unavailable.");
       continue;
     }
@@ -104,14 +104,7 @@ export async function resolvePreparedRuntimeAuthAttempts<Model, Auth>(params: {
             priorProfileAttempted,
           }),
       });
-      if (
-        attempt.kind === "profile" &&
-        !preparedAgentRuntimeProfileAttemptHasCandidate({
-          attempt,
-          store: params.store,
-          modelId: params.modelId,
-        })
-      ) {
+      if (!hasAvailableCandidate(attempt)) {
         throw new Error("Prepared runtime auth candidates are temporarily unavailable.");
       }
       // Direct fallback unlocks only after credential resolution really ran;
@@ -146,6 +139,7 @@ function scopeAuthStoreToPreparedCandidates(
   profileIds: readonly string[],
 ): AuthProfileStore {
   const profileIdSet = new Set(profileIds);
+  const includesProfile = (profileId: string) => profileIdSet.has(profileId);
   const profiles: AuthProfileStore["profiles"] = {};
   for (const profileId of profileIds) {
     const profile = store.profiles[profileId];
@@ -157,7 +151,7 @@ function scopeAuthStoreToPreparedCandidates(
     ? Object.fromEntries(
         Object.entries(store.order).map(([provider, ids]) => [
           provider,
-          ids.filter((profileId) => profileIdSet.has(profileId)),
+          ids.filter(includesProfile),
         ]),
       )
     : undefined;
@@ -171,12 +165,8 @@ function scopeAuthStoreToPreparedCandidates(
         Object.entries(store.usageStats).filter(([profileId]) => profileIdSet.has(profileId)),
       )
     : undefined;
-  const runtimePersistedProfileIds = store.runtimePersistedProfileIds?.filter((profileId) =>
-    profileIdSet.has(profileId),
-  );
-  const runtimeExternalProfileIds = store.runtimeExternalProfileIds?.filter((profileId) =>
-    profileIdSet.has(profileId),
-  );
+  const runtimePersistedProfileIds = store.runtimePersistedProfileIds?.filter(includesProfile);
+  const runtimeExternalProfileIds = store.runtimeExternalProfileIds?.filter(includesProfile);
   return {
     version: store.version,
     profiles,

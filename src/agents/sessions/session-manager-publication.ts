@@ -29,6 +29,14 @@ export type SessionManagerAuthorityPublication = {
   entryPublication: readonly SessionEntryMetadataReceipt[];
 };
 
+export function unwrapSessionManagerPublication(
+  request: SqliteWorkerAdmissionRequest,
+): SqliteWorkerAdmissionRequest {
+  return isRecord(request.facts) && request.facts.kind === "session-manager-authority"
+    ? { ...request, facts: request.facts.domainFacts }
+    : request;
+}
+
 /** Entry and transcript postimages share one native receipt and one observer boundary. */
 export function createSessionManagerPublicationHooks(params: {
   agentId: string;
@@ -45,11 +53,7 @@ export function createSessionManagerPublicationHooks(params: {
   };
   let pending: Pending | undefined;
   return {
-    unwrap: (request: SqliteWorkerAdmissionRequest): SqliteWorkerAdmissionRequest => {
-      return isRecord(request.facts) && request.facts.kind === "session-manager-authority"
-        ? { ...request, facts: request.facts.domainFacts }
-        : request;
-    },
+    unwrap: unwrapSessionManagerPublication,
     onAdmitted: (request: SqliteWorkerAdmissionRequest) => {
       if (
         request.stage !== "commit" ||

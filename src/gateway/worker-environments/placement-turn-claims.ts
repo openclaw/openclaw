@@ -17,9 +17,7 @@ import {
 import { find, fromRow, getRequired, query, turnClaimValues } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import { clearWorkerTurnToolState } from "./placement-session-tool-operations.kernel.js";
-import { parseWorkerSessionPlacementState } from "./placement-state.js";
 import {
-  publishPlacementTurnClaimCleared,
   publishPlacementTurnClaimState,
   publishPlacementWorkspaceJournalState,
 } from "./placement-turn-authority.js";
@@ -60,6 +58,22 @@ function releaseTurnQuery(db: DatabaseSync, nowMs: number) {
       ...turnClaimValues(null),
       updated_at_ms: nowMs,
     });
+}
+
+export function clearLocalTurnClaimsInDatabase(
+  db: DatabaseSync,
+  path: string,
+  nowMs: number,
+): WorkerSessionPlacementRecord[] {
+  const placements = executeSqliteQuerySync(
+    db,
+    releaseTurnQuery(db, nowMs).where("turn_claim_owner", "=", "local").returningAll(),
+  ).rows.map(fromRow);
+  for (const placement of placements) {
+    publishPlacementTurnClaimState(db, placement, placement.state);
+    deferTurnClaimRelease(db, path, placement.sessionId);
+  }
+  return placements;
 }
 
 export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
@@ -447,27 +461,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
     },
 
     clearLocalTurnClaimsAfterRestart(this: void): number {
-      return write((db) => {
-        const placements = executeSqliteQuerySync(
-          db,
-          query(db)
-            .selectFrom("worker_session_placements")
-            .select(["session_id", "state"])
-            .where("turn_claim_owner", "=", "local"),
-        ).rows;
-        const result = executeSqliteQuerySync(
-          db,
-          releaseTurnQuery(db, now()).where("turn_claim_owner", "=", "local"),
-        );
-        if (result.numAffectedRows !== BigInt(placements.length)) {
-          throw new Error("Local turn claims changed during restart recovery");
-        }
-        for (const { session_id: sessionId, state } of placements) {
-          publishPlacementTurnClaimCleared(db, sessionId, parseWorkerSessionPlacementState(state));
-          deferTurnClaimRelease(db, path, sessionId);
-        }
-        return placements.length;
-      });
+      return write((db) => clearLocalTurnClaimsInDatabase(db, path, now()).length);
     },
 
     async waitForTurnClaimRelease(

@@ -169,21 +169,15 @@ export function prepareExecDefaults(
   const resolve = (
     approvalDefaults: ReturnType<typeof resolveExecApprovalsFromFile>["agent"] | undefined,
   ): ResolvedExecDefaults => {
-    const layeredPolicy =
-      sessionPermissionPolicy ??
-      applyExecPolicyLayer(
-        applyExecPolicyLayer(
-          applyExecPolicyLayer(
-            {
-              security: approvalDefaults?.security ?? defaultSecurity,
-              ask: approvalDefaults?.ask ?? "off",
-            },
-            globalExec,
-          ),
-          agentExec,
-        ),
-        params.execOverrides,
-      );
+    let layeredPolicy = sessionPermissionPolicy ?? {
+      security: approvalDefaults?.security ?? defaultSecurity,
+      ask: approvalDefaults?.ask ?? "off",
+    };
+    if (!sessionPermissionPolicy) {
+      for (const layer of [globalExec, agentExec, params.execOverrides]) {
+        layeredPolicy = applyExecPolicyLayer(layeredPolicy, layer);
+      }
+    }
     const modePolicy = resolveExecModePolicy(layeredPolicy);
     // Approval files bound every policy source except explicit admin-only full sessions.
     const security =

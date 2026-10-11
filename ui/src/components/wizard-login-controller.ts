@@ -1,4 +1,5 @@
-import { html, type ReactiveControllerHost } from "lit";
+import { html, nothing, render, type ReactiveControllerHost } from "lit";
+import { createRenderEffect, onCleanup } from "solid-js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
@@ -21,7 +22,7 @@ export class WizardLoginController {
   private cancellationNotice: string | null = null;
 
   constructor(
-    private readonly host: ReactiveControllerHost,
+    private readonly host: Pick<ReactiveControllerHost, "requestUpdate">,
     private readonly options: {
       getClient: () => GatewayBrowserClient | null;
       getAgentId: () => string | null;
@@ -91,6 +92,27 @@ export class WizardLoginController {
         onClose: this.options.onClose,
       })}
     </div>`;
+  }
+
+  /** Own the retained wizard renderer until its shared controls move to Solid. */
+  renderSolid(
+    revision: () => number,
+    options: () => Parameters<WizardLoginController["render"]>[0],
+  ) {
+    const container = document.createElement("div");
+    createRenderEffect(
+      () => {
+        revision();
+        return this.render(options());
+      },
+      (template) => {
+        render(template, container);
+      },
+    );
+    onCleanup(() => {
+      render(nothing, container);
+    });
+    return container;
   }
 
   private async cancel(): Promise<void> {

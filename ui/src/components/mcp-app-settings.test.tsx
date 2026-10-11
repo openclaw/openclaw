@@ -1,29 +1,25 @@
-import { render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { renderMcpAppSettings } from "./mcp-app-settings.ts";
-
-afterEach(() => {
-  document.body.replaceChildren();
-});
+import { createSignal } from "solid-js";
+import { describe, expect, it, vi } from "vitest";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
+import { McpAppSettingsForm } from "./mcp-app-settings.ts";
 
 describe("native app settings", () => {
   it("renders effective grouped values and sends edits only through explicit save", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    const values: Record<string, string | number | boolean> = {
+    const [values, setValues] = createSignal<Record<string, string | number | boolean>>({
       enabled: true,
       color: "blue",
       count: 2,
       name: "Parts",
-    };
+    });
     const onChange = vi.fn((key: string, value: string | number | boolean) => {
-      values[key] = value;
+      setValues((previous) => ({ ...previous, [key]: value }));
     });
     const onSave = vi.fn();
     const onTool = vi.fn();
-    render(
-      renderMcpAppSettings({
-        settings: {
+    const { container } = mountSolid(() => (
+      <McpAppSettingsForm
+        settings={{
           schema: {
             type: "object",
             properties: {
@@ -45,15 +41,14 @@ describe("native app settings", () => {
               ],
             },
           ],
-        },
-        values,
-        busy: false,
-        onChange,
-        onSave,
-        onTool,
-      }),
-      container,
-    );
+        }}
+        values={values()}
+        busy={false}
+        onChange={onChange}
+        onSave={onSave}
+        onTool={onTool}
+      />
+    ));
     expect(container.querySelector("legend")?.textContent).toBe("Display");
     expect(container.querySelector<HTMLInputElement>("input[type=checkbox]")?.checked).toBe(true);
     const select = container.querySelector("select")!;
@@ -63,7 +58,9 @@ describe("native app settings", () => {
     expect(onSave).not.toHaveBeenCalled();
     select.value = "red";
     select.dispatchEvent(new Event("change"));
+    flush();
     expect(onChange).toHaveBeenCalledWith("color", "red");
+    expect(container.querySelector<HTMLButtonElement>("button[type=submit]")?.disabled).toBe(false);
     expect(onSave).not.toHaveBeenCalled();
     container.querySelector<HTMLButtonElement>("fieldset button")!.click();
     expect(onTool).toHaveBeenCalledWith("reset");
