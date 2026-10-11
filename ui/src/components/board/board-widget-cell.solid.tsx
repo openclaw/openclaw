@@ -125,7 +125,7 @@ function BoardWidgetCellContent(
   const frame = new BoardWidgetFrameLifecycle({
     active: () => untrack(active),
     connected: () => connected,
-    loadingCovered: () => untrack(() => props.loadingCovered ?? false),
+    loadingCovered: () => props.loadingCovered ?? false,
     bridgeEnabled: () => untrack(() => props.bridgeEnabled !== false),
     context: () => context,
     refreshFrame: () => untrack(() => props.callbacks?.frameLoadFailed),
@@ -134,7 +134,7 @@ function BoardWidgetCellContent(
     scrollBy: (deltaY) =>
       host.closest("openclaw-board-view")?.scrollBy({ top: deltaY, behavior: "auto" }),
     requestUpdate,
-    resolveFrameUrl: () => untrack(() => props.widgetFrameUrl),
+    resolveFrameUrl: () => props.widgetFrameUrl,
     root: () => host,
     widget: () => untrack(() => props.widget),
   });
@@ -289,7 +289,15 @@ function BoardWidgetCellContent(
       }),
   );
   createEffect(
-    () => [revision(), props.widget, active(), props.loadingCovered, props.bridgeEnabled] as const,
+    () =>
+      [
+        revision(),
+        props.widget,
+        active(),
+        props.loadingCovered,
+        props.bridgeEnabled,
+        props.widgetFrameUrl,
+      ] as const,
     () =>
       untrack(() => {
         appView.observe(
