@@ -442,28 +442,23 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
   );
 
   it.each([
-    { scope: "mine", ownerId: "profile-ada", selected: "Ada (You)", label: "Ada (You)" },
-    { scope: "all", ownerId: "profile-bob", selected: "Bob", label: "profile-bob" },
+    { ownerId: "profile-ada", selected: "My sessions", label: "My sessions" },
+    { ownerId: "profile-bob", selected: "Bob", label: "profile-bob" },
   ])(
-    "keeps the selected owner display for an empty Archived list ($scope)",
-    async ({ scope, ownerId, selected, label }) => {
+    "keeps the selected owner display for an empty Archived list ($ownerId)",
+    async ({ ownerId, selected, label }) => {
       const { sidebar, sessions, page } = await mountFilters(1440);
-      if (scope === "mine") {
-        await page.getByRole("button", { name: "Mine", exact: true }).click();
-      }
-      await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
-      if (scope === "all") {
-        await page.getByRole("button", { name: "Owners: All owners", exact: true }).click();
-        await page.getByRole("option", { name: selected, exact: true }).click();
-      }
+      await page.getByRole("button", { name: "Owners: All owners", exact: true }).click();
+      await page.getByRole("option", { name: selected, exact: true }).click();
       await expect
         .element(page.getByRole("button", { name: `Owners: ${selected}`, exact: true }))
         .toBeVisible();
+      await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
       sessions.list.mockResolvedValue({
         ...sessions.sessions.state.result!,
         sessions: [],
-        // An unresolved facet keeps an explicit All owner selected without inventing a name.
-        owners: scope === "mine" ? [] : undefined,
+        // An unresolved facet keeps the explicit owner selected without inventing a name.
+        owners: ownerId === "profile-ada" ? [] : undefined,
       });
       await page.getByRole("radio", { name: "Archived", exact: true }).click();
       await expect
@@ -473,9 +468,6 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       await expect
         .element(page.getByRole("button", { name: `Owners: ${label}`, exact: true }))
         .toBeVisible();
-      await expect
-        .element(page.getByRole("button", { name: scope === "mine" ? "Mine" : "All", exact: true }))
-        .toHaveAttribute("aria-pressed", "true");
       expect(sessions.list).toHaveBeenLastCalledWith(
         expect.objectContaining({ ownerId, archivedFilter: "archived" }),
       );
