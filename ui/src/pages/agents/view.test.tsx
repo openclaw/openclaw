@@ -1,14 +1,17 @@
-import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { flattenTranslations } from "../../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ChannelAccountSnapshot, CronJob } from "../../api/types.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import type { MultiSelect } from "../../components/multi-select.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { zh_CN } from "../../i18n/locales/zh-CN.ts";
 import { createInitialCronState, loadCronJobsPage } from "../../lib/cron/index.ts";
 import { formatNextRun } from "../../lib/presenter.ts";
+import { ApplicationProvider } from "../../lib/reactive/context.ts";
+import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { updatePickers } from "../../test-helpers/select-picker.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createSkill } from "../skills/view.test-support.ts";
 import { createAgentFileEditors } from "./agent-file-state.test-helpers.ts";
@@ -17,9 +20,9 @@ import {
   inertAgentFileControls,
   primaryModelPicker,
 } from "./agents-view.test-helpers.ts";
-import { renderAgentFiles } from "./panels-files.ts";
-import { renderAgentChannels } from "./panels-status-files.ts";
-import { renderAgents } from "./view.ts";
+import { AgentFiles } from "./panels-files.tsx";
+import { AgentChannels } from "./panels-status-files.tsx";
+import { Agents, type AgentsProps } from "./view.tsx";
 
 function config(configForm: ReturnType<typeof createProps>["config"]["configForm"]) {
   return {
@@ -32,20 +35,29 @@ function config(configForm: ReturnType<typeof createProps>["config"]["configForm
   };
 }
 
+const views = new WeakMap<HTMLElement, ReturnType<typeof mountSolid<AgentsProps>>>();
+
 function renderView(overrides: Partial<ReturnType<typeof createProps>>, container: HTMLElement) {
-  render(renderAgents(createProps(overrides)), container);
+  const props = createProps(overrides);
+  const view = views.get(container);
+  if (view) {
+    view.update(props);
+  } else {
+    views.set(container, mountSolid(Agents, props, container));
+  }
 }
 
 function renderFiles(
-  params: Partial<Parameters<typeof renderAgentFiles>[0]> &
+  params: Partial<Parameters<typeof AgentFiles>[0]> &
     Pick<
-      Parameters<typeof renderAgentFiles>[0],
+      Parameters<typeof AgentFiles>[0],
       "agentFilesList" | "agentFileActive" | "agentFileEditors"
     >,
   container: HTMLElement,
 ) {
-  render(
-    renderAgentFiles({
+  mountSolid(
+    AgentFiles,
+    {
       agentId: "alpha",
       canWrite: true,
       agentFilesLoading: false,
@@ -53,7 +65,7 @@ function renderFiles(
       agentFileSaving: false,
       ...inertAgentFileControls,
       ...params,
-    }),
+    },
     container,
   );
 }
@@ -92,6 +104,16 @@ function expectAgentTab(container: Element, text: string): HTMLElement & { disab
 }
 
 describe("renderAgents", () => {
+  it("renders the selected agent's tool catalog loading state", () => {
+    const container = document.createElement("div");
+    const props = createProps();
+    renderView(
+      { activePanel: "tools", tools: { ...props.tools, toolsCatalogLoading: true } },
+      container,
+    );
+    expect(container.querySelector('.settings-loading-skeleton[aria-busy="true"]')).not.toBeNull();
+  });
+
   it("renders the active agent tab and selects a different panel", () => {
     const container = document.createElement("div");
     const onSelectPanel = vi.fn();
@@ -252,7 +274,22 @@ describe("renderAgents", () => {
 
   it("renders Memory after Automations and scopes the panel to the selected agent", () => {
     const container = document.createElement("div");
-    renderView({ activePanel: "memory" }, container);
+    const context = {
+      gateway: createApplicationGateway().gateway,
+      runtimeConfig: {
+        state: { configForm: null, configSnapshot: null },
+        subscribe: () => () => undefined,
+      },
+    } as unknown as ApplicationContext;
+    mountSolid(
+      (props: AgentsProps) => (
+        <ApplicationProvider value={context}>
+          <Agents {...props} />
+        </ApplicationProvider>
+      ),
+      createProps({ activePanel: "memory" }),
+      container,
+    );
 
     const tabs = [...container.querySelectorAll(".agents-hub-tabs .hub-tab")].map((tab) =>
       directText(tab),
@@ -264,7 +301,7 @@ describe("renderAgents", () => {
     expect(panel?.agentId).toBe("beta");
   });
 
-  it("selects the configured primary model on initial render", async () => {
+  it("updates the configured primary model selection when the active agent changes", async () => {
     const container = document.createElement("div");
     const configForm = {
       agents: {
@@ -304,7 +341,6 @@ describe("renderAgents", () => {
     );
 
     await updatePickers(container);
-    expect(primaryModelPicker(container)).not.toBe(defaultPicker);
     const inheritedSelection = primaryModelPicker(container)?.querySelector(
       '[role="option"][aria-selected="true"]',
     );
@@ -507,8 +543,9 @@ describe("renderAgents", () => {
 describe("renderAgentChannels", () => {
   function renderChannelStatus(accounts: ChannelAccountSnapshot[]) {
     const container = document.createElement("div");
-    render(
-      renderAgentChannels({
+    mountSolid(
+      AgentChannels,
+      {
         context: {
           workspace: "default",
           model: "—",
@@ -532,7 +569,7 @@ describe("renderAgentChannels", () => {
         lastSuccess: Date.now(),
         onRefresh: () => undefined,
         onSelectPanel: () => undefined,
-      }),
+      },
       container,
     );
     const row = Array.from(container.querySelectorAll(".settings-row")).find(
@@ -761,19 +798,17 @@ describe("renderAgents toolbar", () => {
   it("keeps standalone agent creation available with no agents", () => {
     const container = document.createElement("div");
     const onCreateAgent = vi.fn();
-    render(
-      renderAgents(
-        createProps({
-          agentsList: {
-            defaultId: "alpha",
-            mainKey: "main",
-            scope: "per-sender",
-            agents: [],
-          },
-          selectedAgentId: "alpha",
-          onCreateAgent,
-        }),
-      ),
+    renderView(
+      {
+        agentsList: {
+          defaultId: "alpha",
+          mainKey: "main",
+          scope: "per-sender",
+          agents: [],
+        },
+        selectedAgentId: "alpha",
+        onCreateAgent,
+      },
       container,
     );
 
@@ -790,19 +825,17 @@ describe("renderAgents toolbar", () => {
     const onCreateAgent = vi.fn();
     const defaults = createProps();
     try {
-      render(
-        renderAgents(
-          createProps({
-            agentsList: {
-              defaultId: "alpha",
-              mainKey: "main",
-              scope: "per-sender",
-              agents: [{ id: "alpha" }, { id: "beta" }],
-            },
-            access: { ...defaults.access, canCreateAgent: false },
-            onCreateAgent,
-          }),
-        ),
+      renderView(
+        {
+          agentsList: {
+            defaultId: "alpha",
+            mainKey: "main",
+            scope: "per-sender",
+            agents: [{ id: "alpha" }, { id: "beta" }],
+          },
+          access: { ...defaults.access, canCreateAgent: false },
+          onCreateAgent,
+        },
         container,
       );
       expect(container.querySelector("openclaw-agent-select")).toBeNull();
@@ -816,19 +849,17 @@ describe("renderAgents toolbar", () => {
 
 it("surfaces agent config save errors in the active panel", () => {
   const container = document.createElement("div");
-  render(
-    renderAgents(
-      createProps({
-        config: {
-          configForm: { agents: { entries: { beta: {} } } },
-          configSnapshot: null,
-          configLoading: false,
-          configSaving: false,
-          configFormDirty: true,
-          lastError: "mock validation failure",
-        },
-      }),
-    ),
+  renderView(
+    {
+      config: {
+        configForm: { agents: { entries: { beta: {} } } },
+        configSnapshot: null,
+        configLoading: false,
+        configSaving: false,
+        configFormDirty: true,
+        lastError: "mock validation failure",
+      },
+    },
     container,
   );
 
@@ -860,12 +891,12 @@ it.each([
     selectedAgentId: "alpha",
     basePath: "/gateway",
   });
-  render(
-    renderAgents({
+  renderView(
+    {
       ...props,
       access: { ...props.access, canRunCron },
       cron: { ...props.cron, jobs: [job], onRunNow: onCronRunNow },
-    }),
+    },
     container,
   );
   const link = [...container.querySelectorAll("a")].find(

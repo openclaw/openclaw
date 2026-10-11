@@ -9,7 +9,7 @@ describe("cron jobs pagination style ownership", () => {
         readFile(new URL("./cron-jobs-pagination.ts", import.meta.url), "utf8"),
         readFile(new URL("../styles/cron-jobs-pagination.css", import.meta.url), "utf8"),
         readFile(new URL("../styles/cron.css", import.meta.url), "utf8"),
-        readFile(new URL("../pages/agents/panels-status-files.ts", import.meta.url), "utf8"),
+        readFile(new URL("../pages/agents/panels-status-files.tsx", import.meta.url), "utf8"),
         readFile(new URL("../pages/cron/view.ts", import.meta.url), "utf8"),
       ],
     );

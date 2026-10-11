@@ -1,28 +1,25 @@
-import { consume } from "@lit/context";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { html, type PropertyValues } from "lit";
-import { property, state } from "lit/decorators.js";
-import {
-  applicationContext,
-  type ApplicationContext,
-  type ApplicationGateway,
-  type ApplicationGatewaySnapshot,
+import type {
+  ApplicationContext,
+  ApplicationGateway,
+  ApplicationGatewaySnapshot,
 } from "../../../app/context.ts";
-import { shellLayoutTraits } from "../../../app/shell-layout-traits.ts";
 import {
   showConfirmDialog,
   type ConfirmDialogOptions,
 } from "../../../components/confirm-dialog.ts";
-import { renderSettingsDefaultDescription } from "../../../components/settings-ui.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
 import { currentConfigObject } from "../../../lib/config/config-state-model.ts";
 import { formatTimeMs } from "../../../lib/format.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.ts";
 import { GatewayPageController } from "../../../lit/gateway-page-controller.ts";
-import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
-import { SubscriptionsController } from "../../../lit/subscriptions-controller.ts";
+import {
+  ControllerHost,
+  SubscriptionsController,
+  viewState,
+} from "../../../lit/subscriptions-controller.ts";
 import {
   canCallDreamingMethod,
   copyDreamingArchivePath,
@@ -36,8 +33,8 @@ import {
   type DreamingState,
   type WikiPagePreview,
 } from "./dreaming.ts";
-import { renderDreamingToggleConfirmation } from "./toggle-confirmation.ts";
-import { createDreamingViewState, renderDreaming, type DreamingViewState } from "./view.ts";
+import type { DreamingToggleConfirmationProps } from "./toggle-confirmation.tsx";
+import { createDreamingViewState, type DreamingProps, type DreamingViewState } from "./view.tsx";
 
 registerDreamingEnglish();
 
@@ -56,15 +53,24 @@ function resolveDreamingNextCycle(status: DreamingState["dreamingStatus"]): stri
   return formatTimeMs(nextRunAtMs, { hour: "numeric", minute: "2-digit" }, "") || null;
 }
 
-class AgentMemoryPanel extends OpenClawLightDomElement {
-  @consume({ context: applicationContext, subscribe: true })
-  private context!: ApplicationContext;
+export class AgentMemoryState extends ControllerHost {
+  context!: ApplicationContext;
 
-  @property({ attribute: false }) agentId = "";
+  private selectedId = "";
+  get agentId() {
+    return this.selectedId;
+  }
+  set agentId(value: string) {
+    this.selectedId = value;
+    if (this.isConnected) {
+      this.applyAgentId();
+    }
+    this.requestUpdate();
+  }
 
-  @state() private dreaming = createDreamingState();
-  @state() private toggleConfirmLoading = false;
-  @state() private pendingEnabled: boolean | null = null;
+  @viewState() private dreaming = createDreamingState();
+  @viewState() private toggleConfirmLoading = false;
+  @viewState() private pendingEnabled: boolean | null = null;
 
   private readonly viewState: DreamingViewState = createDreamingViewState();
   private readonly gateway = new GatewayPageController(this, {
@@ -87,17 +93,16 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     },
   );
 
-  override updated(changed: PropertyValues<this>) {
-    if (changed.has("agentId")) {
-      this.applyAgentId();
-    }
+  override connect() {
+    super.connect();
+    this.applyAgentId();
   }
 
-  override disconnectedCallback() {
+  override disconnect() {
     this.subscriptions.clear();
     this.resetTransientState();
     this.dreaming = createDreamingState();
-    super.disconnectedCallback();
+    super.disconnect();
   }
 
   private captureTaskScope(): DreamingTaskScope | null {
@@ -208,7 +213,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     return this.runDreamingTask((current) => runDreamDiaryAction(current, method));
   }
 
-  private async loadResources(
+  async loadResources(
     resource: DreamingResourceKey | "all" = "all",
     refreshConfig = resource !== "all",
   ) {
@@ -236,7 +241,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     }
   }
 
-  private setEnabled(enabled: boolean) {
+  setEnabled(enabled: boolean) {
     if (
       !canCallDreamingMethod(this.dreaming, "config.patch", "operator.admin") ||
       this.dreaming.dreamingModeSaving ||
@@ -249,7 +254,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     this.dreaming.dreamingStatusError = null;
   }
 
-  private cancelToggle() {
+  cancelToggle() {
     if (this.toggleConfirmLoading) {
       return;
     }
@@ -257,7 +262,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     this.dreaming.dreamingStatusError = null;
   }
 
-  private async confirmToggle() {
+  async confirmToggle() {
     const enabled = this.pendingEnabled;
     if (
       enabled == null ||
@@ -347,7 +352,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     };
   }
 
-  override render() {
+  get view() {
     const dreaming = this.dreaming;
     const configState = this.context.runtimeConfig.state;
     const configuredDreaming = resolveConfiguredDreaming(currentConfigObject(configState));
@@ -362,44 +367,9 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     const refreshLoading = dreaming.dreamingStatusLoading || dreaming.dreamDiaryLoading;
     const selectedAgentId = dreaming.selectedAgentId ?? "";
 
-    return html`
-      <section
-        class="content-header content-header--page agent-memory-panel__header"
-        ${shellLayoutTraits({ toolbarHeader: true })}
-      >
-        <div class="page-meta">
-          <div class="dreaming-header-controls">
-            <button
-              class="btn btn--subtle btn--sm"
-              ?disabled=${loading || dreaming.dreamDiaryLoading}
-              @click=${() => void this.loadResources("all", true)}
-            >
-              ${refreshLoading ? t("dreaming.header.refreshing") : t("dreaming.header.refresh")}
-            </button>
-            <span class="muted">
-              ${
-                configuredDreaming.engineOff
-                  ? t("dreaming.header.engineOff")
-                  : renderSettingsDefaultDescription(
-                      t("common.enabled"),
-                      configuredDreaming.overridden,
-                    )
-              }
-            </span>
-            <button
-              class="dreams__phase-toggle ${dreamingOn ? "dreams__phase-toggle--on" : ""}"
-              ?disabled=${!canUpdateConfig || loading || configuredDreaming.engineOff}
-              @click=${() => this.setEnabled(!dreamingOn)}
-            >
-              <span class="dreams__phase-toggle-dot"></span>
-              <span class="dreams__phase-toggle-label">
-                ${dreamingOn ? t("dreaming.header.on") : t("dreaming.header.off")}
-              </span>
-            </button>
-          </div>
-        </div>
-      </section>
-      ${renderDreaming({
+    return {
+      header: { configuredDreaming, dreamingOn, loading, canUpdateConfig, refreshLoading },
+      dreaming: {
         access: {
           canOpenConfig: canCallDreamingMethod(dreaming, "config.openFile", "operator.admin", {
             requireAdvertisement: false,
@@ -464,19 +434,15 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
             confirmLabel: t("dreaming.scene.repairCache"),
           }),
         onViewStateChange: () => this.requestUpdate(),
-      })}
-      ${renderDreamingToggleConfirmation({
+      } satisfies DreamingProps,
+      toggle: {
         open: this.pendingEnabled !== null,
         enabling: this.pendingEnabled === true,
         loading: this.toggleConfirmLoading,
         onConfirm: () => void this.confirmToggle(),
         onCancel: () => this.cancelToggle(),
         hasError: Boolean(dreaming.dreamingStatusError),
-      })}
-    `;
+      } satisfies DreamingToggleConfirmationProps,
+    };
   }
-}
-
-if (!customElements.get("openclaw-agent-memory-panel")) {
-  customElements.define("openclaw-agent-memory-panel", AgentMemoryPanel);
 }

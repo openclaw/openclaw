@@ -4,8 +4,8 @@ import { useLazyEnglishTest } from "./lazy-english.test-support.ts";
 const loadI18n = useLazyEnglishTest();
 
 it.each([
-  { surface: "tool panel", load: () => import("../pages/agents/panels-tools-skills.ts") },
-  { surface: "skills panel", load: () => import("../pages/agents/panels-skills.ts") },
+  { surface: "tool panel", load: () => import("../pages/agents/panels-tools-skills.tsx") },
+  { surface: "skills panel", load: () => import("../pages/agents/panels-skills.tsx") },
 ])("loads agent tool fallback copy with the $surface, preserving GitHub copy", async ({ load }) => {
   const { en, manager } = await loadI18n({ agentTools: { title: "Werkzeugzugriff" } });
   const agentTools = en.agentTools;
