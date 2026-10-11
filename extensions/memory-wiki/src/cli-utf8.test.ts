@@ -1,9 +1,13 @@
-// Memory Wiki CLI tests cover UTF-8 refusal output for whole-page rewrites.
+// Memory Wiki CLI tests cover UTF-8 refusal propagation for whole-page rewrites.
+// Rendering, the JSON envelope, and the exit code belong to the shared plugin CLI
+// boundary (see #168850 and src/cli/failure-output.ts `toPluginCommandFailure`),
+// so these tests assert what this owner owns: the refusal escapes the action and
+// the malformed bytes survive.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { registerWikiCli } from "./cli.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -11,7 +15,6 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 const { createVault } = createMemoryWikiTestHarness();
 let suiteRoot = "";
 let caseIndex = 0;
-let stdoutWriteMock: ReturnType<typeof vi.fn>;
 
 function malformedPage(header: string): Buffer {
   return Buffer.concat([
@@ -22,9 +25,29 @@ function malformedPage(header: string): Buffer {
 }
 
 const ENTITY_HEADER =
-  "---\npageType: entity\nid: entity.router\ntitle: Router\nstatus: active\n---\n# Router\n\n## Human Notes";
+  "---\npageType: entity\nid: entity.router\ntitle: Router\nstatus: active\n---\n" +
+  "# Router\n\n## Human Notes";
 const REPORT_HEADER =
   "---\npageType: report\nid: report.lint\ntitle: Lint Report\nstatus: active\n---\n# Lint Report";
+
+const REFUSAL_NAME = "WikiPageNotUtf8Error";
+
+/** Compile reports a vault-relative path, lint reports its absolute report path. */
+async function expectRefusal(run: Promise<unknown>, displayPathFragment: string): Promise<void> {
+  const refusal = await run.then(
+    () => {
+      throw new Error("expected the UTF-8 refusal to escape the wiki action");
+    },
+    (error: unknown) => error,
+  );
+  if (!(refusal instanceof Error)) {
+    throw new Error(`expected an Error refusal, received ${String(refusal)}`);
+  }
+  expect(refusal.name).toBe(REFUSAL_NAME);
+  expect(refusal.message).toContain("cannot be rewritten safely");
+  expect(refusal.message).toContain(displayPathFragment);
+  expect(refusal.message).toContain("The file was left unchanged.");
+}
 
 describe("memory-wiki cli UTF-8 refusals", () => {
   beforeAll(async () => {
@@ -35,19 +58,6 @@ describe("memory-wiki cli UTF-8 refusals", () => {
     if (suiteRoot) {
       await fs.rm(suiteRoot, { recursive: true, force: true });
     }
-  });
-
-  beforeEach(() => {
-    stdoutWriteMock = vi.fn(() => true);
-    vi.spyOn(process.stdout, "write").mockImplementation(
-      stdoutWriteMock as unknown as typeof process.stdout.write,
-    );
-    process.exitCode = undefined;
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-    process.exitCode = undefined;
   });
 
   async function createCliVault() {
@@ -65,56 +75,46 @@ describe("memory-wiki cli UTF-8 refusals", () => {
     return program.parseAsync(["wiki", ...args], { from: "user" });
   }
 
-  it("prints the compile refusal and leaves the malformed page unchanged", async () => {
+  it("lets the compile refusal escape with the page still unchanged", async () => {
     const { rootDir, config } = await createCliVault();
     const entityDir = path.join(rootDir, "entities");
     await fs.mkdir(entityDir, { recursive: true });
     const entityPath = path.join(entityDir, "router.md");
     const malformed = malformedPage(ENTITY_HEADER);
     await fs.writeFile(entityPath, malformed);
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await parseWiki(config, ["compile"]);
-
-    const stderr = consoleError.mock.calls.map(([chunk]) => String(chunk)).join("\n");
-    expect(process.exitCode).toBe(1);
-    expect(stderr).toContain("Wiki page is not valid UTF-8 and cannot be rewritten safely");
-    expect(stderr).toContain(path.join("entities", "router.md"));
-    expect(stderr).toContain("The file was left unchanged.");
+    await expectRefusal(parseWiki(config, ["compile"]), path.join("entities", "router.md"));
     expect(await fs.readFile(entityPath)).toEqual(malformed);
   });
 
-  it("prints the lint refusal and leaves the malformed report unchanged", async () => {
+  it("lets the lint refusal escape with the report still unchanged", async () => {
     const { rootDir, config } = await createCliVault();
     const reportsDir = path.join(rootDir, "reports");
     await fs.mkdir(reportsDir, { recursive: true });
     const reportPath = path.join(reportsDir, "lint.md");
     const malformed = malformedPage(REPORT_HEADER);
     await fs.writeFile(reportPath, malformed);
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await parseWiki(config, ["lint"]);
-
-    const stderr = consoleError.mock.calls.map(([chunk]) => String(chunk)).join("\n");
-    expect(process.exitCode).toBe(1);
-    expect(stderr).toContain("Wiki page is not valid UTF-8 and cannot be rewritten safely");
-    expect(stderr).toContain(path.join("reports", "lint.md"));
-    expect(stderr).toContain("The file was left unchanged.");
+    await expectRefusal(parseWiki(config, ["lint"]), path.join("reports", "lint.md"));
     expect(await fs.readFile(reportPath)).toEqual(malformed);
   });
 
-  it("rethrows the refusal in JSON mode for the shared machine envelope", async () => {
+  it("keeps the refusal intact in JSON mode for the shared machine envelope", async () => {
     const { rootDir, config } = await createCliVault();
     const entityDir = path.join(rootDir, "entities");
     await fs.mkdir(entityDir, { recursive: true });
-    await fs.writeFile(path.join(entityDir, "router.md"), malformedPage(ENTITY_HEADER));
+    const entityPath = path.join(entityDir, "router.md");
+    const malformed = malformedPage(ENTITY_HEADER);
+    await fs.writeFile(entityPath, malformed);
 
-    await expect(parseWiki(config, ["compile", "--json"])).rejects.toMatchObject({
-      name: "WikiPageNotUtf8Error",
-    });
+    await expectRefusal(
+      parseWiki(config, ["compile", "--json"]),
+      path.join("entities", "router.md"),
+    );
+    expect(await fs.readFile(entityPath)).toEqual(malformed);
   });
 
-  it("prints the refusal when another action compiles the vault", async () => {
+  it("surfaces the refusal when another action compiles the vault", async () => {
     const { rootDir, config } = await createCliVault();
     const entityDir = path.join(rootDir, "entities");
     await fs.mkdir(entityDir, { recursive: true });
@@ -123,19 +123,16 @@ describe("memory-wiki cli UTF-8 refusals", () => {
     await fs.writeFile(entityPath, malformed);
     const notePath = path.join(suiteRoot, "ingest-note.md");
     await fs.writeFile(notePath, "# Alpha\n\nLocal note.\n");
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await parseWiki(config, ["ingest", notePath]);
-
-    const stderr = consoleError.mock.calls.map(([chunk]) => String(chunk)).join("\n");
-    expect(process.exitCode).toBe(1);
-    expect(stderr).toContain("Wiki page is not valid UTF-8 and cannot be rewritten safely");
-    expect(stderr).toContain(path.join("entities", "router.md"));
-    expect(stderr).toContain("The file was left unchanged.");
+    await expectRefusal(
+      parseWiki(config, ["ingest", notePath]),
+      path.join("entities", "router.md"),
+    );
     expect(await fs.readFile(entityPath)).toEqual(malformed);
 
-    await expect(parseWiki(config, ["ingest", notePath, "--json"])).rejects.toMatchObject({
-      name: "WikiPageNotUtf8Error",
-    });
+    await expectRefusal(
+      parseWiki(config, ["ingest", notePath, "--json"]),
+      path.join("entities", "router.md"),
+    );
   });
 });
