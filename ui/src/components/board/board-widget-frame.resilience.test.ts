@@ -4,7 +4,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { BoardWidgetFrameLifecycle } from "./board-widget-frame.ts";
+import { BoardWidgetFrameLifecycle } from "./board-widget-frame.tsx";
 
 let lifecycle: BoardWidgetFrameLifecycle | undefined;
 const disposers: Array<() => void> = [];

@@ -8,7 +8,7 @@ import { recordBoardWidgetTicketReceipt } from "../../lib/board/widget-ticket-li
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { WIDGET_PROMPT_EVENT } from "../mcp-app-security.ts";
 import { boardWidget, gatewayContext } from "./board-view.test-support.ts";
-import { BoardWidgetFrameLifecycle } from "./board-widget-frame.ts";
+import { BoardWidgetFrameLifecycle } from "./board-widget-frame.tsx";
 
 const disposers: Array<() => void> = [];
 function mountFrame(lifecycle: BoardWidgetFrameLifecycle, widget: BoardWidget, root: HTMLElement) {
