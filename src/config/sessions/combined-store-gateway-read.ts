@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { prepareAgentDatabaseDeletionSnapshotRead } from "../../state/agent-deletion-journal.read.js";
+import { listOpenIncognitoAgentDatabases } from "../../state/openclaw-agent-db-lifecycle.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -46,8 +47,10 @@ export async function loadCombinedSessionStoreForGatewayCoreAsync(
     env,
     "recovery",
   );
+  const nativeIncognitoTargets =
+    !topology && opts.includeIncognito !== false ? listOpenIncognitoAgentDatabases() : [];
   const read = (stores?: readonly IncognitoStore[]) =>
-    loadCombinedSessionStore(inventory, options, stores);
+    loadCombinedSessionStore(inventory, options, stores, nativeIncognitoTargets);
   return topology ? withIncognitoSessionStoreEntries(read, options.projection ?? "list") : read();
 }
 
@@ -120,15 +123,15 @@ async function loadCombinedSessionStore(
   inventory: ReturnType<typeof prepareSessionStoreTargetInventory>,
   options: CombinedReadOptions,
   incognitoStores?: readonly IncognitoStore[],
+  nativeIncognitoTargets: ReturnType<typeof listOpenIncognitoAgentDatabases> = [],
 ): Promise<GatewayCombinedSessionStore> {
   const { config, env } = inventory;
   const { prepared } = await readCombinedSessionStoreTopology(inventory, options);
-  if (incognitoStores) {
-    prepared.targets.incognitoTargets = incognitoStores.filter(
-      (store) =>
-        !prepared.targets.requestedAgentId || store.agentId === prepared.targets.requestedAgentId,
-    );
-  }
+  // Unbound private stores remain with their existing process-local owner.
+  prepared.targets.incognitoTargets = (incognitoStores ?? nativeIncognitoTargets).filter(
+    (store) =>
+      !prepared.targets.requestedAgentId || store.agentId === prepared.targets.requestedAgentId,
+  );
   // Windows environment proxies cannot cross the worker boundary.
   const transferEnv = { ...env, OPENCLAW_STATE_DIR: env.OPENCLAW_STATE_DIR };
   return withSessionHistoryWorkerDatabases(
