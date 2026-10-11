@@ -1,11 +1,10 @@
-import { nothing } from "lit";
 import {
   normalizeChatSendShortcut,
   patchSettings,
   type ChatFollowUpMode,
 } from "../../../app/settings.ts";
-import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
+import "../../../components/tooltip.ts";
 import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
 import {
@@ -19,7 +18,7 @@ import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { ComposerDictationController, insertComposerDictation } from "../composer-dictation.ts";
 import { normalizeChatComposerDraft } from "../composer-draft.ts";
 import { ComposerMicrophonePicker } from "../composer-microphone-picker.ts";
-import { renderMicrophonePicker, type ChatRunControlsProps } from "./chat-composer-controls.ts";
+import { renderMicrophonePicker, type ChatRunControlsProps } from "./chat-composer-controls.tsx";
 import {
   adjustTextareaHeight,
   disconnectTextareaOverflowObserver,
@@ -28,22 +27,22 @@ import {
   replaceComposerPopoverAnchor,
   scheduleTextareaHeightAdjustment,
 } from "./chat-composer-dom.ts";
-import { createGoalComposerController } from "./chat-composer-goal-mode.ts";
+import { createGoalComposerController } from "./chat-composer-goal-mode.tsx";
 import { createComposerKeyDownHandler } from "./chat-composer-keydown.ts";
-import type { HumanMentionMenuHost } from "./chat-composer-mention-menu.ts";
+import type { HumanMentionMenuHost } from "./chat-composer-mention-menu.tsx";
 import { resolveChatSlashCommandArgOptions, resolveComposerMenus } from "./chat-composer-menus.ts";
-import { resolveComposerQuestionPanel } from "./chat-composer-question.ts";
+import { resolveComposerQuestionPanel } from "./chat-composer-question.tsx";
 import {
   isSkillMenuVisible,
   resetSkillMenuState,
   type SkillMenuHost,
   updateSkillMenu,
-} from "./chat-composer-skill-menu.ts";
+} from "./chat-composer-skill-menu.tsx";
 import {
   resetSlashMenuState,
   type SlashMenuHost,
   updateSlashMenu,
-} from "./chat-composer-slash-menu.ts";
+} from "./chat-composer-slash-menu.tsx";
 import {
   clearPendingClearedSubmittedDraft,
   commitComposerDraft,
@@ -57,13 +56,10 @@ import {
   suppressStaleSubmittedDraftReplay,
 } from "./chat-composer-state.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
-import { renderChatComposerView } from "./chat-composer-view.ts";
 
 registerChatGoalsEnglish();
 
-export { isChatRunWorking, resetChatComposerState } from "./chat-composer-state.ts";
-
-export function renderChatComposer(props: ChatComposerProps) {
+export function createChatComposerContext(props: ChatComposerProps) {
   const state = getChatComposerState(props.paneId);
   state.slashCommandDispatchConnected = props.connected;
   const canCompose = props.canCompose ?? props.canSend;
@@ -86,15 +82,25 @@ export function renderChatComposer(props: ChatComposerProps) {
   const composerRunStatus =
     sendingForCurrentSession || runWorking ? { phase: "in-progress" as const } : props.runStatus;
   const draftKey = composerDraftKey(props);
-  if (state.composerDraftScopeKey !== null && state.composerDraftScopeKey !== draftKey) {
+  if (state.composerDraftScope !== null && state.composerDraftScope.key !== draftKey) {
+    // A new draft owns a new input; late IME events from the retired node cannot commit into it.
+    state.restoreComposerFocus ||= state.composerTextarea === document.activeElement;
+    state.textareaRef?.();
+    state.composerComposing = false;
+    state.composingDraft = null;
     state.emojiMenu.close();
     state.dictation?.dispose();
     state.dictation = null;
     state.dictationSelection = null;
   }
-  state.composerDraftScopeKey = draftKey;
+  if (state.composerDraftScope?.key !== draftKey) {
+    state.composerDraftScope = { key: draftKey };
+  }
+  const draftScope = state.composerDraftScope;
   const visibleDraft =
-    state.composingDraft?.key === draftKey ? state.composingDraft.value : props.draft;
+    state.composingDraft?.key === draftKey
+      ? state.composingDraft.value
+      : (props.getDraft?.() ?? props.draft);
   state.composerInputRef ??= (element?: Element) => {
     state.composerInput = replaceComposerPopoverAnchor(state.composerInput, element);
   };
@@ -266,7 +272,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     submissionAction?: Event,
     followUpModeOverride?: ChatFollowUpMode,
   ) => {
-    if (!canSubmitDraft(draft)) {
+    if (state.composerDraftScope !== draftScope || !canSubmitDraft(draft)) {
       return;
     }
     state.composerComposing = false;
@@ -345,7 +351,7 @@ export function renderChatComposer(props: ChatComposerProps) {
   };
   const handleBeforeInput = (event: InputEvent) => {
     const target = event.target;
-    if (!(target instanceof HTMLTextAreaElement)) {
+    if (!(target instanceof HTMLTextAreaElement) || target !== state.composerTextarea) {
       return;
     }
     state.mentionInput = {
@@ -361,10 +367,12 @@ export function renderChatComposer(props: ChatComposerProps) {
   };
   const handleInput = (event: InputEvent) => {
     const target = event.target as HTMLTextAreaElement;
+    if (target !== state.composerTextarea) {
+      return;
+    }
     const hasInputIntent = consumeComposerInputIntent(state, draftKey);
     if (state.composerComposing || event.isComposing) {
       state.composingDraft = { key: draftKey, value: target.value };
-      requestUpdate();
       return;
     }
     if (state.composingDraft?.key === draftKey) {
@@ -409,6 +417,9 @@ export function renderChatComposer(props: ChatComposerProps) {
     updateSkillMenu(target.value, target.selectionStart, state, skillMenuHost, requestUpdate);
   };
   const handleCompositionEnd = (event: CompositionEvent) => {
+    if (event.target !== state.composerTextarea) {
+      return;
+    }
     recordCompositionEnd(event);
     state.composerComposing = false;
     if (state.composingDraft?.key === draftKey) {
@@ -417,6 +428,9 @@ export function renderChatComposer(props: ChatComposerProps) {
     syncComposerValue(event.target as HTMLTextAreaElement);
   };
   const handleBlur = (event: FocusEvent) => {
+    if (event.target !== state.composerTextarea) {
+      return;
+    }
     clearCompositionEnd(event);
     const emojiWasOpen = state.emojiMenu.open;
     state.emojiMenu.close();
@@ -497,7 +511,7 @@ export function renderChatComposer(props: ChatComposerProps) {
         onOpenTalkSettings: props.onOpenTalkSettings,
         onOpenDictationSettings: props.onOpenDictationSettings,
       })
-    : nothing;
+    : undefined;
   const dictationOptions = {
     client: props.gatewayClient ?? null,
     connected: props.connected,
@@ -625,7 +639,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     onToggleVoice: props.onToggleRealtimeTalk ? handleVoicePrimaryAction : undefined,
     onToggleCamera: props.onToggleRealtimeCamera,
     microphonePicker,
-    dictation,
+    readDictation: dictation ? () => dictation : undefined,
     onDictationPointerDown: handleDictationStart,
     onDirectDictationStart: handleDictationStart,
     onPrimaryActionPointerDown: (event) =>
@@ -650,6 +664,9 @@ export function renderChatComposer(props: ChatComposerProps) {
   ) {
     resetSkillMenuState(state);
   }
+  if (!props.capabilityMenu) {
+    state.capabilityMenuView = "root";
+  }
   const menus = resolveComposerMenus(
     props.paneId,
     commandsVisible,
@@ -659,7 +676,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     state.emojiMenu,
   );
 
-  return renderChatComposerView({
+  return {
     props,
     state,
     canCompose,
@@ -685,5 +702,5 @@ export function renderChatComposer(props: ChatComposerProps) {
     skillMenuHost,
     slashMenuHost,
     goalComposer,
-  });
+  };
 }

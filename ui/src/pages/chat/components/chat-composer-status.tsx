@@ -1,18 +1,17 @@
-import { html, nothing } from "lit";
-import { icons } from "../../../components/icons.ts";
+import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../i18n/index.ts";
 import type { FallbackStatus } from "../tool-stream-contract.ts";
 
 const FALLBACK_TOAST_DURATION_MS = 8000;
 
-export function renderFallbackIndicator(status: FallbackStatus | null | undefined) {
+export function renderFallbackIndicatorSolid(status: FallbackStatus | null | undefined) {
   if (!status) {
-    return nothing;
+    return null;
   }
   const phase = status.phase ?? "active";
   const elapsed = Date.now() - status.occurredAt;
   if (elapsed >= FALLBACK_TOAST_DURATION_MS) {
-    return nothing;
+    return null;
   }
   const details = [
     t("chat.composer.fallbackSelected", { model: status.selected }),
@@ -39,12 +38,12 @@ export function renderFallbackIndicator(status: FallbackStatus | null | undefine
     phase === "cleared"
       ? "compaction-indicator compaction-indicator--fallback-cleared"
       : "compaction-indicator compaction-indicator--fallback";
-  const icon = phase === "cleared" ? icons.check : icons.brain;
-  return html`
-    <openclaw-tooltip .content=${details}>
-      <div class=${className} role="status" aria-live="polite" aria-label=${details}>
-        ${icon} ${message}
+  const icon = phase === "cleared" ? <Icon name="check" /> : <Icon name="brain" />;
+  return (
+    <openclaw-tooltip prop:content={details}>
+      <div class={className} role="status" aria-live="polite" aria-label={details}>
+        {icon} {message}
       </div>
     </openclaw-tooltip>
-  `;
+  );
 }

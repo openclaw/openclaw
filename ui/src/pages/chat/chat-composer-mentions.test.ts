@@ -9,7 +9,7 @@ import {
   resetMentionComposerFixture,
 } from "./chat-composer-mentions.test-support.ts";
 import { createComposerProps, findPrimaryButton } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer.ts";
+import { renderChatComposer } from "./components/chat-composer.tsx";
 
 afterEach(resetMentionComposerFixture);
 

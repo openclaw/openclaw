@@ -7,7 +7,7 @@ import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { renderChat } from "./chat-view.ts";
-import { resetChatComposerState } from "./components/chat-composer.ts";
+import { resetChatComposerState } from "./components/chat-composer.tsx";
 
 function sessionsResult(rows: GatewaySessionRow[]): SessionsListResult {
   return {

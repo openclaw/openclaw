@@ -1,14 +1,8 @@
 import WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
-import { html, nothing } from "lit";
-import { ref } from "lit/directives/ref.js";
-import {
-  handleComposerMenuKeydown,
-  renderComposerMenu,
-  renderComposerMenuOption,
-} from "../../../components/composer-menu.ts";
-import "../../../styles/chat/emoji-menu.css";
+import { For } from "solid-js";
 import { TextareaTokenAnchor } from "../../../components/textarea-token-anchor.ts";
 import { t } from "../../../i18n/index.ts";
+import "../../../styles/chat/emoji-menu.css";
 import {
   emojiForShortcode,
   EmojiTargetResolver,
@@ -16,6 +10,12 @@ import {
   type EmojiTarget,
 } from "../../../lib/chat/emoji.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
+import { solidTemplate } from "./chat-composer-interop.tsx";
+import {
+  handleComposerMenuKeydown,
+  ComposerMenu,
+  renderComposerMenuOption,
+} from "./chat-composer-menu.tsx";
 
 /** Local editing state; both composer owners keep their existing draft/input pipeline. */
 export class ComposerEmojiMenu {
@@ -233,32 +233,58 @@ export class ComposerEmojiMenu {
   }
 
   render(paneId: string, textarea: HTMLTextAreaElement | null, requestUpdate: () => void) {
+    return solidTemplate(EmojiMenuView, { menu: this, paneId, textarea, requestUpdate });
+  }
+
+  renderSolid(paneId: string, textarea: HTMLTextAreaElement | null, requestUpdate: () => void) {
     if (!this.open || !textarea || textarea.disabled || textarea.readOnly) {
-      return nothing;
+      return undefined;
     }
     this.requestUpdate = requestUpdate;
     this.textarea = textarea;
     this.syncAnchor();
-    const menu = renderComposerMenu({
-      className: "emoji-menu",
-      id: paneDomId(paneId, "emoji-menu-listbox"),
-      label: t("chat.composer.emojiSuggestions"),
-      content: this.items.map((name, index) =>
-        renderComposerMenuOption({
-          id: paneDomId(paneId, `emoji-option-${index}`),
-          active: index === this.index,
-          select: () => this.select(textarea, requestUpdate, index),
-          hover: () => {
-            this.index = index;
-            requestUpdate();
-          },
-          icon: emojiForShortcode(name),
-          iconHidden: true,
-          name: `:${name}:`,
-          description: nothing,
-        }),
-      ),
-    });
-    return html`<wa-popup ${ref(this.popupRef)} class="emoji-menu-popup">${menu}</wa-popup>`;
+    const menu = (
+      <ComposerMenu
+        class="emoji-menu"
+        id={paneDomId(paneId, "emoji-menu-listbox")}
+        label={t("chat.composer.emojiSuggestions")}
+        activeId={this.activeId(paneId) ?? undefined}
+        revision={this.items}
+      >
+        <For each={this.items} keyed={(name) => name}>
+          {(name, index) =>
+            renderComposerMenuOption({
+              id: paneDomId(paneId, `emoji-option-${index()}`),
+              active: index() === this.index,
+              select: () => this.select(textarea, requestUpdate, index()),
+              hover: () => {
+                this.index = index();
+                requestUpdate();
+              },
+              icon: emojiForShortcode(name()),
+              iconHidden: true,
+              name: `:${name()}:`,
+              description: undefined,
+            })
+          }
+        </For>
+      </ComposerMenu>
+    );
+    return (
+      <>
+        <wa-popup ref={this.popupRef} class="emoji-menu-popup">
+          {menu}
+        </wa-popup>
+      </>
+    );
   }
+}
+
+function EmojiMenuView(props: {
+  menu: ComposerEmojiMenu;
+  paneId: string;
+  textarea: HTMLTextAreaElement | null;
+  requestUpdate: () => void;
+}) {
+  return <>{props.menu.renderSolid(props.paneId, props.textarea, props.requestUpdate)}</>;
 }

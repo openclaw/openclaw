@@ -4,7 +4,7 @@ import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n, t } from "../../i18n/index.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
-import { renderChatQueue } from "./components/chat-composer-queue.ts";
+import { renderChatQueue } from "./components/chat-composer-queue.tsx";
 
 afterEach(async () => {
   document.body.replaceChildren();

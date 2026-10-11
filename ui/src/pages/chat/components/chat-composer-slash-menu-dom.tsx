@@ -1,4 +1,4 @@
-import { html, type TemplateResult } from "lit";
+import type { JSX } from "@solidjs/web";
 import { getSlashCommandDescription, type SlashCommandDef } from "../../../lib/chat/commands.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 
@@ -22,11 +22,16 @@ export function getSlashArgOptionId(paneId: string, commandName: string, arg: st
   );
 }
 
-export function renderSlashMatchedName(name: string, query: string): TemplateResult {
+export function renderSlashMatchedName(name: string, query: string): JSX.Element {
   const matchLength = name.toLowerCase().startsWith(query.toLowerCase()) ? query.length : 0;
-  return matchLength === 0
-    ? html`${name}`
-    : html`<mark>${name.slice(0, matchLength)}</mark>${name.slice(matchLength)}`;
+  return matchLength === 0 ? (
+    <>{name}</>
+  ) : (
+    <>
+      <mark>{name.slice(0, matchLength)}</mark>
+      {name.slice(matchLength)}
+    </>
+  );
 }
 
 export function getSlashCommandOptionLabel(cmd: SlashCommandDef | undefined): string {

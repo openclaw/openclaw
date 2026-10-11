@@ -1,14 +1,17 @@
 import { html, nothing, render } from "lit";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, server, userEvent } from "vitest/browser";
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import type { SessionGoal } from "../../api/types.ts";
 import { renderComposerMenu } from "../../components/composer-menu.ts";
+import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { createComposerProps } from "./chat-composer.test-support.ts";
 import { renderAttachmentPreview } from "./components/chat-attachments.ts";
-import { clearGoalElapsedTimers, renderChatGoal } from "./components/chat-composer-goal.ts";
-import { getChatComposerState, resetChatComposerState } from "./components/chat-composer-state.ts";
-import { renderChatComposer } from "./components/chat-composer.ts";
+import { ChatGoal, clearGoalElapsedTimers } from "./components/chat-composer-goal.tsx";
+import { resetChatComposerState } from "./components/chat-composer-state.ts";
+import { renderChatComposer } from "./components/chat-composer.tsx";
 import { subscribeTranscriptScroll } from "./components/chat-transcript-scroll-events.ts";
 import baseStyles from "../../styles/base.css?inline";
 import contextStripStyles from "../../styles/chat/composer-context-strip.css?inline";
@@ -49,6 +52,7 @@ describe("composer overflow presentation", () => {
   });
 
   afterEach(() => {
+    cleanupSolid();
     render(nothing, container);
     container.remove();
     styles.remove();
@@ -536,7 +540,7 @@ describe("composer overflow presentation", () => {
       styles.textContent += queueStyles;
       container.className = "agent-chat__composer-shell";
       container.style.width = `${width - 32}px`;
-      const state = getChatComposerState("mobile-actions");
+      const [expanded, setExpanded] = createSignal(false);
       const goal: SessionGoal = {
         schemaVersion: 1,
         id: "mobile-actions",
@@ -551,19 +555,22 @@ describe("composer overflow presentation", () => {
       };
       const onGoalAction = vi.fn();
       const onGoalEdit = vi.fn();
-      const draw = () =>
-        render(
-          html`<div class="agent-chat__goal-float">
-            ${renderChatGoal(state, goal, {
-              canAct: true,
-              onGoalAction,
-              onGoalEdit,
-              requestUpdate: draw,
-            })}
-          </div>`,
-          container,
-        );
-      draw();
+      mountSolid(
+        () => (
+          <div class="agent-chat__goal-float">
+            <ChatGoal
+              goal={goal}
+              expanded={expanded()}
+              canAct
+              onGoalAction={onGoalAction}
+              onGoalEdit={onGoalEdit}
+              onExpandedChange={setExpanded}
+            />
+          </div>
+        ),
+        { container },
+      );
+      flush();
       const commands = container.querySelector<HTMLElement>(".agent-chat__goal-command-actions")!;
       expect(getComputedStyle(commands).display).toBe("none");
       await page.getByRole("button", { name: "Show goal details", exact: true }).click();
@@ -663,8 +670,6 @@ describe("composer overflow presentation", () => {
         await page.viewport(480, 800);
         container.style.width = "400px";
       }
-      const state = getChatComposerState("overflow-goal");
-      state.goalExpandedId = "overflow-goal";
       const goal: SessionGoal = {
         schemaVersion: 1,
         id: "overflow-goal",
@@ -681,21 +686,32 @@ describe("composer overflow presentation", () => {
         menu: ".slash-menu__scroll",
         goal: ".agent-chat__goal-detail-objective",
       }[kind];
+      const [currentGoal, setGoal] = createSignal(goal, { equals: false });
+      let goalView: ReturnType<typeof mountSolid> | undefined;
       const draw = (expanded: boolean) => {
         goal.objective = expanded ? "Fixture objective\n".repeat(30) : "Short objective";
-        return render(
+        if (kind === "goal") {
+          goalView ??= mountSolid(
+            () => (
+              <ChatGoal goal={currentGoal()} expanded canAct={false} onExpandedChange={() => {}} />
+            ),
+            { container },
+          );
+          setGoal(() => goal);
+          flush();
+          return;
+        }
+        render(
           kind === "attachments"
             ? renderAttachmentPreview({ attachments: attachments.slice(0, expanded ? 7 : 1) })
-            : kind === "menu"
-              ? renderComposerMenu({
-                  id: "overflow-menu",
-                  label: "Fixture results",
-                  content: Array.from(
-                    { length: expanded ? 20 : 1 },
-                    (_, index) => html`<div style="height: 40px">Result ${index}</div>`,
-                  ),
-                })
-              : renderChatGoal(state, goal, { canAct: false, requestUpdate: () => {} }),
+            : renderComposerMenu({
+                id: "overflow-menu",
+                label: "Fixture results",
+                content: Array.from(
+                  { length: expanded ? 20 : 1 },
+                  (_, index) => html`<div style="height: 40px">Result ${index}</div>`,
+                ),
+              }),
           container,
         );
       };

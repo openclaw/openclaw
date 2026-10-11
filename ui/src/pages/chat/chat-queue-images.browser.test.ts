@@ -8,7 +8,7 @@ import {
   registerChatAttachmentPayload,
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
-import { renderChatQueue } from "./components/chat-composer-queue.ts";
+import { renderChatQueue } from "./components/chat-composer-queue.tsx";
 import baseStyles from "../../styles/base.css?inline";
 import queueStyles from "../../styles/chat/composer-queue.css?inline";
 

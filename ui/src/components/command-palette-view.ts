@@ -20,8 +20,8 @@ import { paneDomId } from "../pages/chat/components/chat-composer-dom.ts";
 import type {
   HumanMentionMenu,
   HumanMentionMenuHost,
-} from "../pages/chat/components/chat-composer-mention-menu.ts";
-import { renderSelectedHumanMentions } from "../pages/chat/components/chat-composer-selected-mentions.ts";
+} from "../pages/chat/components/chat-composer-mention-menu.tsx";
+import { renderSelectedHumanMentions } from "../pages/chat/components/chat-composer-selected-mentions.tsx";
 import type { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
 import "../styles/command-palette.css";
 import {

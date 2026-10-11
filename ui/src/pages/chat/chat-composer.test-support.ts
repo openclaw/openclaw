@@ -1,7 +1,7 @@
 import { render } from "lit";
 import { expect, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
-import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";
+import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
 
 type ComposerProps = Parameters<typeof renderChatComposer>[0];
 

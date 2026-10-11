@@ -1,9 +1,10 @@
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
+import { solidTemplate } from "../pages/chat/components/chat-composer-interop.tsx";
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
-import { renderComposerLibraryMenu } from "../pages/chat/components/chat-composer-library-menu.ts";
-import { renderChatComposerPlusMenu } from "../pages/chat/components/chat-composer-plus-menu.ts";
+import { renderComposerLibraryMenuSolid } from "../pages/chat/components/chat-composer-library-menu.tsx";
+import { renderChatComposerPlusMenu } from "../pages/chat/components/chat-composer-plus-menu.tsx";
 import "../pages/chat/components/browser-tab-card.ts";
 import { renderComposerMenuOption } from "./composer-menu.ts";
 import "../test-helpers/load-styles.ts";
@@ -380,7 +381,7 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       render(
         html`<wa-dropdown>
           <button slot="trigger">Library</button>
-          ${renderComposerLibraryMenu({
+          ${solidTemplate(renderComposerLibraryMenuSolid, {
             result: null,
             loading: false,
             busy: false,

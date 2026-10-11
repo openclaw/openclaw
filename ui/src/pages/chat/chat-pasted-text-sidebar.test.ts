@@ -16,7 +16,7 @@ import {
 import { resetChatViewState } from "./chat-view-state.ts";
 import { createPasteEvent, renderChatView } from "./chat-view.test-helpers.ts";
 import type { ChatAttachmentControlsProps } from "./components/chat-attachment-controls.types.ts";
-import { renderComposerPastedText } from "./components/chat-composer-pasted-text.ts";
+import { renderComposerPastedText } from "./components/chat-composer-pasted-text.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,

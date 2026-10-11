@@ -14,7 +14,7 @@ import { composerContext } from "../new-session/composer.test-support.ts";
 import { renderNewSessionComposer } from "../new-session/composer.ts";
 import { NewSessionModelControl } from "../new-session/model-control.ts";
 import { createComposerProps, resetComposerFixture } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer.ts";
+import { renderChatComposer } from "./components/chat-composer.tsx";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 
 export const people: UsersMentionableResult = {

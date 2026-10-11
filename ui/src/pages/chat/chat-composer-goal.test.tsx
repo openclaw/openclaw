@@ -1,11 +1,13 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionGoal } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
-import { renderChatGoal, clearGoalElapsedTimers } from "./components/chat-composer-goal.ts";
-import { getChatComposerState, resetChatComposerState } from "./components/chat-composer-state.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import { ChatGoal, clearGoalElapsedTimers } from "./components/chat-composer-goal.tsx";
+import { resetChatComposerState } from "./components/chat-composer-state.ts";
 
 const goal: SessionGoal = {
   schemaVersion: 1,
@@ -20,17 +22,19 @@ const goal: SessionGoal = {
 };
 
 function mountGoal(initial: SessionGoal) {
-  const container = document.createElement("div");
-  document.body.append(container);
-  const state = getChatComposerState("goal-timing");
-  const draw = (value: SessionGoal | undefined) =>
-    render(renderChatGoal(state, value, { canAct: false, requestUpdate: () => {} }), container);
-  const part = draw(initial);
+  const [readGoal, setGoal] = createSignal<SessionGoal | undefined>(initial, { equals: false });
+  const view = mountSolid(() => (
+    <ChatGoal goal={readGoal()} expanded={false} canAct={false} onExpandedChange={() => {}} />
+  ));
+  flush();
   return {
-    container,
-    draw,
-    part,
-    elapsed: () => container.querySelector(".agent-chat__goal-elapsed")?.textContent,
+    container: view.container,
+    draw: (value: SessionGoal | undefined) => {
+      setGoal(() => value);
+      flush();
+    },
+    unmount: view.unmount,
+    elapsed: () => view.container.querySelector(".agent-chat__goal-elapsed")?.textContent,
   };
 }
 
@@ -89,12 +93,12 @@ describe("goal elapsed presentation", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("retires and resumes the active timer with the rendered host connection", () => {
-    const view = mountGoal(goal);
-    view.part.setConnected(false);
+  it("retires the active timer on unmount and resumes from the current time on remount", () => {
+    let view = mountGoal(goal);
+    view.unmount();
     expect(vi.getTimerCount()).toBe(0);
     vi.advanceTimersByTime(60_000);
-    view.part.setConnected(true);
+    view = mountGoal(goal);
     expect(view.elapsed()).toBe("3m 00s");
     expect(vi.getTimerCount()).toBe(1);
   });

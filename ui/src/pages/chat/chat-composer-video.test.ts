@@ -10,7 +10,7 @@ import {
   renderComposerFixture as renderComposer,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer.ts";
+import { renderChatComposer } from "./components/chat-composer.tsx";
 
 function iconMarkup(icon: unknown): string | undefined {
   const container = document.createElement("div");

@@ -1,7 +1,7 @@
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
-import { renderComposerQuestionDock } from "./chat-composer-question.ts";
+import { renderComposerQuestionDock } from "./chat-composer-question.tsx";
 import { questionPanelIn } from "./chat-question-card.test-support.ts";
 import type { QuestionPanelProps } from "./chat-question-card.ts";
 import baseStyles from "../../../styles/base.css?inline";
