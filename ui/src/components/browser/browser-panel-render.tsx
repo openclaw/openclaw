@@ -479,7 +479,7 @@ export function BrowserPanelChrome(
         id={panelId}
         class="bp-viewport"
         name={props.controller.activeTargetId ?? "browser"}
-        prop:active
+        prop:active={true}
         aria-labelledby={
           rendersTabStrip() && props.controller.activeTargetId
             ? `${panelId}-tab-${props.controller.activeTargetId}`
