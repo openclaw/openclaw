@@ -25,6 +25,7 @@ export function captureDurableSessionActor(params: {
     expectedIdentity: params.target.database,
   });
   const lifetime = {
+    assertAdmission: () => params.lifetime.assertAdmission?.(),
     assertCurrent: () => {
       params.lifetime.assertCurrent();
       execution.assertCurrent();
@@ -96,6 +97,7 @@ export function createSessionActorFactory(
   };
   return {
     async acquire(requestedTarget: AcquisitionTarget, lifetime: SessionActorLifetime) {
+      lifetime.assertAdmission?.();
       lifetime.assertCurrent();
       if (requestedTarget.database.kind === "native-incognito") {
         return { kind: "not-actor-owned" } as const;

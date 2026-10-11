@@ -20,6 +20,8 @@ export type SessionActorTarget = Readonly<{
 export type SessionActorVersion = Readonly<{ epoch: string; sequence: number }>;
 
 export type SessionActorLifetime = {
+  /** Refuse new work without revoking already accepted settlement. */
+  assertAdmission?(): void;
   assertCurrent(): void;
   /** Accepted work may still settle after new disclosure has been revoked. */
   assertReadable(): void;

@@ -28,7 +28,6 @@ it.each(["none", "before", "during"])("opens the drawer only without a modal (%s
       },
       onboardingMode: false,
       navDrawerOpen: false,
-      updateComplete: Promise.resolve(true),
     },
     open,
   );
@@ -52,4 +51,34 @@ it.each(["none", "before", "during"])("opens the drawer only without a modal (%s
   touch("touchmove", 200);
   touch("touchend", 200);
   expect(open).toHaveBeenCalledTimes(modal === "none" ? 1 : 0);
+});
+
+it("preserves menu focus when gesture support connects to an open drawer", () => {
+  const element = document.createElement("div");
+  host = element;
+  const drawer = element.appendChild(document.createElement("nav"));
+  drawer.className = "shell-nav";
+  const first = drawer.appendChild(document.createElement("button"));
+  const selected = drawer.appendChild(document.createElement("button"));
+  for (const button of [first, selected]) {
+    Object.defineProperty(button, "checkVisibility", { value: () => true });
+  }
+  document.body.append(element);
+  selected.focus();
+  owner = new NavDrawerSwipeOwner(
+    {
+      element,
+      querySelector: element.querySelector.bind(element),
+      get isConnected() {
+        return element.isConnected;
+      },
+      onboardingMode: false,
+      navDrawerOpen: true,
+    },
+    vi.fn(),
+  );
+
+  owner.connect();
+
+  expect(document.activeElement).toBe(selected);
 });

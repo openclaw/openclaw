@@ -348,7 +348,7 @@ function renderSettingsRadioGroup<T extends string>(
   name: string,
 ) {
   return html`<div
-    class="settings-segmented ${props.className ?? ""}"
+    class="settings-segmented ${props.class ?? ""}"
     role="radiogroup"
     aria-label=${props.ariaLabel ?? nothing}
     aria-describedby=${props.descriptionId ?? nothing}
@@ -387,7 +387,7 @@ export function renderSettingsSegmented<T extends string>(
 ): TemplateResult<1> {
   if (props.mode === "buttons") {
     return html`<div
-      class="settings-segmented ${props.variant ? `settings-segmented--${props.variant}` : ""} ${props.className ?? ""}"
+      class="settings-segmented ${props.variant ? `settings-segmented--${props.variant}` : ""} ${props.class ?? ""}"
       role=${props.ariaLabel ? "group" : nothing}
       aria-label=${props.ariaLabel ?? nothing}
     >

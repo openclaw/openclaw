@@ -71,6 +71,7 @@ import {
   dismissNavigationTransientSurfaces,
   handleNavDrawerKeydown,
   moveToastToNavDrawer,
+  navDrawerFocusableElements,
   restoreToastFromNavDrawer,
   visibleNavDrawerToggle,
 } from "./navigation-surface.ts";
@@ -211,13 +212,16 @@ export class ShellChromeOwner {
       host.navDrawerTrigger = trigger ?? visibleNavDrawerToggle(host.element) ?? null;
       host.navDrawerOpen = true;
       moveToastToNavDrawer(host.element);
-      if (!this.navDrawerSwipe.opened()) {
-        void host.updateComplete.then(() => {
-          if (host.isConnected && host.navDrawerOpen) {
-            host.querySelector<HTMLElement>(".shell-nav")?.focus({ preventScroll: true });
-          }
-        });
-      }
+      void host.updateComplete.then(() => {
+        if (!host.isConnected || !host.navDrawerOpen) {
+          return;
+        }
+        this.navDrawerSwipe.reset();
+        const drawer = host.querySelector<HTMLElement>(".shell-nav");
+        if (drawer) {
+          (navDrawerFocusableElements(drawer)[0] ?? drawer).focus({ preventScroll: true });
+        }
+      });
       return;
     }
     // A responsive handoff expands this shell without overwriting the desktop preference.
@@ -251,7 +255,7 @@ export class ShellChromeOwner {
     const restoreFocus = host.navDrawerOpen && options.restoreFocus;
     if (host.navDrawerOpen) {
       this.dismissSidebarTransientMenus();
-      this.navDrawerSwipe.closed();
+      this.navDrawerSwipe.reset();
     }
     restoreToastFromNavDrawer(host.element);
     const trigger = restoreFocus ? host.navDrawerTrigger : null;
@@ -748,15 +752,13 @@ export class ShellChromeOwner {
     applyCommandPaletteTargetEvent(this.host, event);
 
   readonly nativeNavCollapsed = (): boolean => {
-    const host = this.host;
-    const mobileNavLayout = isMobileNavLayout();
     return (
-      host.onboardingMode ||
-      mobileNavLayout ||
-      (isSettingsTakeover(host.routeState.routeId) && !mobileNavLayout) ||
-      (!host.navDrawerOpen &&
-        !host.desktopNavigationExpanded &&
-        (host.context?.navigation.snapshot.navCollapsed ?? false))
+      this.host.onboardingMode ||
+      isMobileNavLayout() ||
+      isSettingsTakeover(this.host.routeState.routeId) ||
+      (!this.host.navDrawerOpen &&
+        !this.host.desktopNavigationExpanded &&
+        (this.host.context?.navigation.snapshot.navCollapsed ?? false))
     );
   };
 }

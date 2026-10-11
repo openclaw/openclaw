@@ -644,7 +644,7 @@ export function assertSqliteWorkerCommitReceiptPending(database: DatabaseSync): 
   }
 }
 
-/** Called on the SQLite worker, after transaction entry and before its row mutation. */
+/** Ask the live host owner for a native stage; preparation precedes writer-lock acquisition. */
 export function requestSqliteWorkerOperationAdmission(
   request: SqliteWorkerAdmissionRequest,
   transferList: Transferable[] = [],
