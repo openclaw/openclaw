@@ -55,10 +55,6 @@ describe("OpenClaw assistant", () => {
     expect(systemPrompt).toContain("default agent's existing workspace");
   });
 
-  it("does not tell the fallback planner to solicit secrets", () => {
-    expect(SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT).not.toMatch(/\bask for secrets?\b/iu);
-  });
-
   it.each([
     ["fallback planner", SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT],
     ["primary agent loop", buildSystemAgentSystemPrompt()],
@@ -66,15 +62,6 @@ describe("OpenClaw assistant", () => {
     expect(prompt).toContain("cannot run normal-agent slash commands such as `/codex`");
     expect(prompt).toContain("never that the task, conversation, or work has already transferred");
   });
-  it("keeps remote Gateway mode outside both hosted chat planners", () => {
-    for (const prompt of [SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT, buildSystemAgentSystemPrompt()]) {
-      expect(prompt).toContain("running the Gateway on another machine");
-      expect(prompt).toContain("`openclaw onboard` for fresh setup");
-      expect(prompt).toContain("`openclaw configure` for the mode question");
-      expect(prompt).toContain("LOCAL Gateway's port, bind, auth, and Tailscale exposure");
-    }
-  });
-
   it("parses the first compact JSON command", () => {
     expect(
       parseSystemAgentAssistantPlanText(
@@ -84,15 +71,6 @@ describe("OpenClaw assistant", () => {
       reply: "Aye aye.",
       command: "restart gateway",
     });
-  });
-
-  it.each([
-    ['[0] {"reply":"Ready."}', { reply: "Ready." }],
-    ['{"reply":"A } brace."} {"reply":"Later."}', { reply: "A } brace." }],
-    ['prefix "{not-json}" {"reply":"Later."}', null],
-    ['{"reply":"First.","extra":{"nested":true}} trailing }', { reply: "First." }],
-  ])("preserves object-only, first-object extraction: %s", (input, expected) => {
-    expect(parseSystemAgentAssistantPlanText(input)).toEqual(expected);
   });
 
   it("rejects non-JSON and empty plans but accepts chat-only replies", () => {

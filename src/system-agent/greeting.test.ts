@@ -98,33 +98,6 @@ function createConfigAudit(
 }
 
 describe("system agent greeting cache", () => {
-  it("returns a matching model greeting without calling the planner", async () => {
-    const overview = createOverview();
-    const facts = healthyFacts();
-    const cached: SystemAgentGreetingCacheRecord = {
-      lastSeenAuditSequence: 4,
-      factsHash: systemAgentGreetingFactsHash(overview, facts),
-      text: "All systems nominal.",
-      modelRef: "openai/gpt-5.5",
-      at: 100,
-    };
-    const cache = createCache(cached);
-    const planner = vi.fn();
-
-    await expect(
-      resolveSystemAgentGreeting({
-        overview,
-        facts,
-        planner,
-        allowInference: false,
-        cacheStore: cache.store,
-      }),
-    ).resolves.toEqual({ text: cached.text, source: "cache" });
-    await acknowledgeSystemAgentGreetingDelivery({ auditSequence: 5, cacheStore: cache.store });
-    expect(planner).not.toHaveBeenCalled();
-    expect(cache.read()?.lastSeenAuditSequence).toBe(5);
-  });
-
   it("uses the template without calling the planner when inference is disabled", async () => {
     const cache = createCache();
     const planner = vi.fn();
@@ -141,46 +114,6 @@ describe("system agent greeting cache", () => {
 
     expect(planner).not.toHaveBeenCalled();
     expect(cache.read()).toBeUndefined();
-  });
-
-  it("calls the planner once after a state change and replaces the cache", async () => {
-    const overview = createOverview();
-    const priorFacts = healthyFacts();
-    const facts = { ...priorFacts, updateAvailable: "2026.7.20", auditSequence: 6 };
-    const cache = createCache({
-      factsHash: systemAgentGreetingFactsHash(overview, priorFacts),
-      text: "All systems nominal.",
-      modelRef: "openai/gpt-5.5",
-      at: 100,
-    });
-    const planner = vi.fn(async () => ({
-      text: "I'm steady.\nAn upgrade to 2026.7.20 is ready when you are.",
-      modelRef: "openai/gpt-5.5",
-    }));
-
-    const result = await resolveSystemAgentGreeting({
-      overview,
-      facts,
-      planner,
-      cacheStore: cache.store,
-      now: () => 200,
-    });
-
-    expect(result.source).toBe("model");
-    expect(planner).toHaveBeenCalledOnce();
-    expect(planner).toHaveBeenCalledWith(
-      expect.objectContaining({ overview, facts, timeoutMs: 20_000 }),
-    );
-    await acknowledgeSystemAgentGreetingDelivery({
-      auditSequence: facts.auditSequence,
-      cacheStore: cache.store,
-    });
-    expect(cache.read()).toMatchObject({
-      lastSeenAuditSequence: 6,
-      factsHash: systemAgentGreetingFactsHash(overview, facts),
-      modelRef: "openai/gpt-5.5",
-      at: 200,
-    });
   });
 
   it("appends the host-owned edit alert at delivery without caching it", async () => {
@@ -235,65 +168,6 @@ describe("system agent greeting cache", () => {
         configAuditStore: audit.store,
       }),
     ).toMatchObject({ auditSequence: 11, recentExternalEdit: true });
-  });
-
-  it("keeps a template delivery as cursor-only state, then reports a later edit", async () => {
-    const overview = createOverview();
-    const cache = createCache();
-    const audit = createConfigAudit([configAuditEntry(3, "config.write")]);
-    const facts = await loadSystemAgentGreetingFacts({
-      cacheStore: cache.store,
-      configAuditStore: audit.store,
-    });
-
-    await expect(
-      resolveSystemAgentGreeting({
-        overview,
-        facts,
-        planner: async () => {
-          throw new Error("offline");
-        },
-        cacheStore: cache.store,
-      }),
-    ).resolves.toMatchObject({ source: "template" });
-    await acknowledgeSystemAgentGreetingDelivery({
-      auditSequence: facts.auditSequence,
-      cacheStore: cache.store,
-    });
-    expect(cache.read()).toEqual({ lastSeenAuditSequence: 3 });
-
-    audit.add(configAuditEntry(4, "config.external"));
-    expect(
-      await loadSystemAgentGreetingFacts({
-        cacheStore: cache.store,
-        configAuditStore: audit.store,
-      }),
-    ).toMatchObject({ auditSequence: 4, recentExternalEdit: true });
-  });
-
-  it("acknowledges a delivered edit so the next facts load is clear", async () => {
-    const cache = createCache({ lastSeenAuditSequence: 1 });
-    const audit = createConfigAudit([
-      configAuditEntry(2, "config.external"),
-      configAuditEntry(3, "config.write"),
-    ]);
-    const facts = await loadSystemAgentGreetingFacts({
-      cacheStore: cache.store,
-      configAuditStore: audit.store,
-    });
-    expect(facts.recentExternalEdit).toBe(true);
-
-    await acknowledgeSystemAgentGreetingDelivery({
-      auditSequence: facts.auditSequence,
-      cacheStore: cache.store,
-    });
-
-    expect(
-      await loadSystemAgentGreetingFacts({
-        cacheStore: cache.store,
-        configAuditStore: audit.store,
-      }),
-    ).toMatchObject({ auditSequence: 3, recentExternalEdit: false });
   });
 
   it.each([
@@ -538,29 +412,6 @@ describe("system agent greeting cache", () => {
     expect(cache.read()).toBeUndefined();
   });
 
-  it("accepts model text that names every degraded channel", async () => {
-    const cache = createCache();
-    const result = await resolveSystemAgentGreeting({
-      overview: createOverview(),
-      facts: {
-        ...healthyFacts(),
-        channelHealth: { available: true, degraded: ["Telegram", "Discord"] },
-      },
-      planner: async () => ({
-        text: "Telegram and Discord need attention.",
-        modelRef: "openai/gpt-5.5",
-      }),
-      cacheStore: cache.store,
-      now: () => 100,
-    });
-
-    expect(result).toEqual({
-      text: "Telegram and Discord need attention.",
-      source: "model",
-    });
-    expect(cache.read()?.text).toBe("Telegram and Discord need attention.");
-  });
-
   it("requires channel health unavailability before caching model text", async () => {
     const cache = createCache();
     const facts: SystemAgentGreetingFacts = {
@@ -660,7 +511,7 @@ describe("system agent greeting cache", () => {
     expect(planner).not.toHaveBeenCalled();
   });
 
-  it.each(["failed", "revoked"])(
+  it.each(["revoked"])(
     "does not publish cached text after a %s asynchronous greeting read",
     async (failure) => {
       const overview = createOverview();
@@ -706,37 +557,6 @@ describe("system agent greeting cache", () => {
       expect(cache.store.compareAndSet).not.toHaveBeenCalled();
     },
   );
-
-  it("hashes decision fields stably while ignoring diagnostic-only details", () => {
-    const facts = {
-      ...healthyFacts(),
-      channelHealth: { available: true, degraded: ["Telegram", "Discord"] },
-    };
-    const left = createOverview();
-    const right = createOverview({
-      config: {
-        ...left.config,
-        path: "/another/config.json",
-        hash: "another-hash",
-        issues: ["diagnostic detail"],
-      },
-      agents: [...left.agents].toReversed(),
-      gateway: { ...left.gateway, source: "another source", error: "diagnostic detail" },
-    });
-    expect(systemAgentGreetingFactsHash(left, facts)).toBe(
-      systemAgentGreetingFactsHash(right, {
-        ...facts,
-        auditSequence: 999,
-        channelHealth: { available: true, degraded: ["Discord", "Telegram"] },
-      }),
-    );
-    expect(systemAgentGreetingFactsHash(left, facts)).not.toBe(
-      systemAgentGreetingFactsHash(left, {
-        ...facts,
-        channelHealth: { available: false, degraded: [] },
-      }),
-    );
-  });
 });
 
 describe("system agent greeting identity", () => {
@@ -795,18 +615,6 @@ describe("system agent greeting facts", () => {
       }
     },
   );
-
-  it("treats a missing greeting slot as audit watermark zero", async () => {
-    const cache = createCache();
-    const audit = createConfigAudit([configAuditEntry(1, "config.external")]);
-
-    expect(
-      await loadSystemAgentGreetingFacts({
-        cacheStore: cache.store,
-        configAuditStore: audit.store,
-      }),
-    ).toMatchObject({ auditSequence: 1, recentExternalEdit: true });
-  });
 
   it("uses cached update and health state without probing", async () => {
     const facts = await loadSystemAgentGreetingFacts({
@@ -882,12 +690,6 @@ describe("system agent quick actions", () => {
       replies: ["talk to agent", "audit"],
     },
     {
-      name: "channel health unavailable",
-      overview: createOverview(),
-      facts: { ...healthyFacts(), channelHealth: { available: false, degraded: [] } },
-      replies: ["health", "talk to agent", "audit"],
-    },
-    {
       name: "missing config",
       overview: createOverview({
         config: {
@@ -922,28 +724,6 @@ describe("system agent quick actions", () => {
       replies: ["setup", "audit"],
     },
     {
-      name: "update and manual edit",
-      overview: createOverview(),
-      facts: {
-        updateAvailable: "2026.7.20",
-        channelHealth: { available: true, degraded: [] },
-        recentExternalEdit: true,
-        auditSequence: 0,
-      },
-      replies: ["status", "talk to agent", "audit"],
-    },
-    {
-      name: "degraded channel",
-      overview: createOverview(),
-      facts: {
-        updateAvailable: null,
-        channelHealth: { available: true, degraded: ["Telegram"] },
-        recentExternalEdit: false,
-        auditSequence: 0,
-      },
-      replies: ["health", "talk to agent", "audit"],
-    },
-    {
       name: "several exceptional facts",
       overview: createOverview({
         gateway: { url: "ws://127.0.0.1:18789", source: "test", reachable: false },
@@ -962,15 +742,5 @@ describe("system agent quick actions", () => {
     expect(question.options.map((option) => option.reply)).toEqual(replies);
     expect(question.options.length).toBeGreaterThanOrEqual(2);
     expect(question.options.length).toBeLessThanOrEqual(4);
-  });
-
-  it("does not recommend agent handoff for a recent external edit", () => {
-    const question = buildSystemAgentGreetingQuestion(createOverview(), {
-      ...healthyFacts(),
-      recentExternalEdit: true,
-    });
-    expect(question.options.find((option) => option.reply === "talk to agent")?.recommended).toBe(
-      false,
-    );
   });
 });

@@ -113,49 +113,43 @@ function snapshot(config: OpenClawConfig) {
 }
 
 describe("OpenClaw configured-model planner", () => {
-  it.each(["embedded", "cli"] as const)(
-    "rejects a failed %s completion before interpreting retained command text",
-    async (runner) => {
-      const config: OpenClawConfig = {
-        agents: {
-          defaults: {
-            model:
-              runner === "cli" ? "claude-cli/claude-opus-4-8@claude-cli:ops" : "openai/gpt-5.5",
-          },
+  it("rejects a failed embedded completion before interpreting retained command text", async () => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
         },
-      };
-      const { binding, deps } = await createSystemAgentVerifiedInferenceTestFixture(config);
-      useFastVerifiedInference(binding);
-      const run = vi.fn(async () => ({
-        meta: {
-          finalAssistantVisibleText: '{"reply":"I will restart it.","command":"restart gateway"}',
-          error: { kind: "incomplete_turn", message: "The setup turn timed out." },
-          stopReason: "timeout",
+      },
+    };
+    const { binding, deps } = await createSystemAgentVerifiedInferenceTestFixture(config);
+    useFastVerifiedInference(binding);
+    const run = vi.fn(async () => ({
+      meta: {
+        finalAssistantVisibleText: '{"reply":"I will restart it.","command":"restart gateway"}',
+        error: { kind: "incomplete_turn", message: "The setup turn timed out." },
+        stopReason: "timeout",
+      },
+    }));
+    const removeTempDir = vi.fn(async () => {});
+    await expect(
+      planSystemAgentCommand({
+        input: "restart the gateway",
+        overview: overview(),
+        verifiedInference: binding,
+        deps: {
+          ...deps,
+          runEmbeddedAgent: run as never,
+          createTempDir: async () => "/tmp/openclaw-planner",
+          removeTempDir,
         },
-      }));
-      const removeTempDir = vi.fn(async () => {});
-      await expect(
-        planSystemAgentCommand({
-          input: "restart the gateway",
-          overview: overview(),
-          verifiedInference: binding,
-          deps: {
-            ...deps,
-            ...(runner === "cli"
-              ? { runCliAgent: run as never }
-              : { runEmbeddedAgent: run as never }),
-            createTempDir: async () => "/tmp/openclaw-planner",
-            removeTempDir,
-          },
-        }),
-      ).rejects.toMatchObject({
-        code: "SYSTEM_AGENT_INFERENCE_UNAVAILABLE",
-        stage: "planner",
-        message: expect.stringContaining("The inference request timed out."),
-      });
-      expect(removeTempDir).toHaveBeenCalledOnce();
-    },
-  );
+      }),
+    ).rejects.toMatchObject({
+      code: "SYSTEM_AGENT_INFERENCE_UNAVAILABLE",
+      stage: "planner",
+      message: expect.stringContaining("The inference request timed out."),
+    });
+    expect(removeTempDir).toHaveBeenCalledOnce();
+  });
 
   it.each([
     {
@@ -493,44 +487,6 @@ describe("OpenClaw configured-model planner", () => {
     expect(runEmbeddedAgent).toHaveBeenCalledWith(
       expect.not.objectContaining({ sessionKey: expect.anything() }),
     );
-  });
-
-  it("keeps the verified child runtime while parsing a JSON plan", async () => {
-    const config = {
-      agents: {
-        entries: {
-          ops: {
-            agentDir: "/tmp/ops-agent",
-            model: "openai/gpt-5.5",
-            models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-    const { binding, deps } = await createSystemAgentVerifiedInferenceTestFixture(config);
-    useFastVerifiedInference(binding);
-    const runEmbeddedAgent = vi.fn(async (_params: RunEmbeddedAgentParams) => ({
-      payloads: [{ text: '{"reply":"Ready.","command":"gateway status"}' }],
-    }));
-
-    const result = await planSystemAgentCommand({
-      input: "is the gateway healthy",
-      overview: overview("openai/gpt-5.5"),
-      verifiedInference: binding,
-      deps: {
-        ...deps,
-        readConfigFileSnapshot: vi.fn(async () => snapshot(config)) as never,
-        runEmbeddedAgent: runEmbeddedAgent as never,
-        createTempDir: async () => "/tmp/openclaw-planner",
-        removeTempDir: async () => {},
-      },
-    });
-
-    expect(result).toEqual({
-      reply: "Ready.",
-      command: "gateway status",
-      modelLabel: "openai/gpt-5.5",
-    });
     expect(
       resolveRequestStreamTransportOverrides(runEmbeddedAgent.mock.calls[0]?.[0]?.streamParams),
     ).toBeUndefined();

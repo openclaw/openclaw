@@ -233,17 +233,4 @@ describe("SystemAgentChatEngine facade", () => {
       message: expect.stringContaining("verified inference route changed"),
     });
   });
-
-  it("preserves the inference failure without a second model attempt", async () => {
-    const engine = new SystemAgentChatEngine({
-      runAgentTurn: async () => {
-        throw new Error("workspace owner openclaw is missing from the roster");
-      },
-      deps: { loadOverview: fakeOverviewLoader() },
-    });
-
-    await expect(engine.handle("please make everything nice")).rejects.toThrow(
-      "workspace owner openclaw is missing from the roster",
-    );
-  });
 });

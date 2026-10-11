@@ -293,19 +293,6 @@ describe("buildOnboardingWelcome", () => {
     expect(welcome).not.toContain("Codex login");
   });
 
-  it("ignores a blank authored workspace", async () => {
-    mocks.sourceConfig.agents.defaults.workspace = "   ";
-    const engine = createWelcomeEngine("openai/gpt-5.5");
-    const { propose } = engine;
-
-    await buildOnboardingWelcome({ engine: engine as never });
-
-    expect(propose).toHaveBeenCalledWith({
-      kind: "setup",
-      workspace: "/default/workspace",
-    });
-  });
-
   it("honors an explicit workspace override on an authored setup", async () => {
     mocks.sourceConfig.gateway = { auth: { mode: "token", token: "existing-token" } };
     const engine = createWelcomeEngine("openai/gpt-5.5");

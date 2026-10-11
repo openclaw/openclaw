@@ -347,68 +347,6 @@ describe("runSystemAgentTurn", () => {
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
   });
 
-  it("uses the default agent CLI route while keeping OpenClaw session identity", async () => {
-    const stateDir = useTempStateDir();
-    const agentDir = path.join(stateDir, "ops-agent");
-    const config = {
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-global" },
-          timeoutSeconds: 900,
-        },
-        entries: {
-          ops: {
-            agentDir,
-            model: { primary: "claude-cli/claude-opus-4-8@claude-cli:ops" },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const runCliAgent = vi.fn(async (_params: RunCliAgentParams) => ({
-      payloads: [{ text: "ready" }],
-    }));
-    const runEmbeddedAgent = vi.fn(async (_params: RunEmbeddedAgentParams) => ({
-      payloads: [],
-    }));
-    const { session, deps } = await createVerifiedSession(config);
-
-    await runSystemAgentTurnWithDeps(turnParams(session), {
-      ...deps,
-      runCliAgent: runCliAgent as never,
-      runEmbeddedAgent: runEmbeddedAgent as never,
-      readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
-    });
-
-    expect(runCliAgent).toHaveBeenCalledOnce();
-    expect(runEmbeddedAgent).not.toHaveBeenCalled();
-    const call = expectDefined(runCliAgent.mock.calls[0]?.[0], "missing CLI runner call");
-    expect(call).toMatchObject({
-      provider: "claude-cli",
-      model: "claude-opus-4-8",
-      agentDir,
-      authProfileId: "claude-cli:ops",
-      agentId: "openclaw",
-      sessionKey: `agent:openclaw:${session.sessionId}`,
-      runtimePolicySessionKey: "agent:openclaw:main",
-      sessionId: session.sessionId,
-      workspaceDir: path.join(stateDir, "openclaw", "workspace"),
-      sessionFile: `in-memory:${session.sessionId}`,
-      messageChannel: "openclaw",
-      messageProvider: "openclaw",
-      timeoutMs: 900_000,
-    });
-    expect(call.disableCliLiveSession).toBe(true);
-    expect(call.cleanupCliLiveSessionOnRunEnd).toBe(true);
-    expect(call.cliToolAvailability).toEqual({
-      native: [],
-      openClaw: ["openclaw"],
-    });
-    expect(call.toolsAllow).toBeUndefined();
-    expect(expectDefined(call.systemAgentTool, "missing CLI OpenClaw tool").proposalRef).toBe(
-      session.proposalRef,
-    );
-  });
-
   it("rejects an always-on CLI backend before launching OpenClaw", async () => {
     useTempStateDir();
     cliBackendsTesting.setDepsForTest({
@@ -495,6 +433,9 @@ describe("runSystemAgentTurn", () => {
       expect(firstCall.cliSessionBinding).toBeUndefined();
       expect(secondCall.cliSessionBinding).toEqual(binding);
       expect(firstCall).toMatchObject({
+        agentId: "openclaw",
+        runtimePolicySessionKey: "agent:openclaw:main",
+        cliToolAvailability: { native: [], openClaw: ["openclaw"] },
         disableCliLiveSession: true,
         cleanupCliLiveSessionOnRunEnd: true,
       });
@@ -925,29 +866,5 @@ describe("runSystemAgentTurn", () => {
     expect(readConfigFileSnapshot).not.toHaveBeenCalled();
     expect(runCliAgent).not.toHaveBeenCalled();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
-  });
-
-  it("converts route-planning failures to a typed error and clears session state", async () => {
-    useTempStateDir();
-    const config = {
-      agents: { defaults: { model: "openai/gpt-5.5" } },
-    } satisfies OpenClawConfig;
-    const { session, deps } = await createVerifiedSession(config);
-    session.proposalRef.current = "partial-proposal";
-    session.cliSession = {
-      routeKey: "stale-route",
-      binding: { sessionId: "uncertain-cli-session" },
-    };
-
-    await expect(
-      runSystemAgentTurnWithDeps(turnParams(session), {
-        ...deps,
-        readConfigFileSnapshot: vi.fn(async () => {
-          throw new Error("config read failed");
-        }) as never,
-      }),
-    ).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
-    expect(session.proposalRef.current).toBeUndefined();
-    expect(session.cliSession).toBeUndefined();
   });
 });

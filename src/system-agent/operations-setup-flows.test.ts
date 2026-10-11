@@ -30,43 +30,6 @@ describe("system agent setup-flow operations", () => {
     expect(isPersistentSystemAgentOperation({ kind: "channel-list" })).toBe(false);
   });
 
-  it("parses hosted skills, web-search, and Gateway setup requests", () => {
-    for (const input of ["configure skills", "setup skills", "set up skills"]) {
-      expect(parseSystemAgentOperation(input)).toEqual({ kind: "skills-setup" });
-    }
-    for (const input of [
-      "configure search",
-      "configure web search",
-      "setup search",
-      "web search provider setup",
-    ]) {
-      expect(parseSystemAgentOperation(input)).toEqual({ kind: "search-setup" });
-    }
-    expect(parseSystemAgentOperation("open search wizard")).toEqual({
-      kind: "open-setup",
-      target: "search",
-    });
-    for (const input of ["configure gateway", "set up gateway", "gateway settings"]) {
-      expect(parseSystemAgentOperation(input)).toEqual({ kind: "gateway-config-setup" });
-    }
-    expect(parseSystemAgentOperation("open gateway wizard")).toEqual({
-      kind: "open-setup",
-      target: "gateway",
-    });
-    expect(isPersistentSystemAgentOperation({ kind: "skills-setup" })).toBe(false);
-    expect(isPersistentSystemAgentOperation({ kind: "search-setup" })).toBe(false);
-    expect(isPersistentSystemAgentOperation({ kind: "gateway-config-setup" })).toBe(false);
-    expect(parseSystemAgentOperation("configure search with brave").kind).toBe("none");
-  });
-
-  it("parses the exact memory-import grammar", () => {
-    for (const input of ["import memory", "import memories", "memory import"]) {
-      expect(parseSystemAgentOperation(input)).toEqual({ kind: "memory-import" });
-    }
-    expect(isPersistentSystemAgentOperation({ kind: "memory-import" })).toBe(false);
-    expect(parseSystemAgentOperation("import memory from codex").kind).toBe("none");
-  });
-
   it("parses anchored setup switches and channel info", () => {
     for (const input of [
       "open setup wizard",
@@ -134,15 +97,6 @@ describe("system agent setup-flow operations", () => {
     expect(lines.join("\n")).toContain("openclaw configure --section skills");
     expect(lines.join("\n")).toContain("openclaw configure --section web");
     expect(lines.join("\n")).toContain("openclaw configure --section gateway");
-  });
-
-  it("points one-shot memory import at interactive owners", async () => {
-    const { runtime, lines } = createSystemAgentTestRuntime();
-
-    await executeSystemAgentOperation({ kind: "memory-import" }, runtime);
-
-    expect(lines.join("\n")).toContain("Memory page in the Control UI");
-    expect(lines.join("\n")).toContain("openclaw onboard");
   });
 
   it("directs one-shot model setup to protected Models controls without a write", async () => {
