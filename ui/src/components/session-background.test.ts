@@ -24,7 +24,8 @@ import { SessionBackground, backgroundSourceForSurface } from "./session-backgro
 
 const profilePreferences = vi.hoisted(() => ({ ready: true }));
 // mock-isolation: Drive readiness without hydrating the process-wide profile preference cache.
-vi.mock("../app/server-prefs-profile.ts", () => ({
+vi.mock("../app/server-prefs-profile.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../app/server-prefs-profile.ts")>()),
   resolveProfileAppearancePrefs: () => (profilePreferences.ready ? {} : null),
 }));
 

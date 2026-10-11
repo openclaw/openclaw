@@ -390,7 +390,7 @@ export function progressCardPresentation(
     ? TERMINAL_RUN_OUTCOMES[effectiveSessionStatus]
     : undefined;
   const outcomeLabel = terminalOutcome ? t(`sessionProgressCard.outcome.${terminalOutcome}`) : null;
-  const presentedCurrentStatus =
+  const presentedCurrentStatus: PresentedProgressStepStatus | undefined =
     currentStep?.status === "in_progress" && !hasCurrentRunActivity && !terminalOutcome
       ? "paused"
       : currentStep?.status;

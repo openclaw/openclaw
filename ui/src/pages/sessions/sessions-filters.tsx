@@ -1,4 +1,3 @@
-import type WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js";
 import { createMemo, For } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { syncPopoverExpanded, syncPopoverLabel } from "../../components/web-awesome-popover.ts";
@@ -12,20 +11,6 @@ import {
 } from "../../lib/sessions/grouping.ts";
 import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
 import { SESSIONS_PAGE_DEFAULT_LIMIT } from "../../lib/sessions/session-requests.ts";
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "wa-popover": HTMLAttributes<WaPopover> & {
-        for: string;
-        placement: WaPopover["placement"];
-        "without-arrow"?: boolean;
-        "onWa-show"?: (event: Event) => void;
-        "onWa-hide"?: (event: Event) => void;
-      };
-    }
-  }
-}
 
 export type SessionsAdvancedFiltersProps = {
   activeMinutes: string;

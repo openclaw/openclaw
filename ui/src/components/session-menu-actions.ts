@@ -103,7 +103,7 @@ export const EMPTY_SESSION_MENU_DATA: SessionMenuData = {
 type SessionMenuActionsHost = ReactiveControllerHost &
   HTMLElement & { updateComplete: Promise<unknown> };
 
-type SessionMenuActionsState = {
+export type SessionMenuActionsState = {
   involvingMeContext?: boolean;
   session: SessionMenuData;
   selectionCount: number;

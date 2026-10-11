@@ -1,7 +1,7 @@
+import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import { readMissingScopeError } from "@openclaw/gateway-client/browser";
-import { render as renderSolid } from "@solidjs/web";
-import { nothing, render as renderLit } from "lit";
-import { createEffect, createMemo, createSignal, onCleanup, For } from "solid-js";
+import { render as renderSolid, type JSX } from "@solidjs/web";
+import { createEffect, createMemo, createSignal, For } from "solid-js";
 import type {
   FsListDirResult,
   WorktreeRepositoryStatus,
@@ -11,8 +11,8 @@ import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-s
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { pathDisplayName } from "../lib/path-display.ts";
+import { nativeListener } from "../lib/solid-native-listener.ts";
 import { PlaceBrowserState } from "../pages/new-session/place-browser-state.ts";
-import { renderPlaceBrowser } from "../pages/new-session/place-browser.ts";
 import "../styles/new-session.css";
 import { withPromiseModalHost } from "./promise-modal-host.ts";
 import { Icon } from "./solid/icon.tsx";
@@ -145,11 +145,8 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
       selectWorktree(value === "worktree");
     };
 
-    const handleModeKeydown = (event: KeyboardEvent) => {
-      if (!(event.currentTarget instanceof HTMLElement)) {
-        return;
-      }
-      const dropdown = event.currentTarget as HTMLElement & { open?: boolean };
+    const handleModeKeydown: JSX.EventHandler<WaDropdown, KeyboardEvent> = (event) => {
+      const dropdown = event.currentTarget;
       if (event.key !== "Escape" || !dropdown.open) {
         return;
       }
@@ -209,32 +206,168 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
         };
       });
       function Browser() {
-        const element = document.createElement("div");
-        createEffect(
-          () => {
-            revision();
-            return browserVisible
-              ? renderPlaceBrowser({
-                  browser,
-                  id: "session-group-defaults-browser",
-                  label: t("newSession.gateway"),
-                  registerProjectPath: null,
-                  registeringProject: false,
-                  onBack: showPickerRoot,
-                  onRegisterProject: () => undefined,
-                  onClose: showPickerRoot,
-                  onApplyFolder: applyFolder,
-                })
-              : nothing;
-          },
-          (content) => {
-            renderLit(content, element);
-          },
-        );
-        onCleanup(() => {
-          renderLit(nothing, element);
+        const current = createMemo(() => {
+          revision();
+          return {
+            ...browser.view(),
+            draft: browser.draft,
+            activeIndex: browser.activeIndex,
+            highlighted: browser.highlightedEntry(),
+            usablePath: browser.usablePath(),
+            parent: browser.listing?.parent,
+            loading: browser.loading,
+            error: browser.error,
+          };
         });
-        return element;
+        return (
+          <div
+            class="new-session-page__browser"
+            ref={nativeListener("keydown", (event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                showPickerRoot();
+              }
+            })}
+          >
+            <div class="new-session-page__browser-head">
+              <button
+                type="button"
+                class="new-session-page__browser-nav"
+                title={t("newSession.browserUp")}
+                aria-label={t("newSession.browserUp")}
+                onClick={() => {
+                  const parent = current().parent;
+                  if (parent) {
+                    void browser.navigate(parent);
+                  } else {
+                    showPickerRoot();
+                  }
+                }}
+              >
+                <Icon name="arrowLeft" />
+              </button>
+              <input
+                class="new-session-page__browser-path"
+                type="text"
+                role="combobox"
+                aria-expanded="true"
+                aria-autocomplete="list"
+                aria-controls="session-group-defaults-browser-list"
+                aria-activedescendant={
+                  current().highlighted
+                    ? `session-group-defaults-browser-option-${current().activeIndex}`
+                    : undefined
+                }
+                aria-label={t("newSession.folder")}
+                placeholder={t("newSession.gateway")}
+                prop:value={current().draft}
+                onInput={(event) => browser.setDraft(event.currentTarget.value)}
+                ref={nativeListener("keydown", (event) => {
+                  switch (event.key) {
+                    case "ArrowDown":
+                    case "ArrowUp":
+                      event.preventDefault();
+                      browser.moveHighlight(event.key === "ArrowDown" ? 1 : -1);
+                      requestAnimationFrame(() =>
+                        document
+                          .getElementById(
+                            `session-group-defaults-browser-option-${browser.activeIndex}`,
+                          )
+                          ?.scrollIntoView({ block: "nearest" }),
+                      );
+                      break;
+                    case "Enter":
+                      event.preventDefault();
+                      void browser.activate();
+                      break;
+                    case "Tab":
+                      if (!event.shiftKey && browser.completeHighlighted()) {
+                        event.preventDefault();
+                      }
+                      break;
+                  }
+                })}
+              />
+              {current().loading ? (
+                <span class="new-session-page__browser-loading" role="status">
+                  {t("common.loading")}
+                </span>
+              ) : undefined}
+              <button
+                type="button"
+                class="new-session-page__browser-nav"
+                title={t("common.close")}
+                aria-label={t("common.close")}
+                onClick={showPickerRoot}
+              >
+                <Icon name="x" />
+              </button>
+            </div>
+            {current().error ? (
+              <div class="new-session-page__error" role="alert">
+                {current().error}
+              </div>
+            ) : undefined}
+            <div
+              class="new-session-page__browser-list"
+              role="listbox"
+              id="session-group-defaults-browser-list"
+              aria-label={t("newSession.folder")}
+            >
+              {current().empty !== "none" ? (
+                <div class="new-session-page__browser-empty">
+                  {t(
+                    current().empty === "no-matches"
+                      ? "newSession.browserNoMatches"
+                      : "newSession.browserEmpty",
+                  )}
+                </div>
+              ) : undefined}
+              <For each={current().entries} keyed={(entry) => entry.path}>
+                {(entry, index) => (
+                  <button
+                    type="button"
+                    role="option"
+                    id={`session-group-defaults-browser-option-${index()}`}
+                    aria-selected={index() === current().activeIndex ? "true" : "false"}
+                    class={[
+                      "new-session-page__browser-entry",
+                      {
+                        "new-session-page__browser-entry--active":
+                          index() === current().activeIndex,
+                        "new-session-page__browser-entry--hidden": entry().hidden,
+                      },
+                    ]}
+                    title={entry().hidden ? t("newSession.hiddenFolder") : undefined}
+                    onClick={() => void browser.navigate(entry().path)}
+                  >
+                    <span class="new-session-page__target-icon" aria-hidden="true">
+                      <Icon name="folder" />
+                    </span>
+                    <span>{entry().name}</span>
+                  </button>
+                )}
+              </For>
+            </div>
+            <div class="new-session-page__browser-actions">
+              <button
+                type="button"
+                class="new-session-page__browser-use"
+                disabled={current().usablePath === null}
+                onClick={() => {
+                  const path = current().usablePath;
+                  if (path !== null) {
+                    applyFolder(path);
+                    showPickerRoot();
+                  }
+                }}
+              >
+                {t("newSession.browserUse")}
+              </button>
+            </div>
+          </div>
+        );
       }
       function ModeOption(props: { index: number }) {
         const option = () => state().environmentOptions[props.index]!;

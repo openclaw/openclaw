@@ -1,7 +1,6 @@
-import { nothing, render } from "lit";
-import { createEffect, createMemo, For, onCleanup, Show } from "solid-js";
+import { createMemo, For, onSettled, Show } from "solid-js";
 import { i18n, t } from "../i18n/index.ts";
-import { renderHoverMarquee } from "../lib/hover-marquee.ts";
+import { HoverMarqueeController } from "../lib/hover-marquee-controller.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { presenceConnectionDescriptions } from "../lib/presence-connections.ts";
 import {
@@ -49,25 +48,21 @@ function Elapsed(props: {
 }
 
 function RecentSessionName(props: { name: string }) {
-  let host!: HTMLSpanElement;
-  // Keep the marquee owner's observers and motion policy until its own Solid port lands.
-  createEffect(
-    () => props.name,
-    (name) => {
-      render(
-        renderHoverMarquee(name, "person-activity-card__session-name", { delay: 250, speed: 80 }),
-        host,
-      );
-    },
-  );
-  onCleanup(() => render(nothing, host));
+  let label!: HTMLSpanElement;
+  onSettled(() => {
+    const marquee = new HoverMarqueeController();
+    marquee.update(label, { delay: 250, speed: 80 }, "person-activity-card__session-name");
+    return () => marquee.disconnect();
+  });
   return (
     <span
-      style={{ display: "contents" }}
+      class="person-activity-card__session-name hover-marquee"
       ref={(element) => {
-        host = element;
+        label = element;
       }}
-    />
+    >
+      <span class="hover-marquee__text">{props.name}</span>
+    </span>
   );
 }
 

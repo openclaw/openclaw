@@ -10,7 +10,10 @@ import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { SessionBackground } from "./session-background.tsx";
 
 // mock-isolation: Keep the process-wide profile preference cache outside the palette fixture.
-vi.mock("../app/server-prefs-profile.ts", () => ({ resolveProfileAppearancePrefs: () => ({}) }));
+vi.mock("../app/server-prefs-profile.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../app/server-prefs-profile.ts")>()),
+  resolveProfileAppearancePrefs: () => ({}),
+}));
 
 // Keep image transport synthetic while sampling real inherited CSS and canvas contrast.
 vi.mock("./session-background-image.ts", async (importOriginal) => ({

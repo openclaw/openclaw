@@ -9,7 +9,8 @@ class ChannelAvatar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) authTokens: readonly string[] = [];
   @property({ attribute: false }) authReady = false;
   /** Shown while no avatar blob is usable (loading, missing auth, 404). */
-  @property({ attribute: false }) fallback: TemplateResult | typeof nothing = nothing;
+  @property({ attribute: false }) fallback: TemplateResult | Node | undefined | typeof nothing =
+    nothing;
   @state() private undecodableRouteUrl: string | null = null;
   private readonly loader = new AuthenticatedAvatarRouteLoader(this);
 

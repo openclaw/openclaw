@@ -20,6 +20,14 @@ type Props = {
   presented: boolean;
   preferenceOverride?: BackgroundPreference;
 };
+type BackgroundImageRequest = {
+  identity: string;
+  context: ApplicationContext;
+  client: ApplicationContext["gateway"]["snapshot"]["client"];
+  controller: AbortController;
+  url: string | null;
+};
+
 export type SessionBackground = SolidBridgeElement<Props>;
 const FULL_BLEED_MAX_OPACITY = 0.7;
 
@@ -52,13 +60,7 @@ export const SessionBackground = defineSolidBridge<Props>(
             "(forced-colors: active), (prefers-contrast: more), (prefers-reduced-transparency: reduce)",
           )
         : null;
-    let request: {
-      identity: string;
-      context: ApplicationContext;
-      client: ApplicationContext["gateway"]["snapshot"]["client"];
-      controller: AbortController;
-      url: string | null;
-    } | null = null;
+    let request: BackgroundImageRequest | null = null;
     let failedIdentity: string | null = null;
     let surfaceElement: HTMLElement | null = null;
     let paletteKey = "";
@@ -236,12 +238,12 @@ export const SessionBackground = defineSolidBridge<Props>(
         ) {
           return;
         }
-        const pending = {
+        const pending: BackgroundImageRequest = {
           identity: state.identity,
           context: state.context,
           client: state.context.gateway.snapshot.client,
           controller: new AbortController(),
-          url: null as string | null,
+          url: null,
         };
         request = pending;
         void readBackgroundImage(state.context, state.source.assetId, {

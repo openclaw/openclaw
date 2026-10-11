@@ -11,7 +11,7 @@ type SessionMenuItemProps = {
   variant?: WaDropdownItem["variant"];
   disabled?: boolean;
   title?: string;
-  role?: string;
+  role?: JSX.HTMLAttributes<HTMLElement>["role"];
   checked?: boolean;
   "data-shortcut"?: string;
   "data-new-tab-action"?: string;
@@ -42,7 +42,7 @@ export function SessionMenuItem(props: SessionMenuItemProps) {
       prop:disabled={props.disabled ?? false}
       title={props.title}
       role={props.checked === undefined ? props.role : "menuitemradio"}
-      aria-checked={props.checked === undefined ? undefined : String(props.checked)}
+      aria-checked={props.checked === undefined ? undefined : props.checked ? "true" : "false"}
       data-shortcut={props["data-shortcut"]}
       data-new-tab-action={props["data-new-tab-action"]}
       aria-keyshortcuts={props["aria-keyshortcuts"]}

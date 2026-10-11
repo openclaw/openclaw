@@ -89,10 +89,14 @@ class ViewerAvatar extends OpenClawLightDomContentsElement {
     if (!user) {
       return nothing;
     }
+    const identity = this.identity ?? user.identity;
+    if (this.variant === "session" && identity?.type === "agent") {
+      return renderFacepileAgentAvatar(user, identity, this.markAsViewer);
+    }
     const label =
       this.variant === "profile" ? (user.name ?? user.email ?? user.id) : presenceViewerLabel(user);
     const view = resolveIdentityAvatarView({
-      identity: this.identity ?? user.identity,
+      identity,
       id: user.id,
       name: user.name,
       username: user.email,

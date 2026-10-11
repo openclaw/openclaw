@@ -226,9 +226,12 @@ function handleAppearanceGridKeydown(event: KeyboardEvent) {
   if (!(choice instanceof HTMLButtonElement)) {
     return;
   }
-  const offset = (
-    { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -1, ArrowDown: 1 } as Partial<Record<string, number>>
-  )[event.key];
+  const offset =
+    event.key === "ArrowLeft" || event.key === "ArrowUp"
+      ? -1
+      : event.key === "ArrowRight" || event.key === "ArrowDown"
+        ? 1
+        : undefined;
   if (offset === undefined || !(event.currentTarget instanceof HTMLElement)) {
     return;
   }
@@ -313,6 +316,7 @@ export function useSessionMenuAppearance(
       );
       return () => cancelAnimationFrame(frame);
     }
+    return undefined;
   });
   const prepare = () => {
     setMode("grid");

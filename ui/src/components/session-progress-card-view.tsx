@@ -199,7 +199,7 @@ function Refresh(props: { card: ProgressCard; action?: SessionProgressCardRefres
             ? t(REFRESH_STATUS_LABEL_KEYS[props.action.state])
             : label()
         }
-        aria-busy={String(pending())}
+        aria-busy={pending() ? "true" : "false"}
         disabled={pending()}
         onClick={(event) => {
           event.preventDefault();

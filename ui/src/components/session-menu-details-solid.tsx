@@ -1,32 +1,35 @@
 import type { JSX } from "@solidjs/web";
-import { nothing, render as renderLit } from "lit";
-import { For, createMemo, createRenderEffect, createSignal, onCleanup } from "solid-js";
+import { For, createMemo, createSignal } from "solid-js";
 import { SESSION_COMMUNICATION_MODES } from "../../../packages/gateway-protocol/src/session-communication.js";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
-import type { SessionMenuActions, SessionManagementActionKind } from "./session-menu-actions.ts";
+import type {
+  SessionMenuActions,
+  SessionManagementActionKind,
+  SessionMenuActionsState as MenuState,
+} from "./session-menu-actions.ts";
 import { SessionMenuItem } from "./session-menu-item.tsx";
-import type { MenuState } from "./session-menu-view.tsx";
-import { renderSessionOwnerAvatar, type SessionOwnerOption } from "./session-owner-chip.ts";
+import type { SessionOwnerOption } from "./session-owner-chip.ts";
 import { Icon } from "./solid/icon.tsx";
 
-/** The avatar helper remains shared with unported owner surfaces. */
 function OwnerAvatar(props: { owner: SessionOwnerOption }) {
-  const element = document.createElement("span");
-  element.slot = "icon";
-  element.className = "session-menu__avatar";
-  element.setAttribute("aria-hidden", "true");
-  createRenderEffect(
-    () => renderSessionOwnerAvatar(props.owner),
-    (content) => {
-      renderLit(content, element);
-    },
+  return (
+    <span slot="icon" class="session-menu__avatar" aria-hidden="true">
+      <openclaw-viewer-avatar
+        prop:identity={props.owner.identity}
+        prop:user={{
+          id: props.owner.id,
+          name: props.owner.label,
+          avatarUrl: props.owner.avatarUrl,
+          watchedSessions: [],
+        }}
+        prop:markAsViewer={false}
+        variant="session"
+        aria-hidden="true"
+      />
+    </span>
   );
-  onCleanup(() => {
-    renderLit(nothing, element);
-  });
-  return element;
 }
 
 export function useSessionMenuDetails(
@@ -125,7 +128,7 @@ export function useSessionMenuDetails(
             autocomplete="off"
             aria-label={t("sessionsView.searchPeople")}
             placeholder={t("sessionsView.searchPeople")}
-            prop:value={query()}
+            value={query()}
             onInput={(event) =>
               setSearch({
                 generation: snapshot().searchGeneration,
@@ -243,7 +246,7 @@ export function useSessionMenuDetails(
                             type="button"
                             class="session-menu__communication-choice"
                             value={`communication:${direction}:${mode}`}
-                            aria-pressed={String(effective()?.[direction] === mode)}
+                            aria-pressed={effective()?.[direction] === mode ? "true" : "false"}
                             disabled={!effective() || disabled("set-communication")}
                             title={
                               reason() ??

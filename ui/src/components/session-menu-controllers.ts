@@ -1,29 +1,35 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { createEffect, onCleanup, onSettled, untrack } from "solid-js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 
-/** Shared menu controllers remain live while their last Lit consumers migrate. */
+type SessionMenuController = {
+  hostConnected?(): void;
+  hostDisconnected?(): void;
+  hostUpdate?(): void;
+};
+
+/** Adapt the shared menu owners' connection/update hooks to the Solid lifetime. */
 export function useSessionMenuControllers(
-  host: HTMLElement & { readonly updateComplete: Promise<unknown> },
+  host: HTMLElement & { readonly updateComplete: Promise<boolean> },
   context: ApplicationContext | undefined,
   invalidate: () => void,
   dependencies: () => unknown,
 ) {
-  const controllers = new Set<ReactiveController>();
+  const controllers = new Set<SessionMenuController>();
   const controllerHost = Object.assign(host, {
-    addController: (controller: ReactiveController) => controllers.add(controller),
-    removeController: (controller: ReactiveController) => controllers.delete(controller),
+    addController: (controller: SessionMenuController) => {
+      controllers.add(controller);
+    },
+    removeController: (controller: SessionMenuController) => {
+      controllers.delete(controller);
+    },
     requestUpdate: invalidate,
-  }) satisfies ReactiveControllerHost;
-  const provideContext = (event: Event) => {
-    if (!("context" in event) || event.context !== applicationContext || !context) {
+  });
+  const provideContext = (event: HTMLElementEventMap["context-request"]) => {
+    if (event.context !== applicationContext || !context) {
       return;
     }
-    const request = event as Event & {
-      callback: (value: ApplicationContext) => void;
-    };
-    request.stopPropagation();
-    request.callback(context);
+    event.stopPropagation();
+    event.callback(context);
   };
   host.addEventListener("context-request", provideContext);
   createEffect(dependencies, () => {

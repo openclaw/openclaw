@@ -385,6 +385,26 @@ describe.each([
           ).toBe("AB");
         });
         expect(avatar?.querySelector("img.channel-avatar")).toBeNull();
+        renderCard(
+          {
+            row: row({
+              channelAvatarUrl,
+              createdActor: {
+                type: "human",
+                id: "charlie",
+                identity: { type: "profile", id: "charlie" },
+                label: "Charlie Delta",
+              },
+            }),
+            avatarAuth: { authTokens, authReady },
+          },
+          container,
+        );
+        await avatar?.updateComplete;
+        expect(container.querySelector("openclaw-channel-avatar")).toBe(avatar);
+        expect(
+          avatar?.querySelector(".session-hovercard__creator-avatar-fallback")?.textContent,
+        ).toBe("CD");
       }
     },
   );

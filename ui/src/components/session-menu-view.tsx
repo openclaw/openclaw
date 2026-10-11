@@ -11,29 +11,14 @@ import { useSessionMenuAppearance } from "./session-icon-picker-solid.tsx";
 import type {
   SessionMenuActions,
   SessionManagementActionKind,
-  SessionMenuData,
+  SessionMenuActionsState as MenuState,
 } from "./session-menu-actions.ts";
 import type { CompactSessionMenuView } from "./session-menu-compact.ts";
 import { useSessionMenuDetails } from "./session-menu-details-solid.tsx";
 import { SessionMenuItem } from "./session-menu-item.tsx";
 import { sessionArchiveShortcut } from "./session-menu-options.ts";
-import type { SessionCreatedActor } from "./session-owner-chip.ts";
 import { Icon, type IconName } from "./solid/icon.tsx";
 import { Kbd, KeyboardShortcut } from "./solid/kbd.tsx";
-
-export type MenuState = {
-  session: SessionMenuData;
-  selectionCount: number;
-  compact: boolean;
-  involvingMeContext: boolean;
-  navigationAllowed: boolean;
-  splitAllowed: boolean;
-  forkFromLastCompleted: boolean;
-  actionDisabledReasons: Partial<Record<SessionManagementActionKind, string>>;
-  groups: readonly string[];
-  currentOwner: SessionCreatedActor | null;
-  worktreePath: string | null;
-};
 
 export function SessionMenuShortcut(props: {
   shortcut: string;

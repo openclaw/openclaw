@@ -127,7 +127,7 @@ function SessionMenuContent(props: SessionMenuProps, host: SolidBridgeElement<Se
       if (nextView === "icon") {
         view.appearance.prepare();
       }
-      actions.focusCurrentView();
+      onSettled(() => actions.focusCurrentView());
       return;
     }
     if (actions.handleSelect(value)) {

@@ -1,5 +1,5 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
-import { html, nothing } from "lit";
+import { spread } from "@solidjs/web";
 import { createMemo, For, Show, untrack } from "solid-js";
 import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
@@ -117,23 +117,26 @@ function ChannelAvatar(props: {
   auth?: SessionHovercardAvatarAuth;
 }) {
   channelAvatarElementLoad ??= import("./channel-avatar.ts");
-  const fallback = createMemo(() => {
+  const initials = createMemo(() => {
     const creator = props.attribution.creator;
-    const initials = creator ? sessionOwnerInitials(creator) : "";
-    // The unported channel avatar still consumes a Lit fallback template.
-    return initials
-      ? html`<span class="session-hovercard__creator-avatar-fallback" aria-hidden="true"
-          >${initials}</span
-        >`
-      : nothing;
+    return creator ? sessionOwnerInitials(creator) : "";
   });
+  const fallback = document.createElement("span");
+  spread(fallback, {
+    class: "session-hovercard__creator-avatar-fallback",
+    "aria-hidden": "true",
+    get children() {
+      return initials();
+    },
+  });
+
   return (
     <openclaw-channel-avatar
       class="session-hovercard__creator-avatar"
       prop:routeUrl={props.row?.channelAvatarUrl}
       prop:authTokens={props.auth?.authTokens ?? []}
       prop:authReady={props.auth?.authReady ?? false}
-      prop:fallback={fallback()}
+      prop:fallback={initials() ? fallback : undefined}
       aria-hidden="true"
     />
   );
