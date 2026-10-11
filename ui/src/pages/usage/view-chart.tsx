@@ -165,7 +165,7 @@ export function DailyChartCompact(props: {
           <SettingsSegmented
             mode="buttons"
             variant="accent"
-            {...{ className: "small sessions-toggle" }}
+            class="small sessions-toggle"
             value={state().dailyChartMode}
             onChange={state().onDailyChartModeChange}
             onReselect={state().onDailyChartModeChange}

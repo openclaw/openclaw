@@ -28,7 +28,9 @@ it("updates an isolated Lit outlet and retires its directives without replacing 
     () => (
       <section>
         <input aria-label="Solid sibling" />
-        <LitContent content={html`<button @click=${onClick}>${observeRemoval(label())}</button>`} />
+        <LitContent
+          render={() => html`<button @click=${onClick}>${observeRemoval(label())}</button>`}
+        />
       </section>
     ),
     { container },

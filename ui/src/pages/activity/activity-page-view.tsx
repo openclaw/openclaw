@@ -176,22 +176,24 @@ export function ActivityPageView(props: {
       <SettingsWorkspace fillHeight>
         <Show when={route()?.mode !== "run"}>
           <LitContent
-            content={renderHubTabs({
-              id: "activity-mode",
-              active: route()?.mode ?? "sessions",
-              tabs: [
-                { value: "sessions", label: t("activityFeed.sessionsMode") },
-                { value: "live", label: t("activity.runInspector.liveMode") },
-              ],
-              ariaLabel: t("activity.runInspector.activityView"),
-              panelId: "activity-mode-panel",
-              className: "activity-mode-tabs",
-              variant: "sub",
-              onSelect: (selected) =>
-                state().context.navigate("activity", {
-                  search: selected === "live" ? "?view=live" : "",
-                }),
-            })}
+            render={() =>
+              renderHubTabs({
+                id: "activity-mode",
+                active: route()?.mode ?? "sessions",
+                tabs: [
+                  { value: "sessions", label: t("activityFeed.sessionsMode") },
+                  { value: "live", label: t("activity.runInspector.liveMode") },
+                ],
+                ariaLabel: t("activity.runInspector.activityView"),
+                panelId: "activity-mode-panel",
+                className: "activity-mode-tabs",
+                variant: "sub",
+                onSelect: (selected) =>
+                  state().context.navigate("activity", {
+                    search: selected === "live" ? "?view=live" : "",
+                  }),
+              })
+            }
           />
         </Show>
         <div

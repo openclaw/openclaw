@@ -390,7 +390,7 @@ function TimeSeriesChart(props: {
           <SettingsSegmented
             mode="buttons"
             variant="accent"
-            {...{ className: "small" }}
+            class="small"
             value={model().mode}
             onChange={props.callbacks.onTimeSeriesModeChange}
             onReselect={props.callbacks.onTimeSeriesModeChange}
@@ -403,7 +403,7 @@ function TimeSeriesChart(props: {
             <SettingsSegmented
               mode="buttons"
               variant="accent"
-              {...{ className: "small" }}
+              class="small"
               value={model().breakdownMode}
               onChange={props.callbacks.onTimeSeriesBreakdownChange}
               onReselect={props.callbacks.onTimeSeriesBreakdownChange}

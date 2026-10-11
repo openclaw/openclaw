@@ -81,8 +81,6 @@ export function bindBrowserDashboardEvents(
         (dashboard.definition.agentId === event.agentId &&
           parseAgentSessionKey(dashboard.definition.sessionKey)?.rest === event.sessionKey)
       ) {
-        // Fence retained frames synchronously; the next operation verifies the current definition.
-        dashboard.definitionChanged();
         void dashboard.assertDefinitionCurrent().catch(() => {});
       }
     }

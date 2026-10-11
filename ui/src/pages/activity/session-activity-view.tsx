@@ -200,7 +200,7 @@ function SessionLinkView(props: {
             ) : undefined}
             {showAgent() ? (
               <span class="activity-feed__session-scope">
-                <LitContent content={renderAgentRowChip(agentId())} />
+                <LitContent render={() => renderAgentRowChip(agentId())} />
               </span>
             ) : undefined}
             {scope() ? <span class="activity-feed__session-scope">{scope()}</span> : undefined}
@@ -494,10 +494,9 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
             }}
           />
         </label>
-        {/* oxlint-disable solid/no-react-specific-props -- SettingsSegmented retains the shared settings-controls className contract. */}
         <SettingsSegmented
           mode="buttons"
-          className="activity-feed__time-filter"
+          class="activity-feed__time-filter"
           value={props.filters.time}
           ariaLabel={t("activityFeed.time")}
           options={ACTIVITY_TIME_FILTERS.map((time) => ({

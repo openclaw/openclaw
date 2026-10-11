@@ -40,12 +40,14 @@ export function UsagePageShell(props: {
         subtitle={header().subtitle}
         actions={
           <LitContent
-            content={renderAgentScopeControl({
-              agents: agents.read().agentsList?.agents ?? [],
-              additionalAgentIds: additionalAgentIds(),
-              selection: props.context.agentSelection,
-              selectedId: selection.read().state.scopeId,
-            })}
+            render={() =>
+              renderAgentScopeControl({
+                agents: agents.read().agentsList?.agents ?? [],
+                additionalAgentIds: additionalAgentIds(),
+                selection: props.context.agentSelection,
+                selectedId: selection.read().state.scopeId,
+              })
+            }
           />
         }
       />

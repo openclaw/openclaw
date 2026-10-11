@@ -103,7 +103,7 @@ function renderProviderUsage(
                     </>
                   ) : undefined}
                 </div>
-                <LitContent content={renderProviderUsageDetails(provider)} />
+                <LitContent render={() => renderProviderUsageDetails(provider)} />
               </article>
             )}
           </For>

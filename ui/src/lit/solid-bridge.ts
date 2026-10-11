@@ -2,30 +2,17 @@ import { insert, render, spread, type JSX } from "@solidjs/web";
 import { nothing, render as renderLit } from "lit";
 import {
   createComponent,
+  createEffect,
   createRenderEffect,
   createSignal,
   flush,
   onCleanup,
   runWithOwner,
-  untrack,
 } from "solid-js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
+import { shellLayoutOwnerForHost } from "../app/shell-layout-owner.ts";
+import { ShellLayoutProvider } from "../app/shell-layout-traits-solid.tsx";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
-
-/** An isolated outlet for helpers whose owning surface still renders Lit. */
-export function LitContent(props: { content: unknown; class?: string }): JSX.Element {
-  const outlet = document.createElement("span");
-  outlet.style.display = "contents";
-  createRenderEffect(
-    () => ({ content: props.content, className: props.class }),
-    ({ content, className }) => {
-      outlet.className = className ?? "";
-      untrack(() => renderLit(content, outlet));
-    },
-  );
-  onCleanup(() => renderLit(nothing, outlet));
-  return outlet;
-}
 
 type Property<T> = {
   default: T;
@@ -247,7 +234,17 @@ export function defineSolidBridge<Props extends object, Methods extends object =
           },
         });
       }
-      const view = () => content(props, this.#host);
+      const layout = !this.#solidOwned ? shellLayoutOwnerForHost(this) : undefined;
+      const renderContent = () => content(props, this.#host);
+      const view = () =>
+        layout
+          ? createComponent(ShellLayoutProvider, {
+              value: { owner: layout, host: this },
+              get children() {
+                return renderContent();
+              },
+            })
+          : renderContent();
       return this.#application
         ? createComponent(ApplicationProvider, {
             value: this.#application,
@@ -307,4 +304,22 @@ export function defineSolidBridge<Props extends object, Methods extends object =
   return function SolidBridge(props: ComponentProps<Props, Methods>): JSX.Element {
     return BridgeElement.render(props);
   };
+}
+
+/** Unported stateless templates exclusively own this adapter's descendants. */
+export function LitContent(props: { render: () => unknown }) {
+  const host = document.createElement("span");
+  host.style.display = "contents";
+  let part: ReturnType<typeof renderLit> | undefined;
+  createEffect(
+    () => props.render(),
+    (template) => {
+      part = renderLit(template, host, { host });
+    },
+  );
+  onCleanup(() => {
+    part?.setConnected(false);
+    renderLit(nothing, host);
+  });
+  return host;
 }

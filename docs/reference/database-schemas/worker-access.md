@@ -3190,8 +3190,8 @@ binary values and is discarded after settlement or owner closure. Source-file in
 host. Cache pruning uses that same worker for its live count and oldest-row deletion,
 with a transaction recheck before each batch of at most 100 rows. The host releases
 admission and yields between batches; only definite pre-entry lock failures retry.
-Cache and source-hash reads use the retained publication worker, with caller
-authority checked after delivery. Source snapshots use that same publication owner;
+Cache and source-hash reads use the retained publication worker, checking that
+its handle is open at admission. Source snapshots use that same publication owner;
 read-only diagnostics use the retrieval worker. Shadow session publication prepares
 its current tombstone predicate in the original published worker while retaining
 the workspace lock through commit. Ordinary publication checks that predicate only
@@ -3200,12 +3200,12 @@ publication authority. Cold opening remains separate work. Schemas, cache retent
 and stored formats are unchanged.
 
 Session-only lexical searches return hits and recall metadata in one retrieval
-request. Their existing generation owner retains exclusive admission through
-result selection; source mutations and forget retain shared admission through
-settlement. Already-admitted ordinary readers can finish on their shared generation.
-Rebuild and provider recovery release read custody before waiting, then prepare
-fresh results. Forget therefore either precedes the fused read or follows its
-acceptance. Cancellation and close join the accepted read and lock cleanup. Mixed and semantic searches
+request. An in-process reader/writer queue orders retrieval and publication, and
+the workspace queue orders source mutations and Forget through settlement.
+Rebuild and provider recovery release the read slot before waiting, then prepare
+fresh results. Cancellation and close join accepted work. These queues do not
+coordinate foreign processes: CLI and maintenance writers must use the Gateway
+or hold exclusive ownership while it is stopped. Mixed and semantic searches
 retain their final asynchronous metadata reader. No schema, retention, durability,
 SDK, or update migration changes.
 
@@ -4463,17 +4463,28 @@ history worker, with foreground priority and row-generation checks before
 publication. The host evaluates fallback notices using its current runtime plugin
 aliases; configuration and model policy do not travel to the read worker.
 
+Targeted Memory transcript notifications queue session identities directly. The
+indexing owner resolves their corpus and forgetting tombstones once when the
+queued sync runs, then uses that same snapshot for archive selection and indexing.
+An append or forgetting operation committed while the notification waits is
+therefore included without an earlier duplicate corpus read. Full startup scans,
+custom-store selection, archive cleanup, and forgetting semantics are unchanged.
+
 List pages wait for current selection metadata, then materialize their selected
 rows. Concurrent pages share bounded exact-row preparation; an admitted background
 batch may finish, and the remaining display drain resumes after those requests
 release their priority. Catalog-only replacement
 reuses complete accepted database facts for live resident rows while rebuilding
 their selected model presentation, without another worker transfer. Stored-data, configuration,
-physical-store, and lifecycle invalidations revoke those facts. Transcript updates
-revoke watermarks immediately even inside a coalesced presentation window. Cold
-archives retain no complete snapshot; exact archive reads remain bounded by the
-existing materialization cache. Schema, persisted data, and update behavior are
-unchanged.
+physical-store, and lifecycle invalidations revoke those facts. Entry-only receipts
+retain Board and transcript facts for the same session lifecycle; ACP and workspace
+facts remain reusable while their bindings are unchanged. Canonical transcript
+receipts replace the retained watermark before observers run, so summary freshness
+does not require another row read. Unmatched transcript notifications invalidate
+the watermark and use the existing bounded refresh. Summary-free streams keep
+their coalesced presentation window. Cold archives retain no complete snapshot;
+exact archive reads remain bounded by the existing materialization cache. Schema,
+persisted data, and update behavior are unchanged.
 
 Durable keyed RPCs prepare only their selected dirty or archived rows through the
 worker before synchronous presentation; placement waits recheck that preparation.

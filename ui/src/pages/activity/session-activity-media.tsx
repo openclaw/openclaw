@@ -411,7 +411,7 @@ function ActivitySessionMediaContent(
     <>
       {(hasImages() || showNote()) && (
         <div class="activity-feed__media">
-          {hasImages() && <LitContent content={gallery()} />}
+          {hasImages() && <LitContent render={gallery} />}
           {showNote() && (
             <div class="activity-feed__note">
               {displayEntry()?.omitted && <span>{t("activity.images.incomplete")}</span>}
@@ -429,7 +429,7 @@ function ActivitySessionMediaContent(
           )}
         </div>
       )}
-      <LitContent content={lightboxContent()} />
+      <LitContent render={lightboxContent} />
     </>
   );
 }

@@ -161,7 +161,7 @@ export function SessionsCard(props: {
             mode="buttons"
             variant="accent"
             ariaPressed={false}
-            {...{ className: "small" }}
+            class="small"
             value={state().sessionsTab}
             onChange={(tab) => state().onDisplayChange({ sessionsTab: tab })}
             onReselect={(tab) => state().onDisplayChange({ sessionsTab: tab })}

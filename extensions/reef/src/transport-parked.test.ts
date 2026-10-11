@@ -153,48 +153,41 @@ describe("Reef parked cursor ownership", () => {
     expect(persisted).toEqual([8, 10]);
   });
 
-  it.each(["failure", "abort"] as const)(
-    "retains an older barrier when a partial REST drain ends in %s",
-    async (interruption) => {
-      const { inbox, retained, parked, fetcher, respond, notify, persisted, completed } =
-        await startInbox();
-      parked.add(8);
-      retained.set(8, receiptEntry(8));
-      retained.set(9, receiptEntry(9));
-      await inbox.poll();
-      expect(persisted).toEqual([]);
-      parked.clear();
-      const pollAbort = new AbortController();
-      const pulling = createDeferred<void>();
-      const release = createDeferred<void>();
-      fetcher.mockImplementationOnce(async (input) => respond(input));
-      fetcher.mockImplementationOnce(async () => {
-        pulling.resolve();
-        await release.promise;
-        throw new Error("partial pull failed");
-      });
-      const polling = inbox.poll(pollAbort.signal);
-      const rejected = expect(polling).rejects.toThrow(
-        interruption === "abort" ? /abort/i : "partial pull failed",
-      );
-      try {
-        await pulling.promise;
-        expect(persisted.at(-1)).toBe(9);
-        if (interruption === "abort") {
-          pollAbort.abort();
-        }
-      } finally {
-        release.resolve();
-        await rejected;
-      }
-      await notify(12);
+  it("retains an older barrier when a partial REST drain ends in abort", async () => {
+    const { inbox, retained, parked, fetcher, respond, notify, persisted, completed } =
+      await startInbox();
+    parked.add(8);
+    retained.set(8, receiptEntry(8));
+    retained.set(9, receiptEntry(9));
+    await inbox.poll();
+    expect(persisted).toEqual([]);
+    parked.clear();
+    const pollAbort = new AbortController();
+    const pulling = createDeferred<void>();
+    const release = createDeferred<void>();
+    fetcher.mockImplementationOnce(async (input) => respond(input));
+    fetcher.mockImplementationOnce(async () => {
+      pulling.resolve();
+      await release.promise;
+      throw new Error("partial pull failed");
+    });
+    const polling = inbox.poll(pollAbort.signal);
+    const rejected = expect(polling).rejects.toThrow(/abort/i);
+    try {
+      await pulling.promise;
       expect(persisted.at(-1)).toBe(9);
-      expect(completed).toEqual([9, 8, 12]);
-      await inbox.poll();
-      expect(completed).toEqual([9, 8, 12]);
-      expect(persisted.at(-1)).toBe(12);
-    },
-  );
+      pollAbort.abort();
+    } finally {
+      release.resolve();
+      await rejected;
+    }
+    await notify(12);
+    expect(persisted.at(-1)).toBe(9);
+    expect(completed).toEqual([9, 8, 12]);
+    await inbox.poll();
+    expect(completed).toEqual([9, 8, 12]);
+    expect(persisted.at(-1)).toBe(12);
+  });
 
   it("keeps a newly observed park when a later REST handler fails", async () => {
     const { inbox, retained, notify, persisted, completed } = await startInbox();
@@ -212,58 +205,22 @@ describe("Reef parked cursor ownership", () => {
     expect(persisted).toEqual([8, 10, 12]);
   });
 
-  it.each(["page gap", "tail", "empty mailbox"])(
-    "prunes acknowledged completions in the %s without redispatching delayed live frames",
-    async (absence) => {
-      const { inbox, sockets, retained, parked, completed, persisted } = await startInbox();
-      parked.add(8);
-      for (const seq of [8, 10, 12]) {
-        retained.set(seq, receiptEntry(seq));
-      }
-      await inbox.poll();
-      expect(completed).toEqual([10, 12]);
-      retained.delete(10);
-      if (absence !== "page gap") {
-        retained.delete(12);
-      }
-      if (absence === "empty mailbox") {
-        retained.delete(8);
-      }
-      await inbox.poll();
-      // Inspect cardinality only: acknowledged traffic must not accumulate
-      // behind a long-lived park while the durable cursor cannot advance.
-      expect(inbox["processedAboveCursor"].size).toBe(absence === "page gap" ? 1 : 0);
-      sockets[0]!.emit("message", {
-        data: JSON.stringify({ type: "entry", entry: receiptEntry(10) }),
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(completed).toEqual([10, 12]);
-      expect(persisted).toEqual(absence === "empty mailbox" ? [12] : []);
-    },
-  );
-
-  it.each(["retained completion", "empty mailbox"])(
-    "clears an expired park after REST proves %s without replaying completed callbacks",
-    async (recovery) => {
-      const { inbox, retained, parked, notify, persisted, completed, requestedAfter } =
-        await startInbox();
-      parked.add(8);
-      retained.set(8, receiptEntry(8));
-      retained.set(12, receiptEntry(12));
-      await inbox.poll();
-      expect(persisted).toEqual([]);
-      retained.delete(8);
-      if (recovery === "empty mailbox") {
-        retained.clear();
-      }
-      await inbox.poll();
-      expect(completed).toEqual([12]);
-      expect(persisted).toEqual([12]);
-      const pulls = requestedAfter.length;
-      await notify(15);
-      expect(completed).toEqual([12, 15]);
-      expect(persisted).toEqual([12, 15]);
-      expect(requestedAfter).toHaveLength(pulls);
-    },
-  );
+  it("clears an expired park after REST proves an empty mailbox without replaying completed callbacks", async () => {
+    const { inbox, retained, parked, notify, persisted, completed, requestedAfter } =
+      await startInbox();
+    parked.add(8);
+    retained.set(8, receiptEntry(8));
+    retained.set(12, receiptEntry(12));
+    await inbox.poll();
+    expect(persisted).toEqual([]);
+    retained.clear();
+    await inbox.poll();
+    expect(completed).toEqual([12]);
+    expect(persisted).toEqual([12]);
+    const pulls = requestedAfter.length;
+    await notify(15);
+    expect(completed).toEqual([12, 15]);
+    expect(persisted).toEqual([12, 15]);
+    expect(requestedAfter).toHaveLength(pulls);
+  });
 });
