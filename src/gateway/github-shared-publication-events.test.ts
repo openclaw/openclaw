@@ -30,7 +30,7 @@ import {
   claimRepositoryGitHubPublication,
   deferRepositoryGitHubPublicationClaims,
   failRepositoryGitHubPublicationPreparation,
-  failStaleRepositoryGitHubPublicationInDatabase,
+  failStaleRepositoryGitHubPublication,
   insertRepositoryGitHubPublication,
   readRepositoryGitHubPublication,
 } from "./github-repository-publication-store.js";
@@ -300,12 +300,9 @@ describe("shared publication committed notifications", () => {
     execution.recordEffect("push");
     execution.recordEffect("push", { headCommit: NEW_HEAD });
     execution.interrupt();
-    runOpenClawStateWriteTransaction((database) =>
-      failStaleRepositoryGitHubPublicationInDatabase(
-        database,
-        readRepositoryGitHubPublication(row.request_id)!,
-        () => false,
-      ),
+    failStaleRepositoryGitHubPublication(
+      readRepositoryGitHubPublication(row.request_id)!,
+      () => false,
     );
     expect(readRepositoryGitHubPublication(row.request_id)?.status).toBe("failed");
     expect(receiptRows).toHaveLength(6);
@@ -378,14 +375,10 @@ describe("shared publication committed notifications", () => {
     const observer = vi.fn();
     using _ = { [Symbol.dispose]: onSessionLifecycleEvent(observer) };
     failRepositoryGitHubPublicationPreparation(first, "Capture a fresh checkpoint.", () => {});
-    runOpenClawStateWriteTransaction((database) =>
-      failStaleRepositoryGitHubPublicationInDatabase(database, second, () => false),
-    );
+    failStaleRepositoryGitHubPublication(second, () => false);
     deferRepositoryGitHubPublicationClaims([third.request_id]);
     expect(observer).toHaveBeenCalledTimes(3);
-    runOpenClawStateWriteTransaction((database) =>
-      failStaleRepositoryGitHubPublicationInDatabase(database, second, () => false),
-    );
+    failStaleRepositoryGitHubPublication(second, () => false);
     deferRepositoryGitHubPublicationClaims([first.request_id, "absent"]);
     expect(observer).toHaveBeenCalledTimes(3);
   });

@@ -1,6 +1,6 @@
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 
-export type GitHubPublicationMutableFacts = {
+type GitHubPublicationMutableFacts = {
   status?: string;
   head_commit?: string | null;
   pull_request_url?: string | null;
@@ -10,7 +10,7 @@ export type GitHubPublicationMutableFacts = {
   effect_state?: string | null;
 };
 
-export type GitHubPublicationEffectTransition =
+type GitHubPublicationEffectTransition =
   | { operation: "updateHead"; headCommit: string }
   | { operation: "complete"; result: SessionGitHubPublicationResult }
   | {
@@ -21,7 +21,7 @@ export type GitHubPublicationEffectTransition =
   | { operation: "interrupt" };
 
 /** Effect observations retain custody but never restore permission for another action. */
-export function githubPublicationEffectFacts(
+function githubPublicationEffectFacts(
   transition: GitHubPublicationEffectTransition,
   interruptedStatus: "requested" | "needs_confirmation",
 ): { values: GitHubPublicationMutableFacts; requireAction: boolean } {
