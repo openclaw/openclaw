@@ -3521,6 +3521,7 @@ export const en: TranslationMap & {
       unavailable: "Unavailable",
       expired: "Expired",
       disconnected: "Not connected. Try again after reconnecting.",
+      loadFailed: "Could not load this question. Try again.",
     },
     imageLightbox: {
       actions: "Image actions",

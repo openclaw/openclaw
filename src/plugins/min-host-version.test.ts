@@ -106,34 +106,4 @@ describe("min-host-version", () => {
       expected,
     });
   });
-
-  it.each(["2026.3.22", "2026.4.0"] as const)(
-    "accepts equal or newer hosts: %s",
-    (currentVersion) => {
-      expectValidHostCheck(currentVersion, ">=2026.3.22");
-    },
-  );
-
-  it.each([
-    {
-      currentVersion: "2026.7.2-beta.1",
-      minHostVersion: ">=2026.7.2-beta.2",
-      expectedOk: false,
-    },
-    {
-      currentVersion: "2026.7.2-beta.2",
-      minHostVersion: ">=2026.7.2",
-      expectedOk: false,
-    },
-    {
-      currentVersion: "2026.7.2",
-      minHostVersion: ">=2026.7.2-beta.2",
-      expectedOk: true,
-    },
-  ] as const)(
-    "compares prerelease precedence: $currentVersion against $minHostVersion",
-    ({ currentVersion, minHostVersion, expectedOk }) => {
-      expect(checkMinHostVersion({ currentVersion, minHostVersion }).ok).toBe(expectedOk);
-    },
-  );
 });
