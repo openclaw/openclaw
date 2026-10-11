@@ -563,7 +563,7 @@ async function handleChatSendWithOptions(
     phase?.mark("response");
     respond(true, ackPayload, undefined, { runId: clientRunId });
     phase?.finish();
-    diagnostics.acknowledge();
+    diagnostics.acknowledge(messageInjectionAttempt ? "steer" : "startup");
     context.recordClientActivity?.(client);
     const chatSendAckedAtMs = chatSendTiming?.ackedAtMs ?? performance.now();
     // Dispatch owns execution from this point, including deferred and collected turns.

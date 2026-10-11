@@ -18,6 +18,7 @@ import {
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
 import {
+  createComposerContainer,
   createComposerProps,
   resetComposerFixture,
 } from "../pages/chat/chat-composer.test-support.ts";
@@ -242,7 +243,7 @@ describe("Control UI Gateway target lineage", () => {
       const originalShell = shellContainer.querySelector("openclaw-app-shell");
       expect(originalShell).not.toBeNull();
       const releaseShell = gateway.subscribe(drawShell);
-      const composer = document.createElement("div");
+      const composer = createComposerContainer();
       try {
         expect(
           admitQueuedMessageForSession(state, captureChatOutboxAdmission(state, sessionKey), {

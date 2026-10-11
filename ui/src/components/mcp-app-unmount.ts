@@ -27,9 +27,9 @@ function findMcpAppUnmountTargets(roots: Iterable<ParentNode>): McpAppUnmountTar
 }
 
 /** Keeps rendered DOM and owner state together until one coalesced MCP teardown completes. */
-export class McpAppUnmountGate<TValue = unknown> {
+export class McpAppUnmountGate<T = unknown> {
   private renderedKey: McpAppUnmountKey | null = null;
-  private renderedValue!: TValue;
+  private renderedValue: T | undefined;
   private pending = false;
   private restartTargets: McpAppUnmountTarget[] | null = null;
 
@@ -39,7 +39,7 @@ export class McpAppUnmountGate<TValue = unknown> {
     return this.pending || this.restartTargets !== null;
   }
 
-  private apply(key: McpAppUnmountKey, renderValue: () => TValue): TValue {
+  private apply(key: McpAppUnmountKey, renderValue: () => T): T | undefined {
     this.renderedValue = renderValue();
     this.renderedKey = key;
     return this.renderedValue;
@@ -47,17 +47,17 @@ export class McpAppUnmountGate<TValue = unknown> {
 
   render(
     key: McpAppUnmountKey,
-    renderValue: () => TValue,
+    renderValue: () => T,
     leavingRoots: () => Iterable<ParentNode>,
     options: { retainRenderedValue?: boolean } = {},
-  ): TValue {
+  ): T | undefined {
     if (this.pending) {
       return this.renderedValue;
     }
     if (this.restartTargets) {
       const targets = this.restartTargets;
       this.restartTargets = null;
-      // Restart only torn-down views that survive the renderer's commit;
+      // Restart only torn-down views that survived the parent commit;
       // retained siblings stay intact.
       queueMicrotask(() => {
         for (const target of targets) {

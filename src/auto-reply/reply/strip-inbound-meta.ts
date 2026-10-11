@@ -196,30 +196,35 @@ export function stripInboundMetadata(text: string): string {
     .replace(LEADING_TIMESTAMP_PREFIX_RE, "");
 }
 
+/** Returns the leading metadata boundary without rewriting any later content. */
+export function readLeadingInboundMetadataEnd(text: string): number {
+  let start = skipEmptyLines(text, 0, false);
+  let line = readTextLine(text, start);
+  const strippedDeliveryHint = Boolean(line && isMessageToolDeliveryHintLine(line.trimmed));
+  while (line && isMessageToolDeliveryHintLine(line.trimmed)) {
+    start = skipEmptyLines(text, line.next, false);
+    line = readTextLine(text, start);
+  }
+  if (!line) {
+    return text.length;
+  }
+  if (!isInboundContextHeaderLine(line.trimmed)) {
+    return strippedDeliveryHint ? Math.min(start, text.length) : 0;
+  }
+  while (line && isInboundContextHeaderLine(line.trimmed)) {
+    start = skipEmptyLines(text, metadataBlockEnd(text, line));
+    line = readTextLine(text, start);
+  }
+  return Math.min(start, text.length);
+}
+
 /** Strips only leading inbound metadata blocks while preserving later user text. */
 export function stripLeadingInboundMetadata(text: string): string {
   if (!hasInboundMetadataSentinel(text)) {
     return text;
   }
   const source = stripActiveMemoryPromptPrefixBlocks(text);
-  let start = skipEmptyLines(source, 0, false);
-  let line = readTextLine(source, start);
-  const strippedDeliveryHint = Boolean(line && isMessageToolDeliveryHintLine(line.trimmed));
-  while (line && isMessageToolDeliveryHintLine(line.trimmed)) {
-    start = skipEmptyLines(source, line.next, false);
-    line = readTextLine(source, start);
-  }
-  if (!line) {
-    return "";
-  }
-  if (!isInboundContextHeaderLine(line.trimmed)) {
-    return stripTrailingContextBlockSuffix(strippedDeliveryHint ? source.slice(start) : source);
-  }
-  while (line && isInboundContextHeaderLine(line.trimmed)) {
-    start = skipEmptyLines(source, metadataBlockEnd(source, line));
-    line = readTextLine(source, start);
-  }
-  return stripTrailingContextBlockSuffix(source.slice(start));
+  return stripTrailingContextBlockSuffix(source.slice(readLeadingInboundMetadataEnd(source)));
 }
 
 function parseInboundMetaBlock(text: string, label: string): Record<string, unknown> | null {

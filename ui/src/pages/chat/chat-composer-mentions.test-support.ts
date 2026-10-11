@@ -13,7 +13,11 @@ import { NewSessionComposerTextareaController } from "../new-session/composer-co
 import { composerContext } from "../new-session/composer.test-support.ts";
 import { renderNewSessionComposer } from "../new-session/composer.ts";
 import { NewSessionModelControl } from "../new-session/model-control.ts";
-import { createComposerProps, resetComposerFixture } from "./chat-composer.test-support.ts";
+import {
+  createComposerContainer,
+  createComposerProps,
+  resetComposerFixture,
+} from "./chat-composer.test-support.ts";
 import { renderChatComposer } from "./components/chat-composer.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 
@@ -39,7 +43,7 @@ export function composerFixture(
 ) {
   vi.useFakeTimers();
   onTestFinished(installChatComposerPickerDismissal(document));
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   document.body.append(container);
   let retired = false;
   const request = createGatewayRequestMock().mockResolvedValue(people);

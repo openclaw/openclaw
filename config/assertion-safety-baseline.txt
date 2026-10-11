@@ -786,7 +786,7 @@ extensions/signal/src/client.ts	4
 extensions/signal/src/monitor/event-handler.ts	1
 extensions/signal/src/probe.ts	1
 extensions/signal/src/send.ts	1
-extensions/signal/src/signal-ingress.ts	2
+extensions/signal/src/signal-ingress.ts	1
 extensions/slack/src/accounts.ts	2
 extensions/slack/src/action-runtime.ts	1
 extensions/slack/src/actions.ts	3
@@ -2703,7 +2703,6 @@ ui/src/components/markdown-assistant-transcript.ts	1
 ui/src/components/markdown-code-blocks.ts	1
 ui/src/components/markdown-parser.ts	1
 ui/src/components/mcp-app-theme.ts	1
-ui/src/components/mcp-app-view.ts	5
 ui/src/components/mcp-server-form.ts	1
 ui/src/components/model-picker.ts	1
 ui/src/components/onboarding-memory-import.ts	1
