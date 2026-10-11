@@ -133,7 +133,7 @@ async function waitForSavedSidebar(page: Page, view: "sessions" | "pages") {
           ({ databaseName, storeName, view }) =>
             new Promise<boolean>((resolve, reject) => {
               const open = indexedDB.open(databaseName);
-              open.onerror = () => reject(open.error);
+              open.onerror = () => reject(open.error ?? new Error("Sidebar snapshot open failed"));
               open.onsuccess = () => {
                 const database = open.result;
                 const transaction = database.transaction(storeName, "readonly");
@@ -144,7 +144,7 @@ async function waitForSavedSidebar(page: Page, view: "sessions" | "pages") {
                 };
                 transaction.onabort = () => {
                   database.close();
-                  reject(transaction.error);
+                  reject(transaction.error ?? new Error("Sidebar snapshot read failed"));
                 };
               };
             }),
@@ -493,6 +493,31 @@ suite.define(() => {
           );
 
           if (view === "pages") {
+            await page.reload();
+            await page.locator('aside.sidebar[data-snapshot-state="cached"]').waitFor();
+            await gateway.waitForRequest("connect");
+            await gateway.deferNext("sessions.list", { hasBoard: true });
+            await gateway.resolveDeferred("connect");
+            await gateway.waitForRequest("sessions.list", { match: { hasBoard: true } });
+            await gateway.rejectDeferred("sessions.list", {
+              code: "UNAVAILABLE",
+              message: "Synthetic dashboard catalog unavailable",
+            });
+            await page.locator('aside.sidebar[data-snapshot-state="live"]').waitFor();
+            await sidebar
+              .getByRole("alert")
+              .filter({ hasText: "Synthetic dashboard catalog unavailable" })
+              .waitFor();
+            expect(
+              await page.evaluate(() => {
+                const host = document.querySelector<
+                  AppSidebarSessionNavigationElement & {
+                    captureSidebarSnapshot(): unknown;
+                  }
+                >("openclaw-app-sidebar");
+                return host?.captureSidebarSnapshot();
+              }),
+            ).toBeNull();
             return;
           }
           await page.reload();

@@ -124,7 +124,8 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       return false;
     }
     if (this.navigationView === "pages") {
-      return this.navigationCatalog.dashboards?.loading === false;
+      const pages = this.navigationCatalog.dashboards;
+      return pages?.loading === false && (pages.readSucceeded === true || pages.error !== null);
     }
     const people = sidebarOnlineOrder(this).users;
     if (
