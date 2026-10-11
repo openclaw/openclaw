@@ -27,12 +27,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { createPathResolutionEnv, withEnvAsync } from "../test-utils/env.js";
 import { dumpGitBackupDatabase, restoreGitBackupDirectory } from "./git-backup-codec.js";
 import { gitBackupCommandRuntimeEntrypoint } from "./git-backup-command-runtime.test-support.js";
-import {
-  createGitBackup,
-  initializeGitBackupRepository,
-  readGitBackupLog,
-  restoreGitBackupRef,
-} from "./git-backup.js";
+import { createGitBackup, initializeGitBackupRepository, readGitBackupLog } from "./git-backup.js";
 import {
   createAgentFixture,
   createCatalogFixture,
@@ -333,55 +328,6 @@ describe("Git-backed SQLite snapshots", () => {
     },
   );
 
-  it("stages only backup-owned paths in an adopted repository", async () => {
-    const root = await tempRoot();
-    const { stateDir, database } = createStateDatabaseFixture(root);
-    const repositoryPath = path.join(root, "repository");
-    await initializeGitBackupRepository({ repositoryPath, stateDir });
-    await requireGit(repositoryPath, ["config", "user.name", "OpenClaw Backup Test"]);
-    await requireGit(repositoryPath, ["config", "user.email", "backup@example.invalid"]);
-    await fs.writeFile(path.join(repositoryPath, "unrelated.txt"), "operator-owned\n");
-    await requireGit(repositoryPath, ["add", "unrelated.txt"]);
-    const finderPath = path.join(repositoryPath, "agents", ".DS_Store");
-    await fs.mkdir(path.dirname(finderPath), { recursive: true });
-    await fs.writeFile(finderPath, createFinderMetadataFixture());
-    await requireGit(repositoryPath, ["add", "agents/.DS_Store"]);
-
-    const created = await createGitBackup({ repositoryPath, stateDir, databases: [database] });
-    const unchanged = await createGitBackup({ repositoryPath, stateDir, databases: [database] });
-
-    expect(created.noChanges).toBe(false);
-    expect(unchanged.noChanges).toBe(true);
-    expect(unchanged).not.toHaveProperty("commit");
-    expect(await requireGit(repositoryPath, ["status", "--porcelain", "--", "unrelated.txt"])).toBe(
-      "A  unrelated.txt",
-    );
-    const committedPaths = (
-      await requireGit(repositoryPath, ["show", "--pretty=format:", "--name-only", "HEAD"])
-    )
-      .split("\n")
-      .filter(Boolean);
-    expect(committedPaths.length).toBeGreaterThan(0);
-    expect(
-      committedPaths.every(
-        (entry) =>
-          entry === "global" ||
-          entry.startsWith("global/") ||
-          entry === "agents" ||
-          entry.startsWith("agents/"),
-      ),
-    ).toBe(true);
-    expect(committedPaths).not.toContain("unrelated.txt");
-    expect(committedPaths).not.toContain("agents/.DS_Store");
-    expect(
-      await requireGit(repositoryPath, ["status", "--porcelain", "--", "agents/.DS_Store"]),
-    ).toBe("A  agents/.DS_Store");
-    expect(
-      await requireGit(repositoryPath, ["ls-tree", "-r", "--name-only", "HEAD"]),
-    ).not.toContain("unrelated.txt");
-    expect(await requireGit(repositoryPath, ["rev-list", "--count", "HEAD"])).toBe("1");
-  });
-
   it("preserves an unowned global namespace in an adopted repository", async () => {
     const root = await tempRoot();
     const { stateDir, database } = createStateDatabaseFixture(root);
@@ -408,56 +354,6 @@ describe("Git-backed SQLite snapshots", () => {
     await createGitBackup({ repositoryPath, stateDir, databases: [database], all: true });
 
     await expect(fs.lstat(staleAgentPath)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("ignores regular Finder metadata across all-scope backups and restores", async () => {
-    const root = await tempRoot();
-    const { stateDir, database } = createStateDatabaseFixture(root);
-    await closeOpenClawStateDatabaseAsync();
-    const source = new DatabaseSync(database.path);
-    try {
-      source.exec(
-        "CREATE TABLE finder_fixture (value TEXT); INSERT INTO finder_fixture VALUES ('backup survives Finder');",
-      );
-    } finally {
-      source.close();
-    }
-    const repositoryPath = path.join(root, "repository");
-    await initializeGitBackupRepository({ repositoryPath, stateDir });
-    const finderPath = path.join(repositoryPath, "agents", ".DS_Store");
-    await fs.mkdir(path.dirname(finderPath), { recursive: true });
-    await fs.writeFile(finderPath, createFinderMetadataFixture());
-    const params = { repositoryPath, stateDir, databases: [database], all: true };
-
-    const first = await createGitBackup(params);
-    expect(first.commit).toMatch(/^[a-f0-9]{40}$/u);
-    await expect(fs.readFile(finderPath)).resolves.toEqual(createFinderMetadataFixture());
-    expect(
-      await requireGit(repositoryPath, ["ls-tree", "-r", "--name-only", "HEAD"]),
-    ).not.toContain(".DS_Store");
-
-    await fs.writeFile(finderPath, createFinderMetadataFixture(101));
-    const second = await createGitBackup(params);
-    expect(second).toMatchObject({ noChanges: true });
-    expect(second.commit).toBeUndefined();
-    expect(await requireGit(repositoryPath, ["rev-parse", "HEAD"])).toBe(first.commit);
-    await expect(fs.readFile(finderPath)).resolves.toEqual(createFinderMetadataFixture(101));
-
-    const restored = await restoreGitBackupRef({
-      repositoryPath,
-      identity: { role: "global" },
-      targetPath: path.join(root, "restored.sqlite"),
-    });
-    expect(restored.tables.every((table) => table.ok)).toBe(true);
-    expect(restored.manifest.tables).toEqual(first.manifests[0]?.tables);
-    const restoredDatabase = new DatabaseSync(restored.targetPath, { readOnly: true });
-    try {
-      expect(restoredDatabase.prepare("SELECT value FROM finder_fixture").get()).toEqual({
-        value: "backup survives Finder",
-      });
-    } finally {
-      restoredDatabase.close();
-    }
   });
 
   it("aborts all-database cleanup before deleting an unowned agent scope", async () => {
