@@ -28,8 +28,12 @@ clients immediately create sessions or read the updated agent roster. If the
 config was saved but could not be applied, including when reload is `off`, the
 method returns `UNAVAILABLE` with recovery guidance instead of reporting the
 agent change as ready. Inspect `config.get` before retrying a saved mutation.
+When a newer config preserves an earlier Gateway write's changes, that write
+waits for the newer config to apply. A superseding edit that overwrites the earlier
+change still reports that earlier write as unconfirmed.
 
 Agent-only edits retain session admission and active runtimes for unchanged agents.
+Creation prepares the new agent's runtime database before publishing its config entry.
 Overlapping agent edits can supersede an earlier model-runtime refresh. If that
 refresh fails, the newer config retries the unfinished preparation without
 requiring a Gateway restart, including when the newer edit does not change models.

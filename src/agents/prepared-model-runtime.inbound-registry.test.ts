@@ -11,6 +11,7 @@ import {
   createPluginMetadataSnapshot,
   makeRegistry,
 } from "../config/plugin-auto-enable.test-helpers.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registryContainsRuntimePluginIds } from "../plugins/active-runtime-registry.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
@@ -20,7 +21,10 @@ import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generatio
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import type { DiscoverAuthStorageOptions } from "./agent-auth-discovery.js";
-import { withPreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
+import {
+  scopePreparedModelRuntimeLease,
+  withPreparedModelRuntimePluginGenerationScope,
+} from "./prepared-model-runtime-generation-scope.js";
 import { prepareWorkspaceBuildGroup } from "./prepared-model-runtime.facts.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -398,6 +402,90 @@ describe("prepared reply dispatch runtime", () => {
       }
     },
   );
+
+  it("keeps unchanged turns admitted across overlapping agent additions", async () => {
+    mocks.configuredAgentIds = ["free"];
+    const initialConfig = {
+      agents: { defaults: { model: "openai/gpt-5.5" }, entries: { free: {} } },
+    } satisfies OpenClawConfig;
+    const firstConfig = {
+      agents: { ...initialConfig.agents, entries: { free: {}, first: {} } },
+    } satisfies OpenClawConfig;
+    const latestConfig = {
+      agents: { ...initialConfig.agents, entries: { free: {}, first: {}, second: {} } },
+    } satisfies OpenClawConfig;
+    const options = {
+      gatewayLifecycle: true,
+      catalogMode: "static" as const,
+      allowGatewaySubagentBinding: true,
+      joinSupersedingPublication: true,
+    };
+    await refreshPreparedModelRuntimeSnapshots(initialConfig, options);
+    const started = createDeferred();
+    const release = createDeferred();
+    mocks.prepareStaticCatalog.mockImplementationOnce(async () => {
+      started.resolve();
+      await release.promise;
+      return { entries: [] };
+    });
+    mocks.configuredAgentIds = ["free", "first"];
+    const first = refreshPreparedModelRuntimeSnapshots(firstConfig, {
+      ...options,
+      agentIds: new Set(["first"]),
+    });
+    let second: Promise<void> | undefined;
+    await using resources = new AsyncDisposableStack();
+    try {
+      await started.promise;
+      let captured: ReturnType<typeof scopePreparedModelRuntimeLease> | undefined;
+      const dispatch = (await loadPublishedGatewayReplyDispatchRuntime({
+        agentId: "free",
+        onRuntimeLease: (lease) => {
+          captured = resources.use(scopePreparedModelRuntimeLease(lease));
+        },
+      }))!;
+      mocks.configuredAgentIds = ["free", "first", "second"];
+      second = refreshPreparedModelRuntimeSnapshots(latestConfig, {
+        ...options,
+        agentIds: new Set(["second"]),
+      });
+      release.resolve();
+      await Promise.all([first, second]);
+
+      await captured!.run(async () => {
+        await using resumed = await acquireAgentRunPreparedModelRuntime(
+          {
+            config: dispatch.config,
+            agentId: dispatch.agentId,
+            agentDir: dispatch.agentDir,
+            workspaceDir: dispatch.workspaceDir,
+            allowGatewaySubagentBinding: true,
+            runtimePluginSelections: [{ provider: "openai", modelId: "gpt-5.5" }],
+          },
+          { pluginGeneration: dispatch.pluginGeneration },
+        );
+        expect(resumed.pluginGeneration).toBe(dispatch.pluginGeneration);
+      });
+      const latest = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "free" }))!;
+      expect(latest.pluginGeneration).toBe(dispatch.pluginGeneration);
+      expect(latest.config).toBe(latestConfig);
+      await using admitted = await acquireAgentRunPreparedModelRuntime({
+        ...fixture.agentInput("free", latestConfig),
+        workspaceDir: latest.workspaceDir,
+        allowGatewaySubagentBinding: true,
+      });
+      expect(admitted.snapshot.config).toBe(latestConfig);
+      for (const agentId of ["first", "second"]) {
+        expect(await loadPublishedGatewayReplyDispatchRuntime({ agentId })).toMatchObject({
+          agentId,
+          config: latestConfig,
+        });
+      }
+    } finally {
+      release.resolve();
+      await Promise.allSettled([first, second]);
+    }
+  });
 
   it("keeps unaffected dispatch and run admission available when a scoped replacement fails", async () => {
     mocks.configuredAgentIds = ["default", "worker"];

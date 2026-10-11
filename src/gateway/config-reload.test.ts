@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import nodePath from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import {
@@ -31,12 +31,14 @@ import {
 } from "../config/resolution-facts.js";
 import {
   hashRuntimeConfigValue,
+  registerRuntimeConfigWriteListener,
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
+  publishRuntimeConfigWrite,
 } from "../config/runtime-write-application.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
@@ -63,6 +65,7 @@ import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plug
 import {
   captureGatewayRootWorkAdmissionContinuationScope,
   getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
@@ -1674,7 +1677,7 @@ describe("startGatewayConfigReloader", () => {
     );
   });
 
-  it.each(["direct", "watcher-echo", "failed-cleanup", "committed"] as const)(
+  it.each(["direct", "watcher-echo", "failed-cleanup", "committed", "carried-successor"] as const)(
     "settles an RPC write inside its originating gateway root (%s)",
     async (scenario) => {
       const root = tempDirs.make("openclaw-config-receipt-");
@@ -1712,7 +1715,11 @@ describe("startGatewayConfigReloader", () => {
           competingRootCounts.push(getActiveGatewayRootWorkCount({ excludeCurrent: true }));
           hotReloadStarted.resolve();
           await hotReloadGate.promise;
-          if (scenario !== "direct" && competingRootCounts.length === 1) {
+          if (
+            scenario !== "direct" &&
+            scenario !== "carried-successor" &&
+            competingRootCounts.length === 1
+          ) {
             if (scenario === "committed") {
               ownership.markRuntimeCommitted(runtimeConfig, plan);
             }
@@ -1795,6 +1802,8 @@ describe("startGatewayConfigReloader", () => {
                 awaitRuntimeApplication: true,
               });
             });
+            let successorRequest: ReturnType<typeof tryBeginGatewayRootWorkAdmission> = null;
+            let successorWrite: typeof writeResult | undefined;
             try {
               let settled = false;
               void writeResult.application?.then(() => {
@@ -1807,11 +1816,35 @@ describe("startGatewayConfigReloader", () => {
               expect(onHotReload).toHaveBeenCalledOnce();
               expect(settled).toBe(false);
 
+              if (scenario === "carried-successor") {
+                successorRequest = tryBeginGatewayRootWorkAdmission();
+                if (!successorRequest) {
+                  throw new Error("expected successor writer admission");
+                }
+                successorWrite = await successorRequest.run(async () => {
+                  const prepared = await readConfigFileSnapshotForWrite();
+                  return await commitGatewayConfigWrite({
+                    snapshot: prepared.snapshot,
+                    writeOptions: prepared.writeOptions,
+                    nextConfig: { ...prepared.snapshot.sourceConfig, logging: { level: "debug" } },
+                    awaitRuntimeApplication: true,
+                  });
+                });
+                void successorWrite.application?.then(successorRequest.release);
+                expect(settled).toBe(false);
+              }
+
               hotReloadGate.resolve();
               await vi.waitFor(() => expect(settled).toBe(true));
               await flushReload(reloader);
-              const applied = scenario === "direct" || scenario === "watcher-echo";
+              const applied =
+                scenario === "direct" ||
+                scenario === "watcher-echo" ||
+                scenario === "carried-successor";
               await expect(writeResult.application).resolves.toBe(applied ? "applied" : "failed");
+              if (successorWrite) {
+                await expect(successorWrite.application).resolves.toBe("applied");
+              }
               // Timer advancement does not join the watcher's real filesystem reread.
               await vi.waitFor(() =>
                 expect(competingRootCounts).toEqual(
@@ -1826,6 +1859,7 @@ describe("startGatewayConfigReloader", () => {
             } finally {
               hotReloadGate.resolve();
               request.release();
+              successorRequest?.release();
             }
           } finally {
             await reloader.stop();
@@ -2330,6 +2364,169 @@ describe("startGatewayConfigReloader", () => {
           persistedHash: snapshot.hash,
           changedPaths: expect.any(Array),
         });
+      }
+    },
+  );
+
+  it.each([
+    ...(["pending", "active", "external"] as const).flatMap((boundary) =>
+      (["applied", "overwritten", "failed"] as const).map((outcome) => ({ boundary, outcome })),
+    ),
+    { boundary: "external", outcome: "invalid" } as const,
+    { boundary: "plugin", outcome: "applied" } as const,
+    { boundary: "plugin-external", outcome: "applied" } as const,
+  ])(
+    "settles a $boundary carried config write after its successor is $outcome",
+    async ({ boundary, outcome }) => {
+      const external = boundary === "external" || boundary === "plugin-external";
+      const plugin = boundary === "plugin" || boundary === "plugin-external";
+      const initial: OpenClawConfig = { agents: { entries: { main: {}, removed: {} } } };
+      const first: OpenClawConfig = { agents: { entries: { main: {}, alpha: {} } } };
+      const next: OpenClawConfig = {
+        agents: {
+          entries:
+            outcome === "overwritten"
+              ? { main: {}, removed: {}, beta: {} }
+              : { main: {}, alpha: {}, beta: {} },
+        },
+      };
+      const firstEntered = createDeferred();
+      const releaseFirst = createDeferred();
+      const nextEntered = createDeferred();
+      const releaseNext = createDeferred();
+      const drainCounts: number[] = [];
+      const drainHolders: string[][] = [];
+      const { clock, scheduler } = createConfigReloadTestClock();
+      let persisted = makeSnapshot({ config: initial, hash: "initial" });
+      const harness = createReloaderHarness(async () => persisted, {
+        scheduler,
+        initialConfig: initial,
+        onHotReload: async (_plan, config) => {
+          if (!config.agents?.entries?.beta) {
+            firstEntered.resolve();
+            await releaseFirst.promise;
+            return "applied";
+          }
+          drainCounts.push(getActiveGatewayRootWorkCount({ excludeCurrent: true }));
+          drainHolders.push(getActiveGatewayRootWorkHolders({ excludeCurrent: true }));
+          nextEntered.resolve();
+          await releaseNext.promise;
+          if (outcome === "failed") {
+            throw new Error("successor runtime rejected");
+          }
+          if (plugin) {
+            return {
+              status: "applied",
+              runtime: { operationId: "carried-reload", generation: 1, pluginIds: ["notes"] },
+            };
+          }
+          return "applied";
+        },
+      });
+      const unsubscribe = registerRuntimeConfigWriteListener((event) => harness.emitWrite(event));
+      const unrelated = tryBeginGatewayRootWorkAdmission("unrelated-turn");
+      let pluginRequest: ReturnType<typeof tryBeginGatewayRootWorkAdmission> = null;
+      let reloadCompletion: Promise<unknown> | undefined;
+      const publish = async (previous: OpenClawConfig, config: OpenClawConfig, hash: string) => {
+        const root = tryBeginGatewayRootWorkAdmission(`config:${hash}`);
+        if (!root) {
+          throw new Error("expected writer root admission");
+        }
+        return await root.run(async () => {
+          const application = createRuntimeConfigWriteApplication(
+            captureGatewayRootWorkAdmissionContinuationScope()?.run,
+          );
+          const sourceConfig: OpenClawConfig = {
+            ...config,
+            meta: {
+              lastTouchedVersion: hash === "first" ? "2026.10.1" : "2026.10.2",
+            },
+          };
+          persisted = makeSnapshot({ config, sourceConfig, hash });
+          publishRuntimeConfigWrite({
+            configPath: "/tmp/openclaw.json",
+            snapshot: persisted,
+            previousSourceConfig: previous,
+            writtenSourceConfig: config,
+            sourceConfig,
+            runtimeConfig: config,
+            persistedHash: hash,
+            deferRuntimeActivation: true,
+            preparedCandidates: new Map(),
+            writeOptions: attachRuntimeConfigWriteApplication({}, application),
+          });
+          void application.result.finally(root.release);
+          return application;
+        });
+      };
+      try {
+        await harness.reloader.ready;
+        const older = await publish(initial, first, "first");
+        const olderSettled = vi.fn();
+        void older.result.then(olderSettled);
+        const firstRun =
+          boundary === "active" || boundary === "external" ? clock.wake() : undefined;
+        if (firstRun) {
+          await firstEntered.promise;
+        }
+        const newer = external ? undefined : await publish(first, next, "next");
+        if (external) {
+          persisted = makeSnapshot({
+            config: next,
+            hash: "external",
+            valid: outcome !== "invalid",
+          });
+          harness.watcher.emit("change");
+        }
+        releaseFirst.resolve();
+        await firstRun;
+        pluginRequest = plugin ? tryBeginGatewayRootWorkAdmission("plugin-request") : null;
+        const nextRun = pluginRequest
+          ? pluginRequest.run(() =>
+              harness.reloader.applyPluginLifecycleChange({
+                config: persisted.sourceConfig,
+                pluginIds: ["notes"],
+                reason: "reload",
+                assertInvokerOwned: () => {
+                  expect(getActiveGatewayRootWorkHolders({ excludeCurrent: true })).not.toContain(
+                    "plugin-request",
+                  );
+                },
+              }),
+            )
+          : clock.wake();
+        reloadCompletion = Promise.resolve(nextRun).catch(() => {});
+        if (outcome !== "invalid") {
+          await awaitGateBeforeSettlement(
+            nextEntered.promise,
+            Promise.resolve(nextRun),
+            "reload did not enter runtime application",
+          );
+          if (outcome !== "overwritten") {
+            expect(olderSettled).not.toHaveBeenCalled();
+          }
+        }
+        releaseNext.resolve();
+        await nextRun;
+        pluginRequest?.release();
+        await expect(older.result).resolves.toBe(
+          outcome === "overwritten" || outcome === "invalid" ? "superseded" : outcome,
+        );
+        if (newer) {
+          await expect(newer.result).resolves.toBe(outcome === "failed" ? "failed" : "applied");
+        }
+        expect(harness.onRestart).not.toHaveBeenCalled();
+        expect(drainCounts).toEqual(outcome === "invalid" ? [] : [1]);
+        expect(drainHolders).toEqual(outcome === "invalid" ? [] : [["unrelated-turn"]]);
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
+      } finally {
+        releaseFirst.resolve();
+        releaseNext.resolve();
+        unsubscribe();
+        await reloadCompletion;
+        await harness.reloader.stop();
+        pluginRequest?.release();
+        unrelated?.release();
       }
     },
   );
