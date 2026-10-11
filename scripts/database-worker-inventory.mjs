@@ -331,7 +331,7 @@ const reviewedOperations = new Map([
       {
         tier: "W",
         operations: [
-          "assertNoRunningWorkerSessionToolOperations",
+          "deleteWorkerTurnToolState",
           "closeWorkerTurnToolAdmission",
           "clearWorkerTurnToolState",
           "createPlacementSessionToolOperationKernel.hasToolAuthority",

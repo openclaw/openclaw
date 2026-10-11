@@ -116,7 +116,7 @@ it("withholds metadata certification after a later write in its native transacti
             writeSessionEntry(current, sessionKey, {
               sessionId: "metadata-receipt",
               updatedAt: 1,
-              label: "selected",
+              label: `selected-${rawWrite}`,
               skillsSnapshot: { prompt: "Persisted metadata prompt", skills: [] },
             }),
           );
