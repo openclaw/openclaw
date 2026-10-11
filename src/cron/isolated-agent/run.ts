@@ -5,7 +5,10 @@ import {
   createAgentRunRestartAbortError,
   resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
-import { clearTurnSendLedgerForRun } from "../../agents/tools/turn-send-ledger.js";
+import {
+  clearTurnSendLedgerForRun,
+  type TurnSendLedgerScope,
+} from "../../agents/tools/turn-send-ledger.js";
 import { createAgentLifecycleTerminalBackstop } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
@@ -127,6 +130,7 @@ async function runCronIsolatedAgentTurnInTrace(
   await using preparedRuntimeLease = prepared.context.preparedModelRuntimeLease;
   // One invocation owns retries and fallbacks; persistent transcripts outlive that identity.
   const runId = randomUUID();
+  const turnSendLedgerScopes: TurnSendLedgerScope[] = [];
   let leaseActive = true;
   // Accounting, delivery, and teardown use the same metadata as inference. Keep
   // the lease open until cleanup finishes, then fence detached borrowed work.
@@ -262,6 +266,7 @@ async function runCronIsolatedAgentTurnInTrace(
             const executionParams: Parameters<typeof executeCronRun>[0] = {
               ...prepared.context,
               runId,
+              retainTurnSendLedgerScope: (scope) => turnSendLedgerScopes.push(scope),
               cfg: params.cfg,
               job: params.job,
               deliveryAttemptFence: params.deliveryAttemptFence,
@@ -459,10 +464,14 @@ async function runCronIsolatedAgentTurnInTrace(
     );
   } finally {
     leaseActive = false;
-    // Release the per-turn send budget at the cron logical-run terminal. The CLI loopback
+    // Release the per-turn send budget at the cron logical-run terminal. Embedded prompts
+    // (including live model-switch retries) hand their exact scopes here. The CLI loopback
     // message tool commits under the canonical grant slot, which a non-final candidate's own
     // settlement defers to an outer owner; reconstruct that exact canonical key for this
     // invocation's runId so a deferred slot cannot outlive the run.
+    for (const scope of turnSendLedgerScopes) {
+      clearTurnSendLedgerForRun(scope);
+    }
     try {
       clearTurnSendLedgerForRun({
         agentId: prepared.context.agentId,

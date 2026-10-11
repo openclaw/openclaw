@@ -19,7 +19,8 @@
  * for the entire turn as documented (docs/tools/loop-detection.md,
  * schema.help.runtime.ts). The logical-run owner deletes the slot at its terminal
  * boundary (clearTurnSendLedgerForRun, wired from the fallback-chain `finally` in
- * embedded-agent-runner/run-entry.ts); a run that has no entry starts fresh.
+ * embedded-agent-runner/run-entry.ts, or from the turn owner that retries live model
+ * switches under the same runId); a run that has no entry starts fresh.
  * Concurrent foreground runs can share one sessionKey (see
  * src/auto-reply/dispatch.freshness.test.ts), so the runId is part of the key
  * rather than a field that resets a shared slot — otherwise a later run would
@@ -105,8 +106,8 @@ function ledgerKey(sessionKey: string, runId: string): string {
 // evicting it silently zeroed that run's committed counts, pending reservations, and
 // seen-operation ids mid-turn, releasing its hard cap. Retained slots are bounded by
 // the number of concurrently live runs instead: every run clears its own slot at its
-// terminal boundary (the fallback-chain `finally` in run-entry.ts), so completed runs
-// never accumulate.
+// terminal boundary (the fallback-chain `finally` in run-entry.ts, or the turn owner it
+// hands the scope to), so completed runs never accumulate.
 function storeSlot(key: string, slot: TurnSendSlot): void {
   turnSendBySession.set(key, slot);
 }
@@ -468,9 +469,10 @@ export function inspectTurnSendLedger(now = Date.now()): TurnSendLedgerDiagnosti
 /**
  * Deletes the exact (session, run) slot at a logical run's terminal boundary, freeing
  * its per-target counts, pending reservations, and seen-operation ids. The logical-run owner
- * calls this from the fallback-chain `finally` in run-entry.ts (and the cron terminal)
- * after all owned tool work has settled, so the budget survives internal retries and
- * provider fallbacks (same runId) and resets only when the run truly ends. Rebuilds the
+ * calls this from the fallback-chain `finally` in run-entry.ts, or from the turn owner
+ * that retries live model switches (deferred lifecycle `complete()`, the cron terminal),
+ * after all owned tool work has settled, so the budget survives internal retries,
+ * provider fallbacks, and model switches (same runId) and resets only when the run truly ends. Rebuilds the
  * canonical ledger session key the send tools write under (buildTurnSendLedgerSessionKey).
  * Callers must pass the prepared canonical scope rather than reconstructing raw identity;
  * deleting only this runId's slot leaves a

@@ -111,5 +111,11 @@ export type EmbeddedAgentRunEntryParams<T extends EmbeddedAgentRunResult> = {
   onFallbackStep?: (step: ModelFallbackStepFields) => void | Promise<void>;
   /** Runs once after the successful winner is accepted, before post-turn context commit. */
   onAcceptedTerminal?: () => void | (() => void) | Promise<void | (() => void)>;
+  /**
+   * Callers that re-enter run-entry with the same runId (live model-switch retries) own
+   * the per-turn send-ledger terminal: run-entry hands them every slot scope it wrote
+   * instead of clearing it. Without this, run-entry clears at its own terminal.
+   */
+  retainTurnSendLedgerScope?: (scope: TurnSendLedgerScope) => void;
   runCandidate: (provider: string, model: string, options: RunEntryCandidateOptions) => Promise<T>;
 };

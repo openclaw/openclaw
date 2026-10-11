@@ -12,6 +12,12 @@ import {
   resolveAgentRunErrorLifecycleFields,
 } from "../../run-termination.js";
 import {
+  buildTurnSendLedgerSessionKey,
+  commitTurnSend,
+  peekTurnSendCount,
+  reserveTurnSend,
+} from "../../tools/turn-send-ledger.js";
+import {
   abortEmbeddedAgentRun,
   clearActiveEmbeddedRun,
   isEmbeddedAgentRunActive,
@@ -82,6 +88,28 @@ describe("deferred logical-turn lifecycle", () => {
     manager.abort("user_abort");
 
     expect(matchesReason(manager.signal.reason)).toBe(true);
+  });
+
+  it("keeps a retained send-ledger slot until the logical turn completes", async () => {
+    const runId = "ledger-retaining-logical-run";
+    const scope = { agentId: "main", sessionKey, runId };
+    const key = {
+      sessionKey: buildTurnSendLedgerSessionKey(scope.agentId, scope.sessionKey)!,
+      runId,
+      targetKey: "imessage\0default\0+15550001111",
+    };
+    const reserved = reserveTurnSend(key, {});
+    if (reserved.status !== "reserved") {
+      throw new Error(`expected a reserved send, got "${reserved.status}"`);
+    }
+    commitTurnSend(reserved.reservation);
+    const manager = createDeferredEmbeddedRunLifecycleManager({ runId, sessionId, sessionKey });
+
+    manager.retainTurnSendLedgerScope(scope);
+    expect(peekTurnSendCount(key)).toBe(1);
+
+    await manager.complete();
+    expect(peekTurnSendCount(key)).toBe(0);
   });
 
   it("preserves an earlier caller timeout when a user abort arrives later", () => {

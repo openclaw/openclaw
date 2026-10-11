@@ -635,15 +635,18 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
       // `sessionKey?.trim() || sessionId` (attempt-setup.ts), rebuilt here; a dispatched CLI
       // candidate's loopback grant instead writes under a canonicalized, possibly
       // agent-shifted scope this raw identity cannot reproduce, so that candidate's
-      // settlement hands its exact prepared scope to this owner-held collection. Clear the
-      // native scope first, then every deferred prepared scope. Missing slots are harmless.
-      clearTurnSendLedgerForRun({
+      // settlement hands its exact prepared scope to this owner-held collection. A caller
+      // that retries a live model switch with this runId takes both scopes and clears them
+      // at its own terminal instead. Missing slots are harmless.
+      const releaseTurnSendLedgerScope =
+        params.retainTurnSendLedgerScope ?? clearTurnSendLedgerForRun;
+      releaseTurnSendLedgerScope({
         agentId: params.identity.agentId,
         sessionKey: params.identity.sessionKey?.trim() || params.identity.sessionId,
         runId: params.identity.runId,
       });
       for (const scope of deferredTurnSendLedgerScopes) {
-        clearTurnSendLedgerForRun(scope);
+        releaseTurnSendLedgerScope(scope);
       }
       await contextEngineLogicalTurnLease.dispose();
     }

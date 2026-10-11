@@ -1,4 +1,5 @@
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import type { TurnSendLedgerScope } from "../../agents/tools/turn-send-ledger.js";
 import type { AgentLifecycleTerminalBackstop } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
@@ -49,6 +50,8 @@ export type CronRunExecutionParams = Pick<
     | "deliveryAttemptFence"
   > & {
     runId: string;
+    /** Live model-switch and continuation prompts reuse runId; the invocation clears it. */
+    retainTurnSendLedgerScope: (scope: TurnSendLedgerScope) => void;
     agentVerboseDefault: AgentDefaultsConfig["verboseDefault"];
     immutableThinkLevel: ThinkLevel | undefined;
     thinkingCatalog?: ModelCatalogEntry[];

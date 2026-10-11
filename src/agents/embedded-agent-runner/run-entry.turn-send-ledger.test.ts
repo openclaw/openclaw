@@ -325,5 +325,42 @@ describe("runEmbeddedAgentEntry", () => {
       // slot, yet the terminal drained it by runId.
       expect(peekTurnSendCount(grantKey)).toBe(0);
     });
+
+    it("hands every scope to a caller that retries live model switches instead of clearing", async () => {
+      const runId = "ledger-retained-for-retry";
+      const key = { sessionKey: ledgerSessionKey, runId, targetKey };
+      const grantScope = { agentId: "reef", sessionKey: "agent:reef:main", runId };
+      const switchError = new Error("live model switch");
+      state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+        await params.run(params.provider, params.model, initialAttemptOptions(params));
+        throw switchError;
+      });
+      const retained: unknown[] = [];
+      const { runEmbeddedAgentEntry } = await import("./run-entry.js");
+
+      await expect(
+        runEmbeddedAgentEntry({
+          selection: { cfg: {}, provider: "provider", model: "model" },
+          identity: { runId, agentId: "main", sessionId: "session-1" },
+          harness: {
+            workspaceDir: "/tmp/workspace",
+            preparation: { kind: "direct" },
+            resolveRuntimeOverride: () => undefined,
+          },
+          behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
+          sessionOverride: { kind: "preserve" },
+          retainTurnSendLedgerScope: (scope) => retained.push(scope),
+          runCandidate: async (provider, model, options) => {
+            commitLedgerSend(runId);
+            options.onDeferredTurnSendLedgerScope(grantScope);
+            return makeResult({ provider, model });
+          },
+        }),
+      ).rejects.toBe(switchError);
+
+      // The retrying caller re-enters with this runId, so the budget must survive this exit.
+      expect(peekTurnSendCount(key)).toBe(1);
+      expect(retained).toEqual([{ agentId: "main", sessionKey: "session-1", runId }, grantScope]);
+    });
   });
 });

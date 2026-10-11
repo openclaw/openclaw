@@ -2098,6 +2098,7 @@ describe("CLI attempt execution", () => {
       abort: vi.fn(),
       adopt: vi.fn(),
       handoffToCli,
+      retainTurnSendLedgerScope: vi.fn(),
       complete: vi.fn(async () => undefined),
     };
 
