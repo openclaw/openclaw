@@ -15,13 +15,11 @@ function createSealedRecoveryBuildConfig(entry: typeof managedHandoffRuntimeEntr
   const identityReader = fileURLToPath(
     new URL("../../src/shared/freebsd-process-identity.ts", import.meta.url),
   );
+  // Literal URLs keep both loaders visible to declaration-input capture.
   const nativeLoader = fileURLToPath(
-    new URL(
-      entry === managedHandoffRuntimeEntrypoint
-        ? "../../src/infra/update-managed-service-handoff-native-loader.ts"
-        : "../../src/infra/package-update-activation-native-loader.ts",
-      import.meta.url,
-    ),
+    entry === managedHandoffRuntimeEntrypoint
+      ? new URL("../../src/infra/update-managed-service-handoff-native-loader.ts", import.meta.url)
+      : new URL("../../src/infra/package-update-activation-native-loader.ts", import.meta.url),
   );
   return {
     entry: {
