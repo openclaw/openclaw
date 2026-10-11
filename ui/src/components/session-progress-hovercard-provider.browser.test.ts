@@ -15,8 +15,12 @@ function fixture(initialCard: ProgressCard | null) {
   let card = initialCard;
   const eventListeners = new Set<Parameters<ApplicationGateway["subscribeEvents"]>[0]>();
   const request = vi.fn(async (method: string) => {
-    if (method === "progressCard.get") return { card };
-    if (method === SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD) return { sessions: {} };
+    if (method === "progressCard.get") {
+      return { card };
+    }
+    if (method === SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD) {
+      return { sessions: {} };
+    }
     throw new Error(`Unexpected synthetic method: ${method}`);
   });
   // SAFETY: The fixture implements the gateway surfaces consumed by this provider.
@@ -115,7 +119,9 @@ function progress(revision: number, markdown: string): ProgressCard {
 }
 
 afterEach(async () => {
-  for (const provider of mountedProviders.splice(0)) provider.remove();
+  for (const provider of mountedProviders.splice(0)) {
+    provider.remove();
+  }
   await Promise.resolve();
   flush();
   vi.useRealTimers();
