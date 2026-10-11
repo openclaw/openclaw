@@ -1,11 +1,9 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { choosePickerValue, updatePickers } from "../../test-helpers/select-picker.ts";
-import { card, mount, props, text } from "./view.test-support.ts";
-import { renderModelProviders } from "./view.ts";
+import { card, mount, props, text } from "./view.test-support.tsx";
 
 it("offers only decision models, even without a chat provider, and retains an unavailable selection", async () => {
   const onDecisionChange = vi.fn();
@@ -36,10 +34,7 @@ it("offers only decision models, even without a chat provider, and retains an un
   await choosePickerValue(picker, "");
   expect(onDecisionChange).toHaveBeenLastCalledWith(null);
 
-  render(
-    renderModelProviders({ ...viewProps, defaultsMutationBlockedReason: "Read only" }),
-    container,
-  );
+  mount({ ...viewProps, defaultsMutationBlockedReason: "Read only" }, container);
   await updatePickers(container);
   expect(
     container.querySelector<HTMLButtonElement>("#model-providers-decision-model")!.disabled,
@@ -191,15 +186,13 @@ describe("renderModelProviders", () => {
     expect(onThinkingReset).toHaveBeenCalledOnce();
     expect(onFastModeReset).toHaveBeenCalledOnce();
 
-    render(
-      renderModelProviders(
-        props({
-          thinkingLevel: undefined,
-          thinkingOverridden: false,
-          fastMode: undefined,
-          fastModeOverridden: false,
-        }),
-      ),
+    mount(
+      props({
+        thinkingLevel: undefined,
+        thinkingOverridden: false,
+        fastMode: undefined,
+        fastModeOverridden: false,
+      }),
       container,
     );
     const inheritedBehavior = container.querySelector("#settings-model-behavior")!;
@@ -257,7 +250,7 @@ describe("renderModelProviders", () => {
 
     selectSegment(thinking, "");
     selectSegment(fastMode, "");
-    render(renderModelProviders(viewProps), container);
+    mount(viewProps, container);
 
     expect(selectedSegment(thinking)).toBe("high");
     expect(selectedSegment(fastMode)).toBe("on");
@@ -865,26 +858,36 @@ describe("renderModelProviders", () => {
     expect(onProbe).toHaveBeenCalledWith("openai", ["anthropic", "claude-cli"]);
   });
 
-  it("uses the original config key for credential mutations", () => {
+  it("keeps the key editor focused while typing and uses the original config key for mutations", () => {
     const onSaveKey = vi.fn();
     const onRemoveKey = vi.fn();
-    const container = mount(
-      props({
-        cards: [
-          card({
-            configKey: "OpenAI",
-            apiKey: { source: "config" },
-            hasConfigApiKey: true,
-          }),
-        ],
-        keyEditorProvider: "openai",
-        keyDraft: "replacement",
-        onSaveKey,
-        onRemoveKey,
-      }),
-    );
+    let viewProps = props({
+      cards: [card({ configKey: "OpenAI", apiKey: { source: "config" }, hasConfigApiKey: true })],
+      keyEditorProvider: "openai",
+      keyDraft: "replacement",
+      onSaveKey,
+      onRemoveKey,
+      onKeyDraftChange: (value) => {
+        viewProps = {
+          ...viewProps,
+          keyDraft: value,
+          cards: viewProps.cards.map((entry) => ({ ...entry })),
+        };
+        mount(viewProps, container);
+      },
+    });
+    const container = mount(viewProps);
     const provider = container.querySelector('[data-provider-id="openai"]');
     expect(provider).not.toBeNull();
+    const input = provider!.querySelector<HTMLInputElement>(".model-providers__inline-form input")!;
+    input.focus();
+    for (const value of ["replacement-1", "replacement-12"]) {
+      input.value = value;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(container.querySelector(".model-providers__inline-form input")).toBe(input);
+      expect(document.activeElement).toBe(input);
+      expect(input.value).toBe(value);
+    }
     button(provider!, "Save")?.click();
     button(provider!, "Remove key")?.click();
     expect(onSaveKey).toHaveBeenCalledWith("openai", "OpenAI");
@@ -941,10 +944,14 @@ it("filters provider access without hiding global defaults and exposes an empty 
   expect(container.querySelector('[data-provider-id="anthropic"]')).not.toBeNull();
   expect(container.querySelector("#settings-model-behavior")).not.toBeNull();
   const search = container.querySelector<HTMLInputElement>('input[type="search"]')!;
+  document.body.append(container);
+  search.focus();
   search.value = "missing";
   search.dispatchEvent(new Event("input", { bubbles: true }));
   expect(onProviderQueryChange).toHaveBeenCalledExactlyOnceWith("missing");
-  render(renderModelProviders({ ...viewProps, providerQuery: "missing" }), container);
+  mount({ ...viewProps, providerQuery: "missing" }, container);
+  expect(container.querySelector('input[type="search"]')).toBe(search);
+  expect(document.activeElement).toBe(search);
   expect(text(container)).toContain("No providers match your search.");
   expect(container.querySelectorAll("[data-provider-id]")).toHaveLength(0);
   expect(container.querySelector("#settings-model-behavior")).not.toBeNull();
