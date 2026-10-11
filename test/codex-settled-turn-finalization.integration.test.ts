@@ -114,10 +114,11 @@ describe("registered Codex finalizer host silence contract", () => {
     const result = await prepareTerminalWithSettledTurnFinalization(input);
 
     expect(fixture.runBounded).toHaveBeenCalledTimes(2);
-    expect(result.finalizationOutcome).toBe("completed-empty");
+    expect(result.finalizationOutcome).toBe("failed");
+    expect(result.attempt.terminal).toBe(input.initial.attempt.terminal);
     expect(result.prepared.payloadsWithToolMedia).toEqual([
       expect.objectContaining({
-        text: "The tool run finished, but no final summary was produced. I did not repeat any completed actions.",
+        text: "The AI service is temporarily overloaded. Please try again in a moment.",
       }),
     ]);
     expect(fixture.mirror).not.toHaveBeenCalled();
