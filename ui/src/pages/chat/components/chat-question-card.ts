@@ -6,12 +6,12 @@ import type {
   QuestionPanelProps,
   QuestionPanelQuestion,
 } from "./chat-question-types.ts";
+import "./chat-question-card-view.tsx";
 
 export type {
   QuestionPanelOptions,
   QuestionPanelProps,
   QuestionPanelQuestion,
-  QuestionPanelViewModel,
 } from "./chat-question-types.ts";
 
 export function createGatewayQuestionPanelProps(
@@ -106,4 +106,4 @@ export function renderChatQuestionSummary(prompt: QuestionPrompt) {
   `;
 }
 
-export { ChatQuestionCard } from "./chat-question-card-view.tsx";
+export type { ChatQuestionCard } from "./chat-question-card-view.tsx";
