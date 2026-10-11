@@ -12,16 +12,17 @@ export function scanJsonObjectFields(json: string, fields: readonly string[]) {
   let maximumDepth = 0;
   const whitespace = /[\t\n\r ]*/y;
   const number = /-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/y;
+  // eslint-disable-next-line no-control-regex -- JSON strings reject unescaped control characters.
   const stringPart = /["\\\u0000-\u001f]/g;
-  const fail = (): never => {
+  function fail(): never {
     throw new SyntaxError("Invalid JSON predicate source");
-  };
+  }
   const skipWhitespace = () => {
     whitespace.lastIndex = offset;
     whitespace.exec(json);
     offset = whitespace.lastIndex;
   };
-  const string = () => {
+  const string = (): void => {
     if (json[offset++] !== '"') {
       fail();
     }
@@ -29,7 +30,7 @@ export function scanJsonObjectFields(json: string, fields: readonly string[]) {
       stringPart.lastIndex = offset;
       const match = stringPart.exec(json);
       if (!match) {
-        return fail();
+        fail();
       }
       offset = stringPart.lastIndex;
       if (match[0] === '"') {
@@ -73,6 +74,7 @@ export function scanJsonObjectFields(json: string, fields: readonly string[]) {
           const keyStart = offset;
           string();
           if (depth === 0) {
+            // SAFETY: string() validated this exact slice as a complete JSON string.
             key = JSON.parse(json.slice(keyStart, offset)) as string;
           }
           skipWhitespace();
@@ -118,7 +120,7 @@ export function scanJsonObjectFields(json: string, fields: readonly string[]) {
       return literal === "null" ? "null" : "boolean";
     }
     number.lastIndex = offset;
-    if (!number.exec(json)) {
+    if (!number.test(json)) {
       fail();
     }
     offset = number.lastIndex;
@@ -145,7 +147,9 @@ export function scanJsonObjectFields(json: string, fields: readonly string[]) {
 export function readJsonPredicateScalar(
   token: JsonPredicateToken | undefined,
 ): string | number | boolean | null | undefined {
-  return token && token.kind !== "object" && token.kind !== "array"
-    ? (JSON.parse(token.text) as string | number | boolean | null)
-    : undefined;
+  if (!token || token.kind === "object" || token.kind === "array") {
+    return undefined;
+  }
+  // SAFETY: the scanner validated the complete token and its scalar kind.
+  return JSON.parse(token.text) as string | number | boolean | null;
 }

@@ -31,10 +31,11 @@ const COLUMN_DECLARATIONS = {
 
 /** Historical admission compares the schema before predicate columns existed. */
 export function withoutAgentJsonPredicateColumns(schema: string): string {
+  let historicalSchema = schema;
   for (const [column, declaration] of Object.entries(COLUMN_DECLARATIONS)) {
-    schema = schema.replace(`  ${column} ${declaration},\n`, "");
+    historicalSchema = historicalSchema.replace(`  ${column} ${declaration},\n`, "");
   }
-  return schema;
+  return historicalSchema;
 }
 
 /** Runs once inside the versioned migration transaction, never on runtime reads. */
