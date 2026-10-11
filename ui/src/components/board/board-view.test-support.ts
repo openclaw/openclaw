@@ -103,7 +103,9 @@ export async function mount(
   view.canMutate = options.canMutate ?? true;
   view.canGrant = options.canGrant ?? true;
   const root = options.context ? createApplicationContextProvider(options.context) : view;
-  if (root !== view) root.append(view);
+  if (root !== view) {
+    root.append(view);
+  }
   const mounted = mountSolid(() => root);
   onTestFinished(() => mounted.unmount());
   await settleCells(view);

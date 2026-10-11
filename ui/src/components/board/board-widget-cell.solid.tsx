@@ -216,7 +216,9 @@ function BoardWidgetCellContent(
     } else if (value?.startsWith("move:")) {
       void runAction(() => callbacks.moveToTab(widget, value.slice(5)));
     } else if (value?.startsWith("resize:")) {
-      const size = BOARD_SIZE_PRESETS[value.slice(7) as keyof typeof BOARD_SIZE_PRESETS];
+      const size = Object.entries(BOARD_SIZE_PRESETS).find(
+        ([preset]) => preset === value.slice(7),
+      )?.[1];
       if (size) {
         void runAction(() => callbacks.resizeTo(widget, size.w, size.h));
       }
@@ -536,13 +538,16 @@ function BoardWidgetCellContent(
     if (event.target !== event.currentTarget || !canMutate() || props.pageChrome) {
       return;
     }
-    const directions = {
-      ArrowLeft: "left",
-      ArrowRight: "right",
-      ArrowUp: "up",
-      ArrowDown: "down",
-    } as const;
-    const direction = directions[event.key as keyof typeof directions];
+    const direction =
+      event.key === "ArrowLeft"
+        ? "left"
+        : event.key === "ArrowRight"
+          ? "right"
+          : event.key === "ArrowUp"
+            ? "up"
+            : event.key === "ArrowDown"
+              ? "down"
+              : null;
     if (!direction) {
       return;
     }

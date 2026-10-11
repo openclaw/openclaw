@@ -327,6 +327,7 @@ export const PortalsPage = defineSolidBridge<PortalsPageProps, PortalsPageMethod
     methods: {
       handleToggleRequest(host: PortalsPageElement, event: Event) {
         const detail =
+          // SAFETY: Portal panel toggle events use the shared panel-toggle-contract detail.
           event instanceof CustomEvent ? (event.detail as PortalPanelToggleDetail) : null;
         if (detail?.open === false) {
           return;

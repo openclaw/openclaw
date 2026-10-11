@@ -678,6 +678,7 @@ export class BoardWidgetFrameLifecycle {
       }
       return;
     }
+    // SAFETY: Fields remain unknown; each use below checks its discriminant, numeric type, or nonce.
     const data = event.data as {
       type?: unknown;
       height?: unknown;

@@ -19,7 +19,9 @@ export function BoardTabs(props: {
   const visible = createMemo(() => {
     const tabs = props.tabs.slice(0, 6);
     const active = props.tabs.find((tab) => tab.tabId === props.activeTabId);
-    if (active && !tabs.some((tab) => tab.tabId === active.tabId)) tabs[tabs.length - 1] = active;
+    if (active && !tabs.some((tab) => tab.tabId === active.tabId)) {
+      tabs[tabs.length - 1] = active;
+    }
     return tabs;
   });
   const overflow = createMemo(() => {
@@ -34,7 +36,7 @@ export function BoardTabs(props: {
           prop:active={props.activeTabId}
           prop:activation="manual"
           prop:withoutScrollControls={true}
-          onWa-tab-show={props.onTabShow}
+          onWa-tab-show={(event) => props.onTabShow(event)}
         >
           <For each={visible()} keyed={(tab) => tab.tabId}>
             {(tab) => (
@@ -59,7 +61,7 @@ export function BoardTabs(props: {
           <wa-dropdown
             class="board-tabs__overflow"
             placement="bottom-end"
-            onWa-select={props.onOverflowSelect}
+            onWa-select={(event) => props.onOverflowSelect(event)}
           >
             <button
               class="board-tabs__overflow-trigger"

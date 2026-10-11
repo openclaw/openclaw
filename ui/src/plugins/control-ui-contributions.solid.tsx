@@ -1,3 +1,4 @@
+import type { JSX } from "@solidjs/web";
 import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import type { ControlUiAction } from "../../../src/plugin-sdk/control-ui.js";
 import { iconData, type IconName } from "../components/icon-data.ts";
@@ -111,10 +112,11 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
   type Navigation = ReturnType<typeof navigation>[number];
   const iconName = (entry: Navigation["entry"], fallback = "plug"): IconName => {
     const name = entry.value.icon ?? fallback;
+    // SAFETY: the own-key check admits only names from the fixed icon registry.
     return Object.hasOwn(iconData, name) ? (name as IconName) : "plug";
   };
   function NavigationLink(link: { item: Navigation; child?: boolean; fallbackIcon?: string }) {
-    const menu = (event: MouseEvent | KeyboardEvent) => {
+    const menu: JSX.EventHandler<HTMLAnchorElement, MouseEvent | KeyboardEvent> = (event) => {
       if (!link.item.entry.value.actions?.length) {
         return;
       }
@@ -127,7 +129,7 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
       }
       event.preventDefault();
       event.stopPropagation();
-      const trigger = event.currentTarget as HTMLElement;
+      const trigger = event.currentTarget;
       const rect = trigger.getBoundingClientRect();
       props.navigationMenus?.openPluginNavigationMenu(
         link.item.entry,

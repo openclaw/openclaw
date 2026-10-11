@@ -107,7 +107,7 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
         : runtime
             ?.registrations(host.kind)
             .find((candidate) => candidate.key === host.contributionKey);
-    // The renderer pairs each registry kind/surface with its SDK props.
+    // SAFETY: host renderers pair each registry kind/surface with its SDK props; this mount erases that pair.
     return entry as ViewRegistration | undefined;
   };
   const unmount = () => {
@@ -140,8 +140,9 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
         mountAbort?.abort();
         return;
       }
-      // Session props are host-owned; page-only props can omit this identity.
+      // SAFETY: the prior bridge value is a host-rendered SDK props record; page props may omit session identity.
       const previous = before as Partial<BoardGetParams> | undefined;
+      // SAFETY: the next bridge value follows the same host-rendered SDK props contract.
       const next = after as Partial<BoardGetParams> | undefined;
       if (previous?.sessionKey !== next?.sessionKey || previous?.agentId !== next?.agentId) {
         ownerChanged = true;
@@ -166,6 +167,7 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
     if (host.kind !== "replacements" || host.surface !== "composer") {
       return structuredClone(host.props);
     }
+    // SAFETY: renderPluginSurface supplies composer props for the kind and surface checked above.
     const value = host.props as ControlUiSurfaceProps["composer"];
     const generation = composerGeneration;
     const check = () => {
