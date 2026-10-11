@@ -122,7 +122,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
     assertCurrent,
   });
   const hookOwnsFallbacks = hookSelection?.fallbacksOverride !== undefined;
-  const selection = params.modelResolve?.modelSelectionLocked
+  const runSelection = params.modelResolve?.modelSelectionLocked
     ? { ...params.selection, fallbacksOverride: [] }
     : hookOwnsFallbacks && hookSelection
       ? {
@@ -416,7 +416,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
         },
       });
 
-    const originalFallbackResult = await runFallbackSearch(selection, {
+    const originalFallbackResult = await runFallbackSearch(runSelection, {
       captureCyberRefusal: true,
     });
     const originalErrorTranscript = assistantErrorTranscript.snapshot();
@@ -438,7 +438,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
       target &&
       !hookOwnsFallbacks &&
       (!operatorAuthority?.modelPolicy || operatorAuthority.modelPolicy.allows(target)) &&
-      !isEmbeddedModelSelectionStrict(selection) &&
+      !isEmbeddedModelSelectionStrict(runSelection) &&
       modelKey(capturedCyberRefusal.provider, capturedCyberRefusal.model) !==
         modelKey(target.provider, target.model) &&
       !isFallbackCandidateSkipped({
