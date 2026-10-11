@@ -41,6 +41,7 @@ function strictRecord<T extends z.ZodRawShape>(shape: T) {
 const identityConfig = strictRecord({
   profileId: githubOAuthProfileId,
   kind: z.literal("oauth").optional(),
+  allowInSandbox: z.boolean().optional(),
   gitAuthor: strictRecord({ name: authorValue.optional(), email: authorValue.optional() })
     .refine((author) => Object.keys(author).length > 0)
     .optional(),
@@ -236,12 +237,6 @@ export function writeGitHubOAuthRecord(record: GitHubOAuthRecord): void {
   });
 }
 
-function readGitHubOAuthRecord(profileId: string): GitHubOAuthRecord | undefined {
-  const raw = readHiddenGitHubSecretRecord({ name: githubOAuthRecordName(profileId) });
-  const record = raw === undefined ? undefined : parseGitHubRecord(raw, oauthRecordSchema);
-  return record?.profileId === profileId ? record : undefined;
-}
-
 export function inspectGitHubOAuthRecord(
   profileId: string,
 ): { state: "missing" } | { state: "invalid" } | { state: "valid"; record: GitHubOAuthRecord } {
@@ -266,6 +261,7 @@ export function listGitHubOAuthRecords(): Array<{
     if (!profileId) {
       return [];
     }
-    return [{ profileId, record: readGitHubOAuthRecord(profileId) }];
+    const inspected = inspectGitHubOAuthRecord(profileId);
+    return [{ profileId, record: inspected.state === "valid" ? inspected.record : undefined }];
   });
 }

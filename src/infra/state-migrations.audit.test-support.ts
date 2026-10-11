@@ -220,6 +220,40 @@ export function failArchiveHardening(
   };
 }
 
+/** Refuse one move at fs-safe's public boundary, leaving its source untouched. */
+export function failAuditMove(
+  fixture: AuditMigrationFixture,
+  sourcePath: string,
+  error = new fsSafe.FsSafeError(
+    "helper-unavailable",
+    "no-replace move and hard links unavailable",
+    {
+      details: {
+        capability: "rename-noreplace",
+        fallback: "link-unlink",
+        fallbackCapability: "linkat",
+      },
+    },
+  ),
+  beforeRefusal?: () => void,
+) {
+  const openRoot = fsSafe.root;
+  return vi.spyOn(fsSafe, "root").mockImplementation(async (rootPath, defaults) => {
+    const root = await openRoot(rootPath, defaults);
+    if (rootPath === fixture.stateDir) {
+      const move = root.move.bind(root);
+      vi.spyOn(root, "move").mockImplementation(async (...args) => {
+        if (path.resolve(rootPath, args[0]) === sourcePath) {
+          beforeRefusal?.();
+          throw error;
+        }
+        return move(...args);
+      });
+    }
+    return root;
+  });
+}
+
 export async function failSecondScrubWrite(fixture: AuditMigrationFixture) {
   // The source inode becomes the raw archive; sibling publication writes must succeed.
   const sourceIdentity = await fs.stat(fixture.config.source, { bigint: true });

@@ -9,7 +9,7 @@ import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import {
   deliveryContextKey,
-  normalizeDeliveryContext,
+  normalizeSessionDeliveryState,
 } from "../../utils/delivery-context.shared.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -37,54 +37,42 @@ function resolveSessionKeyChannelHint(sessionKey?: string): string | undefined {
 
 function isMainSessionKey(sessionKey?: string): boolean {
   const parsed = parseAgentSessionKey(sessionKey);
-  if (!parsed) {
-    return normalizeLowercaseStringOrEmpty(sessionKey) === "main";
-  }
-  return normalizeLowercaseStringOrEmpty(parsed.rest) === "main";
+  return normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey) === "main";
 }
 
 const DIRECT_SESSION_MARKERS = new Set(["direct", "dm"]);
 const THREAD_SESSION_MARKERS = new Set(["thread", "topic"]);
 
 function hasStrictDirectSessionTail(parts: string[], markerIndex: number): boolean {
-  const peerId = normalizeOptionalString(parts[markerIndex + 1]);
-  if (!peerId) {
+  if (!normalizeOptionalString(parts[markerIndex + 1])) {
     return false;
   }
   const tail = parts.slice(markerIndex + 2);
-  if (tail.length === 0) {
-    return true;
-  }
   return (
-    tail.length === 2 &&
-    THREAD_SESSION_MARKERS.has(tail[0] ?? "") &&
-    Boolean(normalizeOptionalString(tail[1]))
+    tail.length === 0 ||
+    (tail.length === 2 &&
+      THREAD_SESSION_MARKERS.has(tail[0] ?? "") &&
+      Boolean(normalizeOptionalString(tail[1])))
   );
 }
 
 function isDirectSessionKey(sessionKey?: string): boolean {
   const raw = normalizeLowercaseStringOrEmpty(sessionKey);
-  if (!raw) {
+  const parts = (parseAgentSessionKey(raw)?.rest ?? raw).split(":").filter(Boolean);
+  const markerIndex = parts.slice(0, 3).findIndex((part) => DIRECT_SESSION_MARKERS.has(part));
+  if (markerIndex < 0) {
     return false;
   }
-  const scoped = parseAgentSessionKey(raw)?.rest ?? raw;
-  const parts = scoped.split(":").filter(Boolean);
-  if (parts.length < 2) {
-    return false;
+  if (markerIndex > 0) {
+    const channel = normalizeMessageChannel(parts[0]);
+    if (!channel || !isDeliverableMessageChannel(channel)) {
+      return false;
+    }
   }
-  if (DIRECT_SESSION_MARKERS.has(parts[0] ?? "")) {
-    return hasStrictDirectSessionTail(parts, 0);
-  }
-  const channel = normalizeMessageChannel(parts[0]);
-  if (!channel || !isDeliverableMessageChannel(channel)) {
-    return false;
-  }
-  if (DIRECT_SESSION_MARKERS.has(parts[1] ?? "")) {
-    return hasStrictDirectSessionTail(parts, 1);
-  }
-  return Boolean(normalizeOptionalString(parts[1])) && DIRECT_SESSION_MARKERS.has(parts[2] ?? "")
-    ? hasStrictDirectSessionTail(parts, 2)
-    : false;
+  return (
+    (markerIndex !== 2 || Boolean(normalizeOptionalString(parts[1]))) &&
+    hasStrictDirectSessionTail(parts, markerIndex)
+  );
 }
 
 function isExternalRoutingChannel(channel?: string): channel is string {
@@ -144,6 +132,19 @@ export function resolveSessionDeliveryRoute(params: {
   };
 }
 
+/** Internal turns cannot retire a canonical external delivery route. */
+export function resolveSessionInputDeliveryKey(ctx: MsgContext): string | undefined {
+  const delivery = normalizeSessionDeliveryState({
+    context: {
+      channel: ctx.OriginatingChannel as string | undefined,
+      to: ctx.OriginatingTo || ctx.To,
+      accountId: ctx.AccountId,
+      threadId: ctx.MessageThreadId,
+    },
+  });
+  return delivery.kind === "external" ? deliveryContextKey(delivery.context) : undefined;
+}
+
 export function maybeRetireLegacyMainDeliveryRoute(params: {
   sessionCfg: { dmScope?: string } | undefined;
   sessionKey: string;
@@ -151,10 +152,10 @@ export function maybeRetireLegacyMainDeliveryRoute(params: {
   agentId: string;
   mainKey: string;
   isGroup: boolean;
-  ctx: MsgContext;
+  inputDeliveryKey?: string;
 }): LegacyMainDeliveryRetirement | undefined {
   const dmScope = params.sessionCfg?.dmScope ?? "main";
-  if (dmScope === "main" || params.isGroup) {
+  if (dmScope === "main" || params.isGroup || !params.inputDeliveryKey) {
     return undefined;
   }
   const canonicalMainSessionKey = buildAgentMainSessionKey({
@@ -165,25 +166,11 @@ export function maybeRetireLegacyMainDeliveryRoute(params: {
     return undefined;
   }
   const legacyMain = params.legacyMain;
-  if (!legacyMain) {
+  if (legacyMain?.delivery?.kind !== "external") {
     return undefined;
   }
   const legacyRouteKey = deliveryContextKey(deliveryContextFromSession(legacyMain));
-  if (!legacyRouteKey) {
-    return undefined;
-  }
-  const activeDirectRouteKey = deliveryContextKey(
-    normalizeDeliveryContext({
-      channel: params.ctx.OriginatingChannel as string | undefined,
-      to: params.ctx.OriginatingTo || params.ctx.To,
-      accountId: params.ctx.AccountId,
-      threadId: params.ctx.MessageThreadId,
-    }),
-  );
-  if (!activeDirectRouteKey || activeDirectRouteKey !== legacyRouteKey) {
-    return undefined;
-  }
-  if (legacyMain.delivery?.kind !== "external") {
+  if (params.inputDeliveryKey !== legacyRouteKey) {
     return undefined;
   }
   return {

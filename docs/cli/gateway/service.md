@@ -20,9 +20,20 @@ openclaw gateway restart
 openclaw gateway uninstall
 ```
 
-`gateway stop` remains available when plugin configuration needs Doctor migration.
-It still validates core configuration and refuses configuration written by a newer
-OpenClaw binary. Start and restart continue to validate plugin configuration.
+`gateway stop`, `gateway uninstall`, and `gateway restart` remain available when
+configuration is invalid or needs Doctor migration, including configuration written
+by a newer OpenClaw version. They control the recorded service and report config
+problems as warnings with `openclaw doctor --fix` guidance. Stop and uninstall do
+not rewrite configuration. Restart preserves the installed service definition when
+config needs repair; its health check still reports whether the Gateway came back.
+`gateway start` continues to validate configuration before starting the Gateway.
+
+`gateway status` reports service process state separately from Gateway readiness.
+When its connection check fails, inspect the service logs even if the process is
+running. Recent log errors are matching evidence from the bounded log tail, may
+belong to an earlier run, and do not establish the current process's startup phase.
+Routine startup and shutdown messages are not reported as errors. Doctor and
+onboarding use the same error selection.
 
 On Windows, Scheduled Task stop and restart first ask the verified Gateway to drain
 and exit. Older or unresponsive Gateways fall back to termination of the captured
@@ -35,11 +46,42 @@ within the stop budget, restart still attempts the captured task after confirmin
 the Gateway exited, then reports that restart is unverified. An observed replacement
 is preserved and the restart is refused.
 
+`gateway start` checks readiness even when the service process is already running.
+It reports `already-running` only after the selected Gateway passes the health and
+readiness checks; it does not restart a process that is still warming up.
+
 If `gateway start` reaches its readiness deadline while the managed Gateway is
 still starting, it reports `still-starting` and exits with code `2`. The service
 keeps running; check `openclaw gateway status --deep` again before restarting it.
 A crashed service or a foreign listener still produces a failure. Port ownership
 alone does not prove readiness or rule out warm-up.
+
+### Linux maintenance holds
+
+On Linux, `openclaw gateway stop` asks systemd to stop the unit. An explicit stop
+suppresses its `Restart=always` policy until the unit is started again; it does
+not disable startup at the next login or boot. `gateway stop --disable` is
+macOS-only. For non-interactive maintenance, use `openclaw gateway stop --force`.
+
+A systemd mask also refuses explicit starts. Keep masks under operator control:
+OpenClaw does not remove them automatically. If you masked the default user
+service for maintenance, remove the hold before updating:
+
+```bash
+systemctl --user unmask openclaw-gateway.service
+openclaw update
+```
+
+Use the unit and scope shown by `openclaw gateway status --deep` for a custom profile or system
+service. Unmask **before** running `openclaw update`: preflight refuses a masked
+managed unit before replacing files or running migrations. Doctor and status
+report the mask with the unmask command; Doctor does not remove the hold or offer
+to reinstall the masked unit.
+
+If a unit becomes masked during an update, the updater keeps the activated
+candidate and reports a service-definition warning. Remove the mask, run
+`openclaw gateway start`, and check `openclaw gateway status --deep`; the refused
+start does not prove the candidate unhealthy or the Gateway ready.
 
 ### Recover an unreadable native service definition
 
@@ -209,7 +251,7 @@ openclaw gateway restart
 
   </Accordion>
   <Accordion title="Lifecycle behavior">
-    - `gateway start` is idempotent: when the managed service is already running, it reports the running process and leaves it untouched. A loaded but stopped service is started as before.
+    - When the managed service is already running, `gateway start` reports the running process and leaves it untouched. A loaded but stopped service is started as before.
     - On Windows, an explicit `gateway start` re-enables a disabled Scheduled Task after verifying its selected profile and command. It preserves the registered launcher and trigger settings. If enablement succeeds but launch fails, the Task may remain enabled; inspect the same profile with `gateway status --deep` before retrying. `update repair` leaves a Gateway that was already stopped offline; run `gateway start` afterward when you intend to bring it online.
     - If no managed service is installed, `gateway start` prints install hints and exits nonzero. `gateway restart` can first recover an installed-but-unloaded LaunchAgent or a verified unmanaged Gateway; if neither a managed service nor recovery handles the action, it prints the same hints and exits nonzero. Stopping an absent service remains a successful no-op.
     - If `gateway start` or `gateway restart` needs to repair a stale service definition, the command refuses when the invoking shell resolves a different state directory, config path, or port than the installed service. Match or unset the conflicting environment overrides, or use `openclaw gateway install --force` to retarget the service intentionally.
@@ -240,7 +282,7 @@ openclaw gateway restart
   <Accordion title="Auth and SecretRefs at install time">
     - When token auth requires a token and `gateway.auth.token` is SecretRef-managed, `gateway install` validates that the SecretRef is resolvable but does not persist the resolved token into service environment metadata.
     - Reinstall and update preserve existing service values for active env SecretRefs, including Gateway tokens and passwords. On Linux and macOS, legacy inline values move into the generated owner-only env file before the unit or LaunchAgent is rewritten. This does not make service credentials available to interactive CLI commands.
-    - If token auth requires a token and the configured token SecretRef is unresolved, install fails closed instead of persisting fallback plaintext.
+    - If token auth requires a token and the configured token SecretRef is unresolved, install stops instead of persisting fallback plaintext.
     - For password auth on `gateway run`, prefer `OPENCLAW_GATEWAY_PASSWORD`, `--password-file`, or a SecretRef-backed `gateway.auth.password` over inline `--password`.
     - In inferred auth mode, shell-only `OPENCLAW_GATEWAY_PASSWORD` does not relax install token requirements; use durable config (`gateway.auth.password` or config `env`) when installing a managed service.
     - If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, install is blocked until mode is set explicitly.

@@ -1,13 +1,13 @@
-/* ===========================================
-   Dreams Tab – Sleeping Lobster Animation
-   =========================================== */
-
-.dreams-page {
+.dreams-page,
+.dreams__panel {
   display: flex;
   flex-direction: column;
-  height: 100%;
   min-height: 0;
   overflow: hidden;
+}
+
+.dreams-page {
+  height: 100%;
 }
 
 .agent-memory-panel__header {
@@ -20,11 +20,7 @@
 }
 
 .dreams__panel {
-  display: flex;
   flex: 1 1 auto;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
 }
 
 .dreams {
@@ -197,7 +193,6 @@
   }
 }
 
-/* Bubble trail dots */
 .dreams__bubble-dot {
   position: absolute;
   border-radius: 50%;
@@ -305,9 +300,19 @@
   letter-spacing: 0.06em;
 }
 
-.dreams__phase-next {
+.dreams__phase-next,
+.dreams-advanced__summary,
+.dreams-advanced__section-description,
+.dreams-diary__explainer,
+.dreams-diary__insight-meta,
+.dreams-diary__preview-meta,
+.dreams-diary__preview-hint,
+.dreams-diary__empty-hint {
   font-size: 12px;
   color: var(--muted);
+}
+
+.dreams__phase-next {
   font-variant-numeric: tabular-nums;
 }
 
@@ -459,7 +464,8 @@
   color: var(--muted);
 }
 
-.dreams-advanced__actions {
+.dreams-advanced__actions,
+.dreams-advanced__section-toolbar {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -468,9 +474,7 @@
 
 .dreams-advanced__summary {
   margin-top: 12px;
-  font-size: 12px;
   line-height: 1.5;
-  color: var(--muted);
 }
 
 .dreams-advanced__sections {
@@ -514,16 +518,7 @@
 
 .dreams-advanced__section-description {
   margin: 6px 0 0;
-  font-size: 12px;
   line-height: 1.5;
-  color: var(--muted);
-}
-
-.dreams-advanced__section-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
 }
 
 .dreams-advanced__section-count {
@@ -675,9 +670,7 @@
 .dreams-diary__explainer {
   width: min(100%, 920px);
   margin: 0 0 16px;
-  font-size: 12px;
   line-height: 1.6;
-  color: var(--muted);
 }
 
 .dreams-diary__entry {
@@ -709,7 +702,6 @@
   }
 }
 
-/* Left accent glow line */
 .dreams-diary__accent {
   position: absolute;
   top: 4px;
@@ -790,7 +782,6 @@
 }
 
 .dreams-diary__prose {
-  /* no styling container needed, just prose spacing */
   max-width: 100%;
   min-width: 0;
   overflow-x: clip;
@@ -837,8 +828,6 @@
 }
 
 .dreams-diary__insight-meta {
-  font-size: 12px;
-  color: var(--muted);
   margin-bottom: 10px;
 }
 
@@ -946,9 +935,7 @@
 
 .dreams-diary__preview-meta {
   margin-top: 6px;
-  font-size: 12px;
   line-height: 1.5;
-  color: var(--muted);
   overflow-wrap: anywhere;
 }
 
@@ -961,9 +948,7 @@
 
 .dreams-diary__preview-hint {
   margin-bottom: 12px;
-  font-size: 12px;
   line-height: 1.5;
-  color: var(--muted);
 }
 
 .dreams-diary__preview-pre {
@@ -1029,8 +1014,6 @@
 }
 
 .dreams-diary__empty-hint {
-  font-size: 12px;
-  color: var(--muted);
   opacity: 0.4;
 }
 

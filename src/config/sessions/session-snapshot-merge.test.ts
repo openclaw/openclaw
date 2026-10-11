@@ -46,6 +46,19 @@ describe("session snapshot merge", () => {
     expect(mergeSessionEntry(initial, { sandbox: "required" })).not.toHaveProperty("sandbox");
   });
 
+  it.each([undefined, "plugin-dock"] as const)(
+    "retains creation surface %s through merge and transcript rollover",
+    (createdSurface) => {
+      const existing = { ...initial, createdSurface };
+      for (const surface of [undefined, "plugin-dock"] as const) {
+        expect(
+          mergeSessionEntry(existing, { sessionId: "new-transcript", createdSurface: surface })
+            .createdSurface,
+        ).toBe(createdSurface);
+      }
+    },
+  );
+
   it("keeps a concurrently changed model pair", () => {
     const next = { ...initial, model: "claude-sonnet-4-6", updatedAt: 2 };
     const current = {

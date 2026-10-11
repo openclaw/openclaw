@@ -57,15 +57,15 @@ export function isUpdateConfigRuntimeAlias(
   if (!contents.includes(target) || !contents.endsWith(bindings)) {
     return false;
   }
-  // 2026.9.5/9.6 shipped a9fea70fc's fd-3/query-guard template. Retain it only
-  // for that upgrade window; only the target and exact generated bindings vary.
+  // 2026.9.5-9.8 shipped the older diagnostic templates. Retain only those
+  // exact bodies for that upgrade window; the target and generated bindings vary.
   const body = contents
     .slice(0, -bindings.length)
     .replace(target, 'const target = new URL("./", import.meta.url).href;');
-  return (
-    createHash("sha256").update(body).digest("hex") ===
-    "f1e325b58b57ccc6f958a025bcb068bdcdc773fde0c61dc7913179c1540f2607"
-  );
+  return [
+    "f1e325b58b57ccc6f958a025bcb068bdcdc773fde0c61dc7913179c1540f2607",
+    "dc8d98455b7518b7eb4f4777dee6c089d2524a7e8f9dba4b5866ec551ec03931",
+  ].includes(createHash("sha256").update(body).digest("hex"));
 }
 
 /** The stable config entrypoint is consumed by shipped updaters after replacing their own tree. */
@@ -120,7 +120,7 @@ function childEnv(operation, args, options) {
   if (process.env.OPENCLAW_CONFIG_READ_CHILD === "1") {
     const error = new Error("A config reader child cannot launch another reader.");
     error.code = "candidate-config-read-recursion";
-    console.error("[update:warning:" + error.code + "] " + error.message);
+    console.warn("[update:warning:" + error.code + "] " + error.message);
     throw error;
   }
   const selected = options?.env ?? (operation === "readCurrentConfigForPolicyCheck" ? args[0]?.env : undefined) ?? process.env;
@@ -138,7 +138,7 @@ function finish(code, output, logger) {
   if (code === 0 && result?.ok === true) return result.value;
   const error = new Error("Candidate config read failed; the existing service definition was left unchanged. Retry with the updated CLI.");
   error.code = "candidate-config-read-failed";
-  console.error("[update:warning:" + error.code + "] " + error.message);
+  console.warn("[update:warning:" + error.code + "] " + error.message);
   throw error;
 }
 function readSync(operation, args = [], options, factory = false) {

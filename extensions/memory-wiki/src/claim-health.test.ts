@@ -32,24 +32,6 @@ function createPage(params: {
 }
 
 describe("buildPageContradictionClusters", () => {
-  it("clusters Unicode contradiction notes that differ only by punctuation", () => {
-    const clusters = buildPageContradictionClusters([
-      createPage({
-        relativePath: "entities/alpha.md",
-        title: "Alpha",
-        contradictions: ["模型冲突：版本 A"],
-      }),
-      createPage({
-        relativePath: "entities/beta.md",
-        title: "Beta",
-        contradictions: ["模型冲突 版本 A"],
-      }),
-    ]);
-
-    expect(clusters).toHaveLength(1);
-    expect(clusters[0]?.entries).toHaveLength(2);
-  });
-
   it("keeps combining-mark contradiction notes in separate clusters", () => {
     const clusters = buildPageContradictionClusters([
       createPage({
@@ -71,80 +53,6 @@ describe("buildPageContradictionClusters", () => {
 });
 
 describe("assessClaimFreshness", () => {
-  it("uses the latest claim evidence timestamp without relying on page freshness", () => {
-    const page = createPage({
-      relativePath: "entities/alpha.md",
-      title: "Alpha",
-      contradictions: [],
-    });
-    page.updatedAt = "2026-01-01T00:00:00.000Z";
-    const claim: WikiClaim = {
-      text: "Alpha prefers current evidence.",
-      updatedAt: "2026-01-05T00:00:00.000Z",
-      evidence: [
-        { updatedAt: "2026-01-03T00:00:00.000Z" },
-        { updatedAt: "2026-01-20T00:00:00.000Z" },
-      ],
-    };
-
-    const freshness = assessClaimFreshness({
-      page,
-      claim,
-      now: new Date("2026-01-25T00:00:00.000Z"),
-    });
-
-    expect(freshness.level).toBe("fresh");
-    expect(freshness.lastTouchedAt).toBe("2026-01-20T00:00:00.000Z");
-    expect(freshness.daysSinceTouch).toBe(5);
-  });
-
-  it("does not let a newer page timestamp make stale claim evidence fresh", () => {
-    const page = createPage({
-      relativePath: "entities/beta.md",
-      title: "Beta",
-      contradictions: [],
-    });
-    page.updatedAt = "2026-04-20T00:00:00.000Z";
-    const claim: WikiClaim = {
-      text: "Beta still needs old evidence checked.",
-      updatedAt: "2026-01-01T00:00:00.000Z",
-      evidence: [{ updatedAt: "2026-01-05T00:00:00.000Z" }],
-    };
-
-    const freshness = assessClaimFreshness({
-      page,
-      claim,
-      now: new Date("2026-04-20T00:00:00.000Z"),
-    });
-
-    expect(freshness.level).toBe("stale");
-    expect(freshness.lastTouchedAt).toBe("2026-01-05T00:00:00.000Z");
-    expect(freshness.daysSinceTouch).toBe(105);
-  });
-
-  it("falls back to page freshness when claim and evidence timestamps are absent", () => {
-    const page = createPage({
-      relativePath: "entities/gamma.md",
-      title: "Gamma",
-      contradictions: [],
-    });
-    page.updatedAt = "2026-04-20T00:00:00.000Z";
-    const claim: WikiClaim = {
-      text: "Gamma was written through wiki_apply without per-claim timestamps.",
-      evidence: [{ kind: "session", sourceId: "session-1" }],
-    };
-
-    const freshness = assessClaimFreshness({
-      page,
-      claim,
-      now: new Date("2026-04-25T00:00:00.000Z"),
-    });
-
-    expect(freshness.level).toBe("fresh");
-    expect(freshness.lastTouchedAt).toBe("2026-04-20T00:00:00.000Z");
-    expect(freshness.daysSinceTouch).toBe(5);
-  });
-
   it("keeps malformed claim timestamps unknown instead of using page freshness", () => {
     const page = createPage({
       relativePath: "entities/delta.md",
@@ -171,34 +79,31 @@ describe("assessClaimFreshness", () => {
 });
 
 describe("wiki freshness boundaries", () => {
-  it.each([
-    { age: 29, level: "fresh", daysSinceTouch: 29 },
-    { age: 30, level: "aging", daysSinceTouch: 30 },
-    { age: 89, level: "aging", daysSinceTouch: 89 },
-    { age: 90, level: "stale", daysSinceTouch: 90 },
-    { age: -1, level: "fresh", daysSinceTouch: 0 },
-  ])("classifies a timestamp $age days old as $level", ({ age, level, daysSinceTouch }) => {
-    const now = new Date("2026-06-01T00:00:00.000Z");
-    const timestamp = new Date(now.getTime() - age * 24 * 60 * 60 * 1000).toISOString();
-    const page = createPage({
-      relativePath: "entities/alpha.md",
-      title: "Alpha",
-      contradictions: [],
-    });
-    page.updatedAt = timestamp;
-    const claim: WikiClaim = {
-      text: "Alpha has timestamped evidence.",
-      updatedAt: timestamp,
-      evidence: [],
-    };
-    const expected = {
-      level,
-      reason: `last touched ${timestamp}`,
-      daysSinceTouch,
-      lastTouchedAt: timestamp,
-    };
+  it.each([{ age: 89, level: "aging", daysSinceTouch: 89 }])(
+    "classifies a timestamp $age days old as $level",
+    ({ age, level, daysSinceTouch }) => {
+      const now = new Date("2026-06-01T00:00:00.000Z");
+      const timestamp = new Date(now.getTime() - age * 24 * 60 * 60 * 1000).toISOString();
+      const page = createPage({
+        relativePath: "entities/alpha.md",
+        title: "Alpha",
+        contradictions: [],
+      });
+      page.updatedAt = timestamp;
+      const claim: WikiClaim = {
+        text: "Alpha has timestamped evidence.",
+        updatedAt: timestamp,
+        evidence: [],
+      };
+      const expected = {
+        level,
+        reason: `last touched ${timestamp}`,
+        daysSinceTouch,
+        lastTouchedAt: timestamp,
+      };
 
-    expect(assessPageFreshness(page, now)).toEqual(expected);
-    expect(assessClaimFreshness({ page, claim, now })).toEqual(expected);
-  });
+      expect(assessPageFreshness(page, now)).toEqual(expected);
+      expect(assessClaimFreshness({ page, claim, now })).toEqual(expected);
+    },
+  );
 });

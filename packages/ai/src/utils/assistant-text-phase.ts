@@ -17,8 +17,8 @@ function isAssistantTextPhaseBlock(block: unknown): block is AssistantTextPhaseB
 function tagUnphasedText(
   content: ReadonlyArray<unknown>,
   phase: "commentary" | "final_answer",
-  idPrefix: string,
 ): PendingCommentaryTags {
+  const idPrefix = phase === "commentary" ? "commentary" : "final-answer";
   const textBlocks = content.filter(isAssistantTextPhaseBlock);
   let phaseIndex = textBlocks.filter((block) => block.textSignature !== undefined).length;
   const tagged: PendingCommentaryTags = new Map();
@@ -43,7 +43,7 @@ function tagUnphasedText(
 
 /** Tags unphased narration before a tool-call event becomes consumer-visible. */
 export function tagPendingCommentaryText(content: ReadonlyArray<unknown>): PendingCommentaryTags {
-  return tagUnphasedText(content, "commentary", "commentary");
+  return tagUnphasedText(content, "commentary");
 }
 
 /** Records the confirmed final-answer boundary after reasoning resumes. */
@@ -68,12 +68,10 @@ export function tagInterruptedTextPhases(
   tagUnphasedText(
     content.slice(0, finalAnswerIndex).filter((block) => !preservedVisibleText.has(block)),
     "commentary",
-    "commentary",
   );
   tagUnphasedText(
     content.filter((block, index) => index >= finalAnswerIndex || preservedVisibleText.has(block)),
     "final_answer",
-    "final-answer",
   );
 }
 
@@ -83,7 +81,7 @@ export function tagUnresolvedTextAsCommentary(message: {
   openclawDelivery?: { textPhaseRequiresTerminal?: true };
 }): void {
   if (message.openclawDelivery?.textPhaseRequiresTerminal) {
-    tagUnphasedText(message.content, "commentary", "commentary");
+    tagUnphasedText(message.content, "commentary");
   }
 }
 

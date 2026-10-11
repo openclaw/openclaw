@@ -81,19 +81,6 @@ function cacheIMessagePrivateApiStatus(
   }
 }
 
-function getCachedRpcSupport(cliPath: string): RpcSupportResult | undefined {
-  const cached = rpcSupportCache.get(cliPath);
-  if (!cached) {
-    return undefined;
-  }
-  const now = asDateTimestampMs(Date.now());
-  if (now === undefined || cached.expiresAt <= now) {
-    rpcSupportCache.delete(cliPath);
-    return undefined;
-  }
-  return cached.result;
-}
-
 function setCachedRpcSupport(cliPath: string, result: RpcSupportResult): void {
   const expiresAt = resolveExpiresAtMsFromDurationMs(RPC_SUPPORT_CACHE_TTL_MS);
   if (expiresAt === undefined) {
@@ -102,25 +89,14 @@ function setCachedRpcSupport(cliPath: string, result: RpcSupportResult): void {
   rpcSupportCache.set(cliPath, { result, expiresAt });
 }
 
-function isDefaultLocalIMessageCliPath(cliPath: string): boolean {
-  const trimmed = cliPath.trim();
-  return trimmed === "imsg" || (!trimmed.includes("/") && path.basename(trimmed) === "imsg");
-}
-
-function resolveIMessageNonMacHostError(
-  cliPath: string,
-  platform: NodeJS.Platform = process.platform,
-): string | undefined {
-  if (platform === "darwin" || !isDefaultLocalIMessageCliPath(cliPath)) {
-    return undefined;
-  }
-  return "iMessage via the default imsg CLI must run on macOS. Run OpenClaw on the signed-in Messages Mac, or set channels.imessage.cliPath to an SSH wrapper that runs imsg on that Mac.";
-}
-
 async function probeRpcSupport(cliPath: string, timeoutMs: number): Promise<RpcSupportResult> {
-  const cached = getCachedRpcSupport(cliPath);
+  const cached = rpcSupportCache.get(cliPath);
   if (cached) {
-    return cached;
+    const now = asDateTimestampMs(Date.now());
+    if (now !== undefined && cached.expiresAt > now) {
+      return cached.result;
+    }
+    rpcSupportCache.delete(cliPath);
   }
   try {
     const result = await runCommandWithTimeout([expandIMessageUserPath(cliPath), "rpc", "--help"], {
@@ -149,42 +125,6 @@ async function probeRpcSupport(cliPath: string, timeoutMs: number): Promise<RpcS
   } catch (err) {
     return { supported: false, error: String(err) };
   }
-}
-
-function parseStatusPayload(stdout: string): {
-  payload: Record<string, unknown> | null;
-  firstLineSnippet?: string;
-} {
-  const lines = normalizeStringEntries(stdout.split(/\r?\n/));
-  for (const line of lines.toReversed()) {
-    try {
-      const value = JSON.parse(line);
-      if (value && typeof value === "object" && !Array.isArray(value)) {
-        return { payload: value as Record<string, unknown> };
-      }
-    } catch {
-      // Continue scanning earlier JSONL records.
-    }
-  }
-  // No JSONL line parsed. Surface a small snippet of the first non-empty
-  // line so the operator can grep imsg release notes if the status output
-  // schema has shifted.
-  const snippet = lines[0] ? truncateUtf16Safe(lines[0], 120) : undefined;
-  return { payload: null, firstLineSnippet: snippet };
-}
-
-function selectorsFromPayload(payload: Record<string, unknown>): Record<string, boolean> {
-  const raw = payload.selectors;
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return {};
-  }
-  const selectors: Record<string, boolean> = {};
-  for (const [key, value] of Object.entries(raw)) {
-    if (typeof value === "boolean") {
-      selectors[key] = value;
-    }
-  }
-  return selectors;
 }
 
 // Inspect help without sending; failed probes leave the capability disabled.
@@ -246,8 +186,30 @@ export async function probeIMessagePrivateApi(
       cacheIMessagePrivateApiStatus(key, status);
       return status;
     }
-    const { payload, firstLineSnippet } = parseStatusPayload(result.stdout);
-    const selectors = payload ? selectorsFromPayload(payload) : {};
+    const lines = normalizeStringEntries(result.stdout.split(/\r?\n/));
+    let payload: Record<string, unknown> | null = null;
+    for (const line of lines.toReversed()) {
+      try {
+        const value = JSON.parse(line);
+        if (value && typeof value === "object" && !Array.isArray(value)) {
+          payload = value as Record<string, unknown>;
+          break;
+        }
+      } catch {
+        // Continue scanning earlier JSONL records.
+      }
+    }
+    // Preserve a bounded diagnostic when no status record can be read.
+    const firstLineSnippet = !payload && lines[0] ? truncateUtf16Safe(lines[0], 120) : undefined;
+    const rawSelectors = payload?.selectors;
+    const selectors: Record<string, boolean> = {};
+    if (rawSelectors && typeof rawSelectors === "object" && !Array.isArray(rawSelectors)) {
+      for (const [selector, value] of Object.entries(rawSelectors)) {
+        if (typeof value === "boolean") {
+          selectors[selector] = value;
+        }
+      }
+    }
     const rpcMethods = filterStringEntries(payload?.rpc_methods);
     const advancedFeatures = payload?.advanced_features === true;
     const v2Ready = payload?.v2_ready === true;
@@ -321,9 +283,16 @@ export async function probeIMessage(
   const effectiveTimeout =
     timeoutMs ?? cfg?.channels?.imessage?.probeTimeoutMs ?? DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS;
 
-  const nonMacHostError = resolveIMessageNonMacHostError(cliPath, opts.platform);
-  if (nonMacHostError) {
-    return { ok: false, fatal: true, error: nonMacHostError };
+  if (
+    (opts.platform ?? process.platform) !== "darwin" &&
+    (cliPath === "imsg" || (!cliPath.includes("/") && path.basename(cliPath) === "imsg"))
+  ) {
+    return {
+      ok: false,
+      fatal: true,
+      error:
+        "iMessage via the default imsg CLI must run on macOS. Run OpenClaw on the signed-in Messages Mac, or set channels.imessage.cliPath to an SSH wrapper that runs imsg on that Mac.",
+    };
   }
 
   const detected = await detectBinary(expandIMessageUserPath(cliPath));

@@ -1,9 +1,7 @@
 import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { LinkModelConfig, LinkToolsConfig } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
-// Link-understanding runner fetches allowed URLs and invokes configured commands with bounded content.
 import { createAbortError, isAbortError } from "../infra/abort-signal.js";
 import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
@@ -13,46 +11,8 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { DEFAULT_LINK_TIMEOUT_SECONDS } from "./defaults.js";
 import { extractLinksFromMessage } from "./detect.js";
 
-function resolveTimeoutMsFromConfig(params: {
-  config?: LinkToolsConfig;
-  entry: LinkModelConfig;
-}): number {
-  const configured = params.entry.timeoutSeconds ?? params.config?.timeoutSeconds;
-  return resolveTimeoutMs(configured, DEFAULT_LINK_TIMEOUT_SECONDS);
-}
-
-function resolveFetchTimeoutMsFromConfig(params: {
-  config?: LinkToolsConfig;
-  entries: LinkModelConfig[];
-}): number {
-  // The HTTP fetch phase is independent of any single CLI execution, so honor
-  // an explicit global link-tools timeout first. Otherwise use the largest
-  // per-entry timeout so slower entries are not capped by the first entry.
-  if (params.config?.timeoutSeconds != null) {
-    return resolveTimeoutMs(params.config.timeoutSeconds, DEFAULT_LINK_TIMEOUT_SECONDS);
-  }
-  return Math.max(
-    ...params.entries.map((entry) => resolveTimeoutMsFromConfig({ config: params.config, entry })),
-  );
-}
-
 function isLinkUrlTemplate(value: string): boolean {
   return value.includes("LinkUrl") || value.includes("LinkFinalUrl");
-}
-
-function commandName(command: string): string {
-  return (command.split(/[\\/]/).pop() ?? command).toLowerCase();
-}
-
-function isUrlFetcherCommand(command: string): boolean {
-  return commandName(command) === "curl" || commandName(command) === "wget";
-}
-
-function buildLinkCliArgs(params: { args: string[]; ctx: MsgContext }): string[] {
-  const templCtx = { ...params.ctx };
-  return params.args
-    .filter((arg) => !isLinkUrlTemplate(arg))
-    .map((arg) => applyTemplate(arg, templCtx));
 }
 
 async function fetchLinkContent(params: {
@@ -90,105 +50,6 @@ async function fetchLinkContent(params: {
   }
 }
 
-async function runCliEntry(params: {
-  content: string;
-  entry: LinkModelConfig;
-  finalUrl: string;
-  ctx: MsgContext;
-  url: string;
-  config?: LinkToolsConfig;
-  signal?: AbortSignal;
-}): Promise<string | null> {
-  if ((params.entry.type ?? "cli") !== "cli") {
-    return null;
-  }
-  const command = params.entry.command.trim();
-  if (!command) {
-    return null;
-  }
-  const args = params.entry.args ?? [];
-  const timeoutMs = resolveTimeoutMsFromConfig({ config: params.config, entry: params.entry });
-  if (isUrlFetcherCommand(command) && args.some(isLinkUrlTemplate)) {
-    // curl/wget URL templates mark the entry as a fetcher; guarded fetch already supplied content.
-    return params.content;
-  }
-
-  const argv = [
-    command,
-    ...buildLinkCliArgs({
-      args,
-      ctx: params.ctx,
-    }),
-  ];
-
-  if (shouldLogVerbose()) {
-    logVerbose(`Link understanding via CLI: ${argv.join(" ")}`);
-  }
-
-  const result = await runCommandWithTimeout(argv, {
-    timeoutMs,
-    input: params.content,
-    signal: params.signal,
-    // Processor wrappers and their children share the reply's cancellation lifetime.
-    killProcessTree: true,
-    env: {
-      OPENCLAW_LINK_FINAL_URL: params.finalUrl,
-      OPENCLAW_LINK_URL: params.url,
-    },
-  });
-  if (params.signal?.aborted) {
-    throw createAbortError("Link understanding command aborted", { cause: params.signal.reason });
-  }
-  if (result.code !== 0) {
-    throw new Error(`Link understanding command exited with code ${result.code ?? "unknown"}`);
-  }
-  const trimmed = result.stdout.trim();
-  return trimmed || null;
-}
-
-async function runLinkEntries(params: {
-  content: string;
-  entries: LinkModelConfig[];
-  finalUrl: string;
-  ctx: MsgContext;
-  url: string;
-  config?: LinkToolsConfig;
-  signal?: AbortSignal;
-}): Promise<string | null> {
-  let lastError: unknown;
-  for (const entry of params.entries) {
-    if (params.signal?.aborted) {
-      break;
-    }
-    try {
-      const output = await runCliEntry({
-        content: params.content,
-        entry,
-        finalUrl: params.finalUrl,
-        ctx: params.ctx,
-        url: params.url,
-        config: params.config,
-        signal: params.signal,
-      });
-      if (output) {
-        return output;
-      }
-    } catch (err) {
-      if (isAbortError(err)) {
-        throw err;
-      }
-      lastError = err;
-      if (shouldLogVerbose()) {
-        logVerbose(`Link understanding failed for ${params.url}: ${String(err)}`);
-      }
-    }
-  }
-  if (lastError && shouldLogVerbose()) {
-    logVerbose(`Link understanding exhausted for ${params.url}`);
-  }
-  return null;
-}
-
 /**
  * Fetches detected links through the SSRF guard and runs configured CLI processors.
  */
@@ -223,7 +84,15 @@ export async function runLinkUnderstanding(params: {
   }
 
   const outputs: string[] = [];
-  const timeoutMs = resolveFetchTimeoutMsFromConfig({ config, entries });
+  // Fetch honors the global timeout, or the slowest configured processor.
+  const timeoutMs =
+    config.timeoutSeconds != null
+      ? resolveTimeoutMs(config.timeoutSeconds, DEFAULT_LINK_TIMEOUT_SECONDS)
+      : Math.max(
+          ...entries.map((entry) =>
+            resolveTimeoutMs(entry.timeoutSeconds, DEFAULT_LINK_TIMEOUT_SECONDS),
+          ),
+        );
   for (const url of links) {
     if (params.signal?.aborted) {
       break;
@@ -246,22 +115,79 @@ export async function runLinkUnderstanding(params: {
     if (!fetched) {
       continue;
     }
-    const output =
-      (await runLinkEntries({
-        content: fetched.content,
-        entries,
-        finalUrl: fetched.finalUrl,
-        ctx: params.ctx,
-        url,
-        config,
-        signal: params.signal,
-      })) ?? fetched.content;
+    let output: string | undefined;
+    let lastError: unknown;
+    for (const entry of entries) {
+      if (params.signal?.aborted) {
+        break;
+      }
+      try {
+        if ((entry.type ?? "cli") !== "cli") {
+          continue;
+        }
+        const command = entry.command.trim();
+        if (!command) {
+          continue;
+        }
+        const args = entry.args ?? [];
+        const name = (command.split(/[\\/]/).pop() ?? command).toLowerCase();
+        if ((name === "curl" || name === "wget") && args.some(isLinkUrlTemplate)) {
+          // Guarded fetch already supplied content for these fetch-only entries.
+          output = fetched.content;
+          break;
+        }
+        const templCtx = { ...params.ctx };
+        const argv = [
+          command,
+          ...args
+            .filter((arg) => !isLinkUrlTemplate(arg))
+            .map((arg) => applyTemplate(arg, templCtx)),
+        ];
+        if (shouldLogVerbose()) {
+          logVerbose(`Link understanding via CLI: ${argv.join(" ")}`);
+        }
+        const result = await runCommandWithTimeout(argv, {
+          timeoutMs: resolveTimeoutMs(
+            entry.timeoutSeconds ?? config.timeoutSeconds,
+            DEFAULT_LINK_TIMEOUT_SECONDS,
+          ),
+          input: fetched.content,
+          signal: params.signal,
+          // Processor descendants share the reply's cancellation lifetime.
+          killProcessTree: true,
+          env: { OPENCLAW_LINK_FINAL_URL: fetched.finalUrl, OPENCLAW_LINK_URL: url },
+        });
+        if (params.signal?.aborted) {
+          throw createAbortError("Link understanding command aborted", {
+            cause: params.signal.reason,
+          });
+        }
+        if (result.code !== 0) {
+          throw new Error(
+            `Link understanding command exited with code ${result.code ?? "unknown"}`,
+          );
+        }
+        output = result.stdout.trim();
+        if (output) {
+          break;
+        }
+      } catch (err) {
+        if (isAbortError(err)) {
+          throw err;
+        }
+        lastError = err;
+        if (shouldLogVerbose()) {
+          logVerbose(`Link understanding failed for ${url}: ${String(err)}`);
+        }
+      }
+    }
+    if (!output && lastError && shouldLogVerbose()) {
+      logVerbose(`Link understanding exhausted for ${url}`);
+    }
     if (params.signal?.aborted) {
       break;
     }
-    if (output) {
-      outputs.push(output);
-    }
+    outputs.push(output || fetched.content);
   }
 
   return outputs;

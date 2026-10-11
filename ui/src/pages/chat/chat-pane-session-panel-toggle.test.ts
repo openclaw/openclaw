@@ -9,11 +9,15 @@ import {
   stubScreenshotMedia,
   createBrowserPanelTestMetrics,
 } from "../../components/browser/browser-panel-controller-test-support.ts";
-import { LINK_READER_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
+import {
+  LINK_READER_PANEL_TOGGLE_EVENT,
+  PLUGIN_PANEL_TOGGLE_EVENT,
+} from "../../components/panel-toggle-contract.ts";
 import {
   rememberSessionPanelToggle,
   type SessionPanelToggleSlot,
 } from "../../components/session-panel-toggle-buffer.ts";
+import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import {
   ChatPaneSessionPanelToggleController,
   type PendingSessionPanelToggle,
@@ -60,6 +64,7 @@ function fixture() {
     renderRoot: root,
     state,
     linkReaders: [reader],
+    pluginPanels: ["review/document"] as const,
     updateComplete: Promise.resolve(),
   };
   const pending = new Map<SessionPanelToggleSlot, PendingSessionPanelToggle>();
@@ -92,6 +97,45 @@ function fixture() {
 }
 
 afterEach(() => vi.restoreAllMocks());
+
+describe("plugin panel intent delivery", () => {
+  it.each(["buffered", "direct"] as const)(
+    "routes %s intents only to registered session panels",
+    (delivery) => {
+      const f = fixture();
+      const stop = f.controller.subscribe();
+      const send = (panelId: string, open: boolean) =>
+        new CustomEvent(PLUGIN_PANEL_TOGGLE_EVENT, {
+          detail: { pluginId: "review", panelId, sessionKey: "session-b", open },
+        });
+      try {
+        const event = send("document", true);
+        if (delivery === "buffered") {
+          rememberSessionPanelToggle("plugin:review/document", event);
+          f.controller.flush();
+        } else {
+          window.dispatchEvent(event);
+        }
+        expect(f.updateSidebarLayout).not.toHaveBeenCalled();
+        f.state.sessionKey = "session-b";
+        window.dispatchEvent(send("missing", true));
+        expect(f.updateSidebarLayout).not.toHaveBeenCalled();
+        if (delivery === "buffered") {
+          f.controller.flush();
+        } else {
+          window.dispatchEvent(event);
+        }
+        expect(isSidebarSlotVisible(f.state.sidebarLayout, "plugin:review/document")).toBe(true);
+        expect(f.pending.size).toBe(0);
+        expect(f.deliverPanelEvent).not.toHaveBeenCalled();
+        window.dispatchEvent(send("document", false));
+        expect(isSidebarSlotVisible(f.state.sidebarLayout, "plugin:review/document")).toBe(false);
+      } finally {
+        stop();
+      }
+    },
+  );
+});
 
 describe("session link-reader intent delivery", () => {
   it("delivers every buffered reader intent in order after the lazy commit", async () => {
@@ -133,9 +177,14 @@ describe("session link-reader intent delivery", () => {
     expect(f.pending.size).toBe(0);
   });
 
-  it.each([false, true])(
-    "a direct close cancels the complete pending batch (definitions ready=%s)",
-    async (ready) => {
+  it.each([
+    { change: "close", ready: false },
+    { change: "close", ready: true },
+    { change: "session", ready: true },
+    { change: "capability", ready: true },
+  ])(
+    "retires a pending batch after $change (definitions ready=$ready)",
+    async ({ change, ready }) => {
       const f = fixture();
       f.controller.handle("link-reader", "openclaw-link-reader-panel", f.event());
       f.controller.handle(
@@ -148,12 +197,18 @@ describe("session link-reader intent delivery", () => {
         await Promise.resolve();
         await Promise.resolve();
       }
-      f.controller.handle(
-        "link-reader",
-        "openclaw-link-reader-panel",
-        new CustomEvent(LINK_READER_PANEL_TOGGLE_EVENT, { detail: { open: false } }),
-      );
-      expect(f.pending.size).toBe(0);
+      if (change === "close") {
+        f.controller.handle(
+          "link-reader",
+          "openclaw-link-reader-panel",
+          new CustomEvent(LINK_READER_PANEL_TOGGLE_EVENT, { detail: { open: false } }),
+        );
+        expect(f.pending.size).toBe(0);
+      } else if (change === "session") {
+        f.state.sessionKey = "session-b";
+      } else {
+        f.owner.linkReaders = [];
+      }
       f.definitions.resolve(HTMLElement);
       f.commit.resolve(true);
       await f.commit.promise;
@@ -170,28 +225,6 @@ describe("session link-reader intent delivery", () => {
     expect(event.defaultPrevented).toBe(false);
     expect(f.updateSidebarLayout).not.toHaveBeenCalled();
   });
-
-  it.each(["session", "capability"] as const)(
-    "does not deliver after %s changes during the region commit",
-    async (change) => {
-      const f = fixture();
-      f.controller.handle("link-reader", "openclaw-link-reader-panel", f.event());
-      f.definitions.resolve(HTMLElement);
-      await Promise.resolve();
-      await Promise.resolve();
-      if (change === "session") {
-        f.state.sessionKey = "session-b";
-      }
-      if (change === "capability") {
-        f.owner.linkReaders = [];
-      }
-      f.commit.resolve(true);
-      await f.commit.promise;
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(f.deliverPanelEvent).not.toHaveBeenCalled();
-    },
-  );
 });
 
 it("delivers a browser card after the pane's scheduled render commits", async () => {
@@ -230,6 +263,7 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
         renderRoot: this,
         state: this.state,
         linkReaders: [],
+        pluginPanels: [],
         updateComplete: this.updateComplete,
       }),
       pending: this.pending,
@@ -252,7 +286,6 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
       return renderSidebarRegion({
         presentationId: "delayed-browser-card",
         availableWidth: 1400,
-        availableSlots: ["browser"],
         callbacks: {
           activatePanel: () => undefined,
           togglePanelExpanded: () => undefined,
@@ -264,17 +297,22 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
         },
         layout: this.state.sidebarLayout,
         narrow: false,
-        panelActions: {},
-        panelTemplates: {
-          browser: html`<openclaw-browser-panel
-            embedded
-            .available=${true}
-            .client=${gateway.client}
-            .sessionKey=${this.state.sessionKey}
-            .presented=${isSidebarSlotVisible(this.state.sidebarLayout, "browser")}
-            .refreshOnPresentation=${!this.pending.has("browser")}
-          ></openclaw-browser-panel>`,
-        },
+        panelDefinitions: sidebarPanelDefinitions().map((definition) =>
+          Object.assign(definition, {
+            available: definition.slot === "browser",
+            content:
+              definition.slot === "browser"
+                ? html`<openclaw-browser-panel
+                    embedded
+                    .available=${true}
+                    .client=${gateway.client}
+                    .sessionKey=${this.state.sessionKey}
+                    .presented=${isSidebarSlotVisible(this.state.sidebarLayout, "browser")}
+                    .refreshOnPresentation=${!this.pending.has("browser")}
+                  ></openclaw-browser-panel>`
+                : null,
+          }),
+        ),
         primary: html`<main>Conversation</main>`,
         requestUpdate: () => this.requestUpdate(),
       });
@@ -313,7 +351,7 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
     expect(
       pane
         .querySelector("openclaw-browser-panel")
-        ?.shadowRoot?.querySelector(".bp-shot")
+        ?.renderRoot?.querySelector(".bp-shot")
         ?.getAttribute("alt"),
     ).toBe("Local preview");
   } finally {

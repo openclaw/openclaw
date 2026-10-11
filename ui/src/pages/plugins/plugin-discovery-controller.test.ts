@@ -166,8 +166,6 @@ it("populates the grouped home page and keeps it visible during a refresh", asyn
 
   const loading = controller.refresh();
   expect(controller.loading).toBe(false);
-  expect(controller.featuredLoading).toBe(false);
-  expect(controller.trendingLoading).toBe(false);
   expect(controller.featured).toEqual([featured]);
   expect(controller.trending).toEqual([trending]);
   refresh.resolve({ items: [category], categories });
@@ -199,12 +197,14 @@ it("preserves home navigation when a category completes during the search deboun
   controller.selectCategory("channels");
   expect(controller.loading).toBe(true);
   controller.updateQuery("calendar");
+  expect(controller.loading).toBe(true);
 
   category.resolve({ items: categoryItems });
   await vi.advanceTimersByTimeAsync(0);
   expect(request).toHaveBeenCalledTimes(2);
   expect(request.mock.lastCall?.[1]).toMatchObject({ category: "channels" });
   expect(controller.result?.items).toEqual(categoryItems);
+  expect(controller.loading).toBe(true);
   expect.soft(controller.categories).toEqual(categories);
   expect.soft(controller.featured).toEqual([featured]);
   expect.soft(controller.trending).toEqual([trending]);
@@ -260,7 +260,7 @@ it("counts only settled manual searches across refresh, filters and connection i
     request.mockClear();
     controller.updateQuery(query);
     await vi.advanceTimersByTimeAsync(250);
-    expect(request.mock.lastCall?.[1]).toEqual({ intent: "all", query: "memory", pageSize: 100 });
+    expect(request).not.toHaveBeenCalled();
     expect(controller.result?.items).toEqual([entry(1)]);
   }
 
@@ -289,6 +289,126 @@ it("counts only settled manual searches across refresh, filters and connection i
   controller.disconnect();
   await vi.advanceTimersByTimeAsync(250);
   expect(request).not.toHaveBeenCalled();
+});
+
+it("restores the loaded overview immediately when clearing search and retires late results", async () => {
+  vi.useFakeTimers();
+  const overview = entry(1);
+  overview.catalog.featured = true;
+  overview.catalog.trending = true;
+  const lateSearch = createDeferred<PluginDiscoveryResult>();
+  const { controller, request } = setup([
+    { items: [overview] },
+    { items: [entry(2)] },
+    lateSearch.promise,
+  ]);
+  await controller.refresh();
+  controller.updateQuery("test");
+  await vi.advanceTimersByTimeAsync(250);
+  controller.updateQuery("memory");
+  await vi.advanceTimersByTimeAsync(250);
+  controller.updateQuery("");
+
+  expect(controller.loading).toBe(false);
+  expect(controller.result?.items).toEqual([overview]);
+  lateSearch.resolve({ items: [entry(3)] });
+  await vi.advanceTimersByTimeAsync(250);
+  expect(controller.result?.items).toEqual([overview]);
+  expect(request).toHaveBeenCalledTimes(3);
+});
+
+it.each(["category", "featured"] as const)(
+  "restores All when clearing a search before debounce from %s",
+  async (filter) => {
+    vi.useFakeTimers();
+    const { controller, request } = setup([{ items: [entry(2)] }, { items: [entry(1)] }]);
+    if (filter === "category") {
+      controller.category = "memory";
+    } else {
+      controller.intent = filter;
+    }
+    await controller.refresh();
+    controller.updateQuery("test");
+    controller.updateQuery("");
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(controller.intent).toBe("all");
+    expect(controller.category).toBeNull();
+    expect(controller.result?.items).toEqual([entry(1)]);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.lastCall?.[1]).toEqual({ intent: "all", pageSize: 100 });
+  },
+);
+
+it.each(["refresh", "disconnect", "invalidate"] as const)(
+  "reloads overview installation facts after %s while searching",
+  async (boundary) => {
+    vi.useFakeTimers();
+    const available = entry(1);
+    available.catalog.featured = true;
+    available.catalog.trending = true;
+    const installed: PluginDiscoveryEntry = {
+      ...available,
+      local: {
+        ...available.local,
+        installed: true,
+        enabled: true,
+        state: "enabled",
+        action: "manage",
+      },
+    };
+    const search = { items: [entry(2)] };
+    const freshOverview = createDeferred<PluginDiscoveryResult>();
+    const { controller, request } = setup([
+      { items: [available] },
+      search,
+      ...(boundary === "refresh" ? [search] : []),
+      freshOverview.promise,
+    ]);
+    await controller.refresh();
+    controller.updateQuery("memory");
+    await vi.advanceTimersByTimeAsync(250);
+
+    await controller[boundary]();
+    request.mockClear();
+    controller.updateQuery("");
+
+    expect(controller.loading).toBe(true);
+    expect(request).toHaveBeenCalledOnce();
+    expect(request.mock.lastCall?.[1]).toEqual({ intent: "all", pageSize: 100 });
+    freshOverview.resolve({ items: [installed] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(controller.result?.items).toEqual([installed]);
+    expect(controller.featured).toEqual([installed]);
+    expect(controller.trending).toEqual([installed]);
+    expect(controller.loading).toBe(false);
+  },
+);
+
+it("retries a degraded overview when returning from search", async () => {
+  vi.useFakeTimers();
+  const incomplete = entry(1);
+  const recovered = entry(2);
+  const recovery = createDeferred<PluginDiscoveryResult>();
+  const { controller, request } = setup([
+    { items: [incomplete], remoteError: "Catalog unavailable" },
+    { items: [entry(3)] },
+    recovery.promise,
+  ]);
+  await controller.refresh();
+  expect(controller.remoteError).toBe("Catalog unavailable");
+  controller.updateQuery("memory");
+  await vi.advanceTimersByTimeAsync(250);
+  request.mockClear();
+  controller.updateQuery("");
+
+  expect(controller.loading).toBe(true);
+  expect(request).toHaveBeenCalledOnce();
+  recovery.resolve({ items: [incomplete, recovered] });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(controller.result?.items).toEqual([incomplete, recovered]);
+  expect(controller.remoteError).toBeNull();
+  expect(controller.loading).toBe(false);
 });
 
 it("loads one bounded page initially and continues only after explicit expansion", async () => {

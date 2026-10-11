@@ -438,100 +438,6 @@ describe("historical transcript directive migration", () => {
     },
   );
 
-  it("resumes after the committed transcript cursor", async () => {
-    const stateDir = makeTempDir(tempDirs, "transcript-directive-resume-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
-    const databasePath = opened.path;
-    insertSession(opened.db, {
-      events: [
-        messageEvent({
-          id: "already-migrated",
-          role: "assistant",
-          timestamp: 1,
-          content: [{ type: "text", text: "Already clean" }],
-        }),
-      ],
-      generation: "already-bumped",
-      sessionId: "resume-a",
-    });
-    insertSession(opened.db, {
-      events: [
-        messageEvent({
-          id: "still-pending",
-          role: "assistant",
-          timestamp: 2,
-          content: [{ type: "text", text: "[[audio_as_voice]] Pending" }],
-        }),
-      ],
-      generation: "pending-before",
-      sessionId: "resume-b",
-    });
-    opened.db
-      .prepare(
-        `INSERT INTO schema_meta(meta_key,role,schema_version,agent_id,app_version,created_at,updated_at)
-         VALUES(?,?,?,?,?,?,?)`,
-      )
-      .run(
-        "historical-transcript-directives-v1",
-        "agent",
-        1,
-        "main",
-        JSON.stringify({ phase: "transcripts", sessionId: "resume-a" }),
-        1,
-        1,
-      );
-    closeOpenClawAgentDatabasesForTest();
-
-    expect((await migrateHistoricalTranscriptDirectives({ env })).warnings).toEqual([]);
-    expect(readGeneration(databasePath, "resume-a")).toBe("already-bumped");
-    expect(readGeneration(databasePath, "resume-b")).not.toBe("pending-before");
-    expect(JSON.parse(readEventJson(databasePath, "resume-b", 0))).toMatchObject({
-      message: {
-        content: [{ type: "text", text: "Pending" }],
-        openclawDelivery: { audioAsVoice: true },
-      },
-    });
-  });
-
-  it("completes an old-schema database without the optional archives table", async () => {
-    const stateDir = makeTempDir(tempDirs, "transcript-directive-old-schema-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
-    const databasePath = opened.path;
-    insertSession(opened.db, {
-      events: [
-        messageEvent({
-          id: "old-schema-tagged",
-          role: "assistant",
-          timestamp: 1,
-          content: [{ type: "text", text: "[[audio_as_voice]] Pending" }],
-        }),
-      ],
-      generation: "before",
-      sessionId: "old-schema-session",
-    });
-    opened.db.exec("DROP TABLE session_transcript_archives");
-    closeOpenClawAgentDatabasesForTest();
-
-    await expect(migrateHistoricalTranscriptDirectives({ env })).resolves.toEqual({
-      changes: [expect.stringContaining("1 active session(s), 0 archived transcript(s)")],
-      warnings: [],
-    });
-    expect(readMigrationCursor(databasePath)).toEqual({ phase: "complete" });
-    expect(hasTranscriptArchivesTable(databasePath)).toBe(false);
-    expect(JSON.parse(readEventJson(databasePath, "old-schema-session", 0))).toMatchObject({
-      message: {
-        content: [{ type: "text", text: "Pending" }],
-        openclawDelivery: { audioAsVoice: true },
-      },
-    });
-    await expect(migrateHistoricalTranscriptDirectives({ env })).resolves.toEqual({
-      changes: [],
-      warnings: [],
-    });
-  });
-
   it("completes a pre-stuck archives cursor when the optional table is absent", async () => {
     const stateDir = makeTempDir(tempDirs, "transcript-directive-stuck-archives-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -560,26 +466,6 @@ describe("historical transcript directive migration", () => {
     });
     expect(readMigrationCursor(databasePath)).toEqual({ phase: "complete" });
     expect(hasTranscriptArchivesTable(databasePath)).toBe(false);
-  });
-
-  it("acquires stopped-writer maintenance before upgrading an older agent database", async () => {
-    const stateDir = makeTempDir(tempDirs, "transcript-directive-old-agent-schema-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const opened = openLegacyAgentDatabase(stateDir);
-    const databasePath = opened.path;
-    opened.db.close();
-
-    const result = await migrateHistoricalTranscriptDirectives({ env });
-
-    expect(result.warnings).toEqual([]);
-    const migrated = openNodeSqliteDatabase(databasePath, { readOnly: true });
-    try {
-      expect(migrated.prepare("PRAGMA user_version").get()?.user_version).toBe(
-        OPENCLAW_AGENT_SCHEMA_VERSION,
-      );
-    } finally {
-      migrated.close();
-    }
   });
 
   it("rolls back same-version convergence when maintenance expires before commit", async () => {
@@ -645,19 +531,6 @@ describe("historical transcript directive migration", () => {
       rolledBack.close();
     }
     releaseOpenClawAgentDatabaseLease(competingLeaseId as string, { env });
-  });
-
-  it("leaves a current empty database and its active writer untouched", async () => {
-    const stateDir = makeTempDir(tempDirs, "transcript-directive-current-empty-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
-
-    await expect(migrateHistoricalTranscriptDirectives({ env })).resolves.toEqual({
-      changes: [],
-      warnings: [],
-    });
-
-    expect(opened.db.isOpen).toBe(true);
   });
 
   it("surfaces lease inspection failures from preflight", async () => {

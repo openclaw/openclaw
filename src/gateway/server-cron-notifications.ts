@@ -159,44 +159,14 @@ function redactCommandCronEventForExternalDelivery(evt: CronEvent, job?: CronJob
   return redacted;
 }
 
-function resolveCronCompletionWebhook(params: {
-  delivery?: {
-    mode?: string;
-    to?: string;
-    completionDestination?: { mode?: string; to?: string };
-  };
-}): string | undefined {
+function resolveCronCompletionWebhook(delivery: CronJob["delivery"]): string | undefined {
   if (
-    normalizeOptionalLowercaseString(params.delivery?.mode) !== "announce" ||
-    normalizeOptionalLowercaseString(params.delivery?.completionDestination?.mode) !== "webhook"
+    normalizeOptionalLowercaseString(delivery?.mode) !== "announce" ||
+    normalizeOptionalLowercaseString(delivery?.completionDestination?.mode) !== "webhook"
   ) {
     return undefined;
   }
-  return normalizeHttpWebhookUrl(params.delivery?.completionDestination?.to) ?? undefined;
-}
-
-function buildCronWebhookHeaders(webhookToken?: string): Record<string, string> {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
-  if (webhookToken) {
-    headers.Authorization = `Bearer ${webhookToken}`;
-  }
-  return headers;
-}
-
-function appendCronRunStarted(
-  message: string,
-  runAtMs: number | undefined,
-  config: OpenClawConfig,
-): string {
-  if (typeof runAtMs !== "number" || !Number.isFinite(runAtMs)) {
-    return message;
-  }
-  const timestamp = formatZonedTimestamp(new Date(runAtMs), {
-    timeZone: resolveUserTimezone(config.agents?.defaults?.userTimezone),
-  });
-  return timestamp ? `${message}\nRun started: ${timestamp}` : message;
+  return normalizeHttpWebhookUrl(delivery?.completionDestination?.to) ?? undefined;
 }
 
 function appendCronFailureAlertDetails(
@@ -205,12 +175,20 @@ function appendCronFailureAlertDetails(
   runAtMs: number | undefined,
   config: OpenClawConfig,
 ): string {
-  const withRunStarted = appendCronRunStarted(message, runAtMs, config);
+  let text = message;
+  if (typeof runAtMs === "number" && Number.isFinite(runAtMs)) {
+    const timestamp = formatZonedTimestamp(new Date(runAtMs), {
+      timeZone: resolveUserTimezone(config.agents?.defaults?.userTimezone),
+    });
+    if (timestamp) {
+      text += `\nRun started: ${timestamp}`;
+    }
+  }
   const inspectUrl = resolveControlUiAutomationRunUrl(config, {
     jobId,
     runId: runAtMs ? createCronExecutionId(jobId, runAtMs) : undefined,
   });
-  return inspectUrl ? `${withRunStarted}\nInspect: ${inspectUrl}` : withRunStarted;
+  return inspectUrl ? `${text}\nInspect: ${inspectUrl}` : text;
 }
 
 function buildCronFinishedWebhookPayload(evt: CronEvent) {
@@ -268,7 +246,10 @@ async function postCronWebhookStrict(params: {
     ...(params.signal ? { signal: params.signal } : {}),
     init: {
       method: "POST",
-      headers: buildCronWebhookHeaders(params.webhookToken),
+      headers: {
+        "Content-Type": "application/json",
+        ...(params.webhookToken ? { Authorization: `Bearer ${params.webhookToken}` } : {}),
+      },
       body: JSON.stringify(params.payload),
     },
   }).catch((error: unknown) => {
@@ -539,16 +520,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
     params.job?.payload.kind === "script"
       ? normalizeOptionalString(redactedWebhookEvent.summary)
       : params.evt.summary;
-  const completionWebhookUrl = resolveCronCompletionWebhook({
-    delivery:
-      params.job?.delivery && typeof params.job.delivery.mode === "string"
-        ? {
-            mode: params.job.delivery.mode,
-            to: params.job.delivery.to,
-            completionDestination: params.job.delivery.completionDestination,
-          }
-        : undefined,
-  });
+  const completionWebhookUrl = resolveCronCompletionWebhook(params.job?.delivery);
 
   if (
     params.job?.delivery?.completionDestination?.mode === "webhook" &&

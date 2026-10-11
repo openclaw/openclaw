@@ -84,12 +84,7 @@ function readSchemaVersions(db: DatabaseSync): ClawInstallSchemaVersionSnapshot 
   try {
     return decodeSchemaVersions(readClawInstallSchemaVersionRows(db));
   } catch (error) {
-    return {
-      kind: "state-error",
-      error,
-      knownAgentIds: new Set(),
-      ownershipUnknown: true,
-    };
+    return failedSchemaVersionSnapshot(error);
   }
 }
 
@@ -110,6 +105,19 @@ function isOwnershipUnknown(snapshot: ClawInstallSchemaVersionSnapshot | undefin
   );
 }
 
+function failedSchemaVersionSnapshot(
+  error: unknown,
+  previous?: ClawInstallSchemaVersionSnapshot,
+  ownershipUnknown = true,
+): Extract<ClawInstallSchemaVersionSnapshot, { kind: "state-error" }> {
+  return {
+    kind: "state-error",
+    error,
+    knownAgentIds: knownAgentIds(previous),
+    ownershipUnknown,
+  };
+}
+
 registerOpenClawStateDatabaseLifecycleListener((event) => {
   if (event.kind === "failure-cleared") {
     return;
@@ -120,27 +128,18 @@ registerOpenClawStateDatabaseLifecycleListener((event) => {
     snapshotsByPath.set(
       event.database.path,
       snapshot.kind === "state-error"
-        ? {
-            ...snapshot,
-            knownAgentIds: knownAgentIds(previous),
-            ownershipUnknown: isOwnershipUnknown(previous),
-          }
+        ? failedSchemaVersionSnapshot(snapshot.error, previous, isOwnershipUnknown(previous))
         : snapshot,
     );
-  } else if (event.kind === "open-error" || event.kind === "terminal-failure") {
-    snapshotsByPath.set(event.path, {
-      kind: "state-error",
-      error: event.error,
-      knownAgentIds: knownAgentIds(previous),
-      ownershipUnknown: isOwnershipUnknown(previous),
-    });
   } else {
-    snapshotsByPath.set(event.path, {
-      kind: "state-error",
-      error: new Error("OpenClaw state database closed before consent provenance verification."),
-      knownAgentIds: knownAgentIds(previous),
-      ownershipUnknown: isOwnershipUnknown(previous),
-    });
+    const error =
+      event.kind === "open-error" || event.kind === "terminal-failure"
+        ? event.error
+        : new Error("OpenClaw state database closed before consent provenance verification.");
+    snapshotsByPath.set(
+      event.path,
+      failedSchemaVersionSnapshot(error, previous, isOwnershipUnknown(previous)),
+    );
   }
   notifySnapshotListeners();
 });
@@ -242,12 +241,7 @@ export function initializeCachedClawInstallSchemaVersions(
     }, options);
     snapshotsByPath.set(path, resolveSchemaVersionSnapshot(snapshot, previous));
   } catch (error) {
-    snapshotsByPath.set(path, {
-      kind: "state-error",
-      error,
-      knownAgentIds: knownAgentIds(previous),
-      ownershipUnknown: true,
-    });
+    snapshotsByPath.set(path, failedSchemaVersionSnapshot(error, previous));
   }
   notifySnapshotListeners();
 }
@@ -297,12 +291,7 @@ export async function prepareClawInstallSchemaVersions(
       previous,
     );
   } catch (error) {
-    snapshot = {
-      kind: "state-error",
-      error,
-      knownAgentIds: knownAgentIds(previous),
-      ownershipUnknown: true,
-    };
+    snapshot = failedSchemaVersionSnapshot(error, previous);
   }
   return {
     path,
@@ -318,12 +307,7 @@ export async function prepareClawInstallSchemaVersions(
         }
         assertCurrent?.();
       } catch (error) {
-        snapshot = {
-          kind: "state-error",
-          error,
-          knownAgentIds: knownAgentIds(current),
-          ownershipUnknown: true,
-        };
+        snapshot = failedSchemaVersionSnapshot(error, current);
       }
       snapshotsByPath.set(path, snapshot);
       notifySnapshotListeners();

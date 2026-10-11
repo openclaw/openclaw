@@ -38,9 +38,9 @@ describe("agent harness TTS provenance capability", () => {
       provider: "microsoft",
       audioAsVoice: true,
     });
-    const tts = first.hostCapabilities
-      .createToolSurface?.({ config: {} })
-      .find((tool) => tool.name === "tts");
+    const tts = (await first.hostCapabilities.createToolSurfaceAsync?.({ config: {} }))?.find(
+      (tool) => tool.name === "tts",
+    );
     const observedResult = await tts?.execute?.("call-tts", { text: "hello" });
     if (!observedResult) {
       throw new Error("expected host-created TTS result");

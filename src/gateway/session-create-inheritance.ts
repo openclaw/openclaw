@@ -18,24 +18,24 @@ import { readResidentUserProfileId } from "../state/user-profile-list.js";
 import type { CreateGatewaySessionParams } from "./session-create-service.types.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
 import { invalidSessionRequest } from "./session-request-error.js";
-import {
-  loadGatewaySessionEntryReadOnly,
-  resolveGatewaySessionStoreTarget,
-} from "./session-utils.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
+import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 type SessionCreation = NonNullable<CreateGatewaySessionParams["creation"]> &
   Pick<SessionEntry, "inheritedGitContributorProfileIds">;
 
-/** Only an explicit parent supplies launch navigation; dashboard grouping is not lineage. */
+/** Inherit parent selection without replacing explicitly requested choices. */
 export function inheritSessionCreateParentFields(params: {
   parent: SessionEntry | undefined;
-  existing: SessionEntry | undefined;
+  newExplicitChild: boolean;
+  newDashboardRoot: boolean;
+  selectedModel?: string;
   overrides: Pick<
     CreateGatewaySessionParams,
-    "catalogTarget" | "model" | "toolOverrides" | "fastMode"
+    "catalogTarget" | "model" | "toolOverrides" | "fastMode" | "communication"
   >;
 }): Partial<InternalSessionEntry> {
-  const { parent, existing, overrides } = params;
+  const { parent, overrides } = params;
   const inherited =
     overrides.catalogTarget?.model.trim() || overrides.model?.trim()
       ? {}
@@ -47,10 +47,16 @@ export function inheritSessionCreateParentFields(params: {
     // Explicit choices have already been validated by the canonical patch owner.
     delete inherited.fastMode;
   }
-  return {
-    ...inherited,
-    ...(!existing && parent?.conversationLink ? { conversationLink: parent.conversationLink } : {}),
-  };
+  // Communication inheritance initializes only a new explicit child. Adopting a
+  // key or automatically grouping a dashboard root cannot replace its policy.
+  if (params.newExplicitChild && overrides.communication === undefined && parent?.communication) {
+    inherited.communication = { ...parent.communication };
+  }
+  // Main groups dashboard roots; it must not supply their reply-time model.
+  if (params.newDashboardRoot && !params.selectedModel) {
+    inherited.modelOverrideSource = "default";
+  }
+  return inherited;
 }
 
 /** Prepare the parent before lifecycle custody, while accepted input can still settle. */
@@ -60,10 +66,11 @@ export async function prepareSessionCreateParent(input: {
   agentId?: string;
   assertCurrent?: () => void;
 }) {
-  const target = resolveGatewaySessionStoreTarget({
+  const target = await resolveGatewaySessionStoreTargetInWorker({
     cfg: input.params.cfg,
     key: input.key,
     ...(input.agentId ? { agentId: input.agentId } : {}),
+    assertActive: input.assertCurrent,
   });
   if (input.params.creation?.via === "spawn") {
     await waitForSessionParticipantRecording({
@@ -146,6 +153,9 @@ export function resolveSessionCreateSpawnPolicy(
     spawnedBy: parentSessionKey,
     ...(completionOwnerSessionKey ? { completionOwnerSessionKey } : {}),
     inheritedToolPolicyVersion: 1,
+    ...(params.spawnToolPolicy.delegatedToolPolicy
+      ? { delegatedToolPolicy: params.spawnToolPolicy.delegatedToolPolicy }
+      : {}),
     ...(params.preparedPermissionSelection
       ? { permissionMode: params.preparedPermissionSelection.mode }
       : {}),

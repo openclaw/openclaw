@@ -14,8 +14,11 @@ How the Codex model catalog is discovered, and what happens when discovery fails
 
 By default, the Codex plugin asks the app-server for available models. Model
 availability is owned by Codex app-server, so the list can change when
-OpenClaw upgrades the bundled `@openai/codex` version or when a deployment
-points `appServer.command` at a different Codex binary. Availability can also
+OpenClaw upgrades the bundled `@openai/codex` version, when OpenClaw selects a
+[newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex),
+or when a deployment points `appServer.command` at a different Codex binary.
+ChatGPT-login model discovery reports the selected binary's version as its
+`client_version`, so the list matches the binary that runs turns. Availability can also
 be account-scoped. Use `/codex models` on a running gateway to see the live
 catalog for that harness and account.
 
@@ -26,12 +29,26 @@ look up hidden entries returned by `model/list`. The model must still be listed
 and support the required input modalities. Listing does not prove account
 entitlement.
 
-Native discovery reads `model/list` and `account/read` from the same scoped
+Native discovery is demand-driven. Gateway startup publishes configured model
+hints without starting an app-server for each agent. Opening an agent's model
+picker or catalog, creating a Codex session, running a turn, or requesting native
+auth/status information starts that agent's client when needed. Before discovery,
+native account readiness is unknown; configured hints are not proof of sign-in.
+First use of an idle agent can take a few seconds for the cold start.
+
+Discovery reads `model/list` and `account/read` from the same scoped
 app-server client. An API-key account remains API-key authentication; model
 listing does not imply a ChatGPT transport or endpoint. Picker readiness is
 valid only while that native owner and its account/config observation remain
 current. A missing account, failed refresh, account/config mutation, or retired
-client leaves native models unavailable until discovery succeeds again.
+client leaves native models unavailable until discovery succeeds again. The next
+picker/catalog request or native execution reacquires retired observations.
+
+A client with no owned work retires after 30 idle seconds. Requests in that grace
+period reuse it. Active requests, turns, retained or releasing threads, native
+children, background terminals, and ephemeral history retain their client until
+their owners release it. The existing warm-session executor and thread-retention
+policies remain in effect. Clients and accounts stay isolated by agent home.
 
 Use the Models page **Refresh** action (`models.list` with `view: "all"` and
 `refresh: true`) to publish the full catalog for the selected agent. Prepared-only
@@ -40,8 +57,9 @@ require the native owner's supported reload/restart and a catalog refresh;
 OpenClaw does not poll native home files for readiness. Authored host routes and
 explicit profile selections retain their existing auth and compatibility checks.
 
-The composer shows **Ultrafast** only when authenticated account discovery
-advertises that service tier for the selected model, account, route, and runtime.
+For the Codex runtime, the composer shows **Ultrafast** only when authenticated
+account discovery advertises that service tier for the selected model, account,
+route, and runtime.
 The OpenAI provider's existing account-scoped discovery supplies this observation;
 static catalog hints and the native app-server's fallback list do not establish
 access. Selecting a managed personal account prepares that account's catalog
@@ -54,6 +72,14 @@ that cannot use model discovery, and catalogs without explicit service-tier
 metadata leave this capability unknown. The composer hides Ultrafast in those
 cases rather than offering a disabled option. Discovery support describes
 availability, not a guarantee that an upstream request will receive that tier.
+
+The embedded OpenClaw runtime uses the available API-key OpenAI Responses route
+to offer Ultrafast without catalog metadata, whether the key comes from an auth
+profile, environment, or provider config (including SecretRefs). This remains
+subject to observed provider downgrades for the selected credential and route;
+see [Fast mode](/providers/openai/advanced#fast-mode).
+Codex-runtime Ultrafast with API-key authentication still requires the native
+catalog, including a pinned `model_catalog_json`, to list the tier for that model.
 
 Native catalog identifiers are runtime identifiers, not privacy labels. A
 deployment using a broker-owned alias must supply an alias-safe native catalog
@@ -93,7 +119,7 @@ response remains authoritative even if it contains no visible models; HTTP
 
 <Note>
 The current bundled harness is `@openai/codex` `0.160.0`. A `model/list`
-probe against that app-server in an isolated, unauthenticated Codex home returned
+check against that app-server in an isolated, unauthenticated Codex home returned
 these visible bundled catalog entries on October 2, 2026:
 
 | Model id        | Input modalities | Reasoning efforts                    | Default effort |
@@ -145,8 +171,7 @@ fallback and leave native models unavailable until discovery succeeds.
 }
 ```
 
-Disable discovery when you want startup to avoid probing Codex and use only
-the fallback catalog:
+Disable discovery to avoid native model/account catalog checks even on demand:
 
 ```json5
 {

@@ -307,42 +307,41 @@ describe("private node runtime installation", () => {
     });
   });
 
-  it("rejects archive integrity drift before installing anything", async () => {
-    await withTestDir({ prefix: "openclaw-node-integrity-" }, async (stateDir) => {
-      mocks.pack.mockResolvedValue({
-        ok: true,
-        archivePath: path.join(stateDir, "candidate.tgz"),
-        metadata: { ...metadata, integrity: `sha512-${Buffer.alloc(64, 2).toString("base64")}` },
-      });
-      await expect(prepareNodeRuntimeUpdate({ targetVersion: VERSION, stateDir })).rejects.toThrow(
-        "integrity drift",
-      );
-      expect(mocks.command).not.toHaveBeenCalled();
-      expect(await fs.readdir(stateDir)).toEqual([]);
-    });
-  });
-
-  it.each(["state", "agent"] as const)(
-    "defers a changed %s schema before downloading a release",
-    async (schema) => {
-      await withTestDir({ prefix: "openclaw-node-schema-" }, async (stateDir) => {
-        mocks.resolve.mockResolvedValue({
-          ok: true,
-          metadata: {
-            ...metadata,
-            packageOpenClaw: {
-              schemaVersions: {
-                state: OPENCLAW_STATE_SCHEMA_VERSION,
-                agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-                [schema]: 999,
+  it.each(["integrity", "state", "agent"] as const)(
+    "rejects changed %s before installing anything",
+    async (changed) => {
+      await withTestDir({ prefix: "openclaw-node-rejected-" }, async (stateDir) => {
+        if (changed === "integrity") {
+          mocks.pack.mockResolvedValue({
+            ok: true,
+            archivePath: path.join(stateDir, "candidate.tgz"),
+            metadata: {
+              ...metadata,
+              integrity: `sha512-${Buffer.alloc(64, 2).toString("base64")}`,
+            },
+          });
+        } else {
+          mocks.resolve.mockResolvedValue({
+            ok: true,
+            metadata: {
+              ...metadata,
+              packageOpenClaw: {
+                schemaVersions: {
+                  state: OPENCLAW_STATE_SCHEMA_VERSION,
+                  agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+                  [changed]: 999,
+                },
               },
             },
-          },
-        });
+          });
+        }
         await expect(
           prepareNodeRuntimeUpdate({ targetVersion: VERSION, stateDir }),
-        ).rejects.toThrow("openclaw update");
-        expect(mocks.pack).not.toHaveBeenCalled();
+        ).rejects.toThrow(changed === "integrity" ? "integrity drift" : "openclaw update");
+        if (changed !== "integrity") {
+          expect(mocks.pack).not.toHaveBeenCalled();
+        }
+        expect(mocks.command).not.toHaveBeenCalled();
         expect(await fs.readdir(stateDir)).toEqual([]);
       });
     },

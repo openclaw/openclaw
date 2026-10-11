@@ -1,12 +1,11 @@
 import {
-  placementTurnOwner,
+  projectPlacementTurnClaim,
   projectWorkerSessionTurnClaim,
   serializeWorkerSessionTurnClaim,
   type WorkerSessionPlacementRecord,
   type WorkerSessionTurnClaim,
 } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
-import type { PlacementTurnClaimAuthority } from "./placement-turn-authority.js";
 import {
   getWorkerTurnExecutionIdentityCapability,
   type WorkerTurnExecutionIdentityCapability,
@@ -46,7 +45,11 @@ export type WorkerSessionPlacementGate = {
     liveSeq?: number;
     assertCurrent?: () => void;
   }): Promise<void>;
-  prepareWorkspaceResultOwnerRevocation(binding: WorkerPlacementBinding, error: Error): void;
+  prepareWorkspaceResultOwnerRevocation(
+    binding: WorkerPlacementBinding,
+    error: Error,
+    assertCurrent?: () => void,
+  ): Promise<void>;
   registerTurnClaimClosedHandler(handler: (claim: WorkerSessionTurnClaim) => void): () => void;
 };
 
@@ -57,18 +60,11 @@ function claimForOwnerRevocation(
   if (
     (record?.state !== "active" && record?.state !== "draining") ||
     record.environmentId !== binding.environmentId ||
-    record.activeOwnerEpoch !== binding.ownerEpoch ||
-    !record.turnClaim
+    record.activeOwnerEpoch !== binding.ownerEpoch
   ) {
     return undefined;
   }
-  return {
-    sessionId: record.sessionId,
-    claimId: record.turnClaim.claimId,
-    runId: record.turnClaim.runId,
-    placementGeneration: record.turnClaim.generation,
-    owner: placementTurnOwner(record),
-  };
+  return projectPlacementTurnClaim(record);
 }
 
 export function createWorkerSessionPlacementGate(
@@ -85,7 +81,9 @@ export function createWorkerSessionPlacementGate(
   );
   const validateWorkerTurn = (claim: WorkerSessionTurnClaim) =>
     !recoveryOnlyClaims.has(serializeWorkerSessionTurnClaim(claim)) &&
-    store.validateTurnClaim(claim);
+    // Credential issuance precedes owner binding; attached turns already hold live authority.
+    (getWorkerTurnExecutionIdentityCapability(store, claim) !== undefined ||
+      store.validateTurnClaim(claim));
 
   const fenceWorkerTurnForRecovery = (claim: WorkerSessionTurnClaim) => {
     if (claim.owner.kind === "worker") {
@@ -97,24 +95,8 @@ export function createWorkerSessionPlacementGate(
     fenceWorkerTurnForRecovery,
     async prepareWorkerRuntimeRefresh(binding) {
       let prepared = await store.prepareRuntimeRefresh(binding.sessionId);
-      let preparedReleased = false;
-      let claimAuthority: PlacementTurnClaimAuthority | undefined;
-      const assertClaimCurrent = () => {
-        if (claimAuthority && !claimAuthority.isCurrent()) {
-          throw new Error("Worker runtime refresh lost its turn recovery owner");
-        }
-      };
-      const assertCurrent = () => {
-        assertClaimCurrent();
-        prepared.assertCurrent();
-      };
-      const release = () => {
-        if (!preparedReleased) {
-          preparedReleased = true;
-          prepared.release();
-        }
-        claimAuthority?.release();
-      };
+      const assertCurrent = () => prepared.assertCurrent();
+      const release = () => prepared.release();
       const readRefreshOwner = () => {
         const { placement, pendingResult } = prepared;
         const reclaimResult =
@@ -156,36 +138,15 @@ export function createWorkerSessionPlacementGate(
           owner.pendingResult.recoveryRequestedAtMs === null &&
           isCurrentWorkerWorkspacePendingResultOwner(owner.placement, owner.pendingResult)
         ) {
-          claimAuthority = await store.prepareTurnClaimAuthority(owner.claim);
-          assertCurrent();
-          // Handoff invalidates the placement observation. Retain the exact claim
-          // incarnation while the worker commits it and fresh refresh facts are read.
+          // The writer checks the claim and generation at the handoff effect.
           prepared.release();
-          preparedReleased = true;
-          await store.handoffRuntimeRefreshResult(
-            {
-              claim: owner.claim,
-              expectedGeneration: owner.placement.generation,
-              gatewayInstanceId: store.workspaceResultInstanceId(),
-            },
-            assertClaimCurrent,
-          );
+          await store.handoffRuntimeRefreshResult({
+            claim: owner.claim,
+            expectedGeneration: owner.placement.generation,
+            gatewayInstanceId: store.workspaceResultInstanceId(),
+          });
           prepared = await store.prepareRuntimeRefresh(binding.sessionId);
-          preparedReleased = false;
-          const refreshed = readRefreshOwner();
-          if (
-            refreshed.placement.generation !== owner.placement.generation ||
-            !refreshed.pendingResult ||
-            refreshed.pendingResult.gatewayInstanceId !== store.workspaceResultInstanceId() ||
-            refreshed.pendingResult.recoveryRequestedAtMs === null ||
-            !isCurrentWorkerWorkspacePendingResultOwner(
-              refreshed.placement,
-              refreshed.pendingResult,
-            )
-          ) {
-            throw new Error("Worker runtime refresh lost its result recovery handoff");
-          }
-          owner = refreshed;
+          owner = readRefreshOwner();
         }
         if (owner.reclaimResult && owner.claim) {
           fenceWorkerTurnForRecovery(owner.claim);
@@ -245,15 +206,15 @@ export function createWorkerSessionPlacementGate(
         },
         assertCurrent,
       );
-      assertCurrent();
     },
 
-    prepareWorkspaceResultOwnerRevocation(binding, error): void {
+    async prepareWorkspaceResultOwnerRevocation(binding, error, assertCurrent): Promise<void> {
       const claim = claimForOwnerRevocation(store.get(binding.sessionId), binding);
       if (!claim) {
         return;
       }
-      const pending = findPendingWorkerWorkspaceResult(store, claim);
+      const pending = await findPendingWorkerWorkspaceResult(store, claim);
+      assertCurrent?.();
       if (!pending || pending.gatewayInstanceId !== store.workspaceResultInstanceId()) {
         return;
       }
@@ -262,10 +223,10 @@ export function createWorkerSessionPlacementGate(
         pending.stagedResultRef === null &&
         pending.workspaceAcceptedAtMs === null
       ) {
-        store.failWorkspaceResultAndReleaseTurn(pending, error);
+        await store.failWorkspaceResultAndReleaseTurn(pending, error, assertCurrent);
         return;
       }
-      store.handoffWorkspaceResultRecovery(claim);
+      await store.handoffWorkspaceResultRecovery(claim, assertCurrent);
     },
 
     registerTurnClaimClosedHandler: (handler) => store.registerTurnClaimClosedHandler(handler),

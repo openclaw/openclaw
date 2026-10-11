@@ -9,7 +9,7 @@ struct ChatTranscriptRowTests {
     }
 
     private enum Expected: Sendable {
-        case notice(label: String, body: String)
+        case notice(label: String, body: String, collapsed: Bool = false)
         case divider(label: String, metric: String?, description: String?)
         case hidden
     }
@@ -37,6 +37,24 @@ struct ChatTranscriptRowTests {
             expected: .notice(
                 label: "System · gateway restarted",
                 body: "Gateway restarted after an update.")),
+        Case(
+            name: "harness context folds its payload behind the label",
+            input: .notice(
+                sourceTool: "cli_harness_context",
+                text: "This session is being continued from a previous conversation."),
+            expected: .notice(
+                label: "System · injected context",
+                body: "This session is being continued from a previous conversation.",
+                collapsed: true)),
+        Case(
+            name: "background task notification folds its payload behind the label",
+            input: .notice(
+                sourceTool: "claude_cli_task_notification",
+                text: "<task-notification>done</task-notification>"),
+            expected: .notice(
+                label: "System · background task",
+                body: "<task-notification>done</task-notification>",
+                collapsed: true)),
         Case(
             name: "other source tool is generic without fuzzy matching",
             input: .notice(
@@ -95,9 +113,10 @@ struct ChatTranscriptRowTests {
         switch (testCase.expected, row) {
         case (.hidden, nil):
             break
-        case let (.notice(expectedLabel, expectedBody), .systemNotice(notice)):
+        case let (.notice(expectedLabel, expectedBody, expectedCollapsed), .systemNotice(notice)):
             #expect(notice.label == expectedLabel)
             #expect(notice.body == expectedBody)
+            #expect(notice.collapsesBody == expectedCollapsed)
         case let (.divider(expectedLabel, expectedMetric, expectedDescription), .historyDivider(divider)):
             #expect(divider.label == expectedLabel)
             #expect(divider.metric == expectedMetric)

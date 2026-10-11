@@ -36,15 +36,20 @@ import {
   rememberSessionObserverRevisionFloor,
   resolveSessionObserverDigestForLifecycle,
   snapshotSessionObserverRevisionFloor,
-  synthesizeSessionObserverTerminalDigest,
 } from "./session-observer-model.js";
 import type {
   DormantSessionObserverRun,
   SessionObserverDeps,
+  SessionObserverRead,
   SessionObserverState,
 } from "./session-observer-model.js";
 import { createSessionObserverDigestPersister } from "./session-observer-persistence.js";
 import { createSessionObserverPreamblePublisher } from "./session-observer-preamble.js";
+import { createSessionObserverTerminalPublisher } from "./session-observer-terminal.js";
+import {
+  createSessionObserverWork,
+  type SessionObserverEventSteps,
+} from "./session-observer-work.js";
 import { resolveSessionSubscriptionKey } from "./session-subscription-keys.js";
 
 const observerLog = createSubsystemLogger("gateway/session-observer");
@@ -71,14 +76,18 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
   const readSession: NonNullable<SessionObserverDeps["readSession"]> =
     deps.readSession ??
     ((sessionKey, agentId) => defaultReadSession(sessionKey, agentId, resolveStorePath(agentId)));
-  const persistDigest: NonNullable<SessionObserverDeps["persistDigest"]> =
-    deps.persistDigest ??
-    ((params) => defaultPersistDigest({ ...params, storePath: resolveStorePath(params.agentId) }));
+  const persistDigest: NonNullable<SessionObserverDeps["persistDigest"]> = (params) =>
+    params.reader
+      ? params.reader.persist(params)
+      : (
+          deps.persistDigest ??
+          ((input) =>
+            defaultPersistDigest({ ...input, storePath: resolveStorePath(input.agentId) }))
+        )(params);
   const contextlessTerminalRuns = new Map<string, number>();
   const terminalRuns = new Map<string, number>();
   const pendingTerminalErrors = new Map<string, ReturnType<typeof setTimeout>>();
   const visibleConnections = new Set<string>();
-  let disposed = false;
   const clearPendingTerminalError = (runId: string) => {
     clearTimeoutFn(pendingTerminalErrors.get(runId));
     pendingTerminalErrors.delete(runId);
@@ -86,6 +95,8 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
   const lifecycle = createSessionObserverLifecycle({
     getConfig: deps.getConfig,
     readSession,
+    refreshAfterReset: (sessionKey, agentId, consume) =>
+      work.refreshAfterReset(sessionKey, agentId, consume),
     now,
     isTerminal: (runId) => terminalRuns.has(runId),
     clearPendingTerminalError,
@@ -98,10 +109,36 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     },
   });
   const { states, dormantRuns, revisionFloors, supersededRuns, disabledRuns } = lifecycle;
-  const getCompanionSnapshot = createSessionObserverCompanionSnapshotReader({
+  const companionReader = createSessionObserverCompanionSnapshotReader({
     getConfig: deps.getConfig,
     readSession,
     states,
+    retireObsolete: lifecycle.retireObsolete,
+  });
+  const work = createSessionObserverWork({
+    deps,
+    readSession,
+    companionReader,
+    handleEventSteps,
+    canPublish: (state, session) =>
+      audienceLifecycle.stateIsCurrent(state) && lifecycle.acceptPublication(state, session),
+    beginClose: () => {
+      pendingTerminalErrors.forEach((_timer, runId) => clearPendingTerminalError(runId));
+      preamblePublisher.dispose();
+      audienceLifecycle.unsubscribe();
+      for (const state of states.values()) {
+        clearTimeoutFn(state.timer);
+        modelSlots.invalidateRequest(state);
+      }
+    },
+    finishClose: () => {
+      lifecycle.dispose();
+      terminalRuns.clear();
+      contextlessTerminalRuns.clear();
+      visibleConnections.clear();
+    },
+    reportError: (error) =>
+      observerLog.warn("session observer work failed", { error: formatErrorMessage(error) }),
   });
   const audience = createSessionObserverAudience({
     subscribers: deps.subscribers,
@@ -124,7 +161,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
   // Narrow run-identity guard shared by persist paths: a digest may still land
   // while its session is unwatched, but never after a newer run replaces it.
   const runStillCurrent = (runId: string, sessionKey: string, agentId: string) => () =>
-    !disposed &&
+    !work.disposed &&
     !supersededRuns.has(runId) &&
     (states.get(resolveSessionSubscriptionKey(sessionKey, agentId))?.runId ?? runId) === runId;
 
@@ -148,62 +185,32 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     now,
     setTimeoutFn,
     clearTimeoutFn,
-    isCurrent: (state) =>
-      audienceLifecycle.stateIsCurrent(state) && lifecycle.acceptPublication(state),
+    isCurrent: (state) => audienceLifecycle.stateIsCurrent(state),
+    preparePublication: work.preparePublication,
     publish: (state, digest) => {
       broadcastDigest(digest, audience.recipients(state.sessionKey, state.agentId), state.agentId);
-      void persistAcceptedDigest(state, digest, false, "preamble");
+      work.background(() => persistAcceptedDigest(state, digest, false, "preamble"));
     },
   });
 
-  // Terminal paths that cannot run the model must still retire same-run live
-  // health, or idle session rows can display a stale in-progress judgment forever.
-  async function synthesizeTerminalDigest(source: {
-    event?: SessionObserverEvent;
-    state?: SessionObserverState;
-  }) {
-    const runId = source.event?.runId ?? source.state?.runId;
-    if (!runId) {
-      return;
-    }
-    const dormant = dormantRuns.get(runId);
-    const sessionKey = source.event?.sessionKey ?? source.state?.sessionKey ?? dormant?.sessionKey;
-    const agentId = source.event?.agentId ?? source.state?.agentId ?? dormant?.agentId;
-    if (!sessionKey || !agentId) {
-      return;
-    }
-    const stillCurrent = runStillCurrent(runId, sessionKey, agentId);
-    if (!stillCurrent()) {
-      return;
-    }
-    try {
-      const digest = await synthesizeSessionObserverTerminalDigest({
-        source,
-        dormant,
-        readSession,
-        persistDigest,
-        now,
-        stillCurrent,
-      });
-      if (
-        digest &&
-        stillCurrent() &&
-        isSameSessionObserverLifecycle(digest, readSession(sessionKey, agentId))
-      ) {
-        // Live subscribers already saw the in-progress digest over this event;
-        // the synthesized terminal correction must reach them the same way.
-        broadcastDigest(digest, audience.recipients(digest.sessionKey, agentId), agentId);
-      }
-    } catch (error) {
+  const synthesizeTerminalDigest = createSessionObserverTerminalPublisher({
+    dormantRuns,
+    readSession,
+    persistDigest,
+    now,
+    work,
+    runStillCurrent,
+    broadcast: (digest, agentId) =>
+      broadcastDigest(digest, audience.recipients(digest.sessionKey, agentId), agentId),
+    onError: (runId, error) =>
       observerLog.warn("session observer terminal digest synthesis failed", {
         runId,
         error: formatErrorMessage(error),
-      });
-    }
-  }
+      }),
+  });
 
   const retireTerminalState = (state: SessionObserverState) => {
-    void synthesizeTerminalDigest({ state });
+    work.background(() => synthesizeTerminalDigest({ state }));
     dormantRuns.delete(state.runId);
     lifecycle.dropState(state);
   };
@@ -221,7 +228,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     lifecycle.dropState(state);
   };
   const retireInactiveState = (state: SessionObserverState) =>
-    (disposed || supersededRuns.has(state.runId) ? lifecycle.dropState : suspendState)(state);
+    (work.disposed || supersededRuns.has(state.runId) ? lifecycle.dropState : suspendState)(state);
 
   const demoteUtilityModel = (state: SessionObserverState): void => {
     if (state.timer) {
@@ -250,7 +257,9 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     states,
     subscribers: deps.subscribers,
     isCurrent: (state) =>
-      !disposed &&
+      !work.closing &&
+      !work.disposed &&
+      !work.resetting.has(resolveSessionSubscriptionKey(state.sessionKey, state.agentId)) &&
       lifecycle.isTracked(state) &&
       deps.getConfig().gateway?.controlUi?.sessionObserver !== false,
     resolveUtilityModelRef: (agentId) => resolveUtilityModelRef({ cfg: deps.getConfig(), agentId }),
@@ -344,7 +353,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       !modelStateIsCurrent(state) ||
       !modelSlots.requestIsCurrent(state, requestGeneration) ||
       (!final && state.terminalHealth !== undefined);
-    const acceptDigestPublication = () => {
+    const acceptDigestPublication = (session: ReturnType<typeof readSession>) => {
       if (digestIsStale()) {
         retireSelectedNotes();
         if (final && lifecycle.isTracked(state)) {
@@ -352,72 +361,85 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
         }
         return false;
       }
-      return lifecycle.acceptPublication(state);
+      return lifecycle.acceptPublication(state, session);
     };
     state.digestCount += 1;
-    void (async () => {
+    work.background(async () => {
       try {
         const modelDigest = await requestModelDigest(
           state,
           selectedNotes.map((note) => note.text),
         );
-        if (!acceptDigestPublication()) {
+        const acceptedDigest = await work.withCurrent(
+          state.reader,
+          state.sessionKey,
+          state.agentId,
+          (session) => {
+            if (!acceptDigestPublication(session)) {
+              return undefined;
+            }
+            preamblePublisher.clear(state);
+            state.consecutiveFailures = 0;
+            state.revision += 1;
+            retireSelectedNotes();
+            const digest: SessionObserverDigest = {
+              sessionKey: state.sessionKey,
+              agentId: state.agentId,
+              ...(state.sessionId ? { sessionId: state.sessionId } : {}),
+              ...(state.lifecycleRevision ? { lifecycleRevision: state.lifecycleRevision } : {}),
+              runId: state.runId,
+              revision: state.revision,
+              updatedAt: now(),
+              headline: modelDigest.headline,
+              ...(modelDigest.assessment ? { assessment: modelDigest.assessment } : {}),
+              health: final ? (state.terminalHealth ?? modelDigest.health) : modelDigest.health,
+              ...((state.planProgress ?? modelDigest.planProgress)
+                ? { planProgress: state.planProgress ?? modelDigest.planProgress }
+                : {}),
+            };
+            const previous = state.previousDigest?.health;
+            const next = digest.health;
+            const criticalTransition =
+              (next === "stuck" || next === "waiting-on-user") && previous !== next;
+            state.previousDigest = digest;
+            // The existing gateway.controlUi.sessionObserver=false gate prevents this
+            // run entirely, so the wider critical announce inherits the same opt-out.
+            const recipients = criticalTransition
+              ? audience.criticalRecipients(state.sessionKey, state.agentId)
+              : audience.recipients(state.sessionKey, state.agentId);
+            broadcastDigest(digest, recipients, state.agentId);
+            return digest;
+          },
+        );
+        if (!acceptedDigest) {
           return;
         }
-        preamblePublisher.clear(state);
-        state.consecutiveFailures = 0;
-        state.revision += 1;
-        retireSelectedNotes();
-        const digest: SessionObserverDigest = {
-          sessionKey: state.sessionKey,
-          agentId: state.agentId,
-          ...(state.sessionId ? { sessionId: state.sessionId } : {}),
-          ...(state.lifecycleRevision ? { lifecycleRevision: state.lifecycleRevision } : {}),
-          runId: state.runId,
-          revision: state.revision,
-          updatedAt: now(),
-          headline: modelDigest.headline,
-          ...(modelDigest.assessment ? { assessment: modelDigest.assessment } : {}),
-          health: final ? (state.terminalHealth ?? modelDigest.health) : modelDigest.health,
-          ...((state.planProgress ?? modelDigest.planProgress)
-            ? { planProgress: state.planProgress ?? modelDigest.planProgress }
-            : {}),
-        };
-        const previous = state.previousDigest?.health;
-        const next = digest.health;
-        const criticalTransition =
-          (next === "stuck" || next === "waiting-on-user") && previous !== next;
-        state.previousDigest = digest;
-        // The existing gateway.controlUi.sessionObserver=false gate prevents this
-        // run entirely, so the wider critical announce inherits the same opt-out.
-        const recipients = criticalTransition
-          ? audience.criticalRecipients(state.sessionKey, state.agentId)
-          : audience.recipients(state.sessionKey, state.agentId);
-        broadcastDigest(digest, recipients, state.agentId);
-        await persistAcceptedDigest(state, digest, final);
+        await persistAcceptedDigest(state, acceptedDigest, final);
         if (final) {
           dormantRuns.delete(state.runId);
         }
       } catch (error) {
-        if (!acceptDigestPublication()) {
-          return;
-        }
-        state.consecutiveFailures += 1;
-        if (state.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-          observerLog.warn("session observer disabled after consecutive failures", {
-            sessionKey: state.sessionKey,
-            runId: state.runId,
-            consecutiveFailures: state.consecutiveFailures,
-            error: formatErrorMessage(error),
-          });
-          if (final || state.finalPending || state.terminalHealth) {
-            retireTerminalState(state);
-          } else {
-            disableModelForRun(state);
+        await work.withCurrent(state.reader, state.sessionKey, state.agentId, (session) => {
+          if (!acceptDigestPublication(session)) {
+            return;
           }
-        } else if (final) {
-          state.finalPending = true;
-        }
+          state.consecutiveFailures += 1;
+          if (state.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+            observerLog.warn("session observer disabled after consecutive failures", {
+              sessionKey: state.sessionKey,
+              runId: state.runId,
+              consecutiveFailures: state.consecutiveFailures,
+              error: formatErrorMessage(error),
+            });
+            if (final || state.finalPending || state.terminalHealth) {
+              retireTerminalState(state);
+            } else {
+              disableModelForRun(state);
+            }
+          } else if (final) {
+            state.finalPending = true;
+          }
+        });
       } finally {
         if (lifecycle.isTracked(state)) {
           state.inFlight = false;
@@ -432,11 +454,16 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
           }
         }
       }
-    })();
+    });
   };
 
-  const handleEvent = (event: SessionObserverEvent, settledError = false) => {
-    if (disposed || getAgentRunContext(event.runId)?.isHeartbeat) {
+  function* handleEventSteps(
+    event: SessionObserverEvent,
+    settledError = false,
+    capturedReader?: SessionObserverRead,
+  ): SessionObserverEventSteps {
+    let reader = capturedReader;
+    if (work.disposed || getAgentRunContext(event.runId)?.isHeartbeat) {
       return;
     }
     const lifecyclePhase = event.stream === "lifecycle" ? event.data.phase : undefined;
@@ -444,7 +471,13 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       settledError || isDefinitiveRunLifecycle({ phase: lifecyclePhase, data: event.data });
     if (lifecyclePhase === "error" && !terminal) {
       clearPendingTerminalError(event.runId);
-      const timer = setTimeoutFn(() => handleEvent(event, true), AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
+      const timer = setTimeoutFn(() => {
+        if (reader) {
+          work.background(() => work.handleEventAsync(event, true, reader));
+        } else {
+          work.handleEvent(event, true);
+        }
+      }, AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
       pendingTerminalErrors.set(event.runId, timer);
       return;
     }
@@ -491,6 +524,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       return;
     }
     const agentId = eventAgentId || knownRun?.agentId;
+    reader ??= knownRun?.reader;
     if (terminal) {
       contextlessTerminalRuns.delete(event.runId);
       if (!settledError) {
@@ -500,7 +534,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     const isPreamble = event.stream === "item" && event.data.kind === "preamble";
     if (!agentId) {
       if (terminal) {
-        void synthesizeTerminalDigest({ event });
+        work.background(() => synthesizeTerminalDigest({ event, reader }));
         dormantRuns.delete(event.runId);
         disabledRuns.delete(event.runId);
       }
@@ -509,7 +543,9 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     const currentAudience = audience.classify(sessionKey, agentId);
     const scopeKey = resolveSessionSubscriptionKey(sessionKey, agentId);
     if (terminal && audience.recipients(sessionKey, agentId).size === 0) {
-      void synthesizeTerminalDigest({ event, state: states.get(scopeKey) });
+      work.background(() =>
+        synthesizeTerminalDigest({ event, state: states.get(scopeKey), reader }),
+      );
       dormantRuns.delete(event.runId);
       disabledRuns.delete(event.runId);
       return;
@@ -529,7 +565,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
           : undefined;
       canAdmit = observesSession && (admittedModelRef !== undefined || isPreamble);
       if (canAdmit || isRunStart) {
-        session = readSession(sessionKey, agentId);
+        session = yield { sessionKey, agentId, reader };
         // Select revision history only after removing obsolete lifecycle owners.
         // Tool/text events do not read the store unless they admit an observer state.
         lifecycle.retireObsolete(scopeKey, session);
@@ -599,10 +635,11 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     }
     if (!state && canAdmit) {
       state = lifecycle.admit(event, sessionKey, agentId, session, admittedModelRef);
+      state.reader = reader;
     }
     if (!state) {
       if (terminal) {
-        void synthesizeTerminalDigest({ event });
+        work.background(() => synthesizeTerminalDigest({ event, reader }));
         dormantRuns.delete(event.runId);
         disabledRuns.delete(event.runId);
       }
@@ -639,12 +676,18 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       state.startedAt = Math.min(state.startedAt, eventStartedAt);
     }
     noteSessionActivityEvent(state, event);
-    preamblePublisher.handle(state, event);
+    const preamble = preamblePublisher.handle(state, event);
+    if (typeof preamble === "object") {
+      yield { work: preamble };
+    }
     if (terminal) {
       if (!state.terminalHealth) {
         modelSlots.invalidateRequest(state);
       }
-      preamblePublisher.flush(state);
+      const flush = preamblePublisher.flush(state);
+      if (flush) {
+        yield { work: flush };
+      }
       preamblePublisher.clear(state);
       state.terminalHealth = terminalHealthFor(event);
       disabledRuns.delete(event.runId);
@@ -661,10 +704,11 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       return;
     }
     schedule(state, currentAudience);
-  };
+  }
 
   return {
-    handleEvent,
+    handleEvent: work.handleEvent,
+    handleEventAsync: work.handleEventAsync,
     setConnectionVisibility(connId, visible) {
       if (visible) {
         visibleConnections.add(connId);
@@ -678,16 +722,9 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
         audienceLifecycle.reconcileAll();
       }
     },
-    getCompanionSnapshot,
-    dispose() {
-      disposed = true;
-      pendingTerminalErrors.forEach((_timer, runId) => clearPendingTerminalError(runId));
-      preamblePublisher.dispose();
-      audienceLifecycle.unsubscribe();
-      lifecycle.dispose();
-      terminalRuns.clear();
-      contextlessTerminalRuns.clear();
-      visibleConnections.clear();
-    },
+    getCompanionSnapshot: companionReader.readSync,
+    getCompanionSnapshotAsync: work.getCompanionSnapshotAsync,
+    dispose: work.dispose,
+    disposeAsync: work.disposeAsync,
   };
 }

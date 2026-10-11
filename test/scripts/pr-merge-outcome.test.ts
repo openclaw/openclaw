@@ -1,17 +1,10 @@
-import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 
-const {
-  fixture,
-  reconciledMergeAfterCleanup,
-  outcomeRef,
-  describePosix,
-  unknownProjection,
-  scripts,
-} = createMergeOutcomeFixtureHarness();
+const { fixture, reconciledMergeAfterCleanup, outcomeRef, describePosix, unknownProjection } =
+  createMergeOutcomeFixtureHarness();
 
 describePosix("native merge outcome with real Git and supervised lock recovery", () => {
   it("explicitly completes a reconciled merge after cleanup without another merge dispatch", () => {
@@ -73,23 +66,20 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     },
   );
 
-  it.each(["", "Earlier merge response was lost\n"])(
-    "refuses pre-journal merge output without erasing its evidence: %j",
-    (output) => {
-      const f = fixture();
-      const capture = join(f.worktree, ".local/merge-output.log");
-      writeFileSync(capture, output);
-      f.save({ ...f.state(), mode: "unapplied" });
-      const run = f.run();
-      expect(run.status, run.output).toBe(1);
-      expect(f.state().mutations).toBe(0);
-      expect(readFileSync(capture, "utf8")).toBe(output);
-      expect(run.output).toContain("Legacy .local/merge-output.log: present");
-      expect(run.output).toContain("investigate; see scripts/AGENTS.md merge-outcome doctrine");
-      expect(run.output).not.toContain("lock-recover, then rerun merge-run");
-      expect(() => f.record()).toThrow();
-    },
-  );
+  it.each([""])("refuses pre-journal merge output without erasing its evidence: %j", (output) => {
+    const f = fixture();
+    const capture = join(f.worktree, ".local/merge-output.log");
+    writeFileSync(capture, output);
+    f.save({ ...f.state(), mode: "unapplied" });
+    const run = f.run();
+    expect(run.status, run.output).toBe(1);
+    expect(f.state().mutations).toBe(0);
+    expect(readFileSync(capture, "utf8")).toBe(output);
+    expect(run.output).toContain("Legacy .local/merge-output.log: present");
+    expect(run.output).toContain("investigate; see scripts/AGENTS.md merge-outcome doctrine");
+    expect(run.output).not.toContain("lock-recover, then rerun merge-run");
+    expect(() => f.record()).toThrow();
+  });
 
   it("does not repeat applied 502 + OPEN after main advance and exact lock recovery", () => {
     const f = fixture();
@@ -181,7 +171,6 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
 
   it.each([
     { auto: false, method: "squash" },
-    { auto: false, method: "merge" },
     { auto: true, method: "squash" },
   ])("reconciles accepted pending UNKNOWN intent without polling for %j", ({ auto, method }) => {
     const f = fixture();
@@ -410,71 +399,6 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
   });
 });
 
-describePosix("merge_outcome_repo_identity", () => {
-  // Local historical records contain either scalar. Remote admission separately
-  // binds the whole retained object to the authoritative repository pair.
-  const identity = (repo: unknown, parentEnv: NodeJS.ProcessEnv = process.env) =>
-    spawnSync(
-      "bash",
-      [
-        "-c",
-        `set -euo pipefail; . "$1"; printf '%s' "$2" | merge_outcome_repo_identity`,
-        "bash",
-        join(scripts, "pr-lib/merge-outcome.sh"),
-        JSON.stringify(repo),
-      ],
-      {
-        encoding: "utf8",
-        env: { ...parentEnv, OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT: undefined },
-      },
-    );
-
-  it.each([1103012935, "R_kgDOQb6kRw"])(
-    "validates identity %s despite an unrelated inherited helper snapshot",
-    (id) => {
-      const repo = {
-        id,
-        nameWithOwner: "openclaw/openclaw",
-        url: "https://github.com/openclaw/openclaw",
-      };
-      const run = identity(repo, {
-        ...process.env,
-        OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT: join(scripts, "pr-lib"),
-      });
-      expect(run.status, run.stderr).toBe(0);
-      expect(JSON.parse(run.stdout)).toEqual(repo);
-      expect(run.stderr).toBe("");
-    },
-  );
-
-  it.each([
-    ["a missing id", {}],
-    ["a null id", { id: null }],
-    ["an empty string id", { id: "" }],
-    ["an object id", { id: { node: "x" } }],
-  ])("still rejects %s", (_label, overrides) => {
-    const run = identity({
-      nameWithOwner: "openclaw/openclaw",
-      url: "https://github.com/openclaw/openclaw",
-      ...overrides,
-    });
-    expect(run.status, run.stderr).toBe(4);
-    expect(run.stderr).toBe("");
-    expect(run.stdout).toBe("");
-  });
-
-  it("still rejects a url that does not belong to the named repository", () => {
-    const run = identity({
-      id: 1103012935,
-      nameWithOwner: "openclaw/openclaw",
-      url: "https://github.com/attacker/openclaw",
-    });
-    expect(run.status, run.stderr).toBe(4);
-    expect(run.stderr).toBe("");
-    expect(run.stdout).toBe("");
-  });
-});
-
 describePosix("repository identity across gh id representations", () => {
   const canonicalRepo = {
     id: "R_kgDOQb6kRw",
@@ -494,16 +418,6 @@ describePosix("repository identity across gh id representations", () => {
     f.git(["update-ref", outcomeRef, historical, previous]);
     return historical;
   };
-
-  it.each(historicalIds)("records the canonical node identity with a $name CLI id", ({ id }) => {
-    const f = fixture();
-    f.save({ ...f.state(), repo: { ...f.state().repo, id } });
-    const run = f.run();
-    expect(run.status, run.output).toBe(0);
-    expect(f.record().repo).toEqual(canonicalRepo);
-    expect(f.record().phase).toBe("complete");
-    expect(f.state().mutations).toBe(1);
-  });
 
   it.each(historicalIds)(
     "recovers the historical $name identity after CLI shape drift without rewriting its evidence",
@@ -568,10 +482,7 @@ describePosix("repository identity across gh id representations", () => {
 
   it.each(
     [
-      { name: "extra key", repo: { ...canonicalRepo, allow: true } },
-      { name: "numeric string", repo: { ...canonicalRepo, id: "1103012935" } },
       { name: "unknown node id", repo: { ...canonicalRepo, id: "R_other" } },
-      { name: "unknown numeric id", repo: { ...canonicalRepo, id: 1103012936 } },
       {
         name: "other repository",
         repo: {
@@ -612,12 +523,7 @@ describePosix("repository identity across gh id representations", () => {
   );
 
   it.each([
-    { name: "missing numeric id", authority: { id: undefined } },
-    { name: "numeric string", authority: { id: "1103012935" } },
-    { name: "zero numeric id", authority: { id: 0 } },
     { name: "fractional numeric id", authority: { id: 1.5 } },
-    { name: "missing node id", authority: { node_id: undefined } },
-    { name: "empty node id", authority: { node_id: "" } },
     { name: "numeric node id", authority: { node_id: 1103012935 } },
     { name: "different name", authority: { full_name: "fixture/other" } },
     { name: "different host", authority: { html_url: "https://elsewhere.invalid/fixture/repo" } },

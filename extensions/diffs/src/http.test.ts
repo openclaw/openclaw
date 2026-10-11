@@ -23,7 +23,10 @@ type ServedResponse = {
 };
 
 async function withDiffsServer(run: (base: string) => Promise<void>): Promise<void> {
-  const handler = createDiffsHttpHandler({ store: {} as DiffArtifactStore });
+  const handler = createDiffsHttpHandler({
+    store: {} as DiffArtifactStore,
+    resolveAccessConfig: () => ({}),
+  });
   const server: Server = createServer((req, res) => {
     void handler(req, res).then((handled) => {
       if (!handled) {

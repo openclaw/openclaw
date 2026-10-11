@@ -17,8 +17,15 @@ function renderFrame(mode: "expanded" | "minimized", body: TemplateResult) {
 
 async function mount(mode: "expanded" | "minimized") {
   const panel = renderFrame(mode, html`<div>Diagnostics</div>`);
-  await import("./debug-overlay-layout.runtime.ts");
+  await vi.dynamicImportSettled();
   await new Promise(requestAnimationFrame);
+  const animate = panel.animate.bind(panel);
+  vi.spyOn(panel, "animate").mockImplementation((keyframes, options) => {
+    const animation = animate(keyframes, options);
+    // Own the native clock before a slow frame can finish the animation.
+    animation.pause();
+    return animation;
+  });
   return panel;
 }
 
@@ -29,8 +36,6 @@ async function frameAnimation(panel: HTMLElement) {
   expect(animations).toHaveLength(1);
   const [animation] = animations;
   assert(animation?.effect instanceof KeyframeEffect);
-  // The test owns time from here: paused, the 160 ms animation outlives later frames.
-  animation.pause();
   return { animation, end: animation.effect.getKeyframes().at(-1)! };
 }
 
@@ -46,6 +51,7 @@ afterEach(() => {
   render(nothing, container);
   container.remove();
   localStorage.removeItem(key);
+  vi.restoreAllMocks();
 });
 
 describe.runIf("__vitest_browser__" in globalThis)("System busyness frame animation", () => {

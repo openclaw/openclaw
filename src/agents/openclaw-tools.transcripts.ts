@@ -68,10 +68,6 @@ export function resolveTranscriptsTool(
   }
   return createTranscriptsTool({
     agentId,
-    agentChannel: options?.gatewayCallerLocal
-      ? undefined
-      : (options?.gatewayCallerChannel ?? options?.agentChannel),
-    agentAccountId: options?.gatewayCallerAccountId ?? options?.agentAccountId,
     caller: caller.caller,
     ...(caller.assertCallerActive ? { assertCallerActive: caller.assertCallerActive } : {}),
     config,

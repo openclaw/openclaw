@@ -1,7 +1,9 @@
 import http from "node:http";
+import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import * as fileAccessRuntime from "openclaw/plugin-sdk/file-access-runtime";
 import {
   createPluginRuntimeMock,
   createPluginRegistry,
@@ -30,10 +32,10 @@ import {
   listSessionEntriesCore,
   loadSessionEntry,
   loadTranscriptEvents,
-  replaceTranscriptEvents,
 } from "../src/config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../src/config/sessions/session-accessor.sqlite-entry-store.js";
-import { readClosedTranscriptTurnInDatabase } from "../src/config/sessions/session-accessor.transcript-range.js";
+import { replaceTranscriptEvents } from "../src/config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { readClosedTranscriptTurnInDatabase } from "../src/config/sessions/session-accessor.transcript-range.worker.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { sessionRewindHandlers } from "../src/gateway/server-methods/sessions-rewind.js";
 import type {
@@ -45,10 +47,11 @@ import { seedAttachedPlacementEnvironment } from "../src/gateway/worker-environm
 import { readCodexSessionTranscriptEventsBeforeAdmission } from "../src/plugin-sdk/codex-session-transcript-runtime.js";
 import { appendSessionTranscriptMessagesByIdentity } from "../src/plugin-sdk/session-transcript-runtime.js";
 import {
-  createPluginStateKeyedStore,
+  createPluginStateKeyedStoreV2,
   createPluginStateSyncKeyedStore,
   type OpenAsyncKeyedStoreOptions,
   type OpenKeyedStoreOptions,
+  type PluginStateActionAuthority,
 } from "../src/plugin-state/plugin-state-store.js";
 import { createRuntimePluginManifestLookup } from "../src/plugins/active-runtime-registry.js";
 import { resolvePluginCapabilityCatalogContext } from "../src/plugins/loader-runtime-load.js";
@@ -75,7 +78,7 @@ import {
   listSessionStateEventsSince,
   registerSessionStateWatch,
 } from "../src/sessions/session-state-events.js";
-import { readSessionUpstreamLink } from "../src/sessions/session-upstream-links.js";
+import { readSessionUpstreamLinkInDatabase } from "../src/sessions/session-upstream-links.kernel.js";
 import { runSessionUpstreamMonitorTick } from "../src/sessions/session-upstream-monitor.test-support.js";
 import {
   buildRunUserTurnIdempotencyKey,
@@ -167,7 +170,7 @@ async function withFixture(
       key: string,
       entryId: string,
     ) => Promise<{ ok: boolean; key?: string; message?: string }>,
-    revoke: (target: "source" | "child" | "registry", sourceKey: string) => void,
+    revoke: (target: "source" | "child", sourceKey: string) => void,
     admissions: Array<{ recorder: UserTurnTranscriptRecorder; before: unknown[] }>,
     runtime: ReturnType<typeof createPluginRuntimeMock>,
   ) => Promise<void>,
@@ -187,7 +190,7 @@ async function withFixture(
       agents: {
         ownership: "explicit",
         defaults: { model: { primary: "openai/gpt-5.5" } },
-        list: [{ id: "main", agentDir: state.agentDir(), workspace: state.workspaceDir }],
+        entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
       },
       tools: { web: { search: { enabled: false } } },
       ...(options.mcpResolver
@@ -203,8 +206,11 @@ async function withFixture(
       agent: createRuntimeAgent(),
       config: { current: () => config },
       state: {
-        openKeyedStore: <T>(storeOptions: OpenAsyncKeyedStoreOptions) =>
-          createPluginStateKeyedStore<T>("codex", { ...storeOptions, env: state.env }),
+        openKeyedStoreV2: <T>(
+          storeOptions: OpenAsyncKeyedStoreOptions,
+          authority: PluginStateActionAuthority = { assertCurrent() {} },
+        ) =>
+          createPluginStateKeyedStoreV2<T>("codex", { ...storeOptions, env: state.env }, authority),
         openSyncKeyedStore: <T>(storeOptions: OpenKeyedStoreOptions) =>
           createPluginStateSyncKeyedStore<T>("codex", { ...storeOptions, env: state.env }),
       },
@@ -265,21 +271,21 @@ async function withFixture(
             ownerEpoch: 7,
           });
           let placement = await placements.startDispatch(target);
-          placement = placements.transition({
+          placement = await placements.transition({
             sessionId,
             from: "requested",
             to: "provisioning",
             expectedGeneration: placement.generation,
             patch: { environmentId: "policy-worker" },
           });
-          placement = placements.transition({
+          placement = await placements.transition({
             sessionId,
             from: "provisioning",
             to: "syncing",
             expectedGeneration: placement.generation,
             patch: { workerBundleHash: "a".repeat(64) },
           });
-          placement = placements.transition({
+          placement = await placements.transition({
             sessionId,
             from: "syncing",
             to: "starting",
@@ -289,7 +295,7 @@ async function withFixture(
               remoteWorkspaceDir: "/workspace/policy",
             },
           });
-          placements.transition({
+          await placements.transition({
             sessionId,
             from: "starting",
             to: "active",
@@ -507,10 +513,6 @@ async function withFixture(
             fixture,
             fork,
             (target, sourceKey) => {
-              if (target === "registry") {
-                markPluginRegistryRetired(registry);
-                return;
-              }
               const key =
                 target === "source"
                   ? sourceKey
@@ -678,9 +680,9 @@ describe("canonical descendant lifecycle through real owners", () => {
   );
 
   it.each(
-    ["source", "child", "registry"].flatMap((target) =>
+    ["source", "child"].flatMap((target) =>
       ["prewrite", "overload", "acknowledged"].map((phase) => ({
-        target: target as "source" | "child" | "registry",
+        target: target as "source" | "child",
         phase,
       })),
     ),
@@ -994,51 +996,7 @@ describe("canonical descendant lifecycle through real owners", () => {
       }
     });
   }, 180_000);
-  it.each(["source", "child", "registry"] as const)(
-    "fences physical fork writes after %s revocation during configuration wait",
-    async (target) => {
-      await withFixture(async (fixture, fork, revoke) => {
-        const source = await fixture.adopt();
-        await fixture.turn(source.sessionKey, "canonical");
-        const selected = (await fixture.readEntries(source.sessionKey)).at(-1)!;
-        await fixture.withClient(async (client) => {
-          const release = await fixture.holdConfiguration(client);
-          const request = vi.spyOn(client, "request"); // Pass-through: the real fence still runs.
-          const before = fixture.native.calls.filter(
-            (call) => call.method === "thread/fork",
-          ).length;
-          const pending = fork(source.sessionKey, selected.entryId);
-          let result: Awaited<ReturnType<typeof fork>>;
-          try {
-            await vi.waitFor(
-              () =>
-                expect(request.mock.calls.some(([method]) => method === "thread/fork")).toBe(true),
-              { timeout: 10_000 },
-            );
-            expect(
-              fixture.native.calls.filter((call) => call.method === "thread/fork"),
-            ).toHaveLength(before);
-            revoke(target, source.sessionKey);
-          } finally {
-            release();
-            result = await pending;
-            request.mockRestore();
-          }
-          expect(result.ok).toBe(false);
-          expect(fixture.native.calls.filter((call) => call.method === "thread/fork")).toHaveLength(
-            before,
-          );
-          await fixture.withClient(async (next) => {
-            expect(next).toBe(client);
-          });
-          await expect(client.request("config/read", {})).resolves.toMatchObject({ config: {} });
-        });
-      });
-    },
-    180_000,
-  );
-
-  it.each(["source", "child", "registry"] as const)(
+  it.each(["source", "child"] as const)(
     "fences physical fork retries after %s revocation on overload",
     async (target) => {
       await withFixture(async (fixture, fork, revoke) => {
@@ -1062,10 +1020,7 @@ describe("canonical descendant lifecycle through real owners", () => {
     180_000,
   );
 
-  it.each([
-    ["source", 2, 0],
-    ["registry", 1, 1],
-  ] as const)(
+  it.each([["source", 2, 0]] as const)(
     "keeps native archive overload retry within captured rollback after %s revocation",
     async (target, attempts, retained) => {
       await withFixture(async (fixture, fork, revoke) => {
@@ -1095,7 +1050,6 @@ describe("canonical descendant lifecycle through real owners", () => {
   it.each([
     ["source", true],
     ["child", false],
-    ["registry", false],
   ] as const)(
     "uses captured rollback ownership after %s revocation following native fork",
     async (target, rollbackAllowed) => {
@@ -1185,8 +1139,18 @@ describe("canonical descendant lifecycle through real owners", () => {
       const before = await events();
       await runSessionUpstreamMonitorTick({ providers: [fixture.catalog] });
       expect(await events()).toEqual(before);
-      const link = expectDefined(readSessionUpstreamLink(key, "main"), "child link");
-      const root = expectDefined(readSessionUpstreamLink(source.sessionKey, "main"), "root link");
+      const link = expectDefined(
+        readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase().db, key, "main"),
+        "child link",
+      );
+      const root = expectDefined(
+        readSessionUpstreamLinkInDatabase(
+          openOpenClawStateDatabase().db,
+          source.sessionKey,
+          "main",
+        ),
+        "root link",
+      );
       expect(link).toMatchObject({
         threadId: root.threadId,
         upstreamRef: root.upstreamRef,
@@ -1314,8 +1278,14 @@ describe("canonical descendant lifecycle through real owners", () => {
               key.endsWith(`:${firstBinding.threadId}`),
             ),
           ).toBe(false);
-          const link = readSessionUpstreamLink(source.sessionKey, "main");
-          expect(readSessionUpstreamLink(firstKey, "main")).toMatchObject({
+          const link = readSessionUpstreamLinkInDatabase(
+            openOpenClawStateDatabase().db,
+            source.sessionKey,
+            "main",
+          );
+          expect(
+            readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase().db, firstKey, "main"),
+          ).toMatchObject({
             threadId: link?.threadId,
             marker: { turnId: null, userMessageCount: 0 },
           });
@@ -2021,4 +1991,78 @@ describe("canonical descendant lifecycle through real owners", () => {
     },
     180_000,
   );
+  it("PROOF canonical fork under wall-clock skew keeps the rollout observation deadline monotonic", async () => {
+    await withFixture(async (fixture, fork) => {
+      const source = await fixture.adopt();
+      await fixture.turn(source.sessionKey, "canonical");
+      const selected = (await fixture.readEntries(source.sessionKey)).at(-1)!;
+      const traces: Array<Record<string, unknown>> = [];
+      for (const delta of [-90_000, 90_000]) {
+        // Real timers and real performance.now throughout; only Date.now is skewed.
+        // The skew opens when the production reader roots the sessions directory
+        // (after its deadline seed, before its remaining-budget read) and closes
+        // when the reader arms its deadline timer.
+        const realDateNow = Date.now;
+        let skewActive = false;
+        let rootTriggered = false;
+        const rootOriginal = fileAccessRuntime.root;
+        const rootSpy = vi.spyOn(fileAccessRuntime, "root").mockImplementation(((...args) => {
+          // Platform-aware: the sessions dir basename is "sessions" on POSIX and
+          // Windows alike (path.join produces backslashes on Windows), so match
+          // the basename instead of a hard-coded "/sessions" suffix.
+          if (!rootTriggered && path.basename(args[0]) === "sessions") {
+            rootTriggered = true;
+            skewActive = true;
+            Date.now = () => realDateNow() + delta;
+          }
+          return rootOriginal(...args);
+        }) as typeof fileAccessRuntime.root);
+        const originalSetTimeout = globalThis.setTimeout;
+        let readerArmedDelay: number | undefined;
+        const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+          callback: (...cbArgs: unknown[]) => void,
+          timeout?: number,
+          ...args: unknown[]
+        ) => {
+          if (skewActive) {
+            skewActive = false;
+            Date.now = realDateNow;
+            readerArmedDelay = timeout ?? 0;
+          }
+          return originalSetTimeout(() => callback(...args), timeout);
+        }) as typeof setTimeout);
+        const startedAt = performance.now();
+        let result: { ok: boolean; key?: string; message?: string } | undefined;
+        try {
+          result = await fork(source.sessionKey, selected.entryId);
+        } finally {
+          Date.now = realDateNow;
+          rootSpy.mockRestore();
+          setTimeoutSpy.mockRestore();
+        }
+        traces.push({
+          wallClockDeltaMs: delta,
+          rootTriggered,
+          forkOk: result?.ok,
+          ...(result?.message ? { forkMessage: result.message.slice(0, 100) } : {}),
+          forkElapsedMs: Math.round(performance.now() - startedAt),
+          readerArmedDelayMs: readerArmedDelay,
+          // Real CodexAppServerClient JSON-RPC methods hit via fromTransportForTests.
+          clientMethods: fixture.native.calls.map((call) => call.method),
+        });
+      }
+      console.log("PROOF_TRACE " + JSON.stringify(traces));
+      expect(traces.map((trace) => trace.forkOk)).toEqual([true, true]);
+      for (const trace of traces) {
+        // The regression validates the budget contract, not disk latency: the
+        // post-fix reader arms its monotonic deadline timer at
+        // max(1, deadline - performance.now()), which stays within the 5s budget
+        // and is never inflated by wall-clock skew. There is no fixed lower bound
+        // (slow lstat/root/open legitimately consume part of the budget while the
+        // fork still succeeds within it), so only the upper budget bound is asserted.
+        expect(trace.readerArmedDelayMs).toBeGreaterThanOrEqual(1);
+        expect(trace.readerArmedDelayMs).toBeLessThanOrEqual(5_000);
+      }
+    });
+  }, 180_000);
 });

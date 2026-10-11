@@ -29,7 +29,7 @@ import {
   matrixPreflightAudio,
 } from "./preflight-audio.js";
 import { createRoomHistoryTracker, type HistoryEntry } from "./room-history.js";
-import { resolveMatrixInboundRoute } from "./route.js";
+import { resolveMatrixInboundRouteAsync } from "./route.js";
 import type { MatrixRawEvent } from "./types.js";
 
 export async function resolveMatrixIngressContent(config: {
@@ -75,7 +75,6 @@ export async function resolveMatrixIngressContent(config: {
 
   const {
     cfg,
-    liveDmAllowFrom,
     content: accessContent,
     messageId,
     audioPreflightMode,
@@ -93,12 +92,9 @@ export async function resolveMatrixIngressContent(config: {
     allowBotsMode,
     isConfiguredBotSender,
     selfUserId,
-    botLoopProtection,
     roomMatchMeta,
     getSenderName,
     accessState,
-    effectiveGroupAllowFrom,
-    effectiveRoomUsers,
   } = access;
   const { resolveMessageIngress } = accessState;
   let content = accessContent;
@@ -176,7 +172,7 @@ export async function resolveMatrixIngressContent(config: {
     route: _route,
     configuredBinding: _configuredBinding,
     runtimeBindingId: _runtimeBindingId,
-  } = resolveMatrixInboundRoute({
+  } = await resolveMatrixInboundRouteAsync({
     cfg,
     accountId,
     roomId,
@@ -435,7 +431,7 @@ export async function resolveMatrixIngressContent(config: {
   }
   if (_runtimeBindingId) {
     const { getSessionBindingService } = await loadSessionBindingRuntime();
-    getSessionBindingService().touch(_runtimeBindingId, eventTs ?? undefined, {
+    await getSessionBindingService().touchAsync(_runtimeBindingId, eventTs ?? undefined, {
       channel: "matrix",
       accountId,
     });
@@ -467,14 +463,10 @@ export async function resolveMatrixIngressContent(config: {
     : undefined;
 
   return {
-    cfg,
-    liveDmAllowFrom,
+    ...access,
     resolveMessageIngress,
     route: _route,
     hasExplicitSessionBinding,
-    roomConfig,
-    isDirectMessage,
-    isRoom,
     shouldRequireMention,
     wasMentioned,
     effectiveWasMentioned,
@@ -487,15 +479,8 @@ export async function resolveMatrixIngressContent(config: {
     commandBodyText,
     media,
     preflightAudioTranscript,
-    locationPayload,
-    messageId,
     triggerSnapshot: preparedTrigger,
-    threadRootId,
     threadContext,
-    thread,
-    botLoopProtection,
-    effectiveGroupAllowFrom,
-    effectiveRoomUsers,
   };
 }
 

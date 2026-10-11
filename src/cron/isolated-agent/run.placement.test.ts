@@ -59,7 +59,7 @@ describe("current-bound cron placement", () => {
     const uninstall = installSessionPlacementAdmissionProvider(provider);
     const cfg: OpenClawConfig = {
       session: { store: sessionTarget.storePath },
-      agents: { list: [{ id: "main", workspace: root }] },
+      agents: { entries: { main: { workspace: root } } },
       tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
     };
     setRuntimeConfigSnapshot(cfg);
@@ -140,6 +140,7 @@ describe("current-bound cron placement", () => {
         config: cfg,
         agentSessionKey: SESSION_KEY,
         expectedTargetSessionId: run.sessionId,
+        completionOwner: "caller",
         callGateway,
       });
       for (const mode of [undefined, "followup"] as const) {

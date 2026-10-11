@@ -28,11 +28,12 @@ const {
   };
 });
 
+// mock-isolation: Plugin auth precedence uses seeded stores and source flags without host credential discovery.
 vi.mock("../agents/auth-profiles.js", () => ({
   dedupeProfileIds: (ids: string[]) => [...new Set(ids)],
   ensureAuthProfileStore: () => loadStore(),
   ensureAuthProfileStoreWithoutExternalProfiles: () => loadLocalStore(),
-  hasAnyAuthProfileStoreSource: () => hasSource(),
+  hasAnyAuthProfileStoreSourceAsync: () => hasSource(),
   listProfilesForProvider: () => [],
   resolveApiKeyForProfile: (params: { profileId: string }) => resolveKey(params),
   resolveAuthProfileOrder: (params: { provider: string }) => order(params),

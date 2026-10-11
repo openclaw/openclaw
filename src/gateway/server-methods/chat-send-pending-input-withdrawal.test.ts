@@ -12,11 +12,13 @@ import {
   retireFollowupRunCancellation,
 } from "../../auto-reply/reply/queue/lifecycle.js";
 import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { listSessionPendingInputs } from "../../config/sessions/session-accessor.pending-inputs.js";
 import { listSessionPendingInputReceipts } from "../../config/sessions/session-accessor.sqlite-pending-input-receipts.js";
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-read.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createChatAbortOps } from "../chat-abort-ops.js";
 import { abortChatRunById, removeChatAbortControllerEntry } from "../chat-abort.js";
 import { abortQueuedChatTurnById } from "../chat-queued-turns.js";
@@ -33,6 +35,55 @@ registerAgentSessionLoopTestLifecycle();
 const createBrowserFollowupFixture = useBrowserFollowupFixture();
 
 describe("queued chat input withdrawal", () => {
+  it("keeps refused browser input revoked after its session access returns", async () => {
+    const fixture = await createBrowserFollowupFixture({
+      preserveContent: true,
+      persistDuringDispatch: true,
+    });
+    try {
+      const profile = ensureProfileForEmail("restored-custody@example.test");
+      fixture.client.authenticatedUserProfile = {
+        profileId: profile.id,
+        displayName: null,
+        hasAvatar: false,
+        updatedAt: profile.updatedAt,
+      };
+      fixture.client.connect.scopes = ["operator.read", "operator.write"];
+      const ack = await fixture.send(undefined, { expectedProfileId: profile.id });
+      const recorder = await fixture.dispatchedRecorder;
+      const check = () =>
+        recorder.withPendingInputCurrent
+          ? recorder.withPendingInputCurrent(() => {})
+          : Promise.resolve().then(() => recorder.withPendingInput?.(() => {}));
+      await patchSessionEntryCore(fixture.scope, () => ({ visibility: "draft" }));
+      await expect(check()).rejects.toMatchObject({
+        message: "Message injection authority is no longer current",
+        cause: expect.objectContaining({
+          message: expect.stringContaining("session is draft for this connection"),
+        }),
+      });
+      await patchSessionEntryCore(fixture.scope, () => ({ visibility: "shared" }));
+      await expect(check()).rejects.toThrow("Message injection authority is no longer current");
+      await fixture.finishDispatch();
+      expect(ack).toHaveBeenCalledOnce();
+      expect(ack.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
+      expect(recorder.getAdmissionReceipt()).toBeUndefined();
+      expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
+        total: 1,
+        items: [{ state: "interrupted" }],
+      });
+      expect(loadTranscriptEventsSync(fixture.scope)).not.toContainEqual(
+        expect.objectContaining({
+          message: expect.objectContaining({
+            idempotencyKey: `${fixture.params.idempotencyKey}:user`,
+          }),
+        }),
+      );
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
   it.each([
     { target: "admitted", stopReason: "timeout", reason: "timeout", discardPendingInput: false },
     { target: "queued", stopReason: "stop", reason: "stop", discardPendingInput: false },

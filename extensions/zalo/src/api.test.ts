@@ -1,7 +1,29 @@
 // Zalo tests cover api plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const effectGate = vi.hoisted(() => ({ prepare: undefined as (() => Promise<void>) | undefined }));
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
+  return {
+    ...actual,
+    captureEffectAuthority: () => {
+      const authority = actual.captureEffectAuthority();
+      const prepare = effectGate.prepare;
+      return prepare
+        ? {
+            ...authority,
+            initiate: async <T>(effect: () => T | Promise<T>) => {
+              await prepare();
+              return authority.initiate(effect);
+            },
+          }
+        : authority;
+    },
+  };
+});
 
 const { resolvePinnedHostnameWithPolicyMock } = vi.hoisted(() => ({
   resolvePinnedHostnameWithPolicyMock: vi.fn(),
@@ -86,6 +108,65 @@ async function expectPostJsonRequest(run: (token: string, fetcher: ZaloFetch) =>
 }
 
 describe("Zalo API request methods", () => {
+  it.each([false, true])(
+    "rechecks the send caller after effect preparation (retired=%s)",
+    async (retired) => {
+      const preparing = createDeferred();
+      const prepared = createDeferred();
+      const dispatched = createDeferred();
+      const response = createDeferred<Response>();
+      const caller = new AbortController();
+      const failure = new Error("Zalo caller retired");
+      effectGate.prepare = async () => {
+        preparing.resolve();
+        await prepared.promise;
+      };
+      const fetch = vi.fn<ZaloFetch>(() => {
+        dispatched.resolve();
+        return response.promise;
+      });
+      const sending = callZaloApi(
+        "sendMessage",
+        "test-token",
+        { chat_id: "chat-123", text: "hello" },
+        {
+          fetch,
+          assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+        },
+      ).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await Promise.race([
+          preparing.promise,
+          dispatched.promise.then(() => {
+            throw new Error("dispatched before preparation");
+          }),
+        ]);
+        expect(fetch).not.toHaveBeenCalled();
+        if (retired) {
+          caller.abort(failure);
+        }
+        prepared.resolve();
+        if (!retired) {
+          await dispatched.promise;
+          caller.abort(failure);
+        }
+        response.resolve(Response.json({ ok: true, result: { message_id: "sent-1" } }));
+        expect(await sending).toEqual(
+          retired ? { error: failure } : { value: { ok: true, result: { message_id: "sent-1" } } },
+        );
+        expect(fetch).toHaveBeenCalledTimes(retired ? 0 : 1);
+      } finally {
+        prepared.resolve();
+        response.resolve(Response.json({ ok: true, result: {} }));
+        await sending;
+        effectGate.prepare = undefined;
+      }
+    },
+  );
+
   beforeEach(() => {
     vi.unstubAllEnvs();
     resolvePinnedHostnameWithPolicyMock.mockReset();
@@ -119,27 +200,11 @@ describe("Zalo API request methods", () => {
     );
   });
 
-  it("prefers an explicit API URL over ZALO_API_URL", async () => {
-    vi.stubEnv("ZALO_API_URL", "http://127.0.0.1:49152/env");
-    const fetcher = createOkFetcher();
-
-    await callZaloApi("getMe", "test-token", undefined, {
-      apiUrl: "http://127.0.0.1:49153/explicit/",
-      fetch: fetcher,
-    });
-
-    expect(fetcher).toHaveBeenCalledWith(
-      "http://127.0.0.1:49153/explicit/bottest-token/getMe",
-      expect.any(Object),
-    );
-  });
-
-  it("rejects an explicitly empty API URL instead of falling back to ZALO_API_URL", async () => {
-    vi.stubEnv("ZALO_API_URL", "http://127.0.0.1:49152/env");
+  it("rejects an empty ZALO_API_URL", async () => {
+    vi.stubEnv("ZALO_API_URL", "   ");
 
     await expect(
       callZaloApi("getMe", "test-token", undefined, {
-        apiUrl: "   ",
         fetch: createOkFetcher(),
       }),
     ).rejects.toThrow("ZALO_API_URL must not be empty.");
@@ -156,9 +221,9 @@ describe("Zalo API request methods", () => {
   it.each(["https://proxy.example/zalo?tenant=1", "https://proxy.example/zalo#provider"])(
     "rejects an API root with URL suffix components: %s",
     async (apiUrl) => {
+      vi.stubEnv("ZALO_API_URL", apiUrl);
       await expect(
         callZaloApi("getMe", "test-token", undefined, {
-          apiUrl,
           fetch: createOkFetcher(),
         }),
       ).rejects.toThrow("ZALO_API_URL must not include a query string or fragment.");

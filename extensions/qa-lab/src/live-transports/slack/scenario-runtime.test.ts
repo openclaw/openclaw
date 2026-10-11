@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runSlackScenario } from "./scenario-runtime.js";
-import type { SlackQaScenarioImplementation, SlackQaScenarioRun } from "./slack-live.contracts.js";
+import type { SlackQaScenarioImplementation } from "./slack-live.contracts.js";
 import {
   slackQaChartPresentationNativeScenario,
   slackQaMpimAppMentionDedupeScenario,
@@ -75,7 +75,7 @@ function createMpimRuntime(
   };
 }
 
-function createScenarioRuntime(run: SlackQaScenarioRun) {
+function createScenarioRuntime(run: ReturnType<SlackQaScenarioImplementation["buildRun"]>) {
   const implementation = {
     buildRun: () => run,
   } satisfies SlackQaScenarioImplementation;

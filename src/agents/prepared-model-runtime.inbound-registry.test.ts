@@ -24,10 +24,17 @@ import { withPreparedModelRuntimePluginGenerationScope } from "./prepared-model-
 import { prepareWorkspaceBuildGroup } from "./prepared-model-runtime.facts.js";
 import {
   acquireAgentRunPreparedModelRuntime,
+  beginPreparedModelRuntimePluginDrain,
+  getPendingPreparedModelRuntimeReplacement,
   getPreparedModelRuntimeSnapshot,
   loadPublishedGatewayReplyDispatchRuntime,
+  markPreparedModelRuntimeSnapshotsStale,
+  prepareModelRuntimeSnapshot,
+  recoverPreparedModelRuntimeCatalogWorker,
   registerPreparedModelRuntimePublicationListener,
   refreshPreparedModelRuntimeSnapshots,
+  rejectPendingPreparedModelRuntimeReplacement,
+  type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
 import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 
@@ -595,4 +602,114 @@ it("refreshes successor discovery auth after the preceding runtime registry reti
     await releaseSuccessor?.();
     await addedInstance.dispose();
   }
+});
+
+describe("catalog-worker replacement demand", () => {
+  const dispatch = (demand: "interactive" | "scheduled" = "interactive") =>
+    loadPublishedGatewayReplyDispatchRuntime({ agentId: "default", demand });
+  async function failReplacement(snapshot?: PreparedModelRuntimeSnapshot, agentIds = ["default"]) {
+    const input = fixture.agentInput("default", snapshot?.config ?? {});
+    if (!snapshot) {
+      mocks.configuredAgentIds = agentIds;
+      await refreshPreparedModelRuntimeSnapshots(input.config, {
+        gatewayLifecycle: true,
+        catalogMode: "static",
+        allowGatewaySubagentBinding: true,
+      });
+    }
+    const prepared = snapshot ?? (await prepareModelRuntimeSnapshot(input));
+    const failure = new Error("catalog replacement preparation failed");
+    mocks.resolveAmbientCredentials.mockRejectedValueOnce(failure);
+    await expect(recoverPreparedModelRuntimeCatalogWorker([prepared])).rejects.toBe(failure);
+    return { input, failure };
+  }
+
+  it.each(["successful", "failed"] as const)(
+    "shares a %s demand replacement without activating pure snapshot reads",
+    async (outcome) => {
+      const { input, failure } = await failReplacement();
+      mocks.resolveAmbientCredentials.mockClear();
+      await expect(prepareModelRuntimeSnapshot(input)).rejects.toBe(failure);
+      expect(mocks.resolveAmbientCredentials).not.toHaveBeenCalled();
+      const started = createDeferred();
+      const finish = createDeferred();
+      mocks.resolveAmbientCredentials.mockImplementationOnce(() => {
+        started.resolve();
+        return finish.promise.then(() => {
+          if (outcome === "failed") {
+            throw failure;
+          }
+          return {};
+        });
+      });
+      const foreground = dispatch();
+      let background: ReturnType<typeof dispatch> | undefined;
+      try {
+        expect(await Promise.race([started.promise, foreground])).toBeUndefined();
+        background = dispatch("scheduled");
+        const shared = Promise.all([foreground, background]);
+        finish.resolve();
+        if (outcome === "failed") {
+          await expect(shared).rejects.toBe(failure);
+          await expect(dispatch("scheduled")).rejects.toThrow("was not published");
+          expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(1);
+          return;
+        }
+        const [recovered, joined] = await shared;
+        expect(recovered).toMatchObject({ agentId: "default", config: input.config });
+        expect(joined).toBe(recovered);
+        expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(1);
+      } finally {
+        finish.resolve();
+        await Promise.allSettled([foreground, background]);
+      }
+    },
+  );
+
+  it("limits scheduled checks to one per failure, retaining foreground recovery after cooldown", async () => {
+    const { input } = await failReplacement();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(10_000);
+    const repeatedFailure = new Error("catalog replacement still fails");
+    mocks.resolveAmbientCredentials.mockClear().mockImplementation(() => {
+      throw repeatedFailure;
+    });
+    try {
+      await expect(dispatch("scheduled")).rejects.toBe(repeatedFailure);
+      await expect(dispatch()).rejects.toThrow("was not published");
+      clock.mockReturnValue(20_000);
+      await expect(dispatch("scheduled")).rejects.toThrow("was not published");
+      expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(1);
+      await expect(dispatch()).rejects.toBe(repeatedFailure);
+      clock.mockReturnValue(30_000);
+      await expect(dispatch("scheduled")).rejects.toThrow("was not published");
+      expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(2);
+      mocks.resolveAmbientCredentials.mockReturnValue({});
+      expect(await dispatch()).toMatchObject({ agentId: "default" });
+      await failReplacement(await prepareModelRuntimeSnapshot(input));
+      expect(await dispatch("scheduled")).toMatchObject({ agentId: "default" });
+      expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(5);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+  it("does not spend the scheduled check while waiting for an unrelated failed replacement", async () => {
+    await failReplacement(undefined, ["default", "other"]);
+    const drain = beginPreparedModelRuntimePluginDrain();
+    const waiting = dispatch("scheduled");
+    const prematureReplacement = getPendingPreparedModelRuntimeReplacement();
+    const gate = markPreparedModelRuntimeSnapshotsStale("other agent reload", {
+      waitForReplacement: true,
+      agentIds: new Set(["other"]),
+    });
+    const unrelatedFailure = new Error("other agent reload failed");
+    const rejected = expect(waiting).rejects.toBe(unrelatedFailure);
+    drain.release();
+    await Promise.resolve();
+    rejectPendingPreparedModelRuntimeReplacement(gate, unrelatedFailure);
+    await rejected;
+    expect(prematureReplacement).toBeUndefined();
+    mocks.resolveAmbientCredentials.mockClear();
+    expect(await dispatch("scheduled")).toMatchObject({ agentId: "default" });
+    expect(mocks.resolveAmbientCredentials).toHaveBeenCalled();
+  });
 });

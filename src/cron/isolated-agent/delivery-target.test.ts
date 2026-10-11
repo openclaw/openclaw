@@ -69,10 +69,6 @@ vi.mock("../../infra/outbound/channel-selection.runtime.js", () => ({
     .mockResolvedValue({ channel: "alpha", configured: ["alpha"] }),
 }));
 
-vi.mock("../../infra/outbound/target-id-resolution.js", () => ({
-  maybeResolveIdLikeTarget: vi.fn(),
-}));
-
 vi.mock("../../infra/outbound/targets.runtime.js", () => ({
   resolveOutboundTarget: vi.fn(),
 }));
@@ -83,7 +79,6 @@ const mockedModuleIds = [
   "../../config/sessions/session-accessor.js",
   "../../infra/outbound/channel-selection.runtime.js",
   "../../infra/outbound/targets.runtime.js",
-  "../../infra/outbound/target-id-resolution.js",
 ];
 
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -613,7 +608,7 @@ describe("resolveDeliveryTarget", () => {
 
   it("falls back to the runtime target resolver when the channel plugin is not already loaded", async () => {
     setSingleOutboundTestPlugin({ id: "alpha", outbound: createStubOutbound("Alpha") });
-    vi.mocked(resolveOutboundTarget).mockReturnValueOnce({ ok: true, to: "room:default" });
+    vi.mocked(resolveOutboundTarget).mockResolvedValueOnce({ ok: true, to: "room:default" });
 
     const cfg = makeCfg();
     const result = await resolveDeliveryTarget(cfg, AGENT_ID, {

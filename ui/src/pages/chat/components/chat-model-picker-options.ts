@@ -38,6 +38,8 @@ export type ChatModelPickerOption = {
   isDefault: boolean;
   label: string;
   provider: string;
+  /** Hosted-catalog recommendation; the rest of its provider collapses under "All models". */
+  recommended?: boolean;
   supportsTools?: boolean;
   value: string;
 };

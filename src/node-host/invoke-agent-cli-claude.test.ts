@@ -3,6 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -12,12 +16,11 @@ import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js
 import { loadExecApprovals } from "../infra/exec-approvals.js";
 import * as logger from "../logger.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
-import type { ProcessExtinctionResult } from "../process/supervisor/types.js";
+import type { ManagedRun, ProcessExtinctionResult } from "../process/supervisor/types.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { NodeHostClient } from "./client.js";
 import { decodeClaudeCliNodeRunParams } from "./invoke-agent-cli-claude-params.js";
 import { runClaudeCliNodeCommand } from "./invoke-agent-cli-claude.js";
-import { handleSystemRunInvoke } from "./invoke-system-run.js";
 import type { RunResult } from "./invoke-types.js";
 import { handleInvoke, type NodeInvokeRequestPayload } from "./invoke.js";
 
@@ -106,7 +109,7 @@ describe("Claude CLI node command", () => {
       let staged = 0;
       let stagedPrompt: string | undefined;
       const writeFile = fs.writeFile.bind(fs);
-      await withEnvAsync({ OPENCLAW_HOME: cwd }, async () => {
+      await withEnvAsync({ OPENCLAW_HOME: cwd, PATH: "/usr/bin:/bin", HOME: cwd }, async () => {
         saveExecApprovals({ version: 1, defaults: { security: "full", ask: "off" }, agents: {} });
         setRuntimeConfigSnapshot({ tools: { exec: { mode: "full" } } });
         const staging = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
@@ -136,11 +139,6 @@ describe("Claude CLI node command", () => {
             undefined,
             {
               claudePath: executable,
-              handleSystemRun: (options) =>
-                handleSystemRunInvoke({
-                  ...options,
-                  sanitizeEnv: () => ({ PATH: "/usr/bin:/bin", HOME: cwd }),
-                }),
             },
           );
         } finally {
@@ -159,6 +157,7 @@ describe("Claude CLI node command", () => {
       expect(existsSync(marker)).toBe(!revoke);
       expect(reply?.ok).toBe(!revoke);
       expect(progress).toBe(revoke ? "" : "approved\n");
+      expect(calls.some((call) => call.method === "node.event")).toBe(false);
       if (revoke) {
         expect(reply?.error?.code).toBe("SYSTEM_RUN_DENIED");
         expect(reply?.error?.message).toContain("exec approval changed before execution");
@@ -327,13 +326,9 @@ describe("Claude CLI node command", () => {
       const handleSystemRun = vi.fn(
         async (options: {
           params: { command: string[] };
-          sendNodeEvent: (client: NodeHostClient, event: string, payload: unknown) => Promise<void>;
-          sendExecFinishedEvent: (params: unknown) => Promise<void>;
           sendInvokeResult: (result: unknown) => Promise<void>;
         }) => {
           expect(options.params.command).toEqual([executable, "-p", "--resume", "session-1"]);
-          await options.sendNodeEvent(client(calls), "exec.denied", {});
-          await options.sendExecFinishedEvent({});
           await options.sendInvokeResult({
             ok: false,
             error: { code: "UNAVAILABLE", message: "SYSTEM_RUN_DENIED: approval required" },
@@ -575,9 +570,9 @@ process.stdin.on("end", () => {
     await expect(fs.stat(promptPath ?? "")).rejects.toThrow();
   });
 
-  it.each(["job-unavailable", "job-create-failed", "job-observation-failed"] as const)(
+  it.for(["job-unavailable", "job-create-failed", "job-observation-failed"] as const)(
     "retains prompt artifacts and command success after %s certification",
-    async (reason) => {
+    async (reason, { signal }) => {
       const executable = await executableScript(
         'process.stderr.write(process.argv[process.argv.indexOf("--append-system-prompt-file") + 1]);',
       );
@@ -587,8 +582,10 @@ process.stdin.on("end", () => {
         reason === "job-unavailable"
           ? { status: "uncertain", reason }
           : { status: "uncertain", reason, cause: new Error("Job certification unavailable") };
+      let started: Promise<ManagedRun> | undefined;
       const spawnSpy = vi.spyOn(supervisor, "spawn").mockImplementation(async (input) => {
-        const run = await spawn(input);
+        started = spawn(input);
+        const run = await started;
         return {
           ...run,
           waitForExtinction: async () => {
@@ -613,33 +610,49 @@ process.stdin.on("end", () => {
           }
         }
       });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       try {
-        const result = await withEnvAsync({ OPENCLAW_SERVICE_MARKER: "openclaw" }, () =>
-          runCommand(executable, {
-            argv: ["-p"],
-            systemPrompt: "descendant-owned prompt",
-            idleTimeoutMs: 5_000,
-            timeoutMs: 5_000,
-          }),
+        const result = await withinTest(
+          withEnvAsync({ OPENCLAW_SERVICE_MARKER: "openclaw" }, () =>
+            runCommand(
+              executable,
+              {
+                argv: ["-p"],
+                systemPrompt: "descendant-owned prompt",
+                idleTimeoutMs: 5_000,
+                timeoutMs: 5_000,
+              },
+              { signal },
+            ),
+          ),
+          signal,
         );
+        vi.useRealTimers();
         expect(result).toMatchObject({ exitCode: 0, success: true });
         const promptDir = path.dirname(result.stderr);
         expect(path.dirname(promptDir)).toBe(path.resolve(os.tmpdir()));
         expect(path.basename(promptDir)).toMatch(/^openclaw-node-claude-prompt-/u);
         expect(path.basename(result.stderr)).toBe("system-prompt.md");
         tempDirs.push(promptDir);
-        await decision.promise;
+        await withinTest(decision.promise, signal);
         await expect(fs.readFile(result.stderr, "utf8")).resolves.toBe("descendant-owned prompt");
         expect(warning).toHaveBeenCalledWith(expect.stringContaining(reason));
       } finally {
-        spawnSpy.mockRestore();
-        warning.mockRestore();
-        removal.mockRestore();
+        vi.useRealTimers();
+        try {
+          await (await started)?.waitForExtinction?.();
+        } finally {
+          spawnSpy.mockRestore();
+          warning.mockRestore();
+          removal.mockRestore();
+        }
       }
     },
   );
 
-  it("joins prompt removal admitted by the process certifier before returning", async () => {
+  it("joins prompt removal admitted by the process certifier before returning", async ({
+    signal,
+  }) => {
     const executable = await executableScript('process.stdout.write(\'{"type":"result"}\\n\');');
     const removing = createDeferred();
     const release = createDeferred();
@@ -666,6 +679,7 @@ process.stdin.on("end", () => {
         removed.resolve();
       }
     });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       await withEnvAsync({ OPENCLAW_SERVICE_MARKER: "openclaw" }, async () => {
         const run = runCommand(
@@ -676,23 +690,28 @@ process.stdin.on("end", () => {
             idleTimeoutMs: 5_000,
             timeoutMs: 5_000,
           },
-          { client: gatedClient },
+          { client: gatedClient, signal },
         );
         const settled = vi.fn();
         void run.then(settled, settled);
         try {
-          await removing.promise;
+          await withinTest(removing.promise, signal);
+          vi.useRealTimers();
           await new Promise<void>((resolve) => {
             setImmediate(resolve);
           });
           expect(settled).not.toHaveBeenCalled();
         } finally {
+          vi.useRealTimers();
+          removing.resolve();
           release.resolve();
           await expect(run).resolves.toMatchObject({ success: true });
           await removed.promise;
         }
       });
     } finally {
+      vi.useRealTimers();
+      removing.resolve();
       release.resolve();
       spy.mockRestore();
     }
@@ -704,53 +723,92 @@ process.stdin.on("end", () => {
       const markerDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-claude-prompt-"));
       tempDirs.push(markerDir);
       const marker = path.join(markerDir, "descendant-read");
-      const executable = await executableScript(`
+      const receipts = await openFixtureReceiptChannel();
+      try {
+        const descendant = `
+${fixtureReceiptClientSource(receipts.endpoint)}
+import { readFileSync, writeFileSync } from "node:fs";
+await awaitRelease(${JSON.stringify(marker)}, "read");
+writeFileSync(${JSON.stringify(marker)}, readFileSync(process.argv[1], "utf8"));`;
+        const executable = await executableScript(`
 const { spawn } = require("node:child_process");
 const prompt = process.argv[process.argv.indexOf("--append-system-prompt-file") + 1];
-const child = spawn(process.execPath, ["-e",
-  "setTimeout(() => require('node:fs').writeFileSync(" +
-  JSON.stringify(${JSON.stringify(marker)}) + ", require('node:fs').readFileSync(" +
-  JSON.stringify(prompt) + ", 'utf8')), 300)"
+const child = spawn(process.execPath, ["--input-type=module", "-e",
+  ${JSON.stringify(descendant)}, prompt
 ], { stdio: ["ignore", "ignore", "ignore", 3] });
 child.unref();
 process.stdout.write(JSON.stringify({ type: "result", result: prompt }) + "\\n");`);
-      await withEnvAsync({ OPENCLAW_SERVICE_MARKER: "openclaw" }, async () => {
-        const calls: Array<{ method: string; params: unknown }> = [];
-        const request = {
-          argv: ["-p"],
-          systemPrompt: "descendant-owned prompt",
-          idleTimeoutMs: 2_000,
-          timeoutMs: 5_000,
-        };
-        const removed = createDeferred();
-        const remove = fs.rm.bind(fs);
-        const removal = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+        await withEnvAsync({ OPENCLAW_SERVICE_MARKER: "openclaw" }, async () => {
+          const calls: Array<{ method: string; params: unknown }> = [];
+          const request = {
+            argv: ["-p"],
+            systemPrompt: "descendant-owned prompt",
+            idleTimeoutMs: 2_000,
+            timeoutMs: 5_000,
+          };
+          const removed = createDeferred();
+          let promptDir: string | undefined;
+          const remove = fs.rm.bind(fs);
+          const removal = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+            try {
+              await remove(target, options);
+            } finally {
+              if (String(target) === promptDir) {
+                removed.resolve();
+              }
+            }
+          });
+          const supervisor = getProcessSupervisor();
+          const spawn = supervisor.spawn.bind(supervisor);
+          let started: Promise<ManagedRun> | undefined;
+          const spawning = vi.spyOn(supervisor, "spawn").mockImplementation((input) => {
+            started = spawn(input);
+            return started;
+          });
+          // This test owns descendant lifetime; fixture startup does not advance command deadlines.
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
           try {
-            await remove(target, options);
+            const result = await withinTest(
+              runCommand(executable, request, { client: client(calls), signal }),
+              signal,
+            );
+            vi.useRealTimers();
+            expect(result).toMatchObject({
+              exitCode: 0,
+              success: true,
+              timedOut: false,
+              noOutputTimedOut: false,
+            });
+            const output = calls
+              .filter((call) => call.method === "node.invoke.progress")
+              .map((call) => (call.params as { chunk: string }).chunk)
+              .join("");
+            const promptPath = (JSON.parse(output) as { result: string }).result;
+            promptDir = path.dirname(promptPath);
+
+            await expect(fs.readFile(promptPath, "utf8")).resolves.toBe("descendant-owned prompt");
+            receipts.release(marker, "read");
+            // Removal follows certified descendant extinction, after its synchronous marker write.
+            await withinTest(removed.promise, signal);
+            expect(await fs.readFile(marker, "utf8")).toBe("descendant-owned prompt");
+            await expect(fs.stat(promptPath)).rejects.toThrow();
           } finally {
-            if (String(target).includes("openclaw-node-claude-prompt-")) {
-              removed.resolve();
+            try {
+              receipts.release(marker, "read");
+            } finally {
+              vi.useRealTimers();
+              try {
+                await (await started)?.waitForExtinction?.();
+              } finally {
+                spawning.mockRestore();
+                removal.mockRestore();
+              }
             }
           }
         });
-        try {
-          const result = await runCommand(executable, request, { client: client(calls) });
-          const output = calls
-            .filter((call) => call.method === "node.invoke.progress")
-            .map((call) => (call.params as { chunk: string }).chunk)
-            .join("");
-          const promptPath = (JSON.parse(output) as { result: string }).result;
-
-          expect(result).toMatchObject({ exitCode: 0, success: true });
-          await expect(fs.readFile(promptPath, "utf8")).resolves.toBe("descendant-owned prompt");
-          // Removal follows certified descendant extinction, after its synchronous marker write.
-          await withinTest(removed.promise, signal);
-          expect(await fs.readFile(marker, "utf8")).toBe("descendant-owned prompt");
-          await expect(fs.stat(promptPath)).rejects.toThrow();
-        } finally {
-          removal.mockRestore();
-        }
-      });
+      } finally {
+        await receipts.close();
+      }
     },
   );
 

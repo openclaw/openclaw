@@ -29,8 +29,7 @@ export function migrateLegacyNotifyFallback(params: {
 
     const jobName =
       normalizeOptionalString(raw.name) ?? normalizeOptionalString(raw.id) ?? "<unnamed>";
-    const notify = raw.notify === true;
-    if (!notify) {
+    if (raw.notify !== true) {
       delete raw.notify;
       changed = true;
       continue;

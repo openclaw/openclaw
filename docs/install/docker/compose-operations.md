@@ -55,6 +55,25 @@ adjust the printed dashboard URL as described in [Containerized Gateway](/instal
 Use [Health checks](/install/docker#health-checks) to verify the gateway and
 [Update OpenClaw](/install/docker-vm-runtime#update-openclaw) for image updates.
 
+When the CLI shares Gateway state, add `pid: "service:openclaw-gateway"` to the
+`openclaw-cli` service in your Compose override so ownership checks can see the
+Gateway's processes; sharing the network alone does not share the PID namespace.
+Alternatively, run the TUI inside the Gateway container with
+`docker compose exec openclaw-gateway openclaw tui`. A different PID namespace
+now refuses unverifiable ownership instead of reclaiming the running Gateway's
+lock. `tui --local` starts an embedded agent and is not a PID-namespace workaround
+for shared state. Older locks retain their previous recovery behavior until the
+Gateway next starts and writes namespace identity.
+A replacement Gateway reclaims a crashed container's state lock and SQLite owner
+lease after about 90 seconds without an owner heartbeat, even when Docker assigns
+a different hostname. Startup waits up to 95 seconds for fresh ownership evidence
+to age out. Doctor refuses a fresh, unverifiable owner immediately; after stopping
+the previous Gateway, wait up to 90 seconds after its last heartbeat and retry.
+Existing leases from older images use their recorded hostname and heartbeat until
+the replacement publishes boot and PID namespace identity. A verified live owner
+still blocks takeover, even when its lease deadline has passed. Image updates need
+no schema migration or manual lease deletion.
+
 Token setup belongs to the [Docker setup flow](/install/docker#containerized-gateway).
 If you need the Control UI token, read `OPENCLAW_GATEWAY_TOKEN` privately from the
 project `.env`. [`config get <path>`](/cli/config) redacts sensitive values; it

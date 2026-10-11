@@ -42,19 +42,16 @@ export function createDeliveryQueueMediaRetentionInDatabase(
   prepared = { id: generateSecureUuid(), enqueuedAt: Date.now() },
 ): string {
   const { id, enqueuedAt } = prepared;
-  const entry: MediaStageEntry = {
-    id,
-    enqueuedAt,
-    retryCount: 0,
-    artifacts: [...artifacts],
-  };
-  const insert = {
-    queueName: DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
-    entry,
-    metadata: { entryKind },
-    insertOnly: true,
-  };
-  const inserted = upsertDeliveryQueueEntryInDatabase(insert, database);
+  const entry: MediaStageEntry = { id, enqueuedAt, retryCount: 0, artifacts: [...artifacts] };
+  const inserted = upsertDeliveryQueueEntryInDatabase(
+    {
+      queueName: DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
+      entry,
+      metadata: { entryKind },
+      insertOnly: true,
+    },
+    database,
+  );
   if (!inserted) {
     throw new Error(`Delivery queue media stage already exists: ${id}`);
   }

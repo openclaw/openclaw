@@ -412,21 +412,21 @@ suite.define(() => {
             path: path.join(proofDir, "control-ui-resource-allowed.png"),
           });
         }
-        const confirmedPrompts: string[] = [];
-        controlPage.on("dialog", async (dialog) => {
-          confirmedPrompts.push(dialog.message());
-          await dialog.accept();
-        });
         await app.locator("#update-context").click();
         await waitForText(app.locator("#context-update"), "accepted");
         await app.locator("#send-message").click();
+        const confirmation = controlPage.getByRole("alertdialog");
+        await waitForTextContaining(confirmation, "summarize selection");
+        expect(
+          await controlPage.evaluate(() => Reflect.get(window, "mcpConformancePrompt")),
+        ).toBeUndefined();
+        await confirmation.getByRole("button", { name: "Send", exact: true }).click();
         await waitForText(app.locator("#message"), "accepted");
         await expect
           .poll(() =>
             controlPage.evaluate(() => Reflect.get(window, "mcpConformancePrompt") as string),
           )
           .toBe("summarize selection");
-        expect(confirmedPrompts).toEqual(["Confirm:\n\nsummarize selection"]);
         const currentView = getMcpAppViewLease(viewId, runtime);
         if (!currentView) {
           throw new Error("Conformance view expired before context inspection");
@@ -730,8 +730,8 @@ suite.define(() => {
                 await expect
                   .poll(
                     async () =>
-                      (await fixture.readEvents()).filter(
-                        (event) => event.scenario === spec.scenario && event.event === "tool-start",
+                      (await fixture.readEvents(spec.scenario)).filter(
+                        (event) => event.event === "tool-start",
                       ).length,
                   )
                   .toBe(1);
@@ -752,10 +752,8 @@ suite.define(() => {
                 await expect
                   .poll(
                     async () =>
-                      (await fixture.readEvents()).filter(
-                        (event) =>
-                          event.scenario === spec.scenario &&
-                          event.event === "tool-cancellation-observed",
+                      (await fixture.readEvents(spec.scenario)).filter(
+                        (event) => event.event === "tool-cancellation-observed",
                       ).length,
                   )
                   .toBe(1);
@@ -767,17 +765,14 @@ suite.define(() => {
                 await expect
                   .poll(
                     async () =>
-                      (await fixture.readEvents()).filter(
+                      (await fixture.readEvents(spec.scenario)).filter(
                         (event) =>
-                          event.scenario === spec.scenario &&
                           event.event === (spec.cooperative ? "tool-stopped" : "tool-complete"),
                       ).length,
                     { timeout: 8000 },
                   )
                   .toBe(1);
-                const events = (await fixture.readEvents()).filter(
-                  (event) => event.scenario === spec.scenario,
-                );
+                const events = await fixture.readEvents(spec.scenario);
                 const calls = events.filter(
                   (event) => event.event === "incoming" && event.tool === "app_companion",
                 );
@@ -807,9 +802,7 @@ suite.define(() => {
                 Object.assign(observation, {
                   settledAtMs: Date.now(),
                   network: diagnostics.slice(networkStart),
-                  events: (await fixture.readEvents()).filter(
-                    (event) => event.scenario === spec.scenario,
-                  ),
+                  events: await fixture.readEvents(spec.scenario),
                   state: await recordHost(standalonePage, spec.scenario + "-after"),
                 });
                 await fs.writeFile(
@@ -855,9 +848,7 @@ suite.define(() => {
               const controlResponses = http.responses.slice(controlHttpStart);
               expect(controlResponses).toHaveLength(1);
               expect(controlResponses[0]?.writableFinished).toBe(true);
-              const controlEvents = (await fixture.readEvents()).filter(
-                (event) => event.scenario === spec.scenario + "-control",
-              );
+              const controlEvents = await fixture.readEvents(spec.scenario + "-control");
               expect(
                 controlEvents.filter(
                   (event) => event.event === "incoming" && event.tool === "app_companion",
@@ -869,9 +860,7 @@ suite.define(() => {
                 ),
               ).toHaveLength(1);
               // A subsequent real response is a causal barrier for the cancelled handler's late reply.
-              const settledEvents = (await fixture.readEvents()).filter(
-                (event) => event.scenario === spec.scenario,
-              );
+              const settledEvents = await fixture.readEvents(spec.scenario);
               observation.events = settledEvents;
               observation.afterControlAtMs = Date.now();
               await fs.writeFile(
@@ -962,8 +951,8 @@ suite.define(() => {
               await historyApp.locator("#call-app").click();
               await waitForTextContaining(historyApp.locator("#app-tool"), "companion-called");
               historyObservations.returnedApp = await recordHost(historyPage, "history-forward");
-              const historyEvents = (await fixture.readEvents()).filter(
-                (event) => event.scenario === "history-forward" && event.tool === "app_companion",
+              const historyEvents = (await fixture.readEvents("history-forward")).filter(
+                (event) => event.tool === "app_companion",
               );
               historyObservations.events = historyEvents;
               const historyCalls = historyEvents.filter((event) => event.event === "incoming");

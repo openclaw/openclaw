@@ -41,7 +41,10 @@ import { clearCommandLane, enqueueCommandInLane } from "../process/command-queue
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayWorkerPlacementLocalDispatchBarrier } from "./server-worker-placement-local-dispatch.js";
-import { createGatewayWorkerPlacementMoveBarrier } from "./server-worker-placement-move-barrier.js";
+import {
+  createGatewayWorkerPlacementMoveBarrier,
+  runWorkerPlacementHandoff,
+} from "./server-worker-placement-move-barrier.js";
 import {
   resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTargetWithStore,
@@ -92,7 +95,7 @@ function createMoveBarrierBeginFixture(sessionId: string, sessionKey: string, ag
 
 describe("worker placement move destination", () => {
   it.each(
-    (["dispatch", "reconcile", "abandon"] as const).flatMap((action) =>
+    (["dispatch", "required", "reconcile", "abandon"] as const).flatMap((action) =>
       (["current", "revoked after commit"] as const).map((authority) => ({ action, authority })),
     ),
   )(
@@ -120,7 +123,7 @@ describe("worker placement move destination", () => {
           assertCurrent: assertAuthority,
           assertBindingCurrent: assertAuthority,
           config: {},
-          entry: { sessionId },
+          entry: { sessionId, updatedAt: 1 },
           target,
           worktree: { id: "research-worktree", path: "/gateway/research" },
           workspace: { kind: "local", path: "/gateway/research" },
@@ -145,16 +148,19 @@ describe("worker placement move destination", () => {
         const results = Promise.allSettled(queued);
         const effects: string[] = [];
         let releaseAdmission = () => {};
-        const admission = await beginSessionWorkAdmission({
-          scope: target.storePath,
-          identities: [sessionKey, sessionId],
-          assertAllowed: () => {},
-          onInterrupt: () => {
-            effects.push("interrupt");
-            releaseAdmission();
-          },
-        });
-        releaseAdmission = admission.release;
+        const admission =
+          action === "required"
+            ? undefined
+            : await beginSessionWorkAdmission({
+                scope: target.storePath,
+                identities: [sessionKey, sessionId],
+                assertAllowed: () => {},
+                onInterrupt: () => {
+                  effects.push("interrupt");
+                  releaseAdmission();
+                },
+              });
+        releaseAdmission = admission?.release ?? (() => {});
         const commit = () => {
           committed = true;
           effects.push("commit");
@@ -162,6 +168,7 @@ describe("worker placement move destination", () => {
         };
         const options = {
           placements: {
+            get: () => undefined,
             waitForTurnClaimRelease: async () => {
               effects.push("claims released");
             },
@@ -172,20 +179,33 @@ describe("worker placement move destination", () => {
           },
         };
         try {
-          if (action === "dispatch") {
-            await createGatewayWorkerPlacementLocalDispatchBarrier(options)({
-              sessionId,
-              sessionKey,
-              agentId,
-              executionMode: "remote-exec",
-              authorize: assertAuthority,
-              startDispatch: async () => commit().placement,
-            });
+          if (action === "required") {
+            await runWorkerPlacementHandoff(
+              options,
+              { sessionId, sessionKey, agentId, action: "dispatch", requiredProfile: "dedicated" },
+              {
+                managedWorktrees: { findLiveByOwner: async () => undefined },
+                resolveCanonicalSessionEntryFromStoreKeys,
+                resolveGatewaySessionStoreTargetWithStore,
+              },
+              async () => commit().placement,
+            );
+          } else if (action === "dispatch") {
+            await expect(
+              createGatewayWorkerPlacementLocalDispatchBarrier(options)({
+                sessionId,
+                sessionKey,
+                agentId,
+                executionMode: "remote-exec",
+                authorize: assertAuthority,
+                startDispatch: async () => commit().placement,
+              }),
+            ).rejects.toThrow("is busy with active work");
           } else {
             await createGatewayWorkerPlacementMoveBarrier({
               ...options,
               loadSessionRuntime: async () => ({
-                managedWorktrees: { findLiveByOwner: () => undefined },
+                managedWorktrees: { findLiveByOwner: async () => undefined },
                 resolveCanonicalSessionEntryFromStoreKeys,
                 resolveGatewaySessionStoreTargetWithStore,
               }),
@@ -198,24 +218,32 @@ describe("worker placement move destination", () => {
               begin: async () => commit(),
             });
           }
-          expect(effects).toEqual([
-            "commit",
-            "revoke",
-            "interrupt",
-            ...(action === "abandon" ? [] : ["claims released"]),
-          ]);
+          expect(effects).toEqual(
+            action === "required"
+              ? ["commit"]
+              : action === "dispatch"
+                ? []
+                : [
+                    "commit",
+                    "revoke",
+                    "interrupt",
+                    ...(action === "abandon" ? [] : ["claims released"]),
+                  ],
+          );
           release.resolve();
           await blocker;
           expect(await results).toEqual([
             { status: "fulfilled", value: "main" },
             { status: "fulfilled", value: "legacy-main" },
-            {
-              status: "rejected",
-              reason: expect.objectContaining({ name: "CommandLaneClearedError" }),
-            },
+            action === "required" || action === "dispatch"
+              ? { status: "fulfilled", value: "research" }
+              : {
+                  status: "rejected",
+                  reason: expect.objectContaining({ name: "CommandLaneClearedError" }),
+                },
           ]);
         } finally {
-          admission.release();
+          admission?.release();
           release.resolve();
           clearCommandLane(lane);
           await Promise.allSettled([blocker, results]);
@@ -248,7 +276,7 @@ describe("worker placement move destination", () => {
         },
         awaitTurnClaimRelease: async (_sessionId, wait) => await wait(),
         loadSessionRuntime: async () => ({
-          managedWorktrees: { findLiveByOwner: () => undefined },
+          managedWorktrees: { findLiveByOwner: async () => undefined },
           resolveCanonicalSessionEntryFromStoreKeys,
           resolveGatewaySessionStoreTargetWithStore,
         }),
@@ -334,7 +362,7 @@ describe("worker placement move destination", () => {
         placements: { waitForTurnClaimRelease: vi.fn() },
         awaitTurnClaimRelease: (_sessionId, wait) => wait(),
         loadSessionRuntime: async () => ({
-          managedWorktrees: { findLiveByOwner: () => undefined },
+          managedWorktrees: { findLiveByOwner: async () => undefined },
           resolveCanonicalSessionEntryFromStoreKeys,
           resolveGatewaySessionStoreTargetWithStore,
         }),
@@ -499,7 +527,7 @@ describe("worker placement move destination", () => {
             retireSessionPlacement: vi.fn(),
             pruneOrphanedWorkspaceReconciliations: async () => [],
             listWorkspaceReconciliationOwners: async () => [],
-            listPendingWorkspaceResults: () => [],
+            listPendingWorkspaceResultsAsync: async () => [],
           } as never,
           environments: {} as never,
           gatewayNamespace: "gateway-test",

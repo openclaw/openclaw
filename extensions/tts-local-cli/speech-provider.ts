@@ -13,15 +13,6 @@ const AUDIO_EXTENSIONS = new Set([".wav", ".mp3", ".opus", ".ogg", ".m4a"]);
 type OutputFormat = (typeof VALID_OUTPUT_FORMATS)[number];
 type SourceFormat = OutputFormat | "ogg" | "m4a";
 
-type CliConfig = {
-  command: string;
-  args: string[];
-  outputFormat: OutputFormat;
-  timeoutMs: number;
-  cwd?: string;
-  env?: Record<string, string>;
-};
-
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_AUDIO_OUTPUT_BYTES = 50 * 1024 * 1024;
 const MAX_CLI_STDERR_BYTES = 1024 * 1024;
@@ -43,10 +34,7 @@ function resolveCliProviderConfig(rawConfig: Record<string, unknown>): SpeechPro
   return asOptionalRecord(providers?.["tts-local-cli"]) ?? asOptionalRecord(providers?.cli) ?? {};
 }
 
-function getConfig(
-  cfg: SpeechProviderConfig,
-  timeoutMs: number = DEFAULT_TIMEOUT_MS,
-): CliConfig | null {
+function getConfig(cfg: SpeechProviderConfig, timeoutMs: number = DEFAULT_TIMEOUT_MS) {
   const command = typeof cfg.command === "string" ? cfg.command.trim() : "";
   if (!command) {
     return null;
@@ -178,7 +166,7 @@ async function readAudioFile(filePath: string): Promise<Buffer> {
 }
 
 async function runCli(params: {
-  config: CliConfig;
+  config: NonNullable<ReturnType<typeof getConfig>>;
   text: string;
   outputDir: string;
   filePrefix: string;

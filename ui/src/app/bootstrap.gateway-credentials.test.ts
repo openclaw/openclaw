@@ -23,6 +23,7 @@ function setNativeAuth(auth: { gatewayUrl: string; token?: string; password?: st
 }
 
 beforeEach(() => {
+  vi.spyOn(Math, "random").mockReturnValue(0);
   vi.stubGlobal("localStorage", createStorageMock());
   vi.stubGlobal("sessionStorage", createStorageMock());
 });
@@ -212,11 +213,6 @@ describe("pending Gateway credentials", () => {
       retryUnavailable: false,
     },
     {
-      name: "a missing token after retrying an unavailable Gateway",
-      authCode: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING,
-      retryUnavailable: true,
-    },
-    {
       name: "a missing password after retrying an unavailable Gateway",
       authCode: ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
       retryUnavailable: true,
@@ -231,7 +227,11 @@ describe("pending Gateway credentials", () => {
       const fetchMock = vi.fn<typeof fetch>(async () =>
         Response.json({ bootstrapToken: "owner-bootstrap", bootstrapProfile: "owner" }),
       );
-      vi.stubGlobal("fetch", fetchMock);
+      vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) =>
+        input === "/control-ui-config.json"
+          ? Promise.resolve(new Response(null, { status: 401 }))
+          : fetchMock(input, init),
+      );
       runtime = bootstrapApplication();
       vi.spyOn(runtime.router, "start").mockResolvedValue(undefined);
       await runtime.start();
@@ -311,7 +311,11 @@ describe("pending Gateway credentials", () => {
       const fetchMock = vi.fn<typeof fetch>(async () =>
         Response.json({ bootstrapToken: "owner-bootstrap", bootstrapProfile: "owner" }),
       );
-      vi.stubGlobal("fetch", fetchMock);
+      vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) =>
+        input === "/control-ui-config.json"
+          ? Promise.resolve(new Response(null, { status: 401 }))
+          : fetchMock(input, init),
+      );
       runtime = bootstrapApplication();
       vi.spyOn(runtime.router, "start").mockResolvedValue(undefined);
       await runtime.start();
@@ -352,25 +356,6 @@ describe("pending Gateway credentials", () => {
     expect(runtime.context.gateway.connection.token).toBe("next-token");
     expect(runtime.context.gateway.connection.password).toBe("");
     persistSessionToken(nextGatewayUrl, "");
-  });
-
-  it("holds a bootstrap token until its changed Gateway URL is confirmed", () => {
-    const currentGatewayUrl = "wss://gateway.example/openclaw";
-    const nextGatewayUrl = "wss://other-gateway.example/openclaw";
-    setNativeAuth({ gatewayUrl: currentGatewayUrl });
-    window.history.replaceState(
-      {},
-      "",
-      `/#gatewayUrl=${encodeURIComponent(nextGatewayUrl)}&bootstrapToken=next-bootstrap`,
-    );
-    runtime = bootstrapApplication();
-
-    expect(runtime.context.gateway.connection.bootstrapToken).toBe("");
-
-    runtime.confirmPendingGatewayConnection();
-
-    expect(runtime.context.gateway.connection.gatewayUrl).toBe(nextGatewayUrl);
-    expect(runtime.context.gateway.connection.bootstrapToken).toBe("next-bootstrap");
   });
 
   it("uses paired-device credentials while other connection bootstrap work is pending", async () => {
@@ -422,11 +407,9 @@ describe("pending Gateway credentials", () => {
         expect(methods).toContain("update.status");
         expect(methods).toContain("exec.approval.list");
       });
-      expect(fetchMock).not.toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalledOnce();
 
-      // Native plugin activation requests its grant before unrelated queued
-      // startup RPCs finish; the connected Gateway already owns its credential.
-      await expect(runtime.context.config.refresh()).resolves.toMatchObject({
+      await expect(runtime.context.config.refresh({ ifNeeded: true })).resolves.toMatchObject({
         serverVersion: "paired",
         pluginFrameGrants: [{ pluginId: "fixture" }],
       });

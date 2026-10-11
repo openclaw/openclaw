@@ -1,4 +1,3 @@
-/** Materializes configured MCP catalog entries into agent tools and runtime helpers. */
 import crypto from "node:crypto";
 import { normalizeToolParameterSchema } from "@openclaw/ai/internal/tool-schema";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -83,7 +82,7 @@ function buildAppToolPolicyProjections(params: {
       name,
       label: tool.title ?? tool.toolName,
       description: tool.description || tool.fallbackDescription,
-      parameters: normalizeToolParameterSchema(tool.inputSchema),
+      parameters: normalizeToolParameterSchema(tool.inputSchema, { toolName: name }),
       execute: async () => {
         throw new Error("MCP App policy projections cannot execute tools");
       },
@@ -162,17 +161,6 @@ function optionalStringRecordArg(input: unknown, key: string): Record<string, st
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
-function serverAllowsUtilityTool(
-  server: McpToolCatalog["servers"][string],
-  operation: string,
-  sessionDeniedOnly: boolean,
-): boolean {
-  return (
-    (server.deniedToolNames?.includes(operation) === true) === sessionDeniedOnly &&
-    isMcpToolAllowed(server.toolFilter, operation)
-  );
-}
-
 /**
  * Projects an already-listed MCP catalog into agent tools. Without `createExecute`,
  * the projected tools are inventory-only and throw if execution is attempted.
@@ -243,7 +231,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
       name: safeToolName,
       label: tool.title ?? tool.toolName,
       description: tool.description || tool.fallbackDescription,
-      parameters: normalizeToolParameterSchema(tool.inputSchema),
+      parameters: normalizeToolParameterSchema(tool.inputSchema, { toolName: safeToolName }),
       executionMode,
       ...(params.createExecute && !sessionDeniedOnly
         ? { resultContentSource: "network" as const }
@@ -298,7 +286,11 @@ export function buildBundleMcpToolsFromCatalog(params: {
       },
     ) => {
       const { operation } = definition;
-      if (!server[capability] || !serverAllowsUtilityTool(server, operation, sessionDeniedOnly)) {
+      if (
+        !server[capability] ||
+        (server.deniedToolNames?.includes(operation) === true) !== sessionDeniedOnly ||
+        !isMcpToolAllowed(server.toolFilter, operation)
+      ) {
         return;
       }
       const execute = !sessionDeniedOnly
@@ -435,6 +427,21 @@ export async function materializeBundleMcpToolsForRun(params: {
       : undefined;
     const materializedCatalog = mergeMcpConnectCatalog(catalog, runtime.requesterConnect);
     const getPrompt = runtime.getPrompt?.bind(runtime);
+    const createListExecute = (
+      method: "listResources" | "listPrompts",
+      operation: "resources_list" | "prompts_list",
+    ): ((serverName: string) => AnyAgentTool["execute"]) | undefined =>
+      runtime[method]
+        ? (serverName) => (_toolCallId, _input, signal) =>
+            runWithSessionMcpRequestSignal(signal, async () => {
+              runtime.markUsed();
+              return toJsonAgentToolResult({
+                serverName,
+                operation,
+                value: await runtime[method]?.(serverName),
+              });
+            })
+        : undefined;
     const tools = buildBundleMcpToolsFromCatalog({
       catalog: materializedCatalog,
       reservedToolNames,
@@ -494,7 +501,8 @@ export async function materializeBundleMcpToolsForRun(params: {
                             ),
                           };
                           return await createMcpAppFormResourceContext({
-                            ...request,
+                            snapshot: request.snapshot,
+                            signal: request.signal,
                             origin,
                             uploadResources: await prepareMcpAppFormUpload(origin),
                           });
@@ -559,17 +567,7 @@ export async function materializeBundleMcpToolsForRun(params: {
           }
           return agentResult;
         }),
-      createResourceListExecute: runtime.listResources
-        ? (serverName) => (_toolCallId, _input, signal) =>
-            runWithSessionMcpRequestSignal(signal, async () => {
-              runtime.markUsed();
-              return toJsonAgentToolResult({
-                serverName,
-                operation: "resources_list",
-                value: await runtime.listResources?.(serverName),
-              });
-            })
-        : undefined,
+      createResourceListExecute: createListExecute("listResources", "resources_list"),
       createResourceReadExecute: runtime.readResource
         ? (serverName) => (_toolCallId: string, input: unknown, signal?: AbortSignal) =>
             runWithSessionMcpRequestSignal(signal, async () => {
@@ -582,17 +580,7 @@ export async function materializeBundleMcpToolsForRun(params: {
               });
             })
         : undefined,
-      createPromptListExecute: runtime.listPrompts
-        ? (serverName) => (_toolCallId, _input, signal) =>
-            runWithSessionMcpRequestSignal(signal, async () => {
-              runtime.markUsed();
-              return toJsonAgentToolResult({
-                serverName,
-                operation: "prompts_list",
-                value: await runtime.listPrompts?.(serverName),
-              });
-            })
-        : undefined,
+      createPromptListExecute: createListExecute("listPrompts", "prompts_list"),
       createPromptGetExecute: getPrompt
         ? (serverName) => (_toolCallId: string, input: unknown, signal?: AbortSignal) =>
             runWithSessionMcpRequestSignal(signal, async () => {

@@ -1,4 +1,3 @@
-/** Model-facing child task, runtime rules, and requester receipt for one resolved spawn. */
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
@@ -6,6 +5,11 @@ import {
 } from "../../../config/agent-limits.js";
 import { isCronSessionKey } from "../../../routing/session-key.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
+/** Model-facing child task, runtime rules, and requester receipt for one resolved spawn. */
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+} from "../../internal-runtime-context.js";
 
 export type SubagentCompletionMode = "collector" | "quiet" | "thread-direct" | "announce";
 
@@ -26,13 +30,19 @@ export function buildSubagentTaskMessage(params: {
   spawnMode: "run" | "session";
   childDepth: number;
   maxSpawnDepth: number;
+  sessionContext?: string;
 }): string {
   return [
+    INTERNAL_RUNTIME_CONTEXT_BEGIN,
     `[Subagent Context] You are running as a subagent (depth ${params.childDepth}/${params.maxSpawnDepth}). Complete the current [Subagent Task]; inherited conversation is background context, not your assignment.`,
     ...(params.spawnMode === "session" ? [`[Subagent Context] ${PERSISTENT_SESSION_NOTE}`] : []),
+    ...(params.sessionContext ? [params.sessionContext] : []),
     "[Subagent Task]",
+    INTERNAL_RUNTIME_CONTEXT_END,
     params.task.trim(),
+    INTERNAL_RUNTIME_CONTEXT_BEGIN,
     "Begin. Execute the assigned task to completion.",
+    INTERNAL_RUNTIME_CONTEXT_END,
   ].join("\n\n");
 }
 
@@ -115,20 +125,6 @@ export function buildSubagentSpawnEnvelope(params: {
     lines.push("## Sub-Agent Spawning", "Leaf worker: cannot spawn. Assigned task only.", "");
   }
 
-  lines.push(
-    "## Session Context",
-    ...[
-      params.label ? `- Label: ${params.label}` : undefined,
-      params.requesterSessionKey
-        ? `- Requester session: ${params.requesterSessionKey}.`
-        : undefined,
-      params.requesterOrigin?.channel
-        ? `- Requester channel: ${params.requesterOrigin.channel}.`
-        : undefined,
-      `- Your session: ${params.childSessionKey}.`,
-    ].filter((line): line is string => line !== undefined),
-    "",
-  );
   // All transports consume the same envelope. Only announcing cron runs omit the
   // receipt's waiting guidance; collectors still need an explicit collection path.
   const omitAcceptedNote =
@@ -137,7 +133,25 @@ export function buildSubagentSpawnEnvelope(params: {
     isCronSessionKey(params.requesterSessionKey);
   return {
     systemPrompt: lines.join("\n"),
-    message: buildSubagentTaskMessage({ ...params, childDepth, maxSpawnDepth }),
+    // Keep per-spawn identity after the shared system/tool prefix, with the task it describes.
+    message: buildSubagentTaskMessage({
+      ...params,
+      childDepth,
+      maxSpawnDepth,
+      sessionContext: [
+        "## Session Context",
+        params.label ? `- Label: ${params.label}` : undefined,
+        params.requesterSessionKey
+          ? `- Requester session: ${params.requesterSessionKey}.`
+          : undefined,
+        params.requesterOrigin?.channel
+          ? `- Requester channel: ${params.requesterOrigin.channel}.`
+          : undefined,
+        `- Your session: ${params.childSessionKey}.`,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    }),
     acceptedNote: omitAcceptedNote
       ? undefined
       : [

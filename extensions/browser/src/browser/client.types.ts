@@ -1,15 +1,9 @@
-/**
- * Browser client response types.
- *
- * Shared by the browser control client, CLI, and Browser agent tool.
- */
 import type { lookup as dnsLookupCb } from "node:dns";
 import type { BrowserEngineDescriptor, BrowserEngineId } from "./engines/types.js";
 import type { ManagedBrowserHeadlessSource } from "./profile.types.js";
 
 type BrowserCdpLookup = typeof dnsLookupCb;
 
-/** Browser transport backing the selected profile. */
 export type BrowserTransport = "cdp" | "chrome-mcp" | "extension";
 
 export type ProfileStatus = {
@@ -38,13 +32,13 @@ export type BrowserGraphicsDevice = {
   driverVersion: string;
 };
 
-export type BrowserVideoDecodeCapability = {
+type BrowserVideoDecodeCapability = {
   profile: string;
   minResolution: { width: number; height: number };
   maxResolution: { width: number; height: number };
 };
 
-export type BrowserVideoEncodeCapability = {
+type BrowserVideoEncodeCapability = {
   profile: string;
   maxResolution: { width: number; height: number };
   maxFramerateNumerator: number;
@@ -91,7 +85,6 @@ export type BrowserTabOwnership =
         | "browser-identity-lookup-failed";
     };
 
-/** Browser status response returned by the control server. */
 export type BrowserStatus = {
   enabled: boolean;
   profile?: string;
@@ -153,7 +146,6 @@ export type BrowserTab = {
   type?: string;
 };
 
-/** Availability and page enumeration returned by the tab-list boundary. */
 export type BrowserTabsResult =
   | { running: true; tabs: BrowserTab[] }
   | { running: false; tabs: [] };

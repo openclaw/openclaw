@@ -2,6 +2,7 @@ import fs from "node:fs";
 import Module, { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { PLUGIN_SOURCE_CAPTURE_PREFIX } from "./plugin-source-capture-path.js";
@@ -338,21 +339,9 @@ export function tryNativeRequireModule(
   ) {
     return { ok: false };
   }
-  let resolvedPath: string;
+  let resolvedPath: string | undefined;
   try {
     resolvedPath = withNativeRequireAliases(options.aliasMap, () => require.resolve(modulePath));
-  } catch (error) {
-    const code = error && typeof error === "object" ? Reflect.get(error, "code") : undefined;
-    if (
-      isSourceTransformFallbackError(error, modulePath) ||
-      (options.fallbackOnMissingDependency === true &&
-        (code === "MODULE_NOT_FOUND" || code === "ERR_MODULE_NOT_FOUND"))
-    ) {
-      return { ok: false };
-    }
-    throw error;
-  }
-  try {
     // Requiring the resolved target could apply a second alias to the same request.
     const moduleExport = withNativeRequireAliases(options.aliasMap, () => require(modulePath));
     nativeModuleLoadFailures.delete(resolvedPath);
@@ -360,15 +349,23 @@ export function tryNativeRequireModule(
   } catch (error) {
     const code = error && typeof error === "object" ? Reflect.get(error, "code") : undefined;
     if (
+      resolvedPath !== undefined &&
       nativeModuleLoadFailures.has(resolvedPath) &&
       (code === "ERR_REQUIRE_ESM_RACE_CONDITION" || code === "ERR_INTERNAL_ASSERTION")
     ) {
       throw nativeModuleLoadFailures.get(resolvedPath);
     }
-    if (isSourceTransformFallbackError(error, modulePath)) {
+    if (
+      isSourceTransformFallbackError(error, modulePath) ||
+      (resolvedPath === undefined &&
+        options.fallbackOnMissingDependency === true &&
+        (code === "MODULE_NOT_FOUND" || code === "ERR_MODULE_NOT_FOUND"))
+    ) {
       return { ok: false };
     }
-    nativeModuleLoadFailures.set(resolvedPath, error);
+    if (resolvedPath !== undefined) {
+      nativeModuleLoadFailures.set(resolvedPath, error);
+    }
     throw error;
   }
 }
@@ -420,9 +417,31 @@ function withNativeRequireAliases<T>(
             ? fileURLToPath(context.parentURL)
             : undefined;
           const aliasTarget = resolveAlias(specifier, parent);
-          return aliasTarget
-            ? { shortCircuit: true, url: pathToFileURL(aliasTarget).href }
-            : nextResolve(specifier, context);
+          if (aliasTarget) {
+            return { shortCircuit: true, url: pathToFileURL(aliasTarget).href };
+          }
+          try {
+            return nextResolve(specifier, context);
+          } catch (error) {
+            // Compiled workers can load source SDKs without a TypeScript resolver.
+            // Keep the native graph while resolving its emitted JavaScript suffixes.
+            if (
+              parent &&
+              isPluginSourceModulePath(parent) &&
+              specifier.startsWith(".") &&
+              /\.[cm]?js$/u.test(specifier) &&
+              hasErrnoCode(error, "ERR_MODULE_NOT_FOUND")
+            ) {
+              const sourceUrl = new URL(
+                specifier.replace(/\.([cm]?)js$/u, ".$1ts"),
+                context.parentURL,
+              );
+              if (fs.existsSync(fileURLToPath(sourceUrl))) {
+                return nextResolve(sourceUrl.href, context);
+              }
+            }
+            throw error;
+          }
         },
       })
     : undefined;

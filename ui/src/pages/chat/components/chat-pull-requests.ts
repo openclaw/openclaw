@@ -14,14 +14,17 @@ import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { syncAnchoredOverlay } from "../../../components/anchored-overlay.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
 import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-controller.ts";
-import { livePresentation, type PresentationBinding } from "../../../lit/presentation-binding.ts";
+import { livePresentation, type PresentationValue } from "../../../lit/presentation-binding.ts";
 import "../../../components/tooltip.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 import {
   renderGitHubPublicationAction,
   renderGitHubPublicationDetails,
 } from "./chat-github-publication.ts";
+
+registerGitHubEnglish();
 
 const DISMISSED_STORAGE_KEY = "openclaw.chat.dismissedPullRequests";
 // Bounds localStorage growth: dismissals for the oldest sessions fall off
@@ -30,6 +33,12 @@ const DISMISSED_SESSION_LIMIT = 20;
 
 export function chatPullRequestId(pullRequest: ControlUiSessionPullRequest): string {
   return `${pullRequest.owner}/${pullRequest.repo}#${pullRequest.number}`.toLowerCase();
+}
+
+// Shares the per-session dismissal store with PR ids; `@` keeps the namespaces apart.
+// GitHub owner/repo names are case-insensitive, but Git branch names are not.
+export function chatBranchId(branch: ControlUiSessionBranch): string {
+  return `${branch.owner}/${branch.repo}`.toLowerCase() + `@${branch.branch}`;
 }
 
 function readDismissedStore(storage: Storage): Record<string, string[]> {
@@ -58,17 +67,15 @@ export function listDismissedChatPullRequests(sessionKey: string): ReadonlySet<s
   return new Set(readDismissedStore(storage)[sessionKey] ?? []);
 }
 
-export function dismissChatPullRequest(
-  sessionKey: string,
-  pullRequest: ControlUiSessionPullRequest,
-): ReadonlySet<string> {
+/** Records a PR (`chatPullRequestId`) or branch (`chatBranchId`) dismissal. */
+export function dismissChatPullRequest(sessionKey: string, id: string): ReadonlySet<string> {
   const storage = getSafeLocalStorage();
   if (!storage || !sessionKey) {
-    return new Set([chatPullRequestId(pullRequest)]);
+    return new Set([id]);
   }
   const store = readDismissedStore(storage);
   const ids = new Set(store[sessionKey] ?? []);
-  ids.add(chatPullRequestId(pullRequest));
+  ids.add(id);
   delete store[sessionKey];
   store[sessionKey] = [...ids];
   const staleSessions = Object.keys(store).slice(0, -DISMISSED_SESSION_LIMIT);
@@ -115,15 +122,14 @@ function renderChecks(
     gateway?: ApplicationGateway;
     sessionKey?: string;
     sessionId?: string;
-    basePath?: string;
-    presented?: boolean;
-    presentation?: PresentationBinding;
+    presented?: PresentationValue;
   },
 ) {
   const checks = pullRequest.checks;
   const label = checks ? t(CHECK_LABEL_KEYS[checks.state]) : t("chat.pullRequests.ciMonitoring");
   let details: HTMLDetailsElement | undefined;
-  const isPresented = () => props.presentation?.isPresented() ?? props.presented ?? true;
+  const presented = props.presented ?? true;
+  const isPresented = () => (typeof presented === "boolean" ? presented : presented.isPresented());
   const syncChecksOverlay = (element: EventTarget | null | undefined) => {
     if (!(element instanceof HTMLDetailsElement)) {
       return;
@@ -149,7 +155,7 @@ function renderChecks(
       </summary>
       <wa-popup
         data-anchored-overlay
-        .active=${props.presentation ? livePresentation({ owner: props.presentation.owner, isPresented: () => isPresented() && Boolean(details?.open) }) : noChange}
+        .active=${typeof presented === "boolean" ? noChange : livePresentation({ owner: presented.owner, isPresented: () => isPresented() && Boolean(details?.open) })}
       >
         <div
           class="chat-pr__checks-menu"
@@ -179,8 +185,7 @@ function renderChecks(
             .gateway=${props.gateway}
             .sessionKey=${props.sessionKey ?? ""}
             .sessionId=${props.sessionId ?? ""}
-            .basePath=${props.basePath ?? ""}
-            .presented=${livePresentation(props.presentation ?? props.presented ?? true)}
+            .presented=${livePresentation(presented)}
           ></openclaw-chat-ci-automation>
           ${
             checks
@@ -188,7 +193,7 @@ function renderChecks(
                   .pullRequest=${pullRequest}
                   .gateway=${props.gateway}
                   .sessionKey=${props.sessionKey ?? ""}
-                  .presented=${livePresentation(props.presentation ?? props.presented ?? true)}
+                  .presented=${livePresentation(presented)}
                 ></openclaw-chat-ci-details>`
               : nothing
           }
@@ -266,6 +271,7 @@ function renderWorkRow(
   status: ControlUiSessionPullRequestSnapshot["status"],
   onOpenSessionDiff?: () => void,
   publication?: GitHubPublicationView,
+  onDismissBranch?: (branch: ControlUiSessionBranch) => void,
 ) {
   const published =
     !branch && publication?.result?.status === "published" ? publication.result : undefined;
@@ -295,6 +301,19 @@ function renderWorkRow(
               ? renderCreatePullRequestLink(branch)
               : nothing
         }
+        ${
+          branch && !published && onDismissBranch
+            ? html`<button
+                class="chat-pr__dismiss"
+                type="button"
+                ?disabled=${publication?.activity != null}
+                aria-label=${t("chat.pullRequests.dismissBranch", { branch: branch.branch })}
+                @click=${() => onDismissBranch(branch)}
+              >
+                ${icons.x}
+              </button>`
+            : nothing
+        }
       </span>
       ${publication ? renderGitHubPublicationDetails(publication) : nothing}
     </article>
@@ -306,30 +325,47 @@ export function renderChatPullRequests(props: {
   gateway?: ApplicationGateway;
   sessionKey?: string;
   sessionId?: string;
-  basePath?: string;
-  presented?: boolean;
-  presentation?: PresentationBinding;
+  presented?: PresentationValue;
   branch?: ControlUiSessionBranch;
+  /** Hides the branch row and its idle publish offer; retained publication outcomes stay visible. */
+  branchDismissed?: boolean;
   status: ControlUiSessionPullRequestSnapshot["status"];
   onDismiss: (pullRequest: ControlUiSessionPullRequest) => void;
+  onDismissBranch?: (branch: ControlUiSessionBranch) => void;
   onOpenSessionDiff?: () => void;
   publication?: GitHubPublicationView;
+  /** Compact row in the user-opened Details surface; actions keep their owners. */
+  compact?: boolean;
 }) {
   const { publication } = props;
   const published = publication?.result?.status === "published" ? publication.result : undefined;
-  const retainedPublication = publication?.result || publication?.locked || publication?.error;
+  // A failed account discovery has no outcome to retain; only the branch row offers its retry.
+  const retainedPublication =
+    publication?.result ||
+    publication?.locked ||
+    (publication?.error && !publication.optionsUnavailable);
   // Session-only publishers cannot read the broader PR subscription's branch facts.
   const sharedAction =
-    publication?.canPublishShared && !publication.canPublishPersonal && publication.options?.shared;
+    !props.branchDismissed &&
+    publication?.canPublishShared &&
+    !publication.canPublishPersonal &&
+    publication.options?.shared;
+  const branch = props.branchDismissed ? undefined : props.branch;
   // Gateway branch facts describe unpublished work, including changes after a merge.
   // PR metadata takes precedence over retained publication history.
-  if (props.branch || (props.pullRequests.length === 0 && (retainedPublication || sharedAction))) {
+  if (branch || (props.pullRequests.length === 0 && (retainedPublication || sharedAction))) {
     return html`<div class="chat-prs" aria-live="polite">
-      ${renderWorkRow(props.branch, props.status, props.onOpenSessionDiff, publication)}
+      ${renderWorkRow(
+        branch,
+        props.status,
+        props.onOpenSessionDiff,
+        publication,
+        props.onDismissBranch,
+      )}
     </div>`;
   }
   if (props.pullRequests.length === 0) {
-    return nothing;
+    return null;
   }
   const recovery =
     retainedPublication && (!published || publication?.error) ? publication : undefined;
@@ -341,10 +377,28 @@ export function renderChatPullRequests(props: {
     <div class="chat-prs" aria-live="polite">
       ${repeat(visible, chatPullRequestId, (pullRequest) => {
         const merged = pullRequest.state === "merged";
+        const compactDescription = props.compact
+          ? [
+              pullRequest.title,
+              `${pullRequest.owner}/${pullRequest.repo}`,
+              pullRequest.branch,
+              t(STATE_LABEL_KEYS[pullRequest.state]),
+              typeof pullRequest.additions === "number"
+                ? `+${pullRequest.additions.toLocaleString()}`
+                : null,
+              typeof pullRequest.deletions === "number"
+                ? `−${pullRequest.deletions.toLocaleString()}`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")
+          : undefined;
         return html`
           <article class="chat-pr" data-state=${pullRequest.state}>
             <a
               class="chat-pr__link"
+              title=${compactDescription ?? nothing}
+              aria-description=${compactDescription ?? nothing}
               href=${pullRequest.url}
               target="_blank"
               rel="noopener noreferrer"
@@ -357,9 +411,11 @@ export function renderChatPullRequests(props: {
                 ${merged ? icons.gitMerge : icons.gitPullRequest}
               </span>
               <span class="chat-pr__number">#${pullRequest.number}</span>
-              <span class="chat-pr__identity">
-                <span class="chat-pr__repo">${pullRequest.repo}</span>
-                <span class="chat-pr__branch">${pullRequest.branch}</span>
+              <span class="chat-pr__identity" title=${compactDescription ?? nothing}>
+                <span class="chat-pr__repo"
+                  >${props.compact ? pullRequest.title : pullRequest.repo}</span
+                >
+                ${props.compact ? nothing : html`<span class="chat-pr__branch">${pullRequest.branch}</span>`}
               </span>
             </a>
             <span class="chat-pr__meta">
@@ -398,8 +454,9 @@ export function renderChatPullRequests(props: {
 }
 
 function renderPublicationRecovery(publication: GitHubPublicationView) {
+  const failed = publication.result?.status === "failed";
   const content = html`<div class="chat-pr__publication-recovery">
-    ${renderGitHubPublicationDetails(publication)}
+    ${renderGitHubPublicationDetails(publication, { inline: failed })}
     ${
       publication.result?.status !== "published"
         ? html`<div>${renderGitHubPublicationAction(publication)}</div>`
@@ -408,7 +465,7 @@ function renderPublicationRecovery(publication: GitHubPublicationView) {
   </div>`;
   // A session attempt has no proven relationship to any listed PR. Keep its
   // failed receipt inspectable without presenting it as that PR’s current state.
-  return publication.result?.status === "failed"
+  return failed
     ? html`<details class="chat-pr__publication-history">
         <summary>${t("githubPublication.failedAttempt")}</summary>
         ${content}

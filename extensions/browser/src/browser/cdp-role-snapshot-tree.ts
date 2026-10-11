@@ -1,14 +1,11 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { axValue, type RawAXNode } from "./cdp-ax.js";
-import type { RoleSnapshotOptions } from "./pw-role-snapshot.js";
+import type { RoleRefMap, RoleSnapshotOptions } from "./pw-role-snapshot.js";
 import { ROLE_SNAPSHOT_MAX_DEPTH } from "./snapshot-depth-limit.js";
 import { INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
 /** Role snapshot ref metadata used by agent-facing snapshots. */
-export type CdpRoleRef = {
-  role: string;
-  name?: string;
-  nth?: number;
+export type CdpRoleRef = RoleRefMap[string] & {
   backendDOMNodeId?: number;
   frameId?: string;
 };

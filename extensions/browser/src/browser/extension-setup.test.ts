@@ -54,20 +54,6 @@ describe("host-local Chrome setup", () => {
     mocks.close.mockResolvedValue(undefined);
   });
 
-  it("inspection never installs, probes, or exposes filesystem or credential material", async () => {
-    const result = await runBrowserExtensionSetup({ ...options, action: "inspect" });
-    expect(result).toMatchObject({
-      phase: "needs_browser_action",
-      nextAction: "install_from_store",
-      connection: { state: "not_checked" },
-      target: { kind: "local-host", profile: "chrome" },
-    });
-    expect(mocks.install).not.toHaveBeenCalled();
-    expect(mocks.readToken).not.toHaveBeenCalled();
-    expect(JSON.stringify(result)).not.toContain("/private");
-    expect(JSON.stringify(result)).not.toContain("synthetic-private-relay-key");
-  });
-
   it("does not replace an unavailable saved profile or choose between conflicting registrations", async () => {
     const saved = installation();
     saved.registrations[0]!.browserProfile = "work";
@@ -135,6 +121,10 @@ describe("host-local Chrome setup", () => {
       },
     });
     expect(mocks.connect).not.toHaveBeenCalled();
+    expect(mocks.install).not.toHaveBeenCalled();
+    expect(mocks.readToken).not.toHaveBeenCalled();
+    expect(JSON.stringify(result)).not.toContain("/private");
+    expect(JSON.stringify(result)).not.toContain("synthetic-private-relay-key");
   });
 
   it("proves the exact local profile even when configured Gateway uses an SSH loopback", async () => {

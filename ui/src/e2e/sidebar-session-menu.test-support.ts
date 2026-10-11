@@ -27,17 +27,23 @@ export async function chooseSidebarMenuOption(
   label: "Group by" | "Sort by" | "Status" | "Owners" | "Hide empty groups",
   option: string,
 ) {
+  if (label === "Owners") {
+    await page.locator("#sidebar-session-owner-title").click();
+    await page
+      .locator(".sidebar-session-owner-filter")
+      .getByRole("option", { name: option, exact: true })
+      .click();
+    return;
+  }
   const menu = await openSidebarMenu(page);
   if (label !== "Status") {
     await menu
       .locator(
-        label === "Owners"
-          ? "#sidebar-sessions-owner"
-          : label === "Group by"
-            ? "#sidebar-sessions-group"
-            : label === "Sort by"
-              ? "#sidebar-sessions-sort"
-              : "#sidebar-sessions-empty",
+        label === "Group by"
+          ? "#sidebar-sessions-group"
+          : label === "Sort by"
+            ? "#sidebar-sessions-sort"
+            : "#sidebar-sessions-empty",
       )
       .click();
     await menu.getByRole("option", { name: option, exact: true }).click();
@@ -62,7 +68,8 @@ export async function closeSidebarMenu(page: Page) {
 }
 
 export async function chooseSidebarOwner(page: Page, value: string) {
-  const menu = await openSidebarMenu(page);
-  await menu.locator("#sidebar-sessions-owner").click();
-  await menu.locator(`[role="option"][data-value="${value}"]`).click();
+  await page.locator("#sidebar-session-owner-title").click();
+  await page
+    .locator(`.sidebar-session-owner-filter [role="option"][data-value="${value}"]`)
+    .click();
 }

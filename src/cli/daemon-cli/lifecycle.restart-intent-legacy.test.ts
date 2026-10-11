@@ -22,7 +22,10 @@ import {
   service,
 } from "./test-helpers/lifecycle-core-harness.js";
 
-vi.mock("../../runtime.js", () => ({ defaultRuntime: lifecycleTestRuntime }));
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
+  defaultRuntime: lifecycleTestRuntime,
+}));
 vi.mock("./lifecycle-action-preflight.js", () => ({
   getServiceActionPreflightFailure: async () => null,
 }));
@@ -192,6 +195,7 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
       "unrelated native main pid",
       "different state directory",
       "different config path",
+      "stopped service with dead SQLite owner and live legacy lock",
     ] as const)("refuses legacy restart admission with %s", async (failure) => {
       const lock = await spawnServingChild();
       switch (failure) {
@@ -225,18 +229,15 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
         case "different config path":
           lock.configPath = path.join(lock.stateDir, "another.json");
           break;
+        case "stopped service with dead SQLite owner and live legacy lock": {
+          const deadOwner = await spawnServingChild();
+          await stopServingChild(deadOwner.pid);
+          publishUnrelatedOwner(deadOwner.pid);
+          service.readRuntime.mockResolvedValue({ status: "stopped" });
+          break;
+        }
       }
       writeLegacyLock(lock);
-      await expectRestartRefused("GATEWAY_RESTART_PREPARATION_REFUSED");
-      expect(lifecycleRuntimeLogs.join("\n")).toContain("Gateway was not signaled");
-    });
-
-    it("refuses stopped-service startup when a dead SQLite owner coexists with a live legacy lock", async () => {
-      const deadOwner = await spawnServingChild();
-      await stopServingChild(deadOwner.pid);
-      publishUnrelatedOwner(deadOwner.pid);
-      writeLegacyLock(await spawnServingChild());
-      service.readRuntime.mockResolvedValue({ status: "stopped" });
       await expectRestartRefused("GATEWAY_RESTART_PREPARATION_REFUSED");
       expect(lifecycleRuntimeLogs.join("\n")).toContain("Gateway was not signaled");
     });
@@ -259,22 +260,24 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
       },
     );
 
-    it("targets the legacy lock replacement present at intent-write admission", async () => {
-      writeLegacyLock(await spawnServingChild());
-      const replacement = await spawnServingChild();
-      beforeIntentWriteAdmission(() => writeLegacyLock(replacement));
-      await expectRestartTargets(replacement.pid);
-      expect(
-        openOpenClawStateDatabase()
-          .db.prepare("SELECT count(*) AS count FROM state_leases WHERE scope = 'gateway-owner'")
-          .get(),
-      ).toEqual({ count: 0 });
-    });
-
-    it("refuses legacy fallback when an unrelated SQLite owner appears at write admission", async () => {
-      writeLegacyLock(await spawnServingChild());
-      beforeIntentWriteAdmission(publishUnrelatedOwner);
-      await expectRestartRefused();
-    });
+    it.each(["legacy replacement", "unrelated SQLite owner"])(
+      "revalidates %s at intent-write admission",
+      async (owner) => {
+        writeLegacyLock(await spawnServingChild());
+        if (owner === "unrelated SQLite owner") {
+          beforeIntentWriteAdmission(publishUnrelatedOwner);
+          await expectRestartRefused();
+          return;
+        }
+        const replacement = await spawnServingChild();
+        beforeIntentWriteAdmission(() => writeLegacyLock(replacement));
+        await expectRestartTargets(replacement.pid);
+        expect(
+          openOpenClawStateDatabase()
+            .db.prepare("SELECT count(*) AS count FROM state_leases WHERE scope = 'gateway-owner'")
+            .get(),
+        ).toEqual({ count: 0 });
+      },
+    );
   },
 );

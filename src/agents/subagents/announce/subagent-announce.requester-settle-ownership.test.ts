@@ -8,6 +8,7 @@ import {
 } from "../registry/subagent-registry-requester-yield.test-support.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { copySubagentRunRuntimeOwner } from "../registry/subagent-run-generation.js";
+import * as deliveryRuntime from "./subagent-announce-delivery.runtime.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import * as announceOutput from "./subagent-announce-output.js";
 import type { createRequesterDescendantReader } from "./subagent-announce.requester-settle-descendants.js";
@@ -38,7 +39,6 @@ const { registryRuntimeMock, deliverSpy } = vi.hoisted(() => ({
 vi.mock("../../../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
 vi.mock("../registry/subagent-registry-read.js", () => registryRuntimeMock);
 vi.mock("../spawn/subagent-depth.js", () => ({ getSubagentDepthFromSessionStore: () => 0 }));
-vi.mock("./subagent-announce.js", () => ({ hasUsableSessionEntry: () => true }));
 vi.mock("./subagent-announce-delivery.js", () => ({
   deliverSubagentAnnouncement: (params: Record<string, unknown>) => deliverSpy(params),
   loadRequesterSessionEntry: () => ({
@@ -114,6 +114,9 @@ function wakeParams() {
 }
 
 beforeEach(() => {
+  vi.spyOn(deliveryRuntime, "captureRequesterSessionEntryCurrent").mockReturnValue(() => ({
+    sessionId: "sess-main",
+  }));
   vi.spyOn(announceOutput, "readChildCompletionFindings").mockImplementation((children) =>
     readChildCompletionFindings(children, (runId) =>
       registryRuntimeMock.listSubagentRunsForRequester().find((entry) => entry.runId === runId),
@@ -124,6 +127,7 @@ beforeEach(() => {
   deliverSpy.mockReset().mockResolvedValue({ delivered: true, path: "direct" });
 });
 afterEach(() => {
+  vi.mocked(deliveryRuntime.captureRequesterSessionEntryCurrent).mockRestore();
   vi.mocked(announceOutput.readChildCompletionFindings).mockRestore();
   publishSystemEventStoreResolver(undefined);
 });
@@ -141,13 +145,26 @@ it("holds an adopted child's old wake until its current requester turn yields", 
       rearmGeneration: 1,
     },
   });
+  const quietChild = makeSettledChild({
+    runId: "run-a",
+    requesterTurnRunId: "quiet-cancellation-owner",
+    expectsCompletionMessage: false,
+    completion: { required: false },
+    delivery: { status: "not_required" },
+    requesterSettleWake: { status: "pending", attemptCount: 0, rearmGeneration: 1 },
+  });
   const oldWake = structuredClone(child.requesterSettleWake);
-  registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
-  expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
+  registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([quietChild, child]);
+  expect(
+    await maybeWakeRequesterAfterAllChildrenSettled({ ...wakeParams(), settledEntry: quietChild }),
+  ).toBe(false);
   expect(deliverSpy).not.toHaveBeenCalled();
   expect(child.requesterSettleWake).toEqual(oldWake);
 
-  const runs = new Map([[child.runId, child]]);
+  const runs = new Map([
+    [quietChild.runId, quietChild],
+    [child.runId, child],
+  ]);
   const requester = {
     requesterSessionKey: REQUESTER,
     requesterTurnRunId,
@@ -174,11 +191,13 @@ it("holds an adopted child's old wake until its current requester turn yields", 
   expect(published.requesterSettleWake?.rearmGeneration).toBe(2);
   expect(published.requesterTurnRunId).toBeUndefined();
   registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
+    quietChild,
     copySubagentRunRuntimeOwner(published, { ...published }),
   ]);
   expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(true);
   expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
   expect(deliverSpy).toHaveBeenCalledOnce();
+  expect(quietChild.requesterTurnRunId).toBe("quiet-cancellation-owner");
 });
 
 it.each(["same", "before admission", "during admission"] as const)(

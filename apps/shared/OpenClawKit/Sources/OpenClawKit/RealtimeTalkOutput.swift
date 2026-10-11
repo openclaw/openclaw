@@ -7,7 +7,7 @@ import OSLog
 /// Audio events and synchronous relay controls use the same critical section.
 final class RealtimeTalkOutput: @unchecked Sendable {
     private let lock = NSLock()
-    private let player: (any RealtimePCMPlayback)?
+    private let player: RealtimePCMStreamingAudioPlayer?
     private let legacyPlayer: PCMStreamingAudioPlaying
     private let transport: RealtimeTalkRelayTransport
     private let notification: AsyncStream<Void>.Continuation
@@ -49,7 +49,7 @@ final class RealtimeTalkOutput: @unchecked Sendable {
         transport: RealtimeTalkRelayTransport,
         notification: AsyncStream<Void>.Continuation)
     {
-        self.player = player as? any RealtimePCMPlayback
+        self.player = player as? RealtimePCMStreamingAudioPlayer
         self.legacyPlayer = player
         self.transport = transport
         self.notification = notification
@@ -355,14 +355,14 @@ final class RealtimeTalkOutput: @unchecked Sendable {
         let (stream, continuation) = AsyncThrowingStream<Data, Error>.makeStream(
             bufferingPolicy: .bufferingOldest(RealtimeTalkRelaySession.maxBufferedOutputChunks))
         self.outputContinuation = continuation
-        // The real backend registers its generation under the output lock, so a stop
-        // cannot race a delayed task that starts an already-retired reply. Actor-bound legacy
-        // players remain supported for existing clients/fakes, but are not the realtime backend.
+        // Both paths check the generation under the output lock, so a stop cannot race a delayed
+        // task that starts an already-retired reply; cancellation through the detached owner below
+        // waits for a pool thread. Actor-bound legacy players remain for existing clients/fakes.
         let playback: Task<StreamingPlaybackResult, Never> = if let player {
             player.beginPlayback(stream: stream, sampleRate: sampleRate)
         } else {
-            Task { @MainActor [legacyPlayer] in
-                guard !Task.isCancelled else {
+            Task { @MainActor [weak self, legacyPlayer] in
+                guard self?.withLock({ $0.outputSessionId == sessionId && !$0.isClosed }) == true else {
                     return StreamingPlaybackResult(finished: false, interruptedAt: nil)
                 }
                 return await legacyPlayer.play(stream: stream, sampleRate: sampleRate)
@@ -402,61 +402,38 @@ final class RealtimeTalkOutput: @unchecked Sendable {
     /// Same PCM-time envelope as PCMPlaybackEnvelope, sampled by the UI at 30 Hz. Metering
     /// and its timeline are output-lock-owned; publishing levels never gates scheduling.
     struct OutputEnvelope {
-        private struct Segment { let start: Double
-            let end: Double
-            let level: Double
-        }
-
-        private var segments: [Segment] = []
-        private var bytesPerSecond = 0.0
+        private var timeline = PCMPlaybackTimeline()
         private var startedAt: Double?
-        private var scheduleEnd = 0.0
 
         mutating func begin(sampleRate: Double) {
             self.cancel()
-            self.bytesPerSecond = max(1, sampleRate * 2)
+            self.timeline.bytesPerSecond = max(1, sampleRate * 2)
         }
 
         mutating func append(_ data: Data) -> Bool {
-            guard self.bytesPerSecond > 1, !data.isEmpty else { return false }
+            guard self.timeline.bytesPerSecond > 1, !data.isEmpty else { return false }
             let restarting = self.startedAt == nil
             let now = ProcessInfo.processInfo.systemUptime
             if self.startedAt == nil {
                 self.startedAt = now
             }
-            var start = max(now - (startedAt ?? now), self.scheduleEnd)
-            let windowBytes = max(2, Int(bytesPerSecond * 0.05) & ~1)
-            var offset = data.startIndex
-            while offset < data.endIndex {
-                let end = min(offset + windowBytes, data.endIndex)
-                let window = Data(data[offset..<end])
-                let duration = Double(window.count) / self.bytesPerSecond
-                self.segments.append(Segment(
-                    start: start,
-                    end: start + duration,
-                    level: TalkAudioLevel.normalized(rms: TalkAudioLevel.pcm16RMS(window))))
-                start += duration
-                offset = end
-            }
-            self.scheduleEnd = start
+            self.timeline.append(data, elapsed: now - (self.startedAt ?? now))
             return restarting
         }
 
         mutating func level() -> Double? {
             guard let startedAt else { return 0 }
             let elapsed = ProcessInfo.processInfo.systemUptime - startedAt
-            guard elapsed <= self.scheduleEnd + 0.5 else {
+            guard let level = self.timeline.level(elapsed: elapsed) else {
                 self.cancel()
                 return nil
             }
-            self.segments.removeAll { $0.end < elapsed }
-            return self.segments.first { elapsed >= $0.start && elapsed < $0.end }?.level ?? 0
+            return level
         }
 
         mutating func cancel() {
-            self.segments.removeAll(keepingCapacity: true)
+            self.timeline.clear(keepingCapacity: true)
             self.startedAt = nil
-            self.scheduleEnd = 0
         }
     }
 }

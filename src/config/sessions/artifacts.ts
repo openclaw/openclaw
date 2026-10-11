@@ -1,4 +1,3 @@
-// Session artifact paths, filename classifiers, and archive timestamp helpers.
 // Cleanup, disk-budget, and usage accounting use these predicates to avoid deleting live transcripts.
 
 import { timestampMsToIsoFileStamp } from "@openclaw/normalization-core/number-coercion";
@@ -88,12 +87,10 @@ export function isSessionStoreTempArtifactName(fileName: string, storeBasename: 
   return sessionStoreTempPattern(storeBasename).test(fileName);
 }
 
-/** Returns true when a filename is a compaction checkpoint transcript. */
 export function isCompactionCheckpointTranscriptFileName(fileName: string): boolean {
   return COMPACTION_CHECKPOINT_TRANSCRIPT_RE.test(fileName);
 }
 
-/** Returns true for trajectory runtime jsonl artifacts. */
 function isTrajectoryRuntimeArtifactName(fileName: string): boolean {
   return fileName.endsWith(".trajectory.jsonl");
 }
@@ -110,7 +107,6 @@ export function resolveTrajectoryPointerPath(transcriptPath: string): string | u
     : undefined;
 }
 
-/** Returns true for any trajectory-related session artifact. */
 export function isTrajectorySessionArtifactName(fileName: string): boolean {
   return isTrajectoryRuntimeArtifactName(fileName) || fileName.endsWith(".trajectory-path.json");
 }
@@ -129,7 +125,6 @@ export function isUsageCountedSessionTranscriptFileName(fileName: string): boole
   return parseUsageCountedSessionIdFromFileName(fileName) !== null;
 }
 
-/** Extracts the session id from a usage-counted transcript filename. */
 export function parseUsageCountedSessionIdFromFileName(fileName: string): string | null {
   if (isPrimarySessionTranscriptFileName(fileName)) {
     return fileName.slice(0, -".jsonl".length);
@@ -146,17 +141,8 @@ export function parseUsageCountedSessionIdFromFileName(fileName: string): string
   return null;
 }
 
-/** Formats an archive timestamp that is safe for filenames. */
 export function formatSessionArchiveTimestamp(nowMs = Date.now()): string {
   return timestampMsToIsoFileStamp(nowMs);
-}
-
-function restoreSessionArchiveTimestamp(raw: string): string {
-  const [datePart, timePart] = raw.split("T");
-  if (!datePart || !timePart) {
-    return raw;
-  }
-  return `${datePart}T${timePart.replace(/-/g, ":")}`;
 }
 
 export function parseSessionArchiveTimestamp(
@@ -167,6 +153,8 @@ export function parseSessionArchiveTimestamp(
   if (!timestampRaw) {
     return null;
   }
-  const timestamp = Date.parse(restoreSessionArchiveTimestamp(timestampRaw));
+  const timestamp = Date.parse(
+    timestampRaw.slice(0, 11) + timestampRaw.slice(11).replace(/-/g, ":"),
+  );
   return Number.isNaN(timestamp) ? null : timestamp;
 }

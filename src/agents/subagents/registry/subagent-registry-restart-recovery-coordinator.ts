@@ -3,6 +3,7 @@ import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../../infra/agent-events.js";
+import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { SubagentRegistryMutationRejectedError } from "./subagent-registry-persistence.js";
@@ -10,7 +11,7 @@ import { getLatestSubagentRunForChild } from "./subagent-registry-queries.js";
 import type {
   RestartRecoveryParams,
   RestartRecoveryResult,
-} from "./subagent-registry-restart-recovery.js";
+} from "./subagent-registry-restart-recovery-types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
@@ -43,14 +44,12 @@ export function createInterruptedRecoveryCoordinator(params: {
   };
   const observe = () => {
     unsubscribe ??= sessionChanges.subscribe((change) => {
-      if ("sessionKey" in change) {
-        for (const entry of params.getRunsForChildSession(change.sessionKey, change.agentId)) {
-          invalidate(entry);
-        }
-      } else {
-        for (const entry of params.runs.values()) {
-          invalidate(entry);
-        }
+      const entries =
+        "sessionKey" in change
+          ? params.getRunsForChildSession(change.sessionKey, change.agentId)
+          : params.runs.values();
+      for (const entry of entries) {
+        invalidate(entry);
       }
     });
   };
@@ -98,6 +97,13 @@ export function createInterruptedRecoveryCoordinator(params: {
       attempts = new Map();
     },
     async recover(runId: string, entry: SubagentRunRecord): Promise<boolean> {
+      if (
+        entry.execution.restartRecovery === undefined &&
+        entry.terminalOwner !== "interrupted-recovery" &&
+        (getAgentRunContext(runId) || typeof entry.execution.endedAt === "number")
+      ) {
+        return false;
+      }
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
       const gatewayRuntime = params.getGatewayRuntime();
       const isGatewayCurrent = () =>
@@ -109,6 +115,17 @@ export function createInterruptedRecoveryCoordinator(params: {
         attempts.delete(entry.runId);
         // Superseded rows still belong to the sweeper's ordinary orphan cleanup.
         return false;
+      }
+      const preparation = gatewayRuntime?.prepareRestartRecovery();
+      if (preparation) {
+        const pausedUntilMs = await preparation;
+        if (!isCurrent(runId, entry)) {
+          return true;
+        }
+        if (pausedUntilMs !== undefined) {
+          params.schedule(Math.max(1, pausedUntilMs - Date.now()));
+          return true;
+        }
       }
       observe();
       const facts = [lifecycleGeneration, gatewayRuntime, ...recoveryFacts(entry)];

@@ -11,6 +11,7 @@ import { resolveControlUiPluginAuthCookieGrants } from "./control-ui-plugin-auth
 import {
   applyHttpOperatorRoleScopeCeiling,
   checkHttpCookieUserProfile,
+  prepareHttpUserProfileCatalog,
 } from "./http-auth-user-profile.js";
 import { sendUnauthorized } from "./http-common.js";
 import { getBearerToken } from "./http-header-value.js";
@@ -36,9 +37,9 @@ export function resolveControlUiPluginAuthCookieGeneration(
     : undefined;
 }
 
-export function authorizeControlUiPluginCookieRequest(
+function readControlUiPluginCookieRequest(
   req: IncomingMessage,
-  params: { requestPath: string; authGeneration: string | undefined; res?: ServerResponse },
+  params: { requestPath: string; authGeneration: string | undefined },
 ) {
   // WebSocket upgrades bypass this HTTP-only handoff and use
   // checkGatewayHttpRequestAuth directly in attachGatewayUpgradeHandler.
@@ -58,10 +59,34 @@ export function authorizeControlUiPluginCookieRequest(
   if (grants.length === 0) {
     return null;
   }
-  const profileAuth = checkHttpCookieUserProfile(
-    cfg,
-    grants.map((grant) => grant.profileId),
-  );
+  const profileId = grants[0]?.profileId;
+  if (grants.some((grant) => grant.profileId !== profileId)) {
+    return null;
+  }
+  return { cfg, grants, profileId };
+}
+
+export async function prepareControlUiPluginCookieRequest(
+  req: IncomingMessage,
+  params: { requestPath: string; authGeneration: string | undefined; res: ServerResponse },
+) {
+  const selected = readControlUiPluginCookieRequest(req, params);
+  if (selected?.profileId && !(await prepareHttpUserProfileCatalog(params.res))) {
+    return null;
+  }
+  return authorizeControlUiPluginCookieRequest(req, params);
+}
+
+export function authorizeControlUiPluginCookieRequest(
+  req: IncomingMessage,
+  params: { requestPath: string; authGeneration: string | undefined; res?: ServerResponse },
+) {
+  const selected = readControlUiPluginCookieRequest(req, params);
+  if (!selected) {
+    return null;
+  }
+  const { cfg, grants, profileId } = selected;
+  const profileAuth = checkHttpCookieUserProfile(cfg, profileId);
   if (!profileAuth.ok) {
     if (profileAuth.authResult.reason === "operator_access_denied" && params.res) {
       sendGatewayHttpAuthFailure(params.res, profileAuth.authResult);

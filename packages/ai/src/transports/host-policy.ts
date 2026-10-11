@@ -8,7 +8,7 @@ import {
 export function buildGuardedModelFetch(
   model: Model,
   timeoutMs?: number,
-  options?: { sanitizeSse?: boolean },
+  options?: { sanitizeSse?: boolean; onSseComment?: () => void },
 ): typeof fetch {
   const host = getAiTransportHost();
   if (options !== undefined) {

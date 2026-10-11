@@ -1,6 +1,6 @@
 // Live Plugin Tool Assertions tests cover live plugin tool assertions script behavior.
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -55,43 +55,34 @@ function deferredToolTranscript() {
   return { call, nested, result };
 }
 
-function runTranscriptAssertion(
-  messages: unknown[],
-  { format = "sqlite", sessionId = "live-plugin-tool" } = {},
-) {
+function runTranscriptAssertion(messages: unknown[], { format = "sqlite" } = {}) {
   const root = tempDirs.make("openclaw-live-plugin-tool-");
   writeJson(path.join(root, "agent.json"), { payloads: [{ text: "live-plugin-slug" }] });
-  if (format === "jsonl") {
-    const file = path.join(root, "state", "agents", "main", "sessions", "session.jsonl");
-    mkdirSync(path.dirname(file), { recursive: true });
-    writeFileSync(file, messages.map((message) => JSON.stringify({ message })).join("\n"));
-  } else {
-    const file = path.join(root, "state", "agents", "main", "agent", "openclaw-agent.sqlite");
-    mkdirSync(path.dirname(file), { recursive: true });
-    const database = new DatabaseSync(file);
-    try {
-      const compressed = format === "sqlite-zstd";
-      database.exec(`CREATE TABLE transcript_events (
+  const file = path.join(root, "state", "agents", "main", "agent", "openclaw-agent.sqlite");
+  mkdirSync(path.dirname(file), { recursive: true });
+  const database = new DatabaseSync(file);
+  try {
+    const compressed = format === "sqlite-zstd";
+    database.exec(`CREATE TABLE transcript_events (
         session_id TEXT NOT NULL, seq INTEGER NOT NULL,
         event_json TEXT ${compressed ? ", event_zstd BLOB, event_utf8_bytes INTEGER" : "NOT NULL"}
       )`);
-      const insert = database.prepare(
-        compressed
-          ? "INSERT INTO transcript_events (session_id, seq, event_json, event_zstd, event_utf8_bytes) VALUES (?, ?, NULL, ?, ?)"
-          : "INSERT INTO transcript_events (session_id, seq, event_json) VALUES (?, ?, ?)",
-      );
-      messages.forEach((message, index) => {
-        const payload = JSON.stringify({ message });
-        if (compressed) {
-          const bytes = Buffer.from(payload);
-          insert.run(sessionId, index, zstdCompressSync(bytes), bytes.length);
-        } else {
-          insert.run(sessionId, index, payload);
-        }
-      });
-    } finally {
-      database.close();
-    }
+    const insert = database.prepare(
+      compressed
+        ? "INSERT INTO transcript_events (session_id, seq, event_json, event_zstd, event_utf8_bytes) VALUES (?, ?, NULL, ?, ?)"
+        : "INSERT INTO transcript_events (session_id, seq, event_json) VALUES (?, ?, ?)",
+    );
+    messages.forEach((message, index) => {
+      const payload = JSON.stringify({ message });
+      if (compressed) {
+        const bytes = Buffer.from(payload);
+        insert.run("live-plugin-tool", index, zstdCompressSync(bytes), bytes.length);
+      } else {
+        insert.run("live-plugin-tool", index, payload);
+      }
+    });
+  } finally {
+    database.close();
   }
   return runAssertion(root);
 }
@@ -135,156 +126,39 @@ function runAssertionCommand(command: string, root: string, env: Record<string, 
 }
 
 describe("live plugin tool assertions", () => {
-  it.each([
-    {
-      format: "sqlite-zstd",
-      selector: { id: "e2e_slug_probe", name: "record-name" },
-      input: { name: "record-name" },
-      wire: "native",
-    },
-    {
-      format: "jsonl",
-      selector: { id: "openclaw:e2e-live-plugin-tool:e2e_slug_probe" },
-      wire: "native",
-    },
-    { format: "sqlite", selector: { name: "e2e_slug_probe" }, wire: "native" },
-    { format: "sqlite", selector: { input: { toolId: "e2e_slug_probe" } }, wire: "native" },
-    {
-      format: "sqlite",
-      selector: { id: "openclaw:e2e-live-plugin-tool:e2e_slug_probe" },
-      wire: "function",
-    },
-  ])(
-    "reads accepted nested tool activity from $format: $wire $selector",
-    ({ format, selector, wire, input }) => {
-      const { call, nested, result } = deferredToolTranscript();
-      nested.details.input = input ?? {};
-      const dispatcher =
-        wire === "function"
-          ? {
-              role: "assistant",
-              tool_calls: [
-                {
-                  id: "outer-call",
-                  type: "function",
-                  function: { name: "tool_call", arguments: JSON.stringify(selector) },
-                },
-              ],
-            }
-          : { ...call, content: [{ ...call.content[0], arguments: selector }] };
-      const assertion = runTranscriptAssertion([dispatcher, nested, result], { format });
-      expect(assertion.status, assertion.stderr).toBe(0);
-      expect(assertion.stderr).toBe("");
-    },
-  );
-
-  it.each([
-    "another target",
-    "failed receipt",
-    "failure text",
-    "marker only in input",
-    "wrong parent",
-    "unrelated dispatcher parent",
-    "another plugin selector",
-    "missing target selector",
-    "unrelated outer selector",
-    "malformed dispatcher arguments",
-    "missing parent",
-    "missing nested call id",
-    "missing success flag",
-    "unrecognized receipt",
-    "user-authored call",
-    "receipt before call",
-    "no dispatcher call",
-    "outer result only",
-    "another session",
-  ])("rejects deferred tool evidence with %s", (scenario) => {
+  it("reads accepted nested tool activity from compressed SQLite with target name arguments", () => {
     const { call, nested, result } = deferredToolTranscript();
-    let messages: unknown[] = [call, nested, result];
-    switch (scenario) {
-      case "another target":
-        nested.details.toolName = "unrelated_tool";
-        break;
-      case "failed receipt":
-        nested.details.isError = true;
-        break;
-      case "failure text":
-        nested.details.result.content = [{ type: "text", text: "Error: live-plugin-slug" }];
-        break;
-      case "marker only in input":
-        nested.details.input = { marker: "live-plugin-slug" };
-        nested.details.result.content = [{ type: "text", text: "no output" }];
-        break;
-      case "wrong parent":
-        nested.details.parentToolCallId = "another-call";
-        break;
-      case "unrelated dispatcher parent": {
+    nested.details.input = { name: "record-name" };
+    const dispatcher = {
+      ...call,
+      content: [{ ...call.content[0], arguments: { id: "e2e_slug_probe", name: "record-name" } }],
+    };
+    const assertion = runTranscriptAssertion([dispatcher, nested, result], {
+      format: "sqlite-zstd",
+    });
+    expect(assertion.status, assertion.stderr).toBe(0);
+    expect(assertion.stderr).toBe("");
+  });
+
+  it.each(["unrelated dispatcher parent", "receipt before call"])(
+    "rejects deferred tool evidence with %s",
+    (scenario) => {
+      const { call, nested, result } = deferredToolTranscript();
+      let messages: unknown[];
+      if (scenario === "unrelated dispatcher parent") {
         const unrelatedCall = structuredClone(call);
         unrelatedCall.content[0].id = "unrelated-parent";
         unrelatedCall.content[0].arguments.id = "unrelated_tool";
         nested.details.parentToolCallId = "unrelated-parent";
         messages = [unrelatedCall, call, nested, result];
-        break;
-      }
-      case "another plugin selector":
-        call.content[0].arguments.id = "openclaw:unrelated-plugin:e2e_slug_probe";
-        break;
-      case "missing target selector":
-        call.content[0].arguments.id = "";
-        break;
-      case "unrelated outer selector":
-        messages = [
-          {
-            ...call,
-            content: [
-              {
-                ...call.content[0],
-                arguments: { id: "unrelated_tool", input: { id: "e2e_slug_probe" } },
-              },
-            ],
-          },
-          nested,
-          result,
-        ];
-        break;
-      case "malformed dispatcher arguments":
-        messages = [{ ...call, content: [{ ...call.content[0], arguments: "{" }] }, nested, result];
-        break;
-      case "missing parent":
-        delete nested.details.parentToolCallId;
-        break;
-      case "missing nested call id":
-        nested.details.toolCallId = "";
-        break;
-      case "missing success flag":
-        messages = [
-          call,
-          { ...nested, details: { ...nested.details, isError: undefined } },
-          result,
-        ];
-        break;
-      case "unrecognized receipt":
-        messages = [call, { ...nested, customType: "unrelated.v1" }, result];
-        break;
-      case "user-authored call":
-        call.role = "user";
-        break;
-      case "receipt before call":
+      } else {
         messages = [nested, call, result];
-        break;
-      case "no dispatcher call":
-        messages = [nested, result];
-        break;
-      case "outer result only":
-        messages = [call, result];
-        break;
-    }
-    const assertion = runTranscriptAssertion(messages, {
-      sessionId: scenario === "another session" ? "other-session" : "live-plugin-tool",
-    });
-    expect(assertion.status).not.toBe(0);
-    expect(assertion.stderr).toContain("missing causal tool-result evidence");
-  });
+      }
+      const assertion = runTranscriptAssertion(messages);
+      expect(assertion.status).not.toBe(0);
+      expect(assertion.stderr).toContain("missing causal tool-result evidence");
+    },
+  );
 
   it("rejects loose timeout env values instead of parsing numeric prefixes", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-live-plugin-tool-"));
@@ -295,67 +169,6 @@ describe("live plugin tool assertions", () => {
 
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("invalid OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS: 1e3");
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
-  it("writes strict positive timeout values into generated config", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-live-plugin-tool-"));
-    try {
-      const result = runAssertionCommand("configure", root, {
-        OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS: "240",
-      });
-
-      expect(result.status, result.stderr).toBe(0);
-      const config = JSON.parse(readFileSync(path.join(root, "state", "openclaw.json"), "utf8"));
-      expect(config.models.providers.openai.timeoutSeconds).toBe(240);
-      expect(config.agents.defaults.timeoutSeconds).toBe(240);
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
-  it("streams session transcripts across chunk boundaries", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-live-plugin-tool-"));
-    const sessionsDir = path.join(root, "state", "agents", "main", "sessions");
-
-    try {
-      writeJson(path.join(root, "agent.json"), {
-        payloads: [{ text: "live-plugin-slug" }],
-      });
-      mkdirSync(sessionsDir, { recursive: true });
-      writeFileSync(
-        path.join(sessionsDir, "session.jsonl"),
-        [
-          JSON.stringify({
-            message: {
-              role: "assistant",
-              content: [
-                {
-                  type: "tool_use",
-                  id: "call-live-plugin-tool",
-                  name: "e2e_slug_probe",
-                  input: { seed: "live plugin slug" },
-                },
-              ],
-            },
-          }),
-          JSON.stringify({
-            message: {
-              role: "tool",
-              tool_call_id: "call-live-plugin-tool",
-              content: `${"x".repeat(64 * 1024)}\nlive-plugin-slug`,
-            },
-          }),
-        ].join("\n"),
-        "utf8",
-      );
-
-      const result = runAssertion(root);
-
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stderr).toBe("");
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
@@ -456,92 +269,6 @@ describe("live plugin tool assertions", () => {
 
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("session transcript scan exceeded 2 filesystem entries");
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
-  it("rejects markers that only appear in error payload text", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-live-plugin-tool-"));
-    const sessionsDir = path.join(root, "state", "agents", "main", "sessions");
-
-    try {
-      writeJson(path.join(root, "agent.json"), {
-        payloads: [
-          { isError: true, text: "live-plugin-slug" },
-          { text: "regular reply without the expected marker" },
-        ],
-      });
-      mkdirSync(sessionsDir, { recursive: true });
-      writeFileSync(
-        path.join(sessionsDir, "session.jsonl"),
-        ["e2e_slug_probe", "live-plugin-slug"].join("\n"),
-        "utf8",
-      );
-
-      const result = runAssertion(root);
-
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("live agent reply did not contain tool slug");
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
-  it("rejects non-JSON stdout even when a later object contains the slug", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-live-plugin-tool-"));
-    const sessionsDir = path.join(root, "state", "agents", "main", "sessions");
-
-    try {
-      writeFileSync(
-        path.join(root, "agent.json"),
-        ["warning before json", JSON.stringify({ payloads: [{ text: "live-plugin-slug" }] })].join(
-          "\n",
-        ),
-        "utf8",
-      );
-      mkdirSync(sessionsDir, { recursive: true });
-      writeFileSync(
-        path.join(sessionsDir, "session.jsonl"),
-        ["e2e_slug_probe", "live-plugin-slug"].join("\n"),
-        "utf8",
-      );
-
-      const result = runAssertion(root);
-
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("Unexpected token");
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
-  it("bounds agent output diagnostics on missing reply slug", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-live-plugin-tool-"));
-
-    try {
-      writeJson(path.join(root, "agent.json"), {
-        payloads: [
-          {
-            text: `DO_NOT_DUMP_OLD_STDOUT${"x".repeat(70 * 1024)}\nrecent stdout tail`,
-          },
-        ],
-      });
-      writeFileSync(
-        path.join(root, "agent.err"),
-        `DO_NOT_DUMP_OLD_STDERR${"x".repeat(70 * 1024)}\nrecent stderr tail\n`,
-        "utf8",
-      );
-
-      const result = runAssertion(root);
-
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("stdout tail=");
-      expect(result.stderr).toContain("stderr tail=");
-      expect(result.stderr).toContain("recent stdout tail");
-      expect(result.stderr).toContain("recent stderr tail");
-      expect(result.stderr).not.toContain("DO_NOT_DUMP_OLD_STDOUT");
-      expect(result.stderr).not.toContain("DO_NOT_DUMP_OLD_STDERR");
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

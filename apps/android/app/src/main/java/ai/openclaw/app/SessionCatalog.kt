@@ -74,14 +74,7 @@ internal fun sessionCatalogPageParams(
   buildJsonObject {
     normalizedCatalogValue(agentId)?.let { put("agentId", JsonPrimitive(it)) }
     put("catalogId", JsonPrimitive(catalogId))
-    put(
-      "cursors",
-      buildJsonObject {
-        cursors.forEach { (hostId, cursor) ->
-          put(hostId, JsonPrimitive(cursor))
-        }
-      },
-    )
+    put("cursors", JsonObject(cursors.mapValues { JsonPrimitive(it.value) }))
   }.toString()
 
 internal fun sessionCatalogContinueParams(entry: SessionCatalogEntry): String =
@@ -111,10 +104,7 @@ internal fun parseSessionCatalogs(
 ): List<SessionCatalog> {
   val root = json.parseToJsonElement(raw) as? JsonObject ?: return emptyList()
   val agentId = normalizedCatalogValue(requestedAgentId)
-  return root.array("catalogs").mapNotNull { catalogElement ->
-    val catalog = catalogElement as? JsonObject ?: return@mapNotNull null
-    parseSessionCatalog(catalog, agentId)
-  }
+  return root.array("catalogs").mapObjects { catalog -> parseSessionCatalog(catalog, agentId) }
 }
 
 internal data class SessionCatalogHostProgress(
@@ -185,9 +175,8 @@ internal suspend fun refetchLoadedSessionCatalogPages(
             return@hostMap previousHost?.let { preserveExpandedSessionCatalogHost(firstHost, it) } ?: firstHost
           }
           var refreshed = firstHost
-          var loadedPages = 0
-          while (loadedPages < pageDepth) {
-            val cursor = refreshed.nextCursor ?: break
+          repeat(pageDepth) {
+            val cursor = refreshed.nextCursor ?: return@hostMap refreshed
             val pageHost =
               fetchPage(catalog.id, firstHost.hostId, cursor)
                 ?: return@hostMap previousHost ?: firstHost
@@ -199,7 +188,6 @@ internal suspend fun refetchLoadedSessionCatalogPages(
               )
             }
             refreshed = mergeSessionCatalogHost(refreshed, pageHost)
-            loadedPages += 1
           }
           refreshed
         },

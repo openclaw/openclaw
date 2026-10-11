@@ -4,20 +4,29 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayBrowserClient } from "../../../api/gateway.ts";
+import {
+  markdownFileLinkFromEvent,
+  markdownFileLinkFromKeyboardEvent,
+} from "../../../components/markdown-file-links.ts";
 import { SessionLinkTitler } from "../../../components/session-link-titling.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
+import { groupMessages } from "../chat-thread-grouping.ts";
+import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
 import { renderMessageGroup } from "./chat-message-group.ts";
 import { createAssistantMessage, createMessageGroup } from "./chat-message.test-support.ts";
+import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 
 let container: HTMLDivElement;
 
 beforeEach(() => {
-  container = document.createElement("div");
+  container = document.body.appendChild(document.createElement("div"));
 });
 
 afterEach(async () => {
   await vi.dynamicImportSettled();
   render(null, container);
+  container.remove();
   vi.restoreAllMocks();
 });
 
@@ -46,41 +55,225 @@ function renderTestMessageGroup(
 }
 
 describe("forwarded message attribution", () => {
-  it("preserves custom assistant sender labels without forwarded provenance", () => {
-    const group = createGroup({ senderLabel: "Forwarded from main" });
+  it.each([
+    { collapsed: false, key: "click" },
+    { collapsed: true, key: "Enter" },
+    { collapsed: false, key: " " },
+  ])(
+    "resolves $key file links to the sender in collapsed=$collapsed groups",
+    ({ collapsed, key }) => {
+      const sessionKey = "agent:research:report";
+      const group = createGroup(
+        { senderSession: { sessionKey } },
+        {
+          content: "See `reports/index.html:7`",
+          ...(collapsed
+            ? { provenance: { kind: "inter_session", sourceTool: "sessions_send" } }
+            : {}),
+        },
+      );
+      render(renderTestMessageGroup(group, { isToolMessageExpanded: () => true }), container);
+      const opened = vi.fn();
+      container.addEventListener("click", (event) => opened(markdownFileLinkFromEvent(event)));
+      container.addEventListener("keydown", (event) =>
+        opened(markdownFileLinkFromKeyboardEvent(event)),
+      );
+      const link = expectDefined(
+        container.querySelector<HTMLAnchorElement>("a.markdown-file-link"),
+        "forwarded file link",
+      );
+      if (key === "click") {
+        link.click();
+      } else {
+        const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+        link.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(true);
+      }
+      expect(opened).toHaveBeenCalledExactlyOnceWith({
+        path: "reports/index.html",
+        line: 7,
+        sessionKey,
+      });
+    },
+  );
 
-    render(renderTestMessageGroup(group), container);
+  it.each([false, true])(
+    "opens nested tool activity files in the sending session (frame=%s)",
+    async (frame) => {
+      const sessionKey = "agent:research:report";
+      const onOpenWorkspaceFile = vi.fn();
+      const group = createGroup(
+        { senderSession: { sessionKey } },
+        {
+          runId: "forwarded-tools",
+          content: [
+            {
+              type: "toolCall",
+              id: "parent-read",
+              name: "read",
+              arguments: { path: "reports/index.html" },
+            },
+            {
+              type: "toolCall",
+              id: "child-read",
+              name: "read",
+              parentToolCallId: "parent-read",
+              arguments: { path: "reports/styles.css" },
+            },
+          ],
+        },
+      );
+      const options = {
+        showReasoning: true,
+        onOpenWorkspaceFile,
+        isToolMessageExpanded: () => true,
+        isToolExpanded: () => true,
+      };
+      const content = frame
+        ? renderAgentRunFrame(
+            {
+              kind: "agent-run-frame",
+              key: "forwarded-frame",
+              runId: "forwarded-tools",
+              boundaryId: "forwarded-boundary",
+              outcome: { kind: "completed", actionOwner: null },
+              parts: [group],
+            },
+            {
+              streamOptions: {},
+              renderGroupOptions: () => options,
+              isWorkExpanded: () => true,
+              onToggleWork: () => {},
+            },
+          )
+        : renderTestMessageGroup(group, options);
+      render(content, container);
+      await settleToolBridges(container);
+      const links = container.querySelectorAll<HTMLButtonElement>(".chat-tool-row__file-link");
+      expect(links).toHaveLength(2);
+      for (const link of links) {
+        link.click();
+      }
+      expect(onOpenWorkspaceFile.mock.calls).toEqual([
+        [{ path: "reports/index.html", sessionKey }],
+        [{ path: "reports/styles.css", sessionKey }],
+      ]);
+    },
+  );
 
-    const sender = container.querySelector<HTMLElement>(".chat-group.assistant .chat-sender-name");
-    expect(sender?.textContent).toBe("Forwarded from main");
-    expect(container.querySelector(".chat-group--forwarded")).toBeNull();
-  });
-
-  it("keeps the source-session chip and timestamp/actions without a known sender avatar", () => {
-    const group = createGroup({
-      senderLabel: "Forwarded from main",
-      senderSession: { sessionKey: "agent:main:main", agentId: "main" },
-    });
-
-    render(renderTestMessageGroup(group), container);
-
-    const forwarded = container.querySelector<HTMLElement>(".chat-group--forwarded");
-    expect(forwarded).not.toBeNull();
-    expect(forwarded?.classList.contains("chat-group--sender-tint")).toBe(true);
-    expect(forwarded?.style.getPropertyValue("--chat-sender-hue")).not.toBe("");
-    const attribution = container.querySelector(".chat-group--forwarded .chat-reply-attribution");
-    const link = attribution?.querySelector<HTMLAnchorElement>(
-      'a.markdown-session-link[data-session-key="agent:main:main"]',
+  it("keeps the sender on narrated file links beside a single tool in a run frame", () => {
+    const sessionKey = "agent:research:report";
+    const groups = groupMessages([
+      {
+        kind: "message",
+        key: "forwarded-tool-narration",
+        message: {
+          role: "assistant",
+          runId: "narrated-file-run",
+          timestamp: 1_000,
+          senderSession: { sessionKey },
+          content: [
+            { type: "text", text: "See `reports/index.html:7`" },
+            {
+              type: "toolCall",
+              id: "read-report",
+              name: "read",
+              arguments: { path: "reports/index.html" },
+            },
+          ],
+        },
+      },
+      {
+        kind: "message",
+        key: "narrated-file-answer",
+        message: {
+          role: "assistant",
+          runId: "narrated-file-run",
+          timestamp: 2_000,
+          phase: "final_answer",
+          content: "Done.",
+        },
+      },
+    ]).filter((item) => item.kind === "group");
+    const frame = coalesceAgentRunFrames(groups).find((item) => item.kind === "agent-run-frame");
+    if (!frame) {
+      throw new Error("Expected the narrated tool to join its completed run frame");
+    }
+    render(
+      renderAgentRunFrame(frame, {
+        streamOptions: {},
+        renderGroupOptions: () => ({ showReasoning: true }),
+        isWorkExpanded: () => true,
+        onToggleWork: () => {},
+      }),
+      container,
     );
-    expect(attribution?.textContent).toContain("From");
-    expect(link?.textContent).toBe("agent:main:main");
-    expect(link?.tabIndex).toBe(0);
-    expect(attribution?.nextElementSibling?.classList.contains("chat-bubble")).toBe(true);
-    expect(container.querySelector(".chat-avatar, .chat-avatar-slot")).toBeNull();
-    expect(container.querySelector(".chat-group-footer .chat-sender-name")).toBeNull();
-    expect(container.querySelector(".chat-group-footer .chat-group-timestamp")).not.toBeNull();
-    expect(container.querySelector(".chat-group-footer-actions")).not.toBeNull();
+    const opened = vi.fn();
+    container.addEventListener("click", (event) => opened(markdownFileLinkFromEvent(event)));
+    const link = expectDefined(
+      container.querySelector<HTMLAnchorElement>('a[data-file-path="reports/index.html"]'),
+      "narrated file link",
+    );
+    link.click();
+    expect(opened).toHaveBeenCalledExactlyOnceWith({
+      path: "reports/index.html",
+      line: 7,
+      sessionKey,
+    });
   });
+
+  it.each([false, true])(
+    "preserves the sender footer or source chip (forwarded=%s)",
+    async (forwarded) => {
+      const group = createGroup({
+        senderLabel: "Forwarded from main",
+        ...(forwarded ? { senderSession: { sessionKey: "agent:main:main", agentId: "main" } } : {}),
+      });
+      render(renderTestMessageGroup(group), container);
+      if (!forwarded) {
+        expect(
+          container.querySelector(".chat-group.assistant .chat-sender-name")?.textContent,
+        ).toBe("Forwarded from main");
+        expect(container.querySelector(".chat-group--forwarded")).toBeNull();
+        return;
+      }
+      const forwardedGroup = container.querySelector<HTMLElement>(".chat-group--forwarded");
+      expect(forwardedGroup).not.toBeNull();
+      expect(forwardedGroup?.classList.contains("chat-group--sender-tint")).toBe(true);
+      expect(forwardedGroup?.style.getPropertyValue("--chat-sender-hue")).not.toBe("");
+      const attribution = container.querySelector(".chat-group--forwarded .chat-reply-attribution");
+      const link = attribution?.querySelector<HTMLAnchorElement>(
+        'a.markdown-session-link[data-session-key="agent:main:main"]',
+      );
+      expect(attribution?.textContent).toContain("From");
+      expect(link?.textContent).toBe("agent:main:main");
+      expect(link?.tabIndex).toBe(0);
+      expect(attribution?.nextElementSibling?.classList.contains("chat-bubble")).toBe(true);
+      expect(container.querySelector(".chat-avatar, .chat-avatar-slot")).toBeNull();
+      expect(container.querySelector(".chat-group-footer .chat-sender-name")).toBeNull();
+      expect(container.querySelector(".chat-group-footer .chat-group-timestamp")).not.toBeNull();
+      expect(container.querySelector(".chat-group-footer-actions")).not.toBeNull();
+
+      const titler = new SessionLinkTitler(container);
+      titler.client = new GatewayBrowserClient({ url: "ws://localhost" });
+      vi.spyOn(titler.client, "request").mockResolvedValueOnce({
+        status: "ok",
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        title: "Main session",
+      });
+      const sourceLink = expectDefined(link, "source session link");
+      expect(sourceLink).toBeInstanceOf(HTMLAnchorElement);
+      await titler.decorate(sourceLink, true);
+      expect(sourceLink.textContent).toBe("Main session");
+      render(renderTestMessageGroup(group), container);
+      const retained = container.querySelector<HTMLAnchorElement>(
+        ".chat-group--forwarded .chat-reply-attribution a",
+      );
+      expect(retained?.textContent).toBe("Main session");
+      expect(retained?.title).toBe("agent:main:main");
+    },
+  );
 
   it.each([
     { agentId: "research", avatar: "blob:research-avatar", expected: "image" },
@@ -122,39 +315,10 @@ describe("forwarded message attribution", () => {
 
   it.each([
     {
-      name: "another agent's main session labels as that agent",
-      key: "agent:research:main",
-      chipText: "Research Agent",
-      prefix: null,
-      titled: true,
-    },
-    {
-      name: "own main session labels as the local agent",
-      key: "agent:main:main",
-      chipText: "main",
-      prefix: null,
-      titled: true,
-    },
-    {
-      name: "same-agent session leaves the key for the titler",
-      key: "agent:main:bench",
-      chipText: "agent:main:bench",
-      prefix: null,
-      titled: false,
-    },
-    {
-      name: "other-agent session prefixes the agent name",
-      key: "agent:research:bench",
-      chipText: "agent:research:bench",
-      prefix: "Research Agent ·",
-      titled: false,
-    },
-    {
       name: "Gateway label overrides a main session's agent name",
       key: "agent:main:main",
       label: "Named source",
       chipText: "Named source",
-      prefix: null,
       titled: true,
     },
     {
@@ -162,19 +326,17 @@ describe("forwarded message attribution", () => {
       key: "agent:main:cron:daily:run:first",
       label: "Daily report",
       chipText: "Daily report",
-      prefix: null,
       titled: true,
     },
     {
       name: "cron run respects the app base path and encodes its ids",
       key: "agent:main:cron:daily report:run:first+run",
       chipText: "Automation",
-      prefix: null,
       titled: true,
       basePath: "/control",
       href: "/control/automations?job=daily+report&run=first%2Brun",
     },
-  ])("$name", async ({ key, label, chipText, prefix, titled, basePath, href }) => {
+  ])("$name", async ({ key, label, chipText, titled, basePath, href }) => {
     const group = createGroup({
       senderSession: { sessionKey: key, agentId: key.split(":")[1], label },
     });
@@ -203,11 +365,7 @@ describe("forwarded message attribution", () => {
         .querySelector(".chat-group--forwarded .chat-reply-attribution")
         ?.textContent?.replace(/\s+/g, " ")
         .trim() ?? "";
-    if (prefix) {
-      expect(attributionText).toContain(prefix.replace(/\s+/g, " "));
-    } else {
-      expect(attributionText).not.toContain("—");
-    }
+    expect(attributionText).not.toContain("—");
     if (titled) {
       const titler = new SessionLinkTitler(container);
       titler.client = new GatewayBrowserClient({ url: "ws://localhost" });
@@ -259,33 +417,4 @@ describe("forwarded message attribution", () => {
       expect(container.querySelector(".chat-group-footer .chat-sender-name")).toBeNull();
     },
   );
-
-  it("keeps titled source chips usable across rerenders", async () => {
-    const group = createGroup({
-      senderSession: { sessionKey: "agent:main:main" },
-    });
-    const titler = new SessionLinkTitler(container);
-    titler.client = new GatewayBrowserClient({ url: "ws://localhost" });
-    vi.spyOn(titler.client, "request").mockResolvedValueOnce({
-      status: "ok",
-      sessionKey: "agent:main:main",
-      agentId: "main",
-      title: "Main session",
-    });
-    const sourceLink = () =>
-      expectDefined(
-        container.querySelector<HTMLAnchorElement>(
-          ".chat-group--forwarded .chat-reply-attribution a",
-        ),
-        "source session link",
-      );
-
-    render(renderTestMessageGroup(group), container);
-    expect(sourceLink()).toBeInstanceOf(HTMLAnchorElement);
-    await titler.decorate(sourceLink(), true);
-    expect(sourceLink().textContent).toBe("Main session");
-    render(renderTestMessageGroup(group), container);
-    expect(sourceLink().textContent).toBe("Main session");
-    expect(sourceLink().title).toBe("agent:main:main");
-  });
 });

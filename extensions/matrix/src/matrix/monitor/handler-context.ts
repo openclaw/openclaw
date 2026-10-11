@@ -48,7 +48,7 @@ export async function resolveMatrixInboundContext(config: {
     historyLimit,
     dmSessionScope,
     resolveStorePath: resolveStorePathImpl,
-    createChannelInboundEnvelopeBuilder: createChannelInboundEnvelopeBuilderImpl,
+    createChannelInboundEnvelopeBuilderAsync: createChannelInboundEnvelopeBuilderImpl,
     finalizeInboundContext,
   } = handler;
   const {
@@ -144,7 +144,7 @@ export async function resolveMatrixInboundContext(config: {
   const storePath = resolveStorePathImpl(cfg.session?.store, {
     agentId: _route.agentId,
   });
-  const buildEnvelope = createChannelInboundEnvelopeBuilderImpl({ cfg, route: _route });
+  const buildEnvelope = await createChannelInboundEnvelopeBuilderImpl({ cfg, route: _route });
   const sharedDmNoticeSessionKey = threadTarget
     ? _route.mainSessionKey || _route.sessionKey
     : _route.sessionKey;

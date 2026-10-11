@@ -4,19 +4,21 @@ import { resolveMSTeamsReactionEmoji } from "../reaction-types.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 import { resolveMSTeamsSenderAccess } from "./access.js";
+import { createMSTeamsHandlerConfigReader } from "./config.js";
 import { resolveMSTeamsRouteSessionKey } from "./thread-session.js";
 
 type ReactionDirection = "added" | "removed";
 
 export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
-  const { cfg, log } = deps;
+  const { accountId, log } = deps;
+  const readConfig = deps.readConfig ?? createMSTeamsHandlerConfigReader(deps);
   const core = getMSTeamsRuntime();
-  const msteamsCfg = cfg.channels?.msteams;
 
   return async function handleReaction(
     context: MSTeamsTurnContext,
     direction: ReactionDirection,
   ): Promise<void> {
+    const cfg = readConfig();
     const activity = context.activity;
 
     const rawReactions =
@@ -44,8 +46,11 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
     // A reaction enqueues a session-scoped event, so it must reuse the message admission
     // classification and gates. Re-deriving direct/group locally lets a conversation that
     // admission treats as direct route into a team-scoped session without the team/channel gate.
-    const access = await resolveMSTeamsSenderAccess({ cfg, activity });
-    const { isDirectMessage, channelGate } = access;
+    const access = await resolveMSTeamsSenderAccess({ cfg, accountId, activity });
+    const { isDirectMessage, channelGate, msteamsCfg } = access;
+    if (msteamsCfg?.enabled === false || (msteamsCfg?.appId && msteamsCfg.appId !== deps.appId)) {
+      return;
+    }
     if (access.hasConflictingConversationScope) {
       // Bot Framework marks group and channel conversations as non-personal. Fail closed when
       // their scope metadata contradicts a personal conversation instead of choosing a session.
@@ -78,6 +83,7 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
     const route = core.channel.routing.resolveAgentRoute({
       cfg,
       channel: "msteams",
+      accountId,
       peer: {
         kind: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
         id: isDirectMessage ? senderId : conversationId,

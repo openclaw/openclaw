@@ -2,6 +2,8 @@ import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
+import { resolveProviderTransportSsrFPolicy } from "../agents/provider-network-policy.js";
+import { resolveProviderRequestPolicyConfig } from "../agents/provider-request-config.js";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
@@ -10,7 +12,6 @@ import {
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { cancelUnreadResponseBody } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-import { SsrFBlockedError, ssrfPolicyFromHttpBaseUrlAllowedOrigin } from "../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 
@@ -90,42 +91,25 @@ function buildSelfHostedDiscoveryHeaders(params: {
 
 async function fetchSelfHostedDiscoveryJson(params: {
   url: string;
-  origin: string;
+  requestPolicy: ReturnType<typeof resolveProviderRequestPolicyConfig>;
   apiKey?: string;
   headers?: Record<string, string>;
   acceptJson?: boolean;
-  allowPrivateNetwork?: boolean;
   timeoutMs: number;
   signal?: AbortSignal;
   readBody: boolean;
   label: string;
 }): Promise<DiscoveryResponse> {
   let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
-  const guardParams = {
-    url: params.url,
-    init: { headers: buildSelfHostedDiscoveryHeaders(params) },
-    policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(params.origin),
-    timeoutMs: params.timeoutMs,
-    signal: params.signal,
-    auditContext: "self-hosted-provider-discovery",
-  };
   try {
-    try {
-      guarded = await fetchWithSsrFGuard(guardParams);
-    } catch (error) {
-      if (params.allowPrivateNetwork !== true || !(error instanceof SsrFBlockedError)) {
-        throw error;
-      }
-      // Same private-network flag as the inference transport (on unless disabled) for hosts that resolve to
-      // link-local addresses, e.g. Podman's host gateway. Only reached after the exact-origin
-      // policy rejected the target, and redirects are not followed so the flag cannot widen
-      // to another destination.
-      guarded = await fetchWithSsrFGuard({
-        ...guardParams,
-        policy: { ...guardParams.policy, allowPrivateNetwork: true },
-        maxRedirects: 0,
-      });
-    }
+    guarded = await fetchWithSsrFGuard({
+      url: params.url,
+      init: { headers: buildSelfHostedDiscoveryHeaders(params) },
+      policy: resolveProviderTransportSsrFPolicy({ ...params.requestPolicy, url: params.url }),
+      timeoutMs: params.timeoutMs,
+      signal: params.signal,
+      auditContext: "self-hosted-provider-discovery",
+    });
   } catch (error) {
     return { kind: "unreachable", error };
   }
@@ -187,9 +171,13 @@ async function discoverOpenAICompatibleModelRows(
   const inferredServerBaseUrl = inferenceBaseUrl.replace(/\/v1$/u, "");
   const serverBaseUrl = (params.serverBaseUrl ?? inferredServerBaseUrl).replace(/\/+$/, "");
   const timeoutMs = params.timeoutMs ?? 5_000;
+  const requestPolicy = resolveProviderRequestPolicyConfig({
+    baseUrl: inferenceBaseUrl,
+    allowPrivateNetwork: params.allowPrivateNetwork,
+  });
   const request = {
     ...params,
-    origin: new URL(serverBaseUrl).origin,
+    requestPolicy,
     timeoutMs,
     acceptJson: params.modelsPathOrder === "server-first",
     readBody: true,

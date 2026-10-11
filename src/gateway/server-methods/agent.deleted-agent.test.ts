@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import { agentHandlers } from "./agent.js";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import {
   mockDeletedAgentSession,
   resetDeletedAgentSessionMocks,
@@ -32,18 +32,22 @@ vi.mock("../chat-attachments.js", async () => {
   };
 });
 
+// Load the handler after the shared helper has registered its storage mocks.
+const { agentHandlers } = await import("./agent.js");
+
 async function invoke(
   id: string,
   params: Record<string, unknown>,
   client: Parameters<NonNullable<typeof agentHandlers.agent>>[0]["client"] = null,
+  pending?: { dedupe: Map<string, unknown>; sessionKey: string },
 ) {
   const respond = vi.fn<RespondFn>();
-  const dedupe = new Map();
+  const dedupe = pending?.dedupe ?? new Map();
   await expectDefined(agentHandlers.agent, "agentHandlers.agent test invariant").call(
     agentHandlers,
     {
       req: { id } as never,
-      params: { sessionKey: mockDeletedAgentSession(), ...params },
+      params: { sessionKey: pending?.sessionKey ?? mockDeletedAgentSession(), ...params },
       respond,
       context: {
         dedupe,
@@ -81,6 +85,43 @@ describe("agent RPC deleted-agent guard", () => {
     expect(parseMessageWithAttachmentsMock).not.toHaveBeenCalled();
     expect(dedupe.size).toBe(0);
     expect(agentCommandFromIngressMock).not.toHaveBeenCalled();
+  });
+
+  it("reserves an ACP request while metadata is pending and clears a refused reservation", async () => {
+    const started = Promise.withResolvers<void>();
+    const metadata = Promise.withResolvers<string | null>();
+    const sessionKey = mockDeletedAgentSession(
+      "agent:claude:acp:11111111-1111-4111-8111-111111111111",
+      () => {
+        started.resolve();
+        return metadata.promise;
+      },
+    );
+    const dedupe = new Map<string, unknown>();
+    const pending = invoke("req-acp", { message: "hi", idempotencyKey: "run-acp" }, null, {
+      dedupe,
+      sessionKey,
+    });
+    try {
+      await awaitGateBeforeSettlement(
+        started.promise,
+        pending.then(({ respond }) => expect(respond).not.toHaveBeenCalled()),
+        "ACP request settled before its metadata check",
+      );
+      expect(dedupe.size).toBeGreaterThan(0);
+      expect(agentCommandFromIngressMock).not.toHaveBeenCalled();
+      metadata.resolve("claude");
+      const { respond } = await pending;
+      expect(respond).toHaveBeenCalledWith(false, undefined, {
+        code: ErrorCodes.INVALID_REQUEST,
+        message: 'Agent "claude" no longer exists in configuration',
+      });
+      expect(dedupe.size).toBe(0);
+      expect(agentCommandFromIngressMock).not.toHaveBeenCalled();
+    } finally {
+      metadata.resolve("claude");
+      await pending;
+    }
   });
 
   it.each(["/reset", "/reset follow up"])(

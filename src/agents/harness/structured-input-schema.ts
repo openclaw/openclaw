@@ -14,7 +14,6 @@ import type {
   StructuredInputCompilerOptions,
   StructuredInputField,
   StructuredInputRecord,
-  StructuredInputValue,
 } from "./structured-input-boundary.js";
 import {
   buildField,
@@ -24,6 +23,7 @@ import {
   MAX_CHOICE_COUNT,
   MAX_CHOICE_LABEL,
   normalizeChoices,
+  readStructuredInputChoice,
   validateChoices,
   type Choice,
   type FieldContext,
@@ -351,6 +351,7 @@ function readChoices(
   ) {
     return "declares both enum and oneOf choices.";
   }
+  let choices: Parameters<typeof normalizeChoices>[0];
   if (enumValue !== undefined && enumValue !== null) {
     if (!Array.isArray(enumValue)) {
       return "has an invalid enum.";
@@ -362,26 +363,23 @@ function readChoices(
     ) {
       return "has invalid enumNames.";
     }
-    return normalizeChoices(
-      enumValue.map((value, index) => ({
-        value,
-        label: Array.isArray(enumNames) ? enumNames[index] : value,
-      })),
-      options.minimumChoiceCount ?? 1,
-      options.allowRichForms ? 64 : MAX_CHOICE_COUNT,
-    );
-  }
-  if (oneOfValue !== undefined && oneOfValue !== null) {
+    choices = enumValue.map((value, index) => ({
+      value,
+      label: Array.isArray(enumNames) ? enumNames[index] : value,
+    }));
+  } else if (oneOfValue !== undefined && oneOfValue !== null) {
     if (!Array.isArray(oneOfValue)) {
       return "has an invalid oneOf.";
     }
-    return normalizeChoices(
-      oneOfValue.map((entry) => readChoice(entry, options)),
-      options.minimumChoiceCount ?? 1,
-      options.allowRichForms ? 64 : MAX_CHOICE_COUNT,
-    );
+    choices = oneOfValue.map((entry) => readStructuredInputChoice(entry, options));
+  } else {
+    return undefined;
   }
-  return undefined;
+  return normalizeChoices(
+    choices,
+    options.minimumChoiceCount ?? 1,
+    options.allowRichForms ? 64 : MAX_CHOICE_COUNT,
+  );
 }
 
 function readArrayChoices(
@@ -396,20 +394,8 @@ function readArrayChoices(
     return "must declare string enum, anyOf, or oneOf array choices.";
   }
   return normalizeChoices(
-    entries.map((entry) => readChoice(entry, options)),
+    entries.map((entry) => readStructuredInputChoice(entry, options)),
     options.minimumChoiceCount ?? 1,
     options.allowRichForms ? 64 : MAX_CHOICE_COUNT,
   );
-}
-
-function readChoice(entry: StructuredInputValue, options: StructuredInputCompilerOptions) {
-  return {
-    value: isStructuredInputRecord(entry) ? ownValue(entry, "const") : undefined,
-    label: isStructuredInputRecord(entry) ? ownValue(entry, "title") : undefined,
-    description: isStructuredInputRecord(entry) ? ownValue(entry, "description") : undefined,
-    thumbnail:
-      isStructuredInputRecord(entry) && options.allowRichForms
-        ? (ownValue(entry, "x-openai-thumbnail") ?? ownValue(entry, "x-openai-preview"))
-        : undefined,
-  };
 }

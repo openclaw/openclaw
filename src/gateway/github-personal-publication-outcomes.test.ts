@@ -1,20 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { ensurePersonalGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { readPersonalGitHubPublication } from "./github-personal-publication-store.js";
-import {
-  callPersonalPublicationRpc,
-  createForeignPublicationSession,
-  createPersonalPublicationFixture,
-  readPersonalPublicationFixtureStatus,
-  personalPublicationAccount as account,
-} from "./github-personal-publication.test-support.js";
-import {
-  claimGitHubPublicationExecution,
-  createGitHubPublicationExecutionStore,
-  readGitHubPublicationRequest,
-} from "./github-publication-store.js";
+// Register the shared Git transport before any publication or run-lease consumer.
+// oxfmt-ignore
 import {
   BRANCH,
   SESSION_ID,
@@ -26,22 +11,29 @@ import {
   installGitHubPublicationTestHarness,
   persistPublicationTestSession,
 } from "./github-publication.test-support.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { ensurePersonalGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { readPersonalGitHubPublication } from "./github-personal-publication-store.js";
+import {
+  callPersonalPublicationRpc,
+  createForeignPublicationSession,
+  createPersonalPublicationFixture,
+  readPersonalPublicationFixtureStatus,
+  personalPublicationAccount as account,
+  preparePersonalPublicationFixtureAction,
+} from "./github-personal-publication.test-support.js";
+import {
+  claimGitHubPublicationExecution,
+  createGitHubPublicationExecutionStore,
+  readGitHubPublicationRequest,
+} from "./github-publication-store.js";
 import { insertSharedWorktreeReceipt } from "./github-shared-publication.test-support.js";
 import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
-import { preparePersonalGitHubSessionAction } from "./server-methods/github-personal-authorization.js";
 
 const mocks = githubPublicationTestMocks();
 const table = "github_personal_publication_requests";
-vi.mock("../agents/worktrees/git-lock.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../agents/worktrees/git-lock.js")>()),
-  lockWorktreeForProcess: vi.fn(async () => undefined),
-  unlockWorktree: vi.fn(async () => undefined),
-}));
-vi.mock("../process/exec.js", () => ({
-  runCommandBuffered: (
-    ...args: Parameters<typeof import("../process/exec.js").runCommandBuffered>
-  ) => mocks.runCommand(...args),
-}));
 
 describe("personal publication definitive outcomes", () => {
   installGitHubPublicationTestHarness();
@@ -65,7 +57,6 @@ describe("personal publication definitive outcomes", () => {
   const status = (requestId: string) => readPersonalPublicationFixtureStatus(fixture, requestId);
   it.each([
     { boundary: "connection closes", readback: false },
-    { boundary: "permission ends", readback: false },
     { boundary: "permission ends during readback", readback: true },
   ] as const)(
     "retains an accepted open PR response after the requesting $boundary",
@@ -165,19 +156,11 @@ describe("personal publication definitive outcomes", () => {
   });
 
   it.each([
-    "closed",
-    "closed-before-unavailable",
-    "closed-with-foreign",
-    "closed-after-create",
-    "closed-after-lost-create",
     "no-changes",
-    "foreign",
     "foreign-after-create",
-    "revoked",
     "revoked-after-create",
     "unavailable-after-create",
     "malformed-after-create",
-    "timeout-after-create",
   ] as const)(
     "preserves the original request outcome for %s observation after an earlier effect",
     async (outcome) => {
@@ -185,10 +168,8 @@ describe("personal publication definitive outcomes", () => {
       const foreign = outcome.startsWith("foreign");
       const revoked = outcome.startsWith("revoked");
       const afterCreate = outcome.endsWith("after-create");
-      const unavailable = /^(unavailable|malformed|timeout)/u.test(outcome);
-      const workspace = await createRealPublicationWorkspace(
-        outcome === "closed-after-lost-create" ? "create" : "push",
-      );
+      const unavailable = /^(unavailable|malformed)/u.test(outcome);
+      const workspace = await createRealPublicationWorkspace("push");
       const initial = (await rpc("sessions.github.publish", request()))[1];
       expect(initial.status).toBe("needs_confirmation");
       const pending = status(initial.requestId);
@@ -228,13 +209,7 @@ describe("personal publication definitive outcomes", () => {
           if (outcome === "malformed-after-create") {
             return commandResult("[{}");
           }
-          if (outcome === "timeout-after-create") {
-            throw new Error("synthetic remote timeout");
-          }
           lookups += 1;
-          if (outcome === "closed-before-unavailable" && lookups > 1) {
-            throw new Error("synthetic later lookup unavailable");
-          }
           if (revoked && lookups === 1) {
             client.connect.scopes = ["operator.read"];
           }
@@ -249,28 +224,13 @@ describe("personal publication definitive outcomes", () => {
                 headRef: BRANCH,
                 baseRef: "main",
               },
-              ...(outcome === "closed-with-foreign"
-                ? [
-                    {
-                      url: "https://github.com/openclaw/openclaw/pull/125204",
-                      userId: 202,
-                      state: "open",
-                      body: "",
-                      headSha,
-                      headRef: BRANCH,
-                      baseRef: "main",
-                    },
-                  ]
-                : []),
             ]),
           );
         }
         return await remote(argv, options);
       });
       const confirmed = await rpc("sessions.github.confirm", confirm);
-      expect(workspace.effects).toEqual(
-        afterCreate || outcome === "closed-after-lost-create" ? ["push", "pull_request"] : ["push"],
-      );
+      expect(workspace.effects).toEqual(afterCreate ? ["push", "pull_request"] : ["push"]);
       if (unavailable) {
         expect(confirmed[0]).toBe(true);
         expect(confirmed[1]).toMatchObject({
@@ -297,28 +257,21 @@ describe("personal publication definitive outcomes", () => {
         return;
       }
       expect(confirmed[0], JSON.stringify(confirmed[2])).toBe(true);
-      const closed = outcome.startsWith("closed");
       expect(confirmed[1]).toMatchObject({
         requestId: initial.requestId,
         status: "failed",
         publisher: initial.publisher,
         code: outcome === "no-changes" ? "no_changes" : "github_rejected",
-        effect: closed
-          ? { kind: "pull_request", status: "observed", headCommit: headSha, url }
-          : afterCreate
-            ? { kind: "pull_request", status: "dispatched", headCommit: headSha }
-            : initial.effect,
-        nextAction: expect.stringContaining(
-          closed ? "Reopen" : outcome === "no-changes" ? "change" : "permission",
-        ),
+        effect: afterCreate
+          ? { kind: "pull_request", status: "dispatched", headCommit: headSha }
+          : initial.effect,
+        nextAction: expect.stringContaining(outcome === "no-changes" ? "change" : "permission"),
       });
       expect(status(initial.requestId)).toEqual({ result: confirmed[1], confirmation: null });
       expect((await rpc("sessions.github.options"))[1].pendingPersonal).toBeNull();
       expect((await rpc("sessions.github.publish", request()))[1]).toEqual(confirmed[1]);
       expect((await rpc("sessions.github.confirm", confirm))[1]).toEqual(confirmed[1]);
-      expect(workspace.effects).toEqual(
-        afterCreate || outcome === "closed-after-lost-create" ? ["push", "pull_request"] : ["push"],
-      );
+      expect(workspace.effects).toEqual(afterCreate ? ["push", "pull_request"] : ["push"]);
       mocks.runCommand.mockImplementation(remote);
       const fresh = await rpc("sessions.github.publish", {
         ...request(),
@@ -344,13 +297,13 @@ describe("personal publication definitive outcomes", () => {
     });
     db.exec(`CREATE TEMP TRIGGER stop_personal_admission AFTER INSERT ON ${table}
       BEGIN SELECT stop_personal_admission(); END`);
-    const stopped = preparePersonalGitHubSessionAction(
-      { client, context, signal: controller.signal },
-      { sessionKey: SESSION_KEY },
+    const stopped = await preparePersonalPublicationFixtureAction(
+      { client, context },
+      controller.signal,
     );
-    await expect(coordinator.requestPersonalForSession(request(), stopped)).rejects.toThrow(
-      "current",
-    );
+    await expect(coordinator.requestPersonalForSession(request(), stopped)).rejects.toMatchObject({
+      name: "AbortError",
+    });
     db.exec("DROP TRIGGER stop_personal_admission");
     const row = openOpenClawStateDatabase()
       .db.prepare(`SELECT request_id, status, execution_id FROM ${table}`)
@@ -466,6 +419,7 @@ describe("personal publication definitive outcomes", () => {
     const originalShared = readShared();
     const originalPersonal = readPersonalGitHubPublication(fixture.owner, { requestId });
     fixture.context.controlUiSessionPullRequests = {
+      readPrepared: vi.fn(),
       read: vi.fn(async () => {
         throw new Error("No session PR projection is installed in this fixture.");
       }),

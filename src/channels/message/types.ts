@@ -5,7 +5,6 @@ import type { OutboundSendDeps } from "../../infra/outbound/send-deps.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
 
-/** Delivery durability requested by core when a channel sends agent output. */
 export type MessageDurabilityPolicy = "required" | "best_effort" | "disabled";
 
 export type OutboundReplyFacts =
@@ -42,7 +41,6 @@ type DurableFinalDeliveryPayloadShape = {
   mediaUrls?: readonly (string | null | undefined)[] | null;
 };
 
-/** Raw platform result shape normalized into a message receipt. */
 export type MessageReceiptSourceResult = {
   /** Provider-confirmed intentional omission before dispatch, never an ambiguous send. */
   outcome?: "not_sent";
@@ -103,7 +101,6 @@ export type RenderedMessageBatchPlanKind =
   | "channelData"
   | "empty";
 
-/** Render plan for a single reply payload after text/media/presentation splitting. */
 export type RenderedMessageBatchPlanItem = {
   index: number;
   kinds: readonly RenderedMessageBatchPlanKind[];
@@ -141,7 +138,6 @@ export type LiveMessageState<TPayload = unknown> = {
   lastRendered?: RenderedMessageBatch<TPayload>;
 };
 
-/** Durable send context passed through render, preview, send, edit, commit, and failure steps. */
 export type MessageSendContext<TPayload = unknown, TSendResult = unknown> = {
   id: string;
   channel: string;
@@ -222,7 +218,6 @@ export type ChannelMessageSendPollContext<TConfig = OpenClawConfig> = Omit<
   isAnonymous?: boolean;
 };
 
-/** Adapter send result normalized to a receipt plus optional legacy message id. */
 export type ChannelMessageSendResult = {
   outcome?: MessageReceiptSourceResult["outcome"];
   receipt: MessageReceipt;
@@ -249,7 +244,6 @@ export type ChannelMessageSendAttemptContext<TConfig = OpenClawConfig> =
   | (ChannelMessageSendPayloadContext<TConfig> & { kind: "payload" })
   | (ChannelMessageSendPollContext<TConfig> & { kind: "poll" });
 
-/** Successful adapter send shared by the success and durable-commit hooks. */
 export type ChannelMessageSendCommitContext<
   TConfig = OpenClawConfig,
   TSendResult extends ChannelMessageSendResult = ChannelMessageSendResult,
@@ -264,7 +258,6 @@ type ChannelMessageSendFailureContext<TConfig = OpenClawConfig> =
     attemptToken?: unknown;
   };
 
-/** Durable queue context used to reconcile a send whose platform state is unknown. */
 export type ChannelMessageUnknownSendContext<TConfig = OpenClawConfig> = {
   cfg: TConfig;
   queueId: string;
@@ -337,11 +330,12 @@ type ChannelMessageSendAdapter<
   lifecycle?: ChannelMessageSendLifecycleAdapter<TConfig, TSendResult>;
 };
 
-/** Durable final-delivery extension for queue reconciliation and capability declaration. */
 export type ChannelMessageDurableFinalAdapter = {
   capabilities?: DurableFinalDeliveryRequirementMap;
   /** Opt into provider reconciliation for ordinary single-payload queued sends. */
   automaticUnknownSendReconciliation?: boolean;
+  /** Recognize inert channel metadata without admitting controls or side effects. */
+  isTextOnlyChannelData?: (channelData: NonNullable<ReplyPayload["channelData"]>) => boolean;
   /**
    * Synchronous provider admission before a durable intent is created or replayed.
    * Providers must not perform I/O from this hook.
@@ -363,7 +357,6 @@ export type ChannelMessageDurableFinalAdapter = {
 
 export type ChannelMessageLiveCapability = (typeof channelMessageLiveCapabilities)[number];
 
-/** Canonical ordered list of live-message feature keys. */
 export const channelMessageLiveCapabilities = [
   "draftPreview",
   "previewFinalization",
@@ -372,7 +365,6 @@ export const channelMessageLiveCapabilities = [
   "quietFinalization",
 ] as const;
 
-/** Capability keys for turning a preview into a final platform message. */
 export const livePreviewFinalizerCapabilities = [
   "finalEdit",
   "normalFallback",
@@ -390,7 +382,6 @@ export type ChannelMessageLiveAdapterShape = {
 
 export type ChannelMessageReceiveAckPolicy = (typeof channelMessageReceiveAckPolicies)[number];
 
-/** Canonical ordered list of receive acknowledgement policies. */
 export const channelMessageReceiveAckPolicies = [
   "after_receive_record",
   "after_agent_dispatch",
@@ -433,7 +424,6 @@ export type DeriveDurableFinalDeliveryRequirementsParams = {
   extraCapabilities?: DurableFinalDeliveryRequirementMap;
 };
 
-/** Stable intent record for a durable outbound message send. */
 export type DurableMessageSendIntent<TPayload = unknown> = {
   id: string;
   channel: string;

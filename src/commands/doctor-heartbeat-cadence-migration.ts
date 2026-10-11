@@ -30,14 +30,15 @@ type HeartbeatCadenceMigrationResult = {
   warnings: string[];
 };
 
-function createDoctorCronService(
+async function withDoctorCronService<T>(
   storePath: string,
   cfg: OpenClawConfig,
-  scheduler: GatewayScheduler,
-): CronService {
+  run: (cron: CronService) => Promise<T>,
+): Promise<T> {
+  const scheduler = new GatewayScheduler();
   const noop = () => {};
   const log = { debug: noop, info: noop, warn: noop, error: noop };
-  return new CronService({
+  const cron = new CronService({
     scheduler,
     storePath,
     cronEnabled: false,
@@ -51,6 +52,12 @@ function createDoctorCronService(
       error: "doctor does not execute automations",
     }),
   });
+  try {
+    return await run(cron);
+  } finally {
+    cron.stop();
+    await scheduler.stop();
+  }
 }
 
 async function loadHeartbeatMonitorPlanReadOnly(
@@ -82,21 +89,6 @@ function noteWarnings(warnings: readonly string[], storePath: string): void {
   note(`${warnings.join("\n")}\nCron store: ${shortenHomePath(storePath)}`, "Doctor warnings");
 }
 
-function cadenceFinding(params: {
-  storePath: string;
-  change: HeartbeatMonitorChange;
-}): HealthFinding {
-  return {
-    checkId: HEARTBEAT_CADENCE_MIGRATION_CHECK_ID,
-    severity: "warning",
-    message: describePlannedChange(params.change),
-    path: params.storePath,
-    target: params.change.agentId,
-    requirement: `heartbeat-monitor-${params.change.kind}`,
-    fixHint: `Run ${formatCliCommand("openclaw doctor --fix")} to materialize heartbeat cadence in cron.`,
-  };
-}
-
 export async function collectHeartbeatCadenceMigrationFindings(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
@@ -104,7 +96,15 @@ export async function collectHeartbeatCadenceMigrationFindings(
   const storePath = resolveCronJobsStorePathFromConfig(cfg, env);
   try {
     const plan = await loadHeartbeatMonitorPlanReadOnly(cfg, storePath, env);
-    return plan.changes.map((change) => cadenceFinding({ storePath, change }));
+    return plan.changes.map((change) => ({
+      checkId: HEARTBEAT_CADENCE_MIGRATION_CHECK_ID,
+      severity: "warning",
+      message: describePlannedChange(change),
+      path: storePath,
+      target: change.agentId,
+      requirement: `heartbeat-monitor-${change.kind}`,
+      fixHint: `Run ${formatCliCommand("openclaw doctor --fix")} to materialize heartbeat cadence in cron.`,
+    }));
   } catch (error) {
     return [
       {
@@ -124,9 +124,7 @@ export async function ensureHeartbeatMonitorJobs(
   storePath: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<Map<string, CronJob>> {
-  const scheduler = new GatewayScheduler();
-  const cron = createDoctorCronService(storePath, cfg, scheduler);
-  try {
+  return await withDoctorCronService(storePath, cfg, async (cron) => {
     const jobs = await cron.list({ includeDisabled: true });
     const schedulerSeed = resolveHeartbeatSchedulerSeed(undefined, { env });
     const { specs } = resolveHeartbeatMonitorPlan(cfg, jobs, { schedulerSeed });
@@ -137,10 +135,7 @@ export async function ensureHeartbeatMonitorJobs(
       monitors.set(spec.agentId, job);
     }
     return monitors;
-  } finally {
-    cron.stop();
-    await scheduler.stop();
-  }
+  });
 }
 
 export async function maybeMigrateHeartbeatCadenceToCron(params: {
@@ -168,9 +163,7 @@ export async function maybeMigrateHeartbeatCadenceToCron(params: {
     return { changes, warnings };
   }
 
-  const scheduler = new GatewayScheduler();
-  const cron = createDoctorCronService(storePath, params.cfg, scheduler);
-  try {
+  await withDoctorCronService(storePath, params.cfg, async (cron) => {
     const schedulerSeed = resolveHeartbeatSchedulerSeed(undefined, { env });
     const result = await applyHeartbeatMonitorJobs({
       cron,
@@ -185,10 +178,7 @@ export async function maybeMigrateHeartbeatCadenceToCron(params: {
           : `Could not inspect heartbeat monitor jobs: ${errorMessage(failure.error)}`,
       );
     }
-  } finally {
-    cron.stop();
-    await scheduler.stop();
-  }
+  });
 
   if (changes.length > 0) {
     note(changes.join("\n"), "Doctor changes");

@@ -9,11 +9,13 @@ import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { transferFollowupCohort } from "../completion/session-followup-cohort.js";
 import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
+import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import {
   publishSubagentRunChanges,
   subscribeSubagentRunChanges,
 } from "./subagent-registry-publication.js";
+import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   getSubagentRunRuntimeKey,
@@ -33,19 +35,67 @@ function freezeValue(value: unknown): void {
   Object.freeze(value);
 }
 
-export function immutableSubagentRun(entry: SubagentRunRecord): SubagentRunRecord {
+const immutableSessionListFacts = new WeakMap<SubagentRunRecord, SubagentRunReadRecord>();
+
+/** A row replacement owns a new projection; retired immutable rows release theirs through GC. */
+export function immutableSubagentRunSessionList(entry: SubagentRunRecord): SubagentRunReadRecord {
+  const prepared = immutableSessionListFacts.get(entry);
+  if (prepared) {
+    return prepared;
+  }
   prepareGatewayContextBindingOwner(entry);
-  freezeValue(entry);
+  freezeSubagentRunReadRecord(entry);
+  const projection = freezeSubagentRunReadRecord(projectSubagentRunForSessionList(entry));
+  immutableSessionListFacts.set(entry, projection);
+  return projection;
+}
+
+export function immutableSubagentRun(entry: SubagentRunRecord): SubagentRunRecord {
+  immutableSubagentRunSessionList(entry);
   return entry;
+}
+
+/** Registry projections contain only canonical JSON fields and owner-created containers. */
+export function freezeSubagentRunReadRecord<T extends SubagentRunReadRecord>(record: T): T {
+  freezeValue(record);
+  return record;
+}
+
+class SubagentRunIndex extends Map<string, Map<string, SubagentRunRecord>> {
+  constructor(private readonly keyFor: (entry: SubagentRunRecord) => string | undefined) {
+    super();
+  }
+
+  update(runId: string, entry: SubagentRunRecord, operation: "add" | "remove"): void {
+    const key = this.keyFor(entry);
+    if (!key) {
+      return;
+    }
+    const indexedRuns = this.get(key);
+    if (operation === "remove") {
+      if (indexedRuns?.get(runId) !== entry) {
+        return;
+      }
+      indexedRuns.delete(runId);
+      if (indexedRuns.size === 0) {
+        this.delete(key);
+      }
+    } else if (indexedRuns) {
+      indexedRuns.set(runId, entry);
+    } else {
+      this.set(key, new Map([[runId, entry]]));
+    }
+  }
 }
 
 // Preflight consults the collector lookup on every Gateway agent request, so it
 // must stay O(1) regardless of retained collector records. The map subclass
 // maintains the index whenever the row owner publishes a new immutable value.
 const collectorRunIdByChildSessionKey = new Map<string, string>();
-const runsByChildSessionKey = new Map<string, Map<string, SubagentRunRecord>>();
-const runsByRequesterSessionKey = new Map<string, Map<string, SubagentRunRecord>>();
-const runsByCollectorGroupKey = new Map<string, Map<string, SubagentRunRecord>>();
+const runsByChildSessionKey = new SubagentRunIndex((entry) => entry.childSessionKey);
+const runsByRequesterSessionKey = new SubagentRunIndex((entry) => entry.requesterSessionKey);
+const runsByCollectorGroupKey = new SubagentRunIndex(collectorGroupKey);
+const runIndexes = [runsByChildSessionKey, runsByRequesterSessionKey, runsByCollectorGroupKey];
 
 function collectorGroupKey(entry: SubagentRunRecord): string | undefined {
   if (entry.collect !== true || !entry.groupId) {
@@ -55,42 +105,6 @@ function collectorGroupKey(entry: SubagentRunRecord): string | undefined {
     entry.swarmRequesterSessionKey ?? entry.requesterSessionKey,
     entry.groupId,
   ]);
-}
-
-function removeIndexedSubagentRun(
-  index: Map<string, Map<string, SubagentRunRecord>>,
-  key: string | undefined,
-  runId: string,
-  entry: SubagentRunRecord,
-) {
-  if (!key) {
-    return;
-  }
-  const indexedRuns = index.get(key);
-  if (indexedRuns?.get(runId) !== entry) {
-    return;
-  }
-  indexedRuns.delete(runId);
-  if (indexedRuns.size === 0) {
-    index.delete(key);
-  }
-}
-
-function indexSubagentRun(
-  index: Map<string, Map<string, SubagentRunRecord>>,
-  key: string | undefined,
-  runId: string,
-  entry: SubagentRunRecord,
-) {
-  if (!key) {
-    return;
-  }
-  const indexedRuns = index.get(key);
-  if (indexedRuns) {
-    indexedRuns.set(runId, entry);
-  } else {
-    index.set(key, new Map([[runId, entry]]));
-  }
 }
 
 type SubagentRetirementScope = {
@@ -288,11 +302,10 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
   /** Committed replacement transfers custody without reviving a retired source. */
   transferCompletionAuthority(previous: SubagentRunRecord, next: SubagentRunRecord): void {
     transferFollowupCohort(previous, next);
-    if (this.retiredCompletionEntries.has(getSubagentRunRuntimeKey(previous))) {
-      this.retiredCompletionEntries.add(getSubagentRunRuntimeKey(next));
-    }
-    if (this.operatorCompletionEntries.has(getSubagentRunRuntimeKey(previous))) {
-      this.operatorCompletionEntries.add(getSubagentRunRuntimeKey(next));
+    for (const entries of [this.retiredCompletionEntries, this.operatorCompletionEntries]) {
+      if (entries.has(getSubagentRunRuntimeKey(previous))) {
+        entries.add(getSubagentRunRuntimeKey(next));
+      }
     }
     const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(previous));
     if (!custody) {
@@ -413,8 +426,15 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
 
   /** Publish accepted runtime ownership after the row's commit acknowledgement. */
   commitOwnership(entry: SubagentRunRecord): void {
+    if (this.settleCommittedOwnership(entry)) {
+      publishSubagentRunChanges([entry.childSessionKey], [entry.runId]);
+    }
+  }
+
+  /** Bulk restore settles custody before its one atomic row publication notifies readers. */
+  settleCommittedOwnership(entry: SubagentRunRecord): boolean {
     if (!isSameSubagentRunOwner(this.get(entry.runId), entry)) {
-      return;
+      return false;
     }
     for (const scope of this.registrationScopes) {
       if (
@@ -438,7 +458,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
         scope.observation = { state: "superseded" };
       }
     }
-    publishSubagentRunChanges([entry.childSessionKey], [entry.runId]);
+    return true;
   }
 
   /** Normal cleanup calls this only after its deletion commits; raw map deletion is not evidence. */
@@ -502,18 +522,18 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
       this.publishRuntimeOwner(prev, entry);
     }
     if (prev) {
-      removeIndexedSubagentRun(runsByChildSessionKey, prev.childSessionKey, runId, prev);
-      removeIndexedSubagentRun(runsByRequesterSessionKey, prev.requesterSessionKey, runId, prev);
-      removeIndexedSubagentRun(runsByCollectorGroupKey, collectorGroupKey(prev), runId, prev);
+      for (const index of runIndexes) {
+        index.update(runId, prev, "remove");
+      }
       if (prev.collect === true && prev.childSessionKey) {
         collectorRunIdByChildSessionKey.delete(prev.childSessionKey);
       }
     }
     super.set(runId, entry);
     this.readLookup.set(runId, entry);
-    indexSubagentRun(runsByChildSessionKey, entry.childSessionKey, runId, entry);
-    indexSubagentRun(runsByRequesterSessionKey, entry.requesterSessionKey, runId, entry);
-    indexSubagentRun(runsByCollectorGroupKey, collectorGroupKey(entry), runId, entry);
+    for (const index of runIndexes) {
+      index.update(runId, entry, "add");
+    }
     if (entry.collect === true && entry.childSessionKey) {
       collectorRunIdByChildSessionKey.set(entry.childSessionKey, runId);
     }
@@ -524,9 +544,9 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     this.readLookup.set(runId, undefined);
     const prev = this.get(runId);
     if (prev) {
-      removeIndexedSubagentRun(runsByChildSessionKey, prev.childSessionKey, runId, prev);
-      removeIndexedSubagentRun(runsByRequesterSessionKey, prev.requesterSessionKey, runId, prev);
-      removeIndexedSubagentRun(runsByCollectorGroupKey, collectorGroupKey(prev), runId, prev);
+      for (const index of runIndexes) {
+        index.update(runId, prev, "remove");
+      }
     }
     if (
       prev?.collect === true &&
@@ -555,9 +575,9 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     super.clear();
     this.readLookup = new SubagentSessionReadLookup();
     collectorRunIdByChildSessionKey.clear();
-    runsByChildSessionKey.clear();
-    runsByRequesterSessionKey.clear();
-    runsByCollectorGroupKey.clear();
+    for (const index of runIndexes) {
+      index.clear();
+    }
     publishSubagentRunChanges();
   }
 }

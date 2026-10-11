@@ -41,7 +41,7 @@ export function resolveStatusAllConnectionDetails(params: {
     "Gateway target: (missing gateway.remote.url)",
     `Config: ${params.configPath}`,
     `Bind: ${params.bindMode ?? "loopback"}`,
-    `Local fallback (used for probes): ${projectGatewayUrlForDiagnostics(params.gatewayConnection.url)}`,
+    `Local fallback (used for checks): ${projectGatewayUrlForDiagnostics(params.gatewayConnection.url)}`,
     "Fix: set gateway.remote.url, or set gateway.mode=local.",
   ].join("\n");
 }

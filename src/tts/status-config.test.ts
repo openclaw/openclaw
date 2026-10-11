@@ -93,7 +93,7 @@ describe("resolveStatusTtsSnapshot", () => {
     expectStatus(
       {
         tts: { auto: "off", provider: "openai" },
-        agents: { list: [{ id: "reader", tts: { auto: "always", provider: "elevenlabs" } }] },
+        agents: { entries: { reader: { tts: { auto: "always", provider: "elevenlabs" } } } },
       },
       { provider: "elevenlabs" },
       "reader",
@@ -108,7 +108,7 @@ describe("resolveStatusTtsSnapshot", () => {
           persona: "alfred",
           personas: { alfred: { provider: "google" }, jarvis: { provider: "edge" } },
         },
-        agents: { list: [{ id: "reader", tts: { persona: "jarvis" } }] },
+        agents: { entries: { reader: { tts: { persona: "jarvis" } } } },
       },
       { provider: "microsoft", persona: "jarvis" },
       "reader",
@@ -205,9 +205,9 @@ describe("resolveStatusTtsSnapshot", () => {
           providers: { openai: { model: "gpt-4o-mini-tts", voice: "coral" } },
         },
         agents: {
-          list: [
-            { id: "reader", tts: { auto: "always", providers: { openai: { voice: "nova" } } } },
-          ],
+          entries: {
+            reader: { tts: { auto: "always", providers: { openai: { voice: "nova" } } } },
+          },
         },
       },
       { provider: "openai", model: "gpt-4o-mini-tts", voice: "nova" },

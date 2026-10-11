@@ -2,23 +2,89 @@ import { describe, expect, it } from "vitest";
 import { redactCredentialText, redactDiagnostic } from "./vitest/credential-redaction.ts";
 
 describe("public test diagnostic redaction", () => {
-  it.each(["EXAMPLE_TOKEN", "PASSWD"])(
-    "preserves %s while hiding its value in object, JSON and env text",
-    (key) => {
-      const cases: [string, string][] = [
+  const encodedObject = JSON.stringify({ EXAMPLE_TOKEN: "synthetic", NORMAL: "visible" });
+  const encodedClean = JSON.stringify({ EXAMPLE_TOKEN: "<redacted len=9>", NORMAL: "visible" });
+  const wrap = (input: string, depth: number) => {
+    let value = input;
+    for (let index = 0; index < depth; index++) {
+      value = JSON.stringify({ payload: value });
+    }
+    return value;
+  };
+  it("redacts credential text without altering nonsecret fields", () => {
+    const cases: [string, string][] = [
+      ...["EXAMPLE_TOKEN", "PASSWD"].flatMap((key): [string, string][] => [
         [`${key}: 'synthetic'`, `${key}: '<redacted len=9>'`],
         [`${key}: "synthetic"`, `${key}: "<redacted len=9>"`],
         [`"${key}": "synthetic"`, `"${key}": "<redacted len=9>"`],
         [`${key}=synthetic\nNORMAL=visible`, `${key}=<redacted len=9>\nNORMAL=visible`],
         [`["${key}", "synthetic"]`, `["${key}", "<redacted len=9>"]`],
         [`[ '${key}', 'synthetic' ]`, `[ '${key}', '<redacted len=9>' ]`],
-      ];
-      for (const [input, expected] of cases) {
-        expect(redactCredentialText(input)).toBe(expected);
-        expect(redactCredentialText(expected)).toBe(expected);
-      }
-    },
-  );
+      ]),
+      [
+        `+ [\n+   "EXAMPLE_TOKEN",\n+   "one\\ntwo",\n+ ],\n  ["NORMAL", "visible"]`,
+        `+ [\n+   "EXAMPLE_TOKEN",\n+   "<redacted len=7>",\n+ ],\n  ["NORMAL", "visible"]`,
+      ],
+      [
+        `@@ -3,8 +3,8 @@\n  "EXAMPLE_TOKEN",\n  "synthetic",\n],`,
+        `@@ -3,8 +3,8 @@\n  "EXAMPLE_TOKEN",\n  "<redacted len=9>",\n],`,
+      ],
+      [
+        JSON.stringify({ message: `[["EXAMPLE_TOKEN", "synthetic"], ["NORMAL", "visible"]]` }),
+        JSON.stringify({
+          message: `[["EXAMPLE_TOKEN", "<redacted len=9>"], ["NORMAL", "visible"]]`,
+        }),
+      ],
+      [
+        `- "TO\u001b[31mKEN\u001b[0m": "one\\"two\\nthree",\n+ '\u001b[31mAPI_KEY\u001b[0m': 'a\\'b',\nNORMAL: 'visible'`,
+        `- "TOKEN": "<redacted len=13>",\n+ 'API_KEY': '<redacted len=3>',\nNORMAL: 'visible'`,
+      ],
+      [
+        "Authorization: Bearer synthetic\nCookie: a=b; c=d",
+        "Authorization: <redacted len=16>\nCookie: <redacted len=8>",
+      ],
+      ...[1, 2, 3].map((depth): [string, string] => [
+        wrap(encodedObject, depth),
+        wrap(encodedClean, depth),
+      ]),
+      ...["", "can't load "].map((prefix): [string, string] => [
+        JSON.stringify({
+          message: `${prefix}AUTHORIZATION=Bearer synthetic`,
+          untouched: "visible",
+        }),
+        JSON.stringify({
+          message: `${prefix}AUTHORIZATION=<redacted len=16>`,
+          untouched: "visible",
+        }),
+      ]),
+      ['TOKEN: "SECRET=synthetic"', 'TOKEN: "<redacted len=16>"'],
+      ...(
+        [
+          ["PASSWORD", " two synthetic words "],
+          ["TOKEN", "synthetic NORMAL=visible"],
+          ["TOKEN", "synthetic,second}"],
+          ["TOKEN", "<redacted len=3> synthetic"],
+        ] satisfies [string, string][]
+      ).map(([key, value]): [string, string] => [
+        `${key}=${value}\r\nNORMAL=visible`,
+        `${key}=<redacted len=${value.length}>\r\nNORMAL=visible`,
+      ]),
+      ["TOKEN=\nNORMAL=visible", "TOKEN=<redacted len=0>\nNORMAL=visible"],
+      ['{ TOKEN: undefined, NORMAL: "visible" }', '{ TOKEN: <redacted len=9>, NORMAL: "visible" }'],
+      [
+        "Authorization: Digest first=synthetic, second=synthetic",
+        "Authorization: <redacted len=40>",
+      ],
+      [
+        '- "TOKEN": "first"\n+ "TOKEN": "second"',
+        '- "TOKEN": "<redacted len=5>"\n+ "TOKEN": "<redacted len=6>"',
+      ],
+    ];
+    for (const [input, expected] of cases) {
+      expect(redactCredentialText(input), input).toBe(expected);
+      expect(redactCredentialText(expected), input).toBe(expected);
+    }
+  });
 
   it("scrubs nested credential entry pairs while preserving keys and ordinary entries", () => {
     const diagnostic = {
@@ -50,32 +116,6 @@ describe("public test diagnostic redaction", () => {
     expect(diagnostic).toEqual(expected);
   });
 
-  it("redacts multiline and JSON-encoded credential entry pairs", () => {
-    const text = `+ [\n+   "EXAMPLE_TOKEN",\n+   "one\\ntwo",\n+ ],\n  ["NORMAL", "visible"]`;
-    const clean = `+ [\n+   "EXAMPLE_TOKEN",\n+   "<redacted len=7>",\n+ ],\n  ["NORMAL", "visible"]`;
-    expect(redactCredentialText(text)).toBe(clean);
-    expect(redactCredentialText(clean)).toBe(clean);
-    expect(redactCredentialText(`@@ -3,8 +3,8 @@\n  "EXAMPLE_TOKEN",\n  "synthetic",\n],`)).toBe(
-      `@@ -3,8 +3,8 @@\n  "EXAMPLE_TOKEN",\n  "<redacted len=9>",\n],`,
-    );
-    const encoded = JSON.stringify({
-      message: `[["EXAMPLE_TOKEN", "synthetic"], ["NORMAL", "visible"]]`,
-    });
-    expect(JSON.parse(redactCredentialText(encoded))).toEqual({
-      message: `[["EXAMPLE_TOKEN", "<redacted len=9>"], ["NORMAL", "visible"]]`,
-    });
-  });
-
-  it("handles escaped quotes, newlines, ANSI colors and repeated fields", () => {
-    const text = `- "TO\u001b[31mKEN\u001b[0m": "one\\"two\\nthree",\n+ '\u001b[31mAPI_KEY\u001b[0m': 'a\\'b',\nNORMAL: 'visible'`;
-    expect(redactCredentialText(text)).toBe(
-      `- "TOKEN": "<redacted len=13>",\n+ 'API_KEY': '<redacted len=3>',\nNORMAL: 'visible'`,
-    );
-    expect(redactCredentialText("Authorization: Bearer synthetic\nCookie: a=b; c=d")).toBe(
-      "Authorization: <redacted len=16>\nCookie: <redacted len=8>",
-    );
-  });
-
   it("redacts composite values and strings that merely start with a redaction marker", () => {
     for (const input of [
       `TOKEN: ['first', { nested: 'second' }]`,
@@ -91,56 +131,6 @@ describe("public test diagnostic redaction", () => {
     const object = { TOKEN: ["first", "second"] };
     redactDiagnostic(object);
     expect(object.TOKEN).toEqual(expect.stringMatching(/^<redacted len=\d+>$/u));
-  });
-
-  it("redacts credential objects embedded in JSON-encoded diagnostic strings", () => {
-    let text = JSON.stringify({ EXAMPLE_TOKEN: "synthetic", NORMAL: "visible" });
-    for (let depth = 0; depth < 3; depth += 1) {
-      text = JSON.stringify({ payload: text });
-      const output = redactCredentialText(text);
-      expect(output).toContain("<redacted len=9>");
-      expect(output).toContain("visible");
-      expect(output).not.toContain("synthetic");
-    }
-    for (const prefix of ["", "can't load "]) {
-      const report = JSON.stringify({
-        message: `${prefix}AUTHORIZATION=Bearer synthetic`,
-        untouched: "visible",
-      });
-      expect(JSON.parse(redactCredentialText(report))).toEqual({
-        message: `${prefix}AUTHORIZATION=<redacted len=16>`,
-        untouched: "visible",
-      });
-    }
-    expect(redactCredentialText('TOKEN: "SECRET=synthetic"')).toBe('TOKEN: "<redacted len=16>"');
-  });
-
-  it.each([
-    ["PASSWORD", " two synthetic words "],
-    ["TOKEN", "synthetic NORMAL=visible"],
-    ["TOKEN", "synthetic,second}"],
-    ["TOKEN", "<redacted len=3> synthetic"],
-  ])("redacts the complete unquoted %s environment value %s", (key, value) => {
-    const output = redactCredentialText(`${key}=${value}\r\nNORMAL=visible`);
-    expect(output).toBe(`${key}=<redacted len=${value.length}>\r\nNORMAL=visible`);
-    expect(redactCredentialText(output)).toBe(output);
-  });
-
-  it("preserves empty environment records and independent object fields", () => {
-    expect(redactCredentialText("TOKEN=\nNORMAL=visible")).toBe(
-      "TOKEN=<redacted len=0>\nNORMAL=visible",
-    );
-    const object = '{ TOKEN: undefined, NORMAL: "visible" }';
-    const clean = '{ TOKEN: <redacted len=9>, NORMAL: "visible" }';
-    expect(redactCredentialText(object)).toBe(clean);
-    expect(redactCredentialText(clean)).toBe(clean);
-    const header = "Digest first=synthetic, second=synthetic";
-    expect(redactCredentialText(`Authorization: ${header}`)).toBe(
-      `Authorization: <redacted len=${header.length}>`,
-    );
-    expect(redactCredentialText('- "TOKEN": "first"\n+ "TOKEN": "second"')).toBe(
-      '- "TOKEN": "<redacted len=5>"\n+ "TOKEN": "<redacted len=6>"',
-    );
   });
 
   it("scrubs every error field and nested causes without losing nonsecret diagnostics", () => {

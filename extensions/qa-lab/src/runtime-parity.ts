@@ -198,10 +198,6 @@ type RuntimeParityObservedToolCall = RuntimeParityToolCall & {
   hasResult?: boolean;
 };
 
-type RuntimeParityPendingToolCall = RuntimeParityObservedToolCall & {
-  resolved: boolean;
-};
-
 type RuntimeParityCaptureSources = {
   sessions: Array<{
     transcriptBytes: string;
@@ -278,18 +274,6 @@ function readAssistantUsage(message: Record<string, unknown>): RuntimeParityUsag
   return usage;
 }
 
-function addUsage(target: RuntimeParityUsage, next: RuntimeParityUsage) {
-  target.inputTokens += next.inputTokens;
-  target.outputTokens += next.outputTokens;
-  target.totalTokens += next.totalTokens;
-  if (next.cacheRead !== undefined) {
-    target.cacheRead = (target.cacheRead ?? 0) + next.cacheRead;
-  }
-  if (next.cacheWrite !== undefined) {
-    target.cacheWrite = (target.cacheWrite ?? 0) + next.cacheWrite;
-  }
-}
-
 function extractAssistantText(message: Record<string, unknown>) {
   return extractQaMessageText(
     message,
@@ -355,11 +339,11 @@ function extractToolResults(message: Record<string, unknown>): Array<{
     readNonEmptyString(message.name) ??
     readNonEmptyString(message.tool);
   if ((message.role === "tool" || message.role === "toolResult") && message.content !== undefined) {
-    const contentText = extractAssistantText(message);
     results.push({
       tool: toolName,
       result: message.content,
-      ...(message.isError === true || TOOL_RESULT_ERROR_RE.test(contentText)
+      ...(message.isError === true ||
+      (message.isError !== false && TOOL_RESULT_ERROR_RE.test(extractAssistantText(message)))
         ? { errorClass: "tool-result-error" }
         : {}),
     });
@@ -377,12 +361,7 @@ function extractToolResults(message: Record<string, unknown>): Array<{
       continue;
     }
     const content = block.content ?? block.result ?? block.output ?? block.text ?? null;
-    const contentText =
-      typeof content === "string"
-        ? content
-        : Array.isArray(content)
-          ? JSON.stringify(content)
-          : JSON.stringify(content ?? "");
+    const contentText = typeof content === "string" ? content : JSON.stringify(content ?? "");
     results.push({
       id:
         readNonEmptyString(block.tool_use_id) ??
@@ -393,7 +372,7 @@ function extractToolResults(message: Record<string, unknown>): Array<{
       result: content,
       ...(block.is_error === true ||
       type === "tool_result_error" ||
-      TOOL_RESULT_ERROR_RE.test(contentText)
+      (block.is_error !== false && TOOL_RESULT_ERROR_RE.test(contentText))
         ? { errorClass: "tool-result-error" }
         : {}),
     });
@@ -430,9 +409,13 @@ function classifyToolResultError(params: {
 }
 
 function createToolCallCapture() {
-  const ordered: RuntimeParityPendingToolCall[] = [];
+  const ordered: RuntimeParityObservedToolCall[] = [];
   return {
     ordered,
+    pending(tool?: string) {
+      const index = ordered.findIndex((call) => !call.hasResult && (!tool || call.tool === tool));
+      return index < 0 ? undefined : index;
+    },
     call(tool: string, args: unknown, callId?: string) {
       return (
         ordered.push({
@@ -442,7 +425,6 @@ function createToolCallCapture() {
           callId,
           hasArguments: true,
           hasResult: false,
-          resolved: false,
         }) - 1
       );
     },
@@ -456,14 +438,13 @@ function createToolCallCapture() {
       },
     ) {
       const pending = index === undefined ? undefined : ordered[index];
-      const resolved: RuntimeParityPendingToolCall = {
+      const resolved: RuntimeParityObservedToolCall = {
         tool: result.tool ?? pending?.tool ?? "unknown",
         argsHash: pending?.argsHash ?? parity.stableHash(null),
         resultHash: parity.stableHash(result.value),
         callId: result.callId,
         hasArguments: pending?.hasArguments === true,
         hasResult: true,
-        resolved: true,
         ...(result.errorClass ? { errorClass: result.errorClass } : {}),
       };
       if (index === undefined || !pending) {
@@ -473,12 +454,12 @@ function createToolCallCapture() {
       }
     },
     finish(): RuntimeParityObservedToolCall[] {
-      return ordered.map(({ resolved, ...toolCall }) => {
-        if (!resolved) {
+      for (const toolCall of ordered) {
+        if (!toolCall.hasResult) {
           toolCall.errorClass ??= TOOL_RESULT_MISSING_ERROR_CLASS;
         }
-        return toolCall;
-      });
+      }
+      return ordered;
     },
   };
 }
@@ -490,18 +471,15 @@ function resolveToolCallOrder(
   const { ordered } = capture;
   const byId = new Map<string, number>();
   const unresolvedByTool = new Map<string, Set<number>>();
-  const unresolvedOrder = new Set<number>();
 
   const enqueueUnresolved = (tool: string, index: number) => {
     const indices = unresolvedByTool.get(tool) ?? new Set<number>();
     indices.add(index);
     unresolvedByTool.set(tool, indices);
-    unresolvedOrder.add(index);
   };
 
   const removeUnresolved = (index: number) => {
     const tool = ordered[index]!.tool;
-    unresolvedOrder.delete(index);
     const toolIndices = unresolvedByTool.get(tool);
     toolIndices?.delete(index);
     if (toolIndices?.size === 0) {
@@ -519,7 +497,7 @@ function resolveToolCallOrder(
         return toolIndices.values().next().value;
       }
     }
-    return unresolvedOrder.values().next().value;
+    return capture.pending();
   };
 
   for (const record of records) {
@@ -560,7 +538,7 @@ function resolveToolCallOrderFromMockRequests(
   const unresolvedOrder: number[] = [];
 
   for (const request of requests) {
-    const rawToolOutput = readNonEmptyString(request.toolOutput) ?? "";
+    const rawToolOutput = request.toolOutput ?? "";
     if (rawToolOutput) {
       const pendingIndex = unresolvedOrder.shift();
       const parsedOutput = parseJsonRecord(rawToolOutput);
@@ -570,7 +548,7 @@ function resolveToolCallOrderFromMockRequests(
       });
     }
 
-    const plannedToolName = readNonEmptyString(request.plannedToolName);
+    const plannedToolName = request.plannedToolName;
     if (!plannedToolName) {
       continue;
     }
@@ -633,13 +611,7 @@ function resolveTrajectoryToolCallOrder(
       }
       return undefined;
     }
-    const toolMatch = ordered.findIndex(
-      (pending) => !pending.resolved && (!tool || pending.tool === tool),
-    );
-    if (toolMatch >= 0) {
-      return toolMatch;
-    }
-    return undefined;
+    return capture.pending(tool);
   };
 
   for (const event of events) {
@@ -877,7 +849,15 @@ function aggregateUsage(records: RuntimeParityTranscriptRecord[]): RuntimeParity
       continue;
     }
     const usage = readAssistantUsage(record.message);
-    addUsage(totals, usage);
+    totals.inputTokens += usage.inputTokens;
+    totals.outputTokens += usage.outputTokens;
+    totals.totalTokens += usage.totalTokens;
+    if (usage.cacheRead !== undefined) {
+      totals.cacheRead = (totals.cacheRead ?? 0) + usage.cacheRead;
+    }
+    if (usage.cacheWrite !== undefined) {
+      totals.cacheWrite = (totals.cacheWrite ?? 0) + usage.cacheWrite;
+    }
   }
   return totals;
 }
@@ -921,10 +901,10 @@ function resolveRuntimeParityToolCalls(params: {
   transcriptToolCalls: RuntimeParityToolCall[];
   terminalImageResultProven?: boolean;
 }): RuntimeParityToolCall[] {
-  let selected = params.transcriptToolCalls;
+  const selected = params.transcriptToolCalls;
   const imageCalls = selected.filter((toolCall) => toolCall.tool === "image_generate");
   if (params.terminalImageResultProven && imageCalls.length === 1) {
-    selected = selected.map((toolCall) => {
+    return selected.map((toolCall) => {
       if (
         toolCall.tool !== "image_generate" ||
         (toolCall.errorClass !== undefined &&
@@ -944,8 +924,7 @@ function resolveRuntimeParityToolCalls(params: {
 
 function filterMockRequestsForParentPrompt(
   requests: RuntimeParityMockRequestSnapshot[],
-  parentPrompt: string,
-  parentPrompts: readonly string[] = [parentPrompt],
+  parentPrompts: readonly string[],
 ) {
   const normalizedParentPrompts = parentPrompts
     .map(parity.normalizeTextForParity)
@@ -1061,48 +1040,11 @@ function classifyRuntimeParityCells(params: {
     };
   }
 
-  const toolCallShapeDetails = parity.compareToolCallShape(
-    params.openclaw.toolCalls,
-    params.codex.toolCalls,
-  );
-  if (toolCallShapeDetails) {
-    return { drift: "tool-call-shape", driftDetails: toolCallShapeDetails };
-  }
-
-  const toolResultShapeDetails = parity.compareToolResultShape(
-    params.openclaw.toolCalls,
-    params.codex.toolCalls,
-    "tool-result-error",
-  );
-  if (toolResultShapeDetails) {
-    return { drift: "tool-result-shape", driftDetails: toolResultShapeDetails };
-  }
-
-  const openclawTranscriptLines = params.openclaw.transcriptBytes.trim().length
-    ? params.openclaw.transcriptBytes.trim().split(/\r?\n/u).length
-    : 0;
-  const codexTranscriptLines = params.codex.transcriptBytes.trim().length
-    ? params.codex.transcriptBytes.trim().split(/\r?\n/u).length
-    : 0;
-  if (
-    openclawTranscriptLines !== codexTranscriptLines ||
-    (!params.openclaw.finalText && Boolean(params.codex.finalText)) ||
-    (Boolean(params.openclaw.finalText) && !params.codex.finalText)
-  ) {
-    return {
-      drift: "structural",
-      driftDetails: `transcript/final-text structure differs (${openclawTranscriptLines} lines vs ${codexTranscriptLines})`,
-    };
-  }
-
-  if (
-    parity.normalizeTextForParity(params.openclaw.finalText) ===
-    parity.normalizeTextForParity(params.codex.finalText)
-  ) {
-    return { drift: "none" };
-  }
-
-  return { drift: "text-only", driftDetails: "final text differs after whitespace normalization" };
+  return parity.compareParityBehavior({
+    left: params.openclaw,
+    right: params.codex,
+    allowedSharedErrorClass: "tool-result-error",
+  });
 }
 
 function isRuntimeParityRootSession(entry: SessionEntry) {
@@ -1116,10 +1058,6 @@ function isRuntimeParityRootSession(entry: SessionEntry) {
     return false;
   }
   return true;
-}
-
-function runtimeParitySessionEnv(stateDir: string): NodeJS.ProcessEnv {
-  return { ...process.env, OPENCLAW_STATE_DIR: stateDir };
 }
 
 async function readRuntimeParitySessionEntries(params: {
@@ -1157,8 +1095,7 @@ async function loadRuntimeParityCaptureSources(params: {
   agentId: string;
   preferredSessionKeys?: readonly string[];
 }): Promise<RuntimeParityCaptureSources> {
-  const stateDir = `${params.gateway.tempRoot}/state`;
-  const env = runtimeParitySessionEnv(stateDir);
+  const env = { ...process.env, OPENCLAW_STATE_DIR: `${params.gateway.tempRoot}/state` };
   const storePath = resolveStorePath(undefined, { agentId: params.agentId, env });
   const sessionEntries = await readRuntimeParitySessionEntries({
     gateway: params.gateway,
@@ -1237,8 +1174,7 @@ function runtimeParitySessionKeysFromScenarioResult(result: QaSuiteScenarioLike)
 
 async function loadRuntimeParityMockToolCalls(
   mockBaseUrl: string | undefined,
-  parentPrompt: string,
-  parentPrompts: readonly string[] = [parentPrompt],
+  parentPrompts: readonly string[],
 ): Promise<RuntimeParityToolCall[] | null> {
   const normalizedBaseUrl = mockBaseUrl?.trim().replace(/\/+$/u, "");
   if (!normalizedBaseUrl) {
@@ -1264,7 +1200,7 @@ async function loadRuntimeParityMockToolCalls(
         toolOutput: readNonEmptyString(entry.toolOutput) ?? "",
       }));
     return resolveToolCallOrderFromMockRequests(
-      filterMockRequestsForParentPrompt(requests, parentPrompt, parentPrompts),
+      filterMockRequestsForParentPrompt(requests, parentPrompts),
     );
   } catch {
     return null;
@@ -1295,12 +1231,7 @@ export async function captureRuntimeParityCell(
     .filter((record) => record.role === "user")
     .map((record) => extractAssistantText(record.message))
     .filter((prompt) => prompt.length > 0);
-  const parentPrompt = parentPrompts[0] ?? "";
-  const mockToolCalls = await loadRuntimeParityMockToolCalls(
-    params.mockBaseUrl,
-    parentPrompt,
-    parentPrompts,
-  );
+  const mockToolCalls = await loadRuntimeParityMockToolCalls(params.mockBaseUrl, parentPrompts);
   const gatewayLogs = params.gateway.logs?.();
   const sentinelFindings = [
     ...scanGatewayLogSentinels(gatewayLogs),

@@ -103,8 +103,7 @@ export async function handleArtifactDownloadHttpRequest(
       assertCurrent();
     }
   } catch {
-    respondNotFound(res);
-    return true;
+    prepared = undefined;
   }
   if (!prepared) {
     respondNotFound(res);

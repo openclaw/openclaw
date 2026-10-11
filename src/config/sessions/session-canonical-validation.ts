@@ -4,8 +4,6 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
-  prepareSqliteQuerySync,
-  prepareSqliteQueryTakeFirstSync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
@@ -85,10 +83,10 @@ export function readPendingCanonicalSessionValidationBatch(
   ) {
     throw new Error("Canonical validation batch limits must be positive safe integers");
   }
-  if (!hasCanonicalSessionValidationProjection(database)) {
-    return { mainKey: "main", rows: [], absentKeys: [], hasMore: false, oversizedRows: 0 };
-  }
   return runSqliteDeferredTransactionSync(database.db, () => {
+    if (!hasCanonicalSessionValidationProjection(database)) {
+      return { mainKey: "main", rows: [], absentKeys: [], hasMore: false, oversizedRows: 0 };
+    }
     const mainKey = readCanonicalSessionMainKey(database);
     const db = getNodeSqliteKysely<PendingDatabase>(database.db);
     const candidates = executeSqliteQuerySync(
@@ -220,71 +218,4 @@ export function compareAndCertifyCanonicalSessionValidationBatch(
       .where("session_key", "in", sqliteStringSet(certifiedKeys)),
   );
   return Number(result.numAffectedRows ?? 0n);
-}
-
-function prepareCanonicalWriterQueries(database: ValidationDatabase) {
-  const db = getNodeSqliteKysely<PendingDatabase>(database.db);
-  return {
-    pending: prepareSqliteQueryTakeFirstSync<string, { session_key: string }>(
-      database.db,
-      (parameter) =>
-        db
-          .selectFrom("session_canonical_validation_pending")
-          .select("session_key")
-          .where(
-            "session_key",
-            "=",
-            parameter((key) => key),
-          ),
-    ),
-    row: prepareSqliteQueryTakeFirstSync<string, CanonicalSessionValidationRow>(
-      database.db,
-      (parameter) =>
-        canonicalSessionValidationQuery(database).where(
-          "session_nodes.session_key",
-          "=",
-          parameter((key) => key),
-        ),
-    ),
-    certify: prepareSqliteQuerySync<string>(database.db, (parameter) =>
-      db.deleteFrom("session_canonical_validation_pending").where(
-        "session_key",
-        "=",
-        parameter((key) => key),
-      ),
-    ),
-  };
-}
-
-// Retain compiled shapes only; fresh bindings and native statement lifecycle stay with the executor.
-const canonicalWriterQueries = new WeakMap<
-  DatabaseSync,
-  ReturnType<typeof prepareCanonicalWriterQueries>
->();
-
-/** Canonical writers certify their final row within their existing transaction. */
-export function certifyCanonicalSessionValidationRow(
-  database: ValidationDatabase,
-  sessionKey: string,
-): void {
-  // Low-level autocommit callers leave invalidation work for the readiness owner.
-  if (!database.db.isTransaction || !hasCanonicalSessionValidationProjection(database)) {
-    return;
-  }
-  let queries = canonicalWriterQueries.get(database.db);
-  if (!queries) {
-    queries = prepareCanonicalWriterQueries(database);
-    canonicalWriterQueries.set(database.db, queries);
-  }
-  const pending = queries.pending(sessionKey);
-  if (!pending) {
-    return;
-  }
-  // Validate stored metadata after native TEXT binding; saved prompts are not canonical inputs.
-  const row = queries.row(pending.session_key);
-  if (row) {
-    validateCanonicalSessionRow(row);
-  }
-  // The row was just reread and validated without yielding under the same reservation.
-  queries.certify(pending.session_key);
 }

@@ -2,7 +2,13 @@ import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import { createRestartRecoveryOperatorSource } from "../../agents/operator-run-recovery-source.js";
 import { normalizeMessageClientSources } from "../../chat/message-client-source.js";
+import { bindUserTurnInputActor } from "../../config/sessions/session-input-actor.js";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import {
@@ -13,6 +19,7 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import type { UserTurnOriginalInputCommit } from "../../sessions/user-turn-transcript.types.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
+import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
 import type { MentionInbox } from "../mention-inbox.types.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { formatForLog } from "../ws-log.js";
@@ -24,6 +31,7 @@ import {
 } from "./chat-send-reply-context.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
+import type { createChatSendGoalCommitGuard } from "./chat-send-work-admission.js";
 import { gatewayClientSenderFields } from "./gateway-client-identity.js";
 import type { GatewayClient } from "./shared-types.js";
 
@@ -42,6 +50,7 @@ type GatewayChatUserTurnController = {
 
 export function createGatewayChatUserTurnController(params: {
   admission: AdmittedChatSend;
+  isDirectExternalUser?: boolean;
   client: GatewayClient | null;
   request: NormalizedChatSendRequest;
   session: PreparedChatSendSession;
@@ -49,8 +58,8 @@ export function createGatewayChatUserTurnController(params: {
   startedAt: number;
   warn: (message: string) => void;
   mentionInbox?: MentionInbox;
-  assertGoalCurrent?: () => void;
-  assertOriginalInputCommit?: () => void;
+  goalCommitGuard?: ReturnType<typeof createChatSendGoalCommitGuard>;
+  assertOriginalInputCommit?: SessionSourceAssertion;
 }): GatewayChatUserTurnController {
   const { admission, request, session } = params;
   const sender =
@@ -78,7 +87,11 @@ export function createGatewayChatUserTurnController(params: {
     ...(sender ? { sender } : {}),
     ...(sourceClients.length ? { transport: { clients: sourceClients } } : {}),
     ...(hasGatewayAdminScope(params.client) ? { senderIsOwner: true } : {}),
-    ...(request.systemInputProvenance ? { provenance: request.systemInputProvenance } : {}),
+    ...(request.systemInputProvenance
+      ? { provenance: request.systemInputProvenance }
+      : admission.restartSafeAdmission && params.isDirectExternalUser
+        ? { provenance: { kind: "external_user" } as const }
+        : {}),
   };
   const replyContextFieldsPromise = request.p.replyToId
     ? resolveChatSendReplyContext({
@@ -106,6 +119,9 @@ export function createGatewayChatUserTurnController(params: {
       }))
     : Promise.resolve(baseInput);
   let contextFreeCommand = false;
+  let mentionCommit: Promise<void> | undefined;
+  const onPersistenceError = (error: unknown) =>
+    params.warn(`gateway user transcript persistence failed: ${formatForLog(error)}`);
   const recorder: UserTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
     ...(sender?.id && !request.goalOperation
       ? {
@@ -130,7 +146,7 @@ export function createGatewayChatUserTurnController(params: {
             kind: "goal",
             operation: request.goalOperation,
             runId: session.clientRunId,
-            assertCurrent: params.assertGoalCurrent,
+            ...params.goalCommitGuard,
           },
         }
       : {}),
@@ -156,32 +172,43 @@ export function createGatewayChatUserTurnController(params: {
           admission: admission.restartSafeAdmission,
           clientRunId: session.clientRunId,
           startedAt: params.startedAt,
+          sourceIngress: isBrowserOperatorUiClient(request.clientInfo) ? "control-ui" : "internal",
+          operatorSource: admission.restartSafeAdmission.retryExpectedState
+            ? undefined
+            : createRestartRecoveryOperatorSource({
+                authority: admission.operatorAuthority,
+                entry: admission.admittedSessionEntry ?? admission.initialSessionEntry!,
+                agentId: session.agentId,
+                sessionKey: session.sessionKey,
+                sourceRunId: session.clientRunId,
+                inputProvenance: request.systemInputProvenance,
+              }),
         })
       : {}),
     errorContext: "gateway chat user turn transcript",
-    assertOriginalInputCommit: params.assertOriginalInputCommit,
+    assertOriginalInputCommit: composeSessionSourceAssertion([
+      params.assertOriginalInputCommit,
+      admission.operatorAuthority?.assertCurrent,
+    ]),
     beforeMessageWrite: (event) => {
-      const originalInput = event.message.idempotencyKey === sourceId;
       const next = runAgentHarnessBeforeMessageWriteHook(event);
-      // This hook runs inside the synchronous writer after durable replay lookup.
-      // Fence only fresh original input, never accepted custody or terminal notices.
-      if (originalInput && next?.role === "user") {
-        recorder.assertOriginalInputCommit?.();
-        if (contextFreeCommand) {
-          return {
-            ...next,
-            excludeFromContext: true,
-            __openclaw: {
-              ...asOptionalRecord(Reflect.get(next, "__openclaw")),
-              contextFreeCommand: true,
-            },
-          };
-        }
+      if (
+        event.message.idempotencyKey === sourceId &&
+        next?.role === "user" &&
+        contextFreeCommand
+      ) {
+        return {
+          ...next,
+          excludeFromContext: true,
+          __openclaw: {
+            ...asOptionalRecord(Reflect.get(next, "__openclaw")),
+            contextFreeCommand: true,
+          },
+        };
       }
       return next;
     },
-    onPersistenceError: (error) =>
-      params.warn(`gateway user transcript persistence failed: ${formatForLog(error)}`),
+    onPersistenceError,
     ...(selectedMentions && senderProfileId && mentionInbox
       ? {
           onOriginalInputCommitted: ({ message, anchor }: UserTurnOriginalInputCommit) => {
@@ -211,7 +238,7 @@ export function createGatewayChatUserTurnController(params: {
               );
               return;
             }
-            mentionInbox.recordCommittedInput({
+            mentionCommit = mentionInbox.recordCommittedInputAsync({
               sourceId,
               committedSource: {
                 generation: anchor.generation,
@@ -226,15 +253,17 @@ export function createGatewayChatUserTurnController(params: {
               recipientProfileIds: retained.map((mention) => mention.profileId),
               excerpt: redactSensitiveText(text),
             });
+            void mentionCommit.catch(onPersistenceError);
           },
         }
       : {}),
   });
+  bindUserTurnInputActor(recorder, { phase: "acceptInput", acquire: admission.acquireInputActor });
   const persist: GatewayChatUserTurnController["persist"] = async (options) => {
     if (options?.contextFreeCommand === true && !recorder.hasPersisted()) {
       contextFreeCommand = true;
     }
-    return await measureDiagnosticsTimelineSpan(
+    const persisted = await measureDiagnosticsTimelineSpan(
       "gateway.chat_send.persist_user_transcript",
       () => recorder.persistFallback(),
       {
@@ -243,6 +272,8 @@ export function createGatewayChatUserTurnController(params: {
         attributes: admission.chatSendTraceAttributes,
       },
     );
+    await mentionCommit;
+    return persisted;
   };
   return {
     baseInput,

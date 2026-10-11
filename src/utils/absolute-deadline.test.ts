@@ -1,12 +1,30 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "./absolute-deadline.js";
+import {
+  ABSOLUTE_DEADLINE_EXPIRED,
+  awaitWithinDeadline,
+  scheduleAbsoluteDeadline,
+} from "./absolute-deadline.js";
 
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(0);
 });
 afterEach(() => vi.useRealTimers());
+
+it("re-arms a 30-day deadline after the maximum Node timer delay", async () => {
+  const deadline = 30 * 24 * 60 * 60_000;
+  const expired = vi.fn();
+  scheduleAbsoluteDeadline(deadline, expired);
+
+  await vi.advanceTimersByTimeAsync(2_147_483_647);
+  expect(expired).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(deadline - 2_147_483_647 - 1);
+  expect(expired).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(expired).toHaveBeenCalledOnce();
+  expect(vi.getTimerCount()).toBe(0);
+});
 
 it.each([
   [59.5, "in time"],

@@ -42,6 +42,13 @@ export async function inspectCronJobOwnersForDoctor(scope: DoctorCronScope, stor
   );
 }
 
+export function resolveStoredCronJobOwner(job: Record<string, unknown> | undefined) {
+  return tryResolveCronJobEffectiveAgentId({
+    agentId: normalizeOptionalString(job?.agentId),
+    sessionKey: normalizeOptionalString(job?.sessionKey),
+  });
+}
+
 /** Pins only ownerless definitions, retaining every other authored and runtime field. */
 export async function repairLegacyCronJobOwnersForDoctor(
   scope: DoctorCronScope,
@@ -56,12 +63,7 @@ export async function repairLegacyCronJobOwnersForDoctor(
   const changes: Array<{ jobId: string; agentId: string; definition: string }> = [];
   for (const row of rows) {
     const job = safeParseJsonRecord(row.job_json);
-    if (
-      tryResolveCronJobEffectiveAgentId({
-        agentId: normalizeOptionalString(job?.agentId),
-        sessionKey: normalizeOptionalString(job?.sessionKey),
-      })
-    ) {
+    if (resolveStoredCronJobOwner(job)) {
       continue;
     }
     if (!job) {
@@ -160,15 +162,14 @@ export async function repairCronJobsForDoctor(
     seen.add(key);
   }
   const expected = definitionEvidence(inventory.jobs);
-  const assertRowsUnchanged = (db: DatabaseSync) => {
-    if (!isDeepStrictEqual(definitionEvidence(inspectCronRowsForDoctor(db)), expected)) {
-      throw new Error(
-        "Cron definitions changed during Doctor repair; inspect again before retrying.",
-      );
-    }
-  };
   const backupPath = await commitCronDoctorRepair(scope, authority, {
-    assertRowsUnchanged,
+    assertRowsUnchanged(db) {
+      if (!isDeepStrictEqual(definitionEvidence(inspectCronRowsForDoctor(db)), expected)) {
+        throw new Error(
+          "Cron definitions changed during Doctor repair; inspect again before retrying.",
+        );
+      }
+    },
     write(db) {
       for (const { job, definition } of changes) {
         if (!definition) {

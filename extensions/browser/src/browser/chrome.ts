@@ -1,9 +1,3 @@
-/**
- * OpenClaw-managed Chrome lifecycle and CDP helpers.
- *
- * Builds launch args, starts/stops managed Chrome, probes CDP readiness, and
- * resolves WebSocket endpoints for browser control.
- */
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
@@ -42,11 +36,11 @@ import {
   isDirectCdpWebSocketEndpoint,
   isWebSocketUrl,
   normalizeCdpHttpBaseForJsonEndpoints,
+  resolveCdpWebSocketDiscovery,
   scopeCdpPolicyToConfiguredEndpoint,
   withCdpSocket,
   type CdpEndpointPin,
 } from "./cdp.helpers.js";
-import { normalizeCdpWsUrl } from "./cdp.js";
 import {
   type ChromeCdpDiagnostic,
   diagnoseChromeCdp,
@@ -74,10 +68,7 @@ import {
   type ResolvedBrowserConfig,
   type ResolvedBrowserProfile,
 } from "./config.js";
-import {
-  DEFAULT_OPENCLAW_BROWSER_COLOR,
-  DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
-} from "./constants.js";
+import { DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME } from "./constants.js";
 import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "./errors.js";
 import { ensureOutputDirectory } from "./output-directories.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
@@ -101,43 +92,35 @@ const CHROME_HTTP_DISCOVERY_FAILURE_CODES = new Set([
   "invalid_json",
 ]);
 const TCP_LISTEN_STATE_HEX = "0A";
-
-function diagnosticShowsChromeHttpDiscovery(diagnostic: ChromeCdpDiagnostic | null): boolean {
-  if (!diagnostic) {
-    return false;
-  }
-  if (diagnostic.ok) {
-    return true;
-  }
-  return !CHROME_HTTP_DISCOVERY_FAILURE_CODES.has(diagnostic.code);
-}
+const CHROME_EXECUTABLE_FAMILIES = {
+  chrome: /\b(google chrome|google-chrome|chrome|chromium)\b/i,
+  chromium: /\b(chromium|chromium-browser)\b/i,
+  brave: /\b(brave browser|brave-browser|brave)\b/i,
+  edge: /\b(microsoft edge|microsoft-edge|msedge)\b/i,
+};
 
 type ChromeLaunchStderrSignals = {
   singletonInUse: boolean;
   missingDisplay: boolean;
 };
 
-function createChromeLaunchStderrDiagnostics(maxBytes: number) {
-  const tail = createBoundedUtf8Tail(maxBytes);
+function createChromeLaunchStderrDiagnostics() {
+  const tail = createBoundedUtf8Tail(CHROME_LAUNCH_STDERR_TAIL_MAX_BYTES);
   const signals: ChromeLaunchStderrSignals = {
     singletonInUse: false,
     missingDisplay: false,
   };
   let markerScanTail = "";
 
-  const updateSignals = (chunkText: string) => {
-    const scanText = `${markerScanTail}${chunkText}`;
-    signals.singletonInUse ||= CHROME_SINGLETON_IN_USE_PATTERN.test(scanText);
-    signals.missingDisplay ||= CHROME_MISSING_DISPLAY_PATTERN.test(scanText);
-    markerScanTail = scanText.slice(-CHROME_STDERR_MARKER_SCAN_TAIL_CHARS);
-  };
-
   return {
     append(chunk: Buffer | string) {
       tail.append(chunk);
       const chunkText = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk;
       if (chunkText.length > 0) {
-        updateSignals(chunkText);
+        const scanText = `${markerScanTail}${chunkText}`;
+        signals.singletonInUse ||= CHROME_SINGLETON_IN_USE_PATTERN.test(scanText);
+        signals.missingDisplay ||= CHROME_MISSING_DISPLAY_PATTERN.test(scanText);
+        markerScanTail = scanText.slice(-CHROME_STDERR_MARKER_SCAN_TAIL_CHARS);
       }
     },
     toString() {
@@ -248,19 +231,10 @@ function isChromeExecutableFamilyMatch(commandText: string, exe: BrowserExecutab
   ) {
     return true;
   }
-  if (exe.kind === "chrome" || exe.kind === "canary") {
-    return /\b(google chrome|google-chrome|chrome|chromium)\b/i.test(commandText);
-  }
-  if (exe.kind === "chromium") {
-    return /\b(chromium|chromium-browser)\b/i.test(commandText);
-  }
-  if (exe.kind === "brave") {
-    return /\b(brave browser|brave-browser|brave)\b/i.test(commandText);
-  }
-  if (exe.kind === "edge") {
-    return /\b(microsoft edge|microsoft-edge|msedge)\b/i.test(commandText);
-  }
-  return false;
+  return (
+    exe.kind !== "custom" &&
+    CHROME_EXECUTABLE_FAMILIES[exe.kind === "canary" ? "chrome" : exe.kind].test(commandText)
+  );
 }
 
 function processCommandHasFlag(
@@ -428,9 +402,9 @@ function isPortInUseError(err: unknown): boolean {
   );
 }
 
-function readCurrentHostSingletonPid(userDataDir: string, hostname = os.hostname()): number | null {
+function readCurrentHostSingletonPid(userDataDir: string): number | null {
   const lock = readSingletonLockTarget(userDataDir);
-  if (lock.status !== "owner" || lock.hostname !== hostname || !isPidAlive(lock.pid)) {
+  if (lock.status !== "owner" || lock.hostname !== os.hostname() || !isPidAlive(lock.pid)) {
     return null;
   }
   return lock.pid;
@@ -446,10 +420,17 @@ function clearChromeSingletonArtifacts(userDataDir: string) {
   }
 }
 
-/** Remove stale Chrome singleton lock files from a user-data-dir. */
-function clearStaleChromeSingletonLocks(userDataDir: string, hostname = os.hostname()): boolean {
+function clearStaleChromeSingletonLocks(
+  userDataDir: string,
+  expectedOwner?: { pid: number; hostname: string },
+): boolean {
   const lock = readSingletonLockTarget(userDataDir);
-  if (lock.status !== "owner" || lock.hostname !== hostname || isPidAlive(lock.pid)) {
+  if (
+    lock.status !== "owner" ||
+    lock.hostname !== (expectedOwner?.hostname ?? os.hostname()) ||
+    (expectedOwner && lock.pid !== expectedOwner.pid) ||
+    isPidAlive(lock.pid)
+  ) {
     return false;
   }
 
@@ -556,24 +537,6 @@ async function terminateOwnedStaleChromeProcess(
   return false;
 }
 
-function clearRecoveredChromeSingletonArtifacts(
-  userDataDir: string,
-  pid: number,
-  hostname = os.hostname(),
-): boolean {
-  const lock = readSingletonLockTarget(userDataDir);
-  if (
-    lock.status !== "owner" ||
-    lock.hostname !== hostname ||
-    lock.pid !== pid ||
-    isPidAlive(pid)
-  ) {
-    return false;
-  }
-  clearChromeSingletonArtifacts(userDataDir);
-  return true;
-}
-
 async function recoverOwnedStaleManagedChromeCdpListener(params: {
   exe: BrowserExecutable;
   profile: ResolvedBrowserProfile;
@@ -624,7 +587,7 @@ async function recoverOwnedStaleManagedChromeCdpListener(params: {
   ) {
     return false;
   }
-  if (!clearRecoveredChromeSingletonArtifacts(params.userDataDir, pid)) {
+  if (!clearStaleChromeSingletonLocks(params.userDataDir, { pid, hostname: os.hostname() })) {
     return false;
   }
   log.warn(
@@ -702,7 +665,6 @@ function chromeLaunchHints(params: {
   return hints.length > 0 ? `\nHint: ${hints.join("\nHint: ")}` : "";
 }
 
-/** Running managed Chrome process and resolved control metadata. */
 export type RunningChrome = {
   pid: number;
   exe: BrowserExecutable;
@@ -738,12 +700,10 @@ function resolveBrowserExecutable(
   );
 }
 
-/** Resolve the user-data-dir path for a managed OpenClaw Chrome profile. */
 export function resolveOpenClawUserDataDir(profileName = DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME) {
   return path.join(CONFIG_DIR, "browser", profileName, "user-data");
 }
 
-/** Build Chrome launch arguments for the managed OpenClaw browser. */
 function buildOpenClawChromeLaunchArgs(params: {
   resolved: ResolvedBrowserConfig;
   profile: ResolvedBrowserProfile;
@@ -820,7 +780,6 @@ async function canOpenWebSocket(
   }
 }
 
-/** Return true when a Chrome CDP endpoint is reachable over HTTP. */
 export async function isChromeReachable(
   cdpUrl: string,
   timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
@@ -871,7 +830,6 @@ async function fetchChromeVersion(
   }
 }
 
-/** Resolve a usable Chrome DevTools WebSocket endpoint from a CDP endpoint. */
 export async function getChromeWebSocketEndpoint(
   cdpUrl: string,
   timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
@@ -882,40 +840,26 @@ export async function getChromeWebSocketEndpoint(
   const configuredPin = await assertCdpEndpointAllowed(cdpUrl, ssrfPolicy);
   signal?.throwIfAborted();
   const cdpControlPolicy = scopeCdpPolicyToConfiguredEndpoint(cdpUrl, ssrfPolicy);
-  if (isDirectCdpWebSocketEndpoint(cdpUrl)) {
-    // Handshake-ready direct WebSocket endpoint — the cdpUrl is already
-    // the WebSocket URL.
-    return { url: cdpUrl, lookup: configuredPin?.lookup };
-  }
-  // Either an http(s) endpoint or a bare ws/wss root; discover the
-  // actual WebSocket URL via /json/version. Normalise the scheme so
-  // fetch() can reach the endpoint.
-  const discoveryUrl = isWebSocketUrl(cdpUrl)
-    ? normalizeCdpHttpBaseForJsonEndpoints(cdpUrl)
-    : cdpUrl;
-  const version = await fetchChromeVersion(discoveryUrl, timeoutMs, cdpControlPolicy, signal);
-  const wsUrl = normalizeOptionalString(version?.webSocketDebuggerUrl) ?? "";
-  if (!wsUrl) {
-    // /json/version unavailable or returned no WebSocket URL. For bare
-    // ws/wss inputs, the URL itself may be a direct WebSocket endpoint
-    // (e.g. Browserless/Browserbase-style providers without /json/version).
-    // The SSRF check on cdpUrl was already performed at the start of this
-    // function, so we can return it directly.
-    if (isWebSocketUrl(cdpUrl)) {
-      return { url: cdpUrl, lookup: configuredPin?.lookup };
-    }
+  const endpoint = await resolveCdpWebSocketDiscovery(cdpUrl, async (discoveryUrl) =>
+    normalizeOptionalString(
+      (await fetchChromeVersion(discoveryUrl, timeoutMs, cdpControlPolicy, signal))
+        ?.webSocketDebuggerUrl,
+    ),
+  );
+  if (!endpoint) {
     return null;
   }
-  const normalizedWsUrl = normalizeCdpWsUrl(wsUrl, discoveryUrl);
-  const discoveredPin = await assertCdpEndpointAllowed(normalizedWsUrl, cdpControlPolicy, {
+  if (!endpoint.discovered) {
+    return { url: endpoint.url, lookup: configuredPin?.lookup };
+  }
+  const discoveredPin = await assertCdpEndpointAllowed(endpoint.url, cdpControlPolicy, {
     source: "discovered",
     configuredUrl: cdpUrl,
   });
   signal?.throwIfAborted();
-  return { url: normalizedWsUrl, lookup: discoveredPin?.lookup };
+  return { url: endpoint.url, lookup: discoveredPin?.lookup };
 }
 
-/** Return true when a Chrome CDP endpoint has a healthy WebSocket command path. */
 export async function isChromeCdpReady(
   cdpUrl: string,
   timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
@@ -955,7 +899,6 @@ async function waitForManagedLaunchPoll(delayMs: number, signal?: AbortSignal): 
   }
 }
 
-/** Launch or attach to the managed OpenClaw Chrome profile. */
 export async function launchOpenClawChrome(
   resolved: ResolvedBrowserConfig,
   profile: ResolvedBrowserProfile,
@@ -1035,7 +978,7 @@ export async function launchOpenClawChrome(
   const needsDecorate = !isProfileDecorated(
     userDataDir,
     profile.name,
-    (profile.color ?? DEFAULT_OPENCLAW_BROWSER_COLOR).toUpperCase(),
+    profile.color.toUpperCase(),
     DEFAULT_DOWNLOAD_DIR,
   );
 
@@ -1087,30 +1030,23 @@ export async function launchOpenClawChrome(
     if (onStderr) {
       proc.stderr?.on("data", onStderr);
     }
-    if (proc.pid == null) {
-      try {
+    const releaseAbort = () => signal?.removeEventListener("abort", onAbort);
+    try {
+      if (proc.pid == null) {
         await once(proc, "spawn");
-      } catch (err) {
-        signal?.removeEventListener("abort", onAbort);
-        if (onStderr) {
-          proc.stderr?.off("data", onStderr);
-        }
-        throw err;
       }
-    }
-    const pid = proc.pid;
-    if (pid == null) {
-      signal?.removeEventListener("abort", onAbort);
+      const pid = proc.pid;
+      if (pid == null) {
+        throw new Error("Managed Chrome process spawned without a pid.");
+      }
+      return { pid, proc, releaseAbort };
+    } catch (err) {
+      releaseAbort();
       if (onStderr) {
         proc.stderr?.off("data", onStderr);
       }
-      throw new Error("Managed Chrome process spawned without a pid.");
+      throw err;
     }
-    return {
-      pid,
-      proc,
-      releaseAbort: () => signal?.removeEventListener("abort", onAbort),
-    };
   };
 
   const runningForProcess = (proc: ChildProcess, pid: number): RunningChrome => ({
@@ -1189,9 +1125,7 @@ export async function launchOpenClawChrome(
   const launchOnceAndWait = async (allowSingletonRecovery: boolean): Promise<RunningChrome> => {
     // Keep a bounded stderr tail for diagnostics in case Chrome fails to start.
     // Attach before awaiting spawn so immediate diagnostics cannot be lost.
-    const stderrDiagnostics = createChromeLaunchStderrDiagnostics(
-      CHROME_LAUNCH_STDERR_TAIL_MAX_BYTES,
-    );
+    const stderrDiagnostics = createChromeLaunchStderrDiagnostics();
     const onStderr = (chunk: Buffer | string) => {
       stderrDiagnostics.append(chunk);
     };
@@ -1239,7 +1173,10 @@ export async function launchOpenClawChrome(
           diagnosticErrorText = `CDP diagnostic failed: ${safeChromeCdpErrorMessage(err)}.`;
         }
         signal?.throwIfAborted();
-        if (diagnosticShowsChromeHttpDiscovery(finalDiagnostic)) {
+        if (
+          finalDiagnostic &&
+          (finalDiagnostic.ok || !CHROME_HTTP_DISCOVERY_FAILURE_CODES.has(finalDiagnostic.code))
+        ) {
           launchHttpReachable = true;
         }
         const diagnosticText = finalDiagnostic
@@ -1561,7 +1498,7 @@ export async function stopOwnedOpenClawChrome(
   ) {
     return { status: "unverified", reason: "The Chromium profile owner changed or did not stop" };
   }
-  clearRecoveredChromeSingletonArtifacts(userDataDir, pid, lock.hostname);
+  clearStaleChromeSingletonLocks(userDataDir, { pid, hostname: lock.hostname });
   const remaining = readSingletonLockTarget(userDataDir);
   const remainingReason = unverifiedSingletonLockReason(remaining);
   if (remainingReason) {
@@ -1573,7 +1510,6 @@ export async function stopOwnedOpenClawChrome(
   return { status: "stopped" };
 }
 
-/** Stop a managed Chrome process and wait for shutdown. */
 export async function stopOpenClawChrome(
   running: RunningChrome,
   timeoutMs = CHROME_STOP_TIMEOUT_MS,

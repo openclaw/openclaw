@@ -12,13 +12,10 @@ import { ssrfPolicyFromDangerouslyAllowPrivateNetwork } from "./urbit/context.js
 export type ClientConfig = {
   shipUrl: string;
   shipName: string;
-  verbose: boolean;
   getCode: () => Promise<string>;
   dangerouslyAllowPrivateNetwork?: boolean;
   assertDirectAdapterHandoff?: () => void;
 };
-
-type StorageService = "presigned-url" | "credentials";
 
 type StorageConfiguration = {
   buckets: string[];
@@ -26,7 +23,7 @@ type StorageConfiguration = {
   region: string;
   publicUrlBase: string;
   presignedUrl: string;
-  service: StorageService;
+  service: "presigned-url" | "credentials";
 };
 
 type StorageCredentials = {
@@ -39,10 +36,6 @@ type UploadFileParams = {
   blob: Blob;
   fileName?: string;
   contentType?: string;
-};
-
-type UploadResult = {
-  url: string;
 };
 
 const MEMEX_BASE_URL = "https://memex.tlon.network";
@@ -98,20 +91,15 @@ function hostnameMatchesDomainBoundary(hostname: string, domain: string): boolea
 }
 
 function isHostedShipUrl(shipUrl: string): boolean {
-  const hostname = extractShipHostname(shipUrl);
-  return hostname !== null && isHostedTlonHostname(hostname);
-}
-
-function extractShipHostname(shipUrl: string): string | null {
   const trimmed = shipUrl.trim();
   if (!trimmed) {
-    return null;
+    return false;
   }
   const normalized = /^[a-zA-Z][\w+.-]*:\/\//.test(trimmed) ? trimmed : `https://${trimmed}`;
   try {
-    return new URL(normalized).hostname;
+    return isHostedTlonHostname(new URL(normalized).hostname);
   } catch {
-    return null;
+    return false;
   }
 }
 
@@ -276,7 +264,7 @@ async function getMemexUploadUrl(params: {
 export async function uploadFile(
   params: UploadFileParams,
   clientConfig: ClientConfig,
-): Promise<UploadResult> {
+): Promise<{ url: string }> {
   const config: ClientConfig = {
     ...clientConfig,
     shipName: clientConfig.shipName.replace(/^~/, ""),

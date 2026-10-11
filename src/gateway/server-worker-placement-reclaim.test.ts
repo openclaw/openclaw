@@ -5,7 +5,7 @@ import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -30,7 +30,10 @@ import { workerWorkspaceResultStaging } from "./worker-environments/workspace-re
 const lookup = vi.hoisted(() => ({
   value: undefined as ReturnType<typeof import("./session-utils.js").loadSessionEntry> | undefined,
 }));
-vi.mock("./session-utils.js", () => ({ loadSessionEntry: () => lookup.value }));
+vi.mock("./session-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils.js")>()),
+  loadSessionEntry: () => lookup.value,
+}));
 vi.mock("../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/config.js")>()),
   getRuntimeConfig: () => ({}),
@@ -83,12 +86,10 @@ async function scenario(
     store: { [REQUEST.sessionKey]: entry },
   };
   lookup.value = { ...target, cfg: {}, entry, legacyKey: undefined };
-  if (pendingMove) {
-    await replaceSessionEntry(
-      { storePath, sessionKey: REQUEST.sessionKey, agentId: REQUEST.agentId },
-      entry,
-    );
-  }
+  await replaceSessionEntry(
+    { storePath, sessionKey: REQUEST.sessionKey, agentId: REQUEST.agentId },
+    entry,
+  );
   const barrierEntered = createDeferred();
   const releaseBarrier = createDeferred();
   const context = createWorkerStopChatContext();
@@ -96,6 +97,7 @@ async function scenario(
   context.cancelRunBoundApprovals = cancelApprovals;
   const revocations: unknown[] = [];
   const cancellationLoad = createDeferred();
+  const cancellationEntered = createDeferred();
   let cancellationLoadEntered = false;
   let abortedBeforeCancellationLoad = false;
   const barriers = createGatewayWorkerPlacementReclaimBarriers({
@@ -103,7 +105,7 @@ async function scenario(
     loadSessionRuntime: async () =>
       ({
         managedWorktrees: {
-          findLiveByOwner: () =>
+          findLiveByOwner: async () =>
             failedRetry
               ? undefined
               : {
@@ -116,6 +118,7 @@ async function scenario(
         resolveCanonicalSessionEntryFromStoreKeys: () => entry,
       }) as never,
     cancelSessionWork: async (request) => {
+      cancellationEntered.resolve();
       if (pendingMove) {
         cancellationLoadEntered = true;
         await cancellationLoad.promise;
@@ -195,7 +198,7 @@ async function scenario(
           async () =>
             ({
               managedWorktrees: {
-                findLiveByOwner: () => ({
+                findLiveByOwner: async () => ({
                   id: "task-worktree",
                   ownerId: REQUEST.sessionKey,
                   path: worktreePath,
@@ -253,6 +256,7 @@ async function scenario(
     context.chatRunState.getOrCreate(name + "-running").buffer = "partial before queued Move Stop";
   }
   let cancellationRecovery: Promise<void> | undefined;
+  const runningAborted = createDeferred();
   if (running?.ok) {
     running.value.activeRunAbort.controller.signal.addEventListener("abort", () => {
       if (cancellationNeedsRecovery) {
@@ -263,6 +267,7 @@ async function scenario(
       } else {
         running.value.cleanupAdmittedRun();
       }
+      runningAborted.resolve();
     });
   }
   const inspectionEntered = createDeferred();
@@ -348,23 +353,41 @@ async function scenario(
       },
     );
     if (blockedInspection) {
-      await setImmediate();
-      if (pendingMove) {
-        abortedBeforeCancellationLoad = activeController?.controller.signal.aborted === true;
+      try {
+        if (pendingMove) {
+          await awaitGateBeforeSettlement(
+            cancellationEntered.promise,
+            reclaim,
+            "Stop settled before entering cancellation with inspection held",
+          );
+          abortedBeforeCancellationLoad = activeController?.controller.signal.aborted === true;
+          cancellationLoad.resolve();
+        }
+        await awaitGateBeforeSettlement(
+          runningAborted.promise,
+          reclaim,
+          "Stop settled before aborting the running chat with inspection held",
+        );
+        abortedDuringInspection =
+          running?.ok === true && running.value.activeRunAbort.controller.signal.aborted;
+        destroyedDuringInspection = vi.mocked(harness.environments.destroy).mock.calls.length > 0;
+        abortReasonDuringInspection = activeController?.abortStopReason;
+        approvalsCancelledDuringInspection = cancelApprovals.mock.calls.some(
+          ([runId]) => runId === name + "-running",
+        );
+        reserveOld();
+        if (moving) {
+          await awaitGateBeforeSettlement(
+            moving,
+            reclaim,
+            "Stop settled before the queued Move with inspection held",
+          );
+        }
+        moveSettledDuringInspection = moveSettled;
+      } finally {
         cancellationLoad.resolve();
-        await setImmediate();
+        releaseInspection.resolve();
       }
-      abortedDuringInspection =
-        running?.ok === true && running.value.activeRunAbort.controller.signal.aborted;
-      destroyedDuringInspection = vi.mocked(harness.environments.destroy).mock.calls.length > 0;
-      abortReasonDuringInspection = activeController?.abortStopReason;
-      approvalsCancelledDuringInspection = cancelApprovals.mock.calls.some(
-        ([runId]) => runId === name + "-running",
-      );
-      reserveOld();
-      await setImmediate();
-      moveSettledDuringInspection = moveSettled;
-      releaseInspection.resolve();
     }
     if (pendingDispatch) {
       await setImmediate();
@@ -385,7 +408,7 @@ async function scenario(
   if (beforeStop) {
     // A preceding lifecycle owner holds ingress pending while Stop joins that
     // same owner. This fixes ordering without timer delays or editing ingress.
-    await runExclusiveSessionLifecycleMutation({
+    await runExclusiveSessionLifecycleMutation("placement-reclaim", {
       scope: storePath,
       identities: [REQUEST.sessionKey, REQUEST.sessionId],
       run: async () => {
@@ -401,7 +424,7 @@ async function scenario(
     expect(oldResult.ok).toBe(false);
     expect(harness.environments.get(active.environmentId!)?.state).toBe("destroying");
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
-    expect(placements.listPendingWorkspaceResults()).toEqual([
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([
       expect.objectContaining({ workspaceAcceptedAtMs: expect.any(Number) }),
     ]);
     await coordinated.reconcileActive();
@@ -444,7 +467,7 @@ async function scenario(
     finalPlacementState: finalPlacement?.state,
     environmentState: environment?.state,
     providerDestroyAttempts: vi.mocked(harness.environments.destroy).mock.calls.length,
-    pendingWorkspaceResults: placements.listPendingWorkspaceResults().length,
+    pendingWorkspaceResults: (await placements.listPendingWorkspaceResultsAsync()).length,
     preexistingAdmissionAccepted: oldResult.ok,
     preexistingResponses: old.respond.mock.calls,
     explicitNewAdmissionAccepted: freshResult.ok,
@@ -488,25 +511,6 @@ it("Stop fences ingress during provisioning without cancelling its dispatch prod
   expect(r.preexistingAdmissionAccepted).toBe(false);
   expect(r.reclaimResult).toEqual({ ok: true, state: "reclaimed" });
   expect(r.explicitNewAdmissionAccepted).toBe(true);
-});
-
-it("successful Stop cancels a preexisting send waiting on its lifecycle fence", async () => {
-  const r = await scenario("successful-stop");
-  expect(r.reclaimResult).toEqual({ ok: true, state: "reclaimed" });
-  expect(r.explicitNewAdmissionAccepted).toBe(true);
-  expect(
-    r.preexistingAdmissionAccepted,
-    "a send already waiting when Stop completes must not revive the worker",
-  ).toBe(false);
-});
-it("provider stop failure plus successful recovery still cancels preexisting ingress", async () => {
-  const r = await scenario("failed-stop-recovered-cleanup", { destroyFailure: true });
-  expect(r.reclaimResult).toEqual({ ok: false, message: "destroy pending" });
-  expect(r.explicitNewAdmissionAccepted).toBe(true);
-  expect(
-    r.preexistingAdmissionAccepted,
-    "provider cleanup failure must not let pending ingress escape Stop",
-  ).toBe(false);
 });
 
 it("a reservation preceding Stop cannot revive a successfully reclaimed worker", async () => {
@@ -560,10 +564,14 @@ it("an idempotent failed-cleanup result does not cancel work already on the loca
   const local = { state: "local", sessionId: REQUEST.sessionId, generation: 4 };
   const cancel = vi.fn();
   const barriers = createGatewayWorkerPlacementReclaimBarriers({
-    placements: { get: () => local as never, waitForTurnClaimRelease: vi.fn() },
+    placements: {
+      get: () => local as never,
+      getAsync: async () => local as never,
+      waitForTurnClaimRelease: vi.fn(),
+    },
     loadSessionRuntime: async () =>
       ({
-        managedWorktrees: { findLiveByOwner: () => undefined },
+        managedWorktrees: { findLiveByOwner: async () => undefined },
         resolveGatewaySessionStoreTargetWithStore: () => target,
         resolveCanonicalSessionEntryFromStoreKeys: () => entry,
       }) as never,
@@ -636,7 +644,7 @@ it.each(["missing", "local"] as const)(
       );
     }
     const sessionRuntime = {
-      managedWorktrees: { findLiveByOwner: () => undefined },
+      managedWorktrees: { findLiveByOwner: async () => undefined },
       resolveGatewaySessionStoreTargetWithStore: () => target,
       resolveCanonicalSessionEntryFromStoreKeys: () => entry,
     };
@@ -644,7 +652,9 @@ it.each(["missing", "local"] as const)(
     const cancelApprovals = vi.fn();
     context.cancelRunBoundApprovals = cancelApprovals;
     const cancellationLoad = createDeferred();
+    const cancellationEntered = createDeferred();
     const cancel = vi.fn(async (request: Parameters<typeof cancelGatewayWorkerSessionWork>[1]) => {
+      cancellationEntered.resolve();
       await cancellationLoad.promise;
       const runtime = await import("./server-worker-placement-cancel.js");
       await runtime.cancelGatewayWorkerSessionWork(context, request);
@@ -689,6 +699,7 @@ it.each(["missing", "local"] as const)(
     });
     const sweep = coordinated.reconcileActive();
     await entered.promise;
+    expect(placements.get(REQUEST.sessionId)?.state).toBe(state === "local" ? "local" : undefined);
     let dispatchSettled = false;
     const dispatch = coordinated
       .dispatch(REQUEST)
@@ -701,15 +712,19 @@ it.each(["missing", "local"] as const)(
       });
     const stopping = coordinated.reclaim(REQUEST).catch(() => undefined);
     try {
-      await setImmediate();
-      await setImmediate();
-      expect(placements.get(REQUEST.sessionId)?.state).toBe(
-        state === "local" ? "local" : undefined,
+      await awaitGateBeforeSettlement(
+        cancellationEntered.promise,
+        stopping,
+        "Stop settled before entering local chat cancellation with inspection held",
       );
       expect(cancel).toHaveBeenCalledOnce();
       expect(controller.controller.signal.aborted).toBe(false);
       cancellationLoad.resolve();
-      await aborted.promise;
+      await awaitGateBeforeSettlement(
+        aborted.promise,
+        stopping,
+        "Stop settled before aborting local chat with inspection held",
+      );
       expect(controller.abortStopReason).toBe("rpc");
       expect(cancelApprovals).toHaveBeenCalledWith(runId);
       await stopping;

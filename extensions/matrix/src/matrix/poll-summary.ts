@@ -1,7 +1,6 @@
 import type { MatrixMessageSummary } from "./actions/types.js";
 import {
   buildPollResultsSummary,
-  formatPollAsText,
   formatPollResultsAsText,
   isPollEventType,
   isPollStartType,
@@ -82,11 +81,8 @@ export async function fetchMatrixPollSnapshot(
 
   const relationEvents = await readAllPollRelations(client, roomId, pollEventId);
   const pollResults = buildPollResultsSummary({
-    pollEventId,
-    roomId,
     sender: rootEvent.sender,
-    senderName: rootEvent.sender,
-    content: pollStartContent,
+    poll: pollSummary,
     relationEvents,
   });
 
@@ -94,7 +90,7 @@ export async function fetchMatrixPollSnapshot(
     pollEventId,
     triggerEvent: event,
     rootEvent,
-    text: pollResults ? formatPollResultsAsText(pollResults) : formatPollAsText(pollSummary),
+    text: formatPollResultsAsText(pollResults),
   };
 }
 

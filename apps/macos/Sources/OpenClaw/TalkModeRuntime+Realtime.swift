@@ -218,11 +218,12 @@ extension TalkModeRuntime {
             return false
         }
         guard hasGatewayRealtimeRelayTuple else {
+            let realtime = self.config?.snapshot.realtime
             logger.warning(
                 "talk macOS realtime relay opted in but Gateway tuple is incompatible: " +
-                    "mode=\(realtimeMode ?? "missing", privacy: .public) " +
-                    "transport=\(realtimeTransport ?? "missing", privacy: .public) " +
-                    "brain=\(realtimeBrain ?? "missing", privacy: .public); using native fallback")
+                    "mode=\(realtime?.mode ?? "missing", privacy: .public) " +
+                    "transport=\(realtime?.transport ?? "missing", privacy: .public) " +
+                    "brain=\(realtime?.brain ?? "missing", privacy: .public); using native fallback")
             return false
         }
         return true
@@ -271,8 +272,8 @@ extension TalkModeRuntime {
             self.controller()?.updatePhase(.listening)
         }
         logger.info(
-            "talk realtime ready provider=\(realtimeProvider ?? "default", privacy: .public) " +
-                "model=\(realtimeModelId ?? "default", privacy: .public)")
+            "talk realtime ready provider=\(self.config?.snapshot.realtime.provider ?? "default", privacy: .public) " +
+                "model=\(self.config?.snapshot.realtime.modelId ?? "default", privacy: .public)")
     }
 
     func applyRealtimeTalkConfig(
@@ -353,16 +354,12 @@ extension TalkModeRuntime {
               realtimeRelayGeneration == relayGeneration
         else { throw CancellationError() }
         let activeSessionKey = await self.dependencies.selectedSession()
-        let sessionKey: String = if let activeSessionKey {
-            activeSessionKey
-        } else {
-            bootstrap.sessionKey
-        }
+        let realtime = self.config?.snapshot.realtime
         let options = RealtimeTalkRelaySession.Options(
-            sessionKey: sessionKey,
-            provider: realtimeProvider,
-            model: realtimeModelId,
-            voice: realtimeSpeakerVoice)
+            sessionKey: activeSessionKey ?? bootstrap.sessionKey,
+            provider: realtime?.provider,
+            model: realtime?.modelId,
+            voice: realtime?.speakerVoice)
         let dependencies = self.dependencies
         return await MainActor.run {
             let audioCapture = dependencies.audioCapture()
@@ -476,12 +473,12 @@ extension TalkModeRuntime {
         let issue = RealtimeTalkRelayIssue(
             code: "audio_input_unavailable",
             message: message,
-            provider: realtimeProvider,
-            model: realtimeModelId,
+            provider: self.config?.snapshot.realtime.provider,
+            model: self.config?.snapshot.realtime.modelId,
             transport: "gateway-relay",
             phase: "audio-input")
-        await handleRealtimeIssue(issue, relayGeneration: relayGeneration)
-        await handleRealtimeTermination(
+        await self.handleRealtimeIssue(issue, relayGeneration: relayGeneration)
+        await self.handleRealtimeTermination(
             .audioInputFailed(message: issue.message),
             relayGeneration: relayGeneration)
     }
@@ -564,11 +561,7 @@ extension TalkModeRuntime {
     }
 
     func handleRealtimeSpeakingChanged(_ speaking: Bool, relayGeneration: UInt64) async {
-        guard let session = realtimeSession,
-              ownsRealtimeRelay(relayGeneration, session),
-              isEnabled,
-              !self.isPaused
-        else { return }
+        guard let session = self.activeRealtimeRelay(relayGeneration) else { return }
         let phase: TalkModePhase = speaking ? .speaking : .listening
         self.phase = phase
         _ = await self.projectRealtimeRelay(relayGeneration, session) {
@@ -577,22 +570,14 @@ extension TalkModeRuntime {
     }
 
     func handleRealtimeInputLevel(_ level: Double, relayGeneration: UInt64) async {
-        guard let session = realtimeSession,
-              ownsRealtimeRelay(relayGeneration, session),
-              isEnabled,
-              !self.isPaused
-        else { return }
+        guard let session = self.activeRealtimeRelay(relayGeneration) else { return }
         _ = await self.projectRealtimeRelay(relayGeneration, session) {
             self.controller()?.updateLevel(level)
         }
     }
 
     func handleRealtimeOutputLevel(_ level: Double?, relayGeneration: UInt64) async {
-        guard let session = realtimeSession,
-              ownsRealtimeRelay(relayGeneration, session),
-              isEnabled,
-              !self.isPaused
-        else { return }
+        guard let session = self.activeRealtimeRelay(relayGeneration) else { return }
         _ = await self.projectRealtimeRelay(relayGeneration, session) {
             self.controller()?.updateSpeakingLevel(level)
         }
@@ -602,11 +587,7 @@ extension TalkModeRuntime {
         _ transcript: RealtimeTalkTranscript,
         relayGeneration: UInt64) async
     {
-        guard let session = realtimeSession,
-              ownsRealtimeRelay(relayGeneration, session),
-              isEnabled,
-              !self.isPaused
-        else { return }
+        guard let session = self.activeRealtimeRelay(relayGeneration) else { return }
         let text = transcript.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         guard transcript.role == "user" else { return }
@@ -621,6 +602,13 @@ extension TalkModeRuntime {
                 self.controller()?.updatePartialTranscript(text)
             }
         }
+    }
+
+    private func activeRealtimeRelay(_ generation: UInt64) -> RealtimeTalkRelaySession? {
+        guard let session = realtimeSession,
+              self.ownsRealtimeRelay(generation, session), isEnabled, !isPaused
+        else { return nil }
+        return session
     }
 
     func ownsRealtimeRelay(_ generation: UInt64, _ session: RealtimeTalkRelaySession?) -> Bool {
@@ -647,8 +635,7 @@ extension TalkModeRuntime {
 
     func cancelScheduledRealtimeRecovery() {
         realtimeRestartGeneration &+= 1
-        realtimeRestartTask?.cancel()
-        realtimeRestartTask = nil
+        SimpleTaskSupport.stop(task: &self.realtimeRestartTask)
     }
 
     private func scheduleRealtimeRecovery(
@@ -731,7 +718,7 @@ extension TalkModeRuntime {
     }
 
     func _test_enableRealtimeRelaySelection() {
-        (macOSRealtimeRelayOptIn, hasGatewayRealtimeRelayTuple) = (true, true)
+        macOSRealtimeRelayOptIn = true
     }
 
     func _test_prepareEnabledLifecycle() -> Int {

@@ -6,6 +6,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as imageOps from "../media/image-ops.js";
 import { readImageMetadataFromHeader } from "../media/image-ops.js";
 import { encodePngRgba } from "../media/png-encode.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-limits.js";
@@ -39,7 +40,7 @@ it("bounds decoded data bytes independently of the encoded URL limit", async () 
   ).rejects.toThrow("Avatar data URL exceeds size limit");
 });
 
-it("keeps pending thumbnails coalesced beyond the completed-cache capacity", async () => {
+it("coalesces concurrent thumbnail requests for the same admitted source", async () => {
   const gate = createDeferred();
   const decode = globalThis.fetch;
   const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (...args) => {
@@ -57,6 +58,18 @@ it("keeps pending thumbnails coalesced beyond the completed-cache capacity", asy
 
   expect(fetch).toHaveBeenCalledTimes(5);
   expect(images[5]).toBe(images[0]);
+});
+
+it("retries failed thumbnail preparation without retaining the rejected result", async () => {
+  const source = {
+    dataUrl: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"/>',
+    revision: "retry-svg",
+  };
+  const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new Error("decode failed"));
+  await expect(readGatewayAvatarThumbnail(source)).rejects.toThrow("decode failed");
+  const recovered = await readGatewayAvatarThumbnail(source);
+  expect(await readGatewayAvatarThumbnail(source)).toBe(recovered);
+  expect(fetch).toHaveBeenCalledTimes(2);
 });
 
 // Two 2×2 red/blue frames encoded with img2webp; VP8X animation flag and timing are retained.
@@ -99,7 +112,7 @@ it.each([
         ? `data:${mime},${Array.from(body, (byte) => `%${byte.toString(16).padStart(2, "0")}`).join("")}`
         : `data:${mime};base64,${sourceKind === "escaped-base64" ? encodeURIComponent(base64) : base64}`;
   const config: OpenClawConfig = {
-    agents: { list: [{ id: "main", workspace, identity: { avatar } }] },
+    agents: { entries: { main: { workspace, identity: { avatar } } } },
   };
   const { avatar: url } = await resolveGatewayAssistantAvatar({
     cfg: config,
@@ -120,8 +133,11 @@ it.each([
 });
 
 it.each(["local", "data"])(
-  "serves a cached authenticated thumbnail for a versioned %s avatar",
+  "reuses authenticated thumbnails across five %s avatars until their source changes",
   async (sourceKind) => {
+    const processor = imageOps.createImageProcessor();
+    const encode = vi.spyOn(processor, "encode");
+    vi.spyOn(imageOps, "createImageProcessor").mockReturnValue(processor);
     const workspace = tempRoots.make("openclaw-avatar-thumbnail-");
     const pixels = randomBytes(640 * 640 * 4);
     const original = encodePngRgba(pixels, 640, 640);
@@ -130,9 +146,8 @@ it.each(["local", "data"])(
     const config: OpenClawConfig = {
       gateway: { controlUi: { basePath: "/control" } },
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             workspace,
             identity: {
               avatar:
@@ -141,14 +156,14 @@ it.each(["local", "data"])(
                   : `data:image/png;base64,${original.toString("base64")}`,
             },
           },
-        ],
+        },
       },
     };
-    const project = async () =>
+    const project = async (agentId = "main") =>
       (
         await resolveGatewayAssistantAvatar({
           cfg: config,
-          identity: await resolveAssistantIdentity({ cfg: config, agentId: "main" }),
+          identity: await resolveAssistantIdentity({ cfg: config, agentId }),
           httpBasePath: "/control",
         })
       ).avatar;
@@ -191,6 +206,28 @@ it.each(["local", "data"])(
     const etag = first.setHeader.mock.calls.find(([name]) => name === "etag")?.[1] as string;
     expect(etag).toBeTruthy();
 
+    const urls = [url];
+    for (let index = 1; index < 5; index += 1) {
+      const agentId = `AvAtAr-${index}`;
+      const filename = `${agentId}.png`;
+      const bytes = encodePngRgba(Buffer.alloc(160 * 160 * 4, index * 40), 160, 160);
+      fs.writeFileSync(path.join(workspace, filename), bytes);
+      config.agents!.entries![agentId] = {
+        workspace,
+        identity: {
+          avatar:
+            sourceKind === "local" ? filename : `data:image/png;base64,${bytes.toString("base64")}`,
+        },
+      };
+      urls.push(await project(agentId));
+      expect((await request({ url: urls[index] })).res.statusCode).toBe(200);
+    }
+    expect(encode).toHaveBeenCalledTimes(5);
+    for (const avatarUrl of urls) {
+      expect((await request({ url: avatarUrl })).res.statusCode).toBe(200);
+    }
+    expect(encode).toHaveBeenCalledTimes(5);
+
     const fileReads = [
       vi.spyOn(fs, "read"),
       vi.spyOn(fs, "openSync"),
@@ -217,12 +254,13 @@ it.each(["local", "data"])(
       fs.writeFileSync(path.join(workspace, "replacement.png"), replacement);
       fs.renameSync(path.join(workspace, "replacement.png"), avatarPath);
     } else {
-      config.agents!.list![0]!.identity!.avatar = `data:image/png;base64,${replacement.toString("base64")}`;
+      config.agents!.entries!.main!.identity!.avatar = `data:image/png;base64,${replacement.toString("base64")}`;
     }
     const replacedUrl = await project();
     expect(replacedUrl).not.toBe(url);
     const replaced = await request({ url: replacedUrl, etag });
     expect(replaced.res.statusCode).toBe(200);
+    expect(encode).toHaveBeenCalledTimes(6);
     expect(replaced.end.mock.calls[0]?.[0]).not.toEqual(thumbnail);
     const stale = await request();
     expect(stale.setHeader).toHaveBeenCalledWith("cache-control", "private, no-cache");

@@ -39,12 +39,13 @@ openclaw doctor
 
   </Accordion>
   <Accordion title="Job fired but no delivery">
+    - `System event queue is full` means the session already has 20 pending events. OpenClaw keeps those accepted events and records the overflowing reminder as a failed run instead of dropping an older reminder. Let the session process its pending events, then retry the failed reminder with `openclaw automations run <jobId>`. If heartbeats were paused, enable them with `openclaw system heartbeat enable`. Pending system events are process-local, not a durable delivery receipt across Gateway restarts.
     - Delivery mode `none` means no runner fallback send is expected. The agent can still send directly with the `message` tool when a chat route is available.
     - Delivery target missing/invalid (`channel`/`to`) means outbound was skipped.
     - For Matrix, copied or legacy jobs with lowercased `delivery.to` room IDs can fail because Matrix room IDs are case-sensitive. Edit the job to the exact `!room:server` or `room:!room:server` value from Matrix.
     - Channel auth errors (`unauthorized`, `Forbidden`) mean delivery was blocked by credentials.
     - When the dispatcher records intentional suppression, job state, run history, and finished events include `deliverySuppressionReason` (`empty`, `silent`, `heartbeat`, or `channel_transform`). This is separate from `lastDeliveryError` / `deliveryError`; required delivery failures also log an error when they happen.
-    - If the isolated run returns only the silent token (`NO_REPLY` / `no_reply`), OpenClaw suppresses direct outbound delivery and the fallback queued-summary path, so nothing is posted back to chat.
+    - For text-only isolated announcements, a reply containing only `NO_REPLY` / `no_reply` or ending with a trailing silent token suppresses the entire text and the fallback queued summary. See [Silent token suppression](/cli/cron#silent-token-suppression) for examples and media behavior.
     - If the agent should message the user itself, check that the job has a usable route (`channel: "last"` with a previous chat, or an explicit channel/target).
 
   </Accordion>

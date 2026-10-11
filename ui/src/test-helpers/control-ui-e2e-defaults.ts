@@ -4,6 +4,8 @@ import type { ControlUiMockPresenceUser } from "./control-ui-e2e-contract.ts";
 
 export const defaultControlUiFeatureMethods = [
   "chat.abort",
+  "chat.history",
+  "chat.send",
   "chat.metadata",
   "chat.startup",
   "config.apply",
@@ -38,6 +40,7 @@ export const defaultControlUiFeatureMethods = [
   "sessions.reset",
   "sessions.rewind",
   "sessions.search",
+  "system.info",
   "users.github.status",
   "users.github.authorize.start",
   "users.github.authorize.poll",

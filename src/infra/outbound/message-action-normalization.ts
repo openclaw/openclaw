@@ -1,5 +1,3 @@
-// Message-action input normalization infers channel/target context and rewrites
-// legacy target fields before dispatch validation.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ChannelMessageActionName,
@@ -26,10 +24,7 @@ export function resolveImplicitMessageActionTarget(
 ): string | undefined {
   for (const value of [toolContext?.currentChannelId, toolContext?.currentMessagingTarget]) {
     const target = normalizeOptionalString(value);
-    if (!target) {
-      continue;
-    }
-    if (isInternalNonDeliveryChannel(target)) {
+    if (!target || isInternalNonDeliveryChannel(target)) {
       continue;
     }
     // A session can arrive bare or wrapped as a channel target; neither is
@@ -42,7 +37,6 @@ export function resolveImplicitMessageActionTarget(
   return undefined;
 }
 
-/** Normalizes message-action args before target validation and dispatch. */
 export function normalizeMessageActionInput(params: {
   action: ChannelMessageActionName;
   args: Record<string, unknown>;
@@ -97,24 +91,21 @@ export function normalizeMessageActionInput(params: {
     normalizedArgs.target = deliveryAliasTarget;
   }
 
-  if (
-    !explicitTarget &&
-    !hasExplicitTargets &&
-    !legacyTarget &&
-    !deliveryAliasTarget &&
-    actionRequiresTarget(action) &&
-    (hasResourceReference || !actionHasTarget(action, normalizedArgs, targetAliasOptions))
-  ) {
-    const inferredTarget = resolveImplicitMessageActionTarget(toolContext);
-    if (inferredTarget) {
-      normalizedArgs.target = inferredTarget;
+  if (!explicitTarget && actionRequiresTarget(action)) {
+    if (legacyTarget) {
+      normalizedArgs.target = legacyTarget;
+      delete normalizedArgs.to;
+      delete normalizedArgs.channelId;
+    } else if (
+      !hasExplicitTargets &&
+      !deliveryAliasTarget &&
+      (hasResourceReference || !actionHasTarget(action, normalizedArgs, targetAliasOptions))
+    ) {
+      const inferredTarget = resolveImplicitMessageActionTarget(toolContext);
+      if (inferredTarget) {
+        normalizedArgs.target = inferredTarget;
+      }
     }
-  }
-
-  if (!explicitTarget && actionRequiresTarget(action) && legacyTarget) {
-    normalizedArgs.target = legacyTarget;
-    delete normalizedArgs.to;
-    delete normalizedArgs.channelId;
   }
 
   if (!explicitChannel && inferredChannel && isDeliverableMessageChannel(inferredChannel)) {

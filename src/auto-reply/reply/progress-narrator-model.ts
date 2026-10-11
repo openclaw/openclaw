@@ -67,6 +67,7 @@ export async function generateNarrationWithUtilityModel(params: {
     signal.throwIfAborted();
     const result = await runIsolatedCompletion({
       ...params.prepared,
+      purpose: "progress-narration",
       config: params.cfg,
       systemPrompt: NARRATION_SYSTEM_PROMPT,
       prompt: buildNarrationUserPrompt(params.input),

@@ -1,11 +1,10 @@
 import { createHmac } from "node:crypto";
-import { loadOrCreateProcessDeviceIdentity } from "../../infra/device-identity.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 
 /** Stable, keyed receipts do not retain another copy or an offline digest of prompt material. */
-export function fingerprintSessionGoalRequest(
+export async function fingerprintSessionGoalRequest(
   value: Record<string, unknown> | readonly unknown[],
-): string {
-  const identity = loadOrCreateProcessDeviceIdentity();
+): Promise<string> {
   const canonical = JSON.stringify(value, (_key, item: unknown) =>
     item && typeof item === "object" && !Array.isArray(item)
       ? Object.fromEntries(
@@ -13,6 +12,7 @@ export function fingerprintSessionGoalRequest(
         )
       : item,
   );
+  const identity = await loadOrCreateProcessDeviceIdentityAsync();
   return createHmac("sha256", identity.privateKeyPem)
     .update("openclaw.session-goal.v1\0")
     .update(canonical)

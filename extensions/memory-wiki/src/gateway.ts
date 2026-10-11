@@ -1,6 +1,7 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/memory-host-core";
+import type { MemoryCallerContext } from "openclaw/plugin-sdk/memory-host-search";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type { OpenClawConfig, OpenClawPluginApi } from "../api.js";
 import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
@@ -108,15 +109,34 @@ export function registerMemoryWikiGatewayMethods(params: {
   const registerResultMethod = (
     method: string,
     scope: typeof READ_SCOPE | typeof WRITE_SCOPE | typeof ADMIN_SCOPE,
-    handler: (requestParams: GatewayMethodContext["params"]) => Promise<unknown>,
+    handler: (
+      requestParams: GatewayMethodContext["params"],
+      memoryContext: MemoryCallerContext,
+    ) => Promise<unknown>,
   ) => {
     api.registerGatewayMethod(
       method,
-      async ({ params: requestParams, respond }) => {
+      async ({ params: requestParams, respond, client, signal, hasCurrentClientAuthority }) => {
+        let active = true;
+        const memoryContext: MemoryCallerContext = {
+          authority:
+            client && hasCurrentClientAuthority
+              ? { kind: "operator", scopes: client.connect.scopes ?? [], connId: client.connId }
+              : { kind: "host", operation: method },
+          signal,
+          assertCurrent() {
+            signal?.throwIfAborted();
+            if (!active || (hasCurrentClientAuthority && !hasCurrentClientAuthority())) {
+              throw new Error("Memory Wiki request authority is no longer current.");
+            }
+          },
+        };
         try {
-          respond(true, await handler(requestParams));
+          respond(true, await handler(requestParams, memoryContext));
         } catch (error) {
           respondError(respond, error);
+        } finally {
+          active = false;
         }
       },
       { scope },
@@ -259,7 +279,7 @@ export function registerMemoryWikiGatewayMethods(params: {
     });
   });
 
-  registerResultMethod("wiki.search", READ_SCOPE, async (requestParams) => {
+  registerResultMethod("wiki.search", READ_SCOPE, async (requestParams, memoryContext) => {
     const { agentId, appConfig, config, signal } = resolveRequestContext(requestParams);
     await syncMemoryWikiImportedSources({ config, appConfig, ...(signal ? { signal } : {}) });
     const query = readStringParam(requestParams, "query", { required: true });
@@ -268,6 +288,7 @@ export function registerMemoryWikiGatewayMethods(params: {
     const searchCorpus = readEnumParam(requestParams, "corpus", WIKI_SEARCH_CORPORA);
     const mode = readEnumParam(requestParams, "mode", WIKI_SEARCH_MODES);
     return await searchMemoryWiki({
+      memoryContext,
       config,
       appConfig,
       ...(agentId ? { agentId } : {}),
@@ -291,7 +312,7 @@ export function registerMemoryWikiGatewayMethods(params: {
     });
   });
 
-  registerResultMethod("wiki.get", READ_SCOPE, async (requestParams) => {
+  registerResultMethod("wiki.get", READ_SCOPE, async (requestParams, memoryContext) => {
     const { agentId, appConfig, config, signal } = resolveRequestContext(requestParams);
     await syncMemoryWikiImportedSources({ config, appConfig, ...(signal ? { signal } : {}) });
     const lookup = readStringParam(requestParams, "lookup", { required: true });
@@ -300,6 +321,7 @@ export function registerMemoryWikiGatewayMethods(params: {
     const searchBackend = readEnumParam(requestParams, "backend", WIKI_SEARCH_BACKENDS);
     const searchCorpus = readEnumParam(requestParams, "corpus", WIKI_SEARCH_CORPORA);
     return await getMemoryWikiPage({
+      memoryContext,
       config,
       appConfig,
       ...(agentId ? { agentId } : {}),

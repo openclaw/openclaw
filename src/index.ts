@@ -6,8 +6,12 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
 import { tryRunUpdateAdmissionBeforeStartup } from "./cli/run-main-update-admission.js";
-import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
+import {
+  configureGatewayStartupTraceConsoleFormatting,
+  createGatewayDispatchStartupTrace,
+} from "./cli/startup-trace.js";
 import { isMainModule } from "./infra/is-main.js";
+import "./shared/detached-async-context.js";
 
 const isMain = isMainModule({
   currentFile: fileURLToPath(import.meta.url),
@@ -31,9 +35,6 @@ if (
     );
   }
 }
-
-const handledRootVersion =
-  isMain && !handledAdmission && tryHandleRootVersionFastPath(process.argv);
 
 type LegacyCliDeps = {
   runCli: (
@@ -67,8 +68,13 @@ export let runCommandWithTimeout: LibraryExports["runCommandWithTimeout"];
 export let runExec: LibraryExports["runExec"];
 export let waitForever: LibraryExports["waitForever"];
 
-async function loadLegacyCliDeps(): Promise<LegacyCliDeps> {
-  const { runCli } = await import("./cli/run-main.js");
+async function loadLegacyCliDeps(argv: string[]): Promise<LegacyCliDeps> {
+  const startupTrace = createGatewayDispatchStartupTrace(argv, "entry");
+  await configureGatewayStartupTraceConsoleFormatting(startupTrace);
+  const { runCli } = await startupTrace.measure(
+    "run-main-import",
+    () => import("./cli/run-main.js"),
+  );
   return { runCli };
 }
 
@@ -80,10 +86,14 @@ export async function runLegacyCliEntry(
     retainConsoleRoutingUntilProcessExit?: boolean;
   },
 ): Promise<void> {
-  const { runCli } = deps ?? (await loadLegacyCliDeps());
+  const { runCli } = deps ?? (await loadLegacyCliDeps(argv));
   await runCli(argv, options);
 }
 
+const handledRootVersion =
+  isMain &&
+  !handledAdmission &&
+  (await import("./entry.version-fast-path.js")).tryHandleRootVersionFastPath(process.argv);
 if (!isMain) {
   ({
     applyTemplate,
@@ -113,7 +123,7 @@ if (isMain && !handledRootVersion && !handledAdmission) {
     { isJsonOutputModeActive },
     { runCliWithExitFinalization },
     { withCliProcessScope },
-    { installDistEsmResolveFastPath: installFastPath },
+    { installDistEsmResolveFastPath },
     { formatUncaughtError },
     { runFatalErrorHooks },
     {
@@ -131,9 +141,10 @@ if (isMain && !handledRootVersion && !handledAdmission) {
     import("./infra/fatal-error-hooks.js"),
     import("./infra/unhandled-rejections.js"),
   ]);
-  installFastPath(import.meta.url);
+  installDistEsmResolveFastPath(import.meta.url);
 
   const { defaultRuntime, restoreRuntimeTerminalState } = await import("./runtime.js");
+  const { exitAfterSignalExitBarriers } = await import("./cli/signal-exit-barrier.js");
 
   // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
   // These log the error and exit gracefully instead of crashing without trace.
@@ -164,7 +175,7 @@ if (isMain && !handledRootVersion && !handledAdmission) {
       console.error("[openclaw]", message);
     }
     restoreRuntimeTerminalState("uncaught exception", { resumeStdinIfPaused: false });
-    process.exit(1);
+    exitAfterSignalExitBarriers(1);
   });
 
   void runCliWithExitFinalization({

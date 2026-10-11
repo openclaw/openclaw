@@ -114,7 +114,7 @@ describe("generateSlugViaLLM", () => {
     await generateSlugViaLLM({
       sessionContent: "hello",
       cfg: {
-        agents: { list: [{ id: "main" }, { id: "molty" }] },
+        agents: { entries: { main: {}, molty: {} } },
       },
       agentId: "molty",
     });

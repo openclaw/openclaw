@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
 import { threadId } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { readAuthProfileJsonCellText } from "../agents/auth-profiles/sqlite-json.js";
-import { withScopedOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly-scope.js";
 import { serveOwnedWorkerTasks } from "./worker-task-server.js";
 
 export type ResourceFixtureInput = {
@@ -36,6 +34,11 @@ serveOwnedWorkerTasks<ResourceFixtureReply>(
       assert.ok(isRecord(input.database));
       assert.ok(typeof input.database.agentId === "string");
       assert.ok(typeof input.database.path === "string");
+      const [{ readAuthProfileJsonCellText }, { withScopedOpenClawAgentDatabaseReadOnly }] =
+        await Promise.all([
+          import("../agents/auth-profiles/sqlite-json.js"),
+          import("../state/openclaw-agent-db-readonly-scope.js"),
+        ]);
       const readAuthStore = input.database.readAuthStore === true;
       const result = withScopedOpenClawAgentDatabaseReadOnly(
         (database) =>

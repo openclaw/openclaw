@@ -63,7 +63,7 @@ export const modelVisibleToolTextRedactionState = {
   copy(source: object, target: object, text: string): void {
     const prepared = preparedToolText.get(source);
     if (prepared?.text === text) {
-      preparedToolText.set(target, prepared);
+      preparedToolText.set(target, { ...prepared, text });
     }
   },
 };

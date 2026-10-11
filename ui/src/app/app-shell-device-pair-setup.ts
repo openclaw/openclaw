@@ -1,30 +1,27 @@
 import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
+import type { LazyRenderer } from "./lazy-renderer.ts";
 
 type DevicePairSetupModule = typeof import("../pages/devices/view-pairing.runtime.ts");
 type DevicePairSetupProps = Parameters<DevicePairSetupModule["renderDevicePairSetup"]>[0];
 
-export interface DevicePairSetupHost {
-  readonly devicePairSetupRenderer: DevicePairSetupModule["renderDevicePairSetup"] | null;
-  readonly devicePairSetupLoadFailed: boolean;
-  loadDevicePairSetupRenderer(): void;
-  retryDevicePairSetupRenderer(): void;
-}
-
 // Lazy: the pairing modal stays out of the startup chunk (perf budget); it is
 // fetched the first time an operator opens Pair mobile device. The eager shell
 // stays visible during that import so the action never appears to do nothing.
-export function renderLazyDevicePairSetup(host: DevicePairSetupHost, props: DevicePairSetupProps) {
+export function renderLazyDevicePairSetup(
+  loader: LazyRenderer<DevicePairSetupModule["renderDevicePairSetup"]>,
+  props: DevicePairSetupProps,
+) {
   if (!props.open) {
     return nothing;
   }
-  const renderer = host.devicePairSetupRenderer;
+  const renderer = loader.renderer;
   if (renderer) {
     return renderer(props);
   }
-  const failed = host.devicePairSetupLoadFailed;
+  const failed = loader.failed;
   if (!failed) {
-    host.loadDevicePairSetupRenderer();
+    loader.load();
   }
   // Loading and failure share the eager modal; a failed chunk remains dismissible and retryable.
   const title = t("devices.pairing.title");
@@ -44,11 +41,7 @@ export function renderLazyDevicePairSetup(host: DevicePairSetupHost, props: Devi
       <footer class="device-pair-setup__footer">
         ${
           failed
-            ? html`<button
-                class="btn btn--primary"
-                type="button"
-                @click=${() => host.retryDevicePairSetupRenderer()}
-              >
+            ? html`<button class="btn btn--primary" type="button" @click=${() => loader.retry()}>
                 ${t("common.retry")}
               </button>`
             : nothing

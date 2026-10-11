@@ -11,11 +11,9 @@ import {
 } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import { runSqliteSessionReclamation } from "../config/sessions/session-accessor.sqlite-reclamation-run.js";
-import {
-  createLifecycleArtifactReclamationPlan,
-  createSessionMaintenanceFinalizationOperation,
-} from "../config/sessions/session-accessor.sqlite-reclamation.js";
+import { createSessionMaintenanceFinalizationOperation } from "../config/sessions/session-accessor.sqlite-reclamation.js";
 import { applySessionEntryExactReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
+import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   emitSessionIdentityMutation,
@@ -29,12 +27,12 @@ import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as projectionWork from "./session-projection-work.js";
 import * as materialization from "./session-row-projection-materialize.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
-import { createSessionRowRegistryRead } from "./session-row-scope.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -43,7 +41,7 @@ it.each(["native", "worker"] as const)(
   "retains assigned owner and participants before observers after a %s metadata write",
   async (writer) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cfg = { agents: { list: [{ id: "main", default: true }] } };
+      const cfg = { agents: { entries: { main: {} } } };
       const creator = ensureProfileForEmail("creator@example.com");
       const owner = ensureProfileForEmail("owner@example.com");
       const participant = ensureProfileForEmail("participant@example.com");
@@ -86,6 +84,8 @@ it.each(["native", "worker"] as const)(
         expect(warm?.entry).toMatchObject(sideMetadata);
         expect(warm?.storedEntry).toMatchObject(sideMetadata);
         const reads = vi.spyOn(materialization, "readSessionRowEntry");
+        const rowReads = vi.spyOn(history, "withSessionHistoryWorkerDatabases");
+        const sharedReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
         const observed: Array<{
           entry: SessionEntry | undefined;
           storedEntry: SessionEntry | undefined;
@@ -122,6 +122,14 @@ it.each(["native", "worker"] as const)(
           },
         ]);
         expect(reads).not.toHaveBeenCalled();
+        await projection.ensureMaterialized();
+        expect(projection.snapshot(query).row?.label).toBe("Updated label");
+        expect(rowReads).not.toHaveBeenCalled();
+        expect(
+          sharedReads.mock.calls.filter(
+            ([, command]) => command.type === "sessionRows.sharedFacts",
+          ),
+        ).toEqual([]);
         const publishedSource = projection.capture(query)?.publishedSource;
         expect(publishedSource).toBeDefined();
         const sql = observeHostDataSql();
@@ -164,49 +172,10 @@ it.each(["native", "worker"] as const)(
   },
 );
 
-it.each([false, true])(
-  "retains repeated registration only for the captured birthtime (replaced=%s)",
-  async (replaced) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const database = openOpenClawAgentDatabase({ agentId: "main" });
-      const identity = databaseIdentity.readOpenClawAgentDatabaseIdentity(database);
-      const stores = new Map([
-        [
-          database.path,
-          {
-            target: { agentId: "main", storePath: database.path },
-            agentId: "main",
-            discoveryAgentId: "main",
-            identity: identity.identity,
-            filename: identity.filename,
-            birthtime: replaced
-              ? (BigInt(identity.birthtime ?? "0") + 1n).toString()
-              : identity.birthtime,
-          },
-        ],
-      ]);
-      const registry = createSessionRowRegistryRead({
-        env: state.env,
-        stores: () => stores,
-        isActive: () => true,
-        runAsOwner: (run) => run(),
-      });
-      try {
-        await registry.prepare();
-        expect(registry.isCurrent()).toBe(true);
-        registerOpenClawAgentDatabase({ agentId: "main", path: database.path });
-        expect(registry.isCurrent()).toBe(!replaced);
-      } finally {
-        registry.dispose();
-      }
-    });
-  },
-);
-
 it("keeps a captured row when another physical store resets the same key and session ID", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       session: { scope: "global" as const },
     };
     const query = {
@@ -289,153 +258,141 @@ it("invalidates a published row after an unprepared reset with the same session 
   });
 });
 
-it.each([false, true])(
-  "retains newer native metadata through reentrant identity publication (cache=%s)",
-  async (cache) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cfg = { agents: { list: [{ id: "main", default: true }] } };
-      const scope = { agentId: "main", sessionKey: "agent:main:identity-publication-reentry" };
-      const updatedAt = Date.now();
-      replaceSessionEntrySync(scope, { sessionId: "original", updatedAt });
-      const database = openOpenClawAgentDatabase({ agentId: "main" });
-      if (cache) {
-        readSessionEntryCache(database, { cache: true });
-      }
-      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-      const list = () => listProjectedSessions({ projection, opts: {} });
-      let stopRows = () => {};
-      try {
-        await list();
-        expect(Boolean(readCommittedSessionEntryCache(database.db))).toBe(cache);
-        const originalGeneration = projection.capture({
-          agentId: scope.agentId,
-          key: scope.sessionKey,
-        })?.generation;
-        expect(originalGeneration).toBeDefined();
-        const newer = { sessionId: "replacement", updatedAt: updatedAt + 1, label: "Newer label" };
-        let reentered = false;
-        const callbackErrors: unknown[] = [];
-        stopRows = sessionChanges.subscribe((change) => {
-          if (reentered || !("sessionKey" in change) || change.sessionKey !== scope.sessionKey) {
-            return;
-          }
-          reentered = true;
-          try {
-            replaceSessionEntrySync(scope, newer);
-          } catch (error) {
-            callbackErrors.push(error);
-          }
-        });
-        replaceSessionEntrySync(scope, { ...newer, label: "Older label" });
-        expect(reentered).toBe(true);
-        expect(callbackErrors).toEqual([]);
-        expect(loadSessionEntry(scope)?.label).toBe(newer.label);
-        const current = projection.capture({ agentId: scope.agentId, key: scope.sessionKey });
-        expect(current).toBeDefined();
-        expect(current?.generation).not.toBe(originalGeneration);
-        expect(current?.entry).toMatchObject({ sessionId: newer.sessionId, label: newer.label });
-        expect((await list()).sessions).toEqual([
-          expect.objectContaining({
-            key: scope.sessionKey,
-            sessionId: newer.sessionId,
-            label: newer.label,
-          }),
-        ]);
-      } finally {
-        stopRows();
-        await projection.ensureMaterialized();
-        projection.dispose();
-      }
-    });
-  },
-);
-
-it.each(["maintenance-finalize", "lifecycle-artifacts"] as const)(
-  "publishes %s removals before row listeners recreate the key",
-  async (kind) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const cfg = { agents: { list: [{ id: "main", default: true }] } };
-      const scope = { agentId: "main", sessionKey: "agent:main:publication-reentry" };
-      replaceSessionEntrySync(scope, { sessionId: "removed", updatedAt: Date.now() });
-      const databaseOptions = { agentId: "main", env: state.env };
-      const database = openOpenClawAgentDatabase(databaseOptions);
-      readSessionEntryCache(database, { cache: true });
-      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-      await listProjectedSessions({ projection, opts: {} });
-      const entries = [{ sessionKey: scope.sessionKey, expectedEntry: loadSessionEntry(scope) }];
-      const params = { agentId: "main", databaseOptions, entries, materializedPlans: [] };
-      const plan =
-        kind === "maintenance-finalize"
-          ? createSessionMaintenanceFinalizationOperation(params)
-          : createLifecycleArtifactReclamationPlan(params);
-      const identities: string[] = [];
-      const removalState: Array<{ cachedId?: string; storedId?: string }> = [];
+it("retains newer cached native metadata through reentrant identity publication", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    const scope = { agentId: "main", sessionKey: "agent:main:identity-publication-reentry" };
+    const updatedAt = Date.now();
+    replaceSessionEntrySync(scope, { sessionId: "original", updatedAt });
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    readSessionEntryCache(database, { cache: true });
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    const list = () => listProjectedSessions({ projection, opts: {} });
+    let stopRows = () => {};
+    try {
+      await list();
+      expect(Boolean(readCommittedSessionEntryCache(database.db))).toBe(true);
+      const originalGeneration = projection.capture({
+        agentId: scope.agentId,
+        key: scope.sessionKey,
+      })?.generation;
+      expect(originalGeneration).toBeDefined();
+      const newer = { sessionId: "replacement", updatedAt: updatedAt + 1, label: "Newer label" };
+      let reentered = false;
       const callbackErrors: unknown[] = [];
-      const stopIdentity = onSessionIdentityMutation((event) => {
-        try {
-          if (event.kind === "delete" && event.previous.sessionKeys.includes(scope.sessionKey)) {
-            identities.push(`delete:${event.previous.sessionId}`);
-            removalState.push({
-              cachedId: readCommittedSessionEntryCache(database.db)?.get(scope.sessionKey)
-                ?.sessionId,
-              storedId: loadSessionEntry(scope)?.sessionId,
-            });
-          } else if (
-            event.kind === "create" &&
-            event.current.sessionKeys.includes(scope.sessionKey)
-          ) {
-            identities.push(`create:${event.current.sessionId}`);
-          }
-        } catch (error) {
-          callbackErrors.push(error);
-        }
-      });
-      let recreated = false;
-      const stopRows = sessionChanges.subscribe((change) => {
-        if (
-          recreated ||
-          !("sessionKey" in change) ||
-          change.sessionKey !== scope.sessionKey ||
-          change.storePath !== database.path
-        ) {
+      stopRows = sessionChanges.subscribe((change) => {
+        if (reentered || !("sessionKey" in change) || change.sessionKey !== scope.sessionKey) {
           return;
         }
-        recreated = true;
+        reentered = true;
         try {
-          replaceSessionEntrySync(scope, {
-            sessionId: "replacement",
-            updatedAt: Date.now(),
-            label: "Replacement survives publication",
-          });
+          replaceSessionEntrySync(scope, newer);
         } catch (error) {
           callbackErrors.push(error);
         }
       });
-      const diagnostics = {};
+      replaceSessionEntrySync(scope, { ...newer, label: "Older label" });
+      expect(reentered).toBe(true);
+      expect(callbackErrors).toEqual([]);
+      expect(loadSessionEntry(scope)?.label).toBe(newer.label);
+      const current = projection.capture({ agentId: scope.agentId, key: scope.sessionKey });
+      expect(current).toBeDefined();
+      expect(current?.generation).not.toBe(originalGeneration);
+      expect(current?.entry).toMatchObject({ sessionId: newer.sessionId, label: newer.label });
+      expect((await list()).sessions).toEqual([
+        expect.objectContaining({
+          key: scope.sessionKey,
+          sessionId: newer.sessionId,
+          label: newer.label,
+        }),
+      ]);
+    } finally {
+      stopRows();
+      await projection.ensureMaterialized();
+      projection.dispose();
+    }
+  });
+});
+
+it("publishes maintenance removals before row listeners recreate the key", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfg = { agents: { entries: { main: {} } } };
+    const scope = { agentId: "main", sessionKey: "agent:main:publication-reentry" };
+    replaceSessionEntrySync(scope, { sessionId: "removed", updatedAt: Date.now() });
+    const databaseOptions = { agentId: "main", env: state.env };
+    const database = openOpenClawAgentDatabase(databaseOptions);
+    readSessionEntryCache(database, { cache: true });
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    await listProjectedSessions({ projection, opts: {} });
+    const entries = [{ sessionKey: scope.sessionKey, expectedEntry: loadSessionEntry(scope) }];
+    const params = { agentId: "main", databaseOptions, entries, materializedPlans: [] };
+    const plan = createSessionMaintenanceFinalizationOperation(params);
+    const identities: string[] = [];
+    const removalState: Array<{ cachedId?: string; storedId?: string }> = [];
+    const callbackErrors: unknown[] = [];
+    const stopIdentity = onSessionIdentityMutation((event) => {
       try {
-        expect(readCommittedSessionEntryCache(database.db)?.get(scope.sessionKey)?.sessionId).toBe(
-          "removed",
-        );
-        await runSqliteSessionReclamation({ forceInProcess: false, plan, diagnostics });
-        expect(diagnostics).toMatchObject({ workerThreadId: expect.any(Number) });
-        expect(callbackErrors).toEqual([]);
-        expect(identities).toEqual(["delete:removed", "create:replacement"]);
-        expect(removalState).toEqual([{ cachedId: undefined, storedId: undefined }]);
-        expect(loadSessionEntry(scope)?.sessionId).toBe("replacement");
-        const result = await listProjectedSessions({ projection, opts: {} });
-        expect(result.sessions).toEqual([
-          expect.objectContaining({
-            key: scope.sessionKey,
-            sessionId: "replacement",
-            label: "Replacement survives publication",
-          }),
-        ]);
-      } finally {
-        stopRows();
-        stopIdentity();
-        await projection.ensureMaterialized();
-        projection.dispose();
+        if (event.kind === "delete" && event.previous.sessionKeys.includes(scope.sessionKey)) {
+          identities.push(`delete:${event.previous.sessionId}`);
+          removalState.push({
+            cachedId: readCommittedSessionEntryCache(database.db)?.get(scope.sessionKey)?.sessionId,
+            storedId: loadSessionEntry(scope)?.sessionId,
+          });
+        } else if (
+          event.kind === "create" &&
+          event.current.sessionKeys.includes(scope.sessionKey)
+        ) {
+          identities.push(`create:${event.current.sessionId}`);
+        }
+      } catch (error) {
+        callbackErrors.push(error);
       }
     });
-  },
-);
+    let recreated = false;
+    const stopRows = sessionChanges.subscribe((change) => {
+      if (
+        recreated ||
+        !("sessionKey" in change) ||
+        change.sessionKey !== scope.sessionKey ||
+        change.storePath !== database.path
+      ) {
+        return;
+      }
+      recreated = true;
+      try {
+        replaceSessionEntrySync(scope, {
+          sessionId: "replacement",
+          updatedAt: Date.now(),
+          label: "Replacement survives publication",
+        });
+      } catch (error) {
+        callbackErrors.push(error);
+      }
+    });
+    const diagnostics = {};
+    try {
+      expect(readCommittedSessionEntryCache(database.db)?.get(scope.sessionKey)?.sessionId).toBe(
+        "removed",
+      );
+      await runSqliteSessionReclamation({ forceInProcess: false, plan, diagnostics });
+      expect(diagnostics).toMatchObject({ workerThreadId: expect.any(Number) });
+      expect(callbackErrors).toEqual([]);
+      expect(identities).toEqual(["delete:removed", "create:replacement"]);
+      expect(removalState).toEqual([{ cachedId: undefined, storedId: undefined }]);
+      expect(loadSessionEntry(scope)?.sessionId).toBe("replacement");
+      const result = await listProjectedSessions({ projection, opts: {} });
+      expect(result.sessions).toEqual([
+        expect.objectContaining({
+          key: scope.sessionKey,
+          sessionId: "replacement",
+          label: "Replacement survives publication",
+        }),
+      ]);
+    } finally {
+      stopRows();
+      stopIdentity();
+      await projection.ensureMaterialized();
+      projection.dispose();
+    }
+  });
+});

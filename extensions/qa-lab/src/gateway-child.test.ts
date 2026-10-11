@@ -1,7 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter, once } from "node:events";
 import { lstat, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
 import { inspect } from "node:util";
@@ -31,23 +30,14 @@ import {
   throwQaGatewayChildFailure,
 } from "./gateway-child-process.js";
 import {
-  isRetryableRpcStartupError,
-  resolveQaGatewayStartupRetry,
+  needsQaGatewayMigrationRestart,
   waitForGatewayReady,
   waitForQaGatewayRestartBoundary,
 } from "./gateway-child-readiness.js";
 import { createQaGatewayChild } from "./gateway-child.js";
-import {
-  assertQaLiveCodexAuthAvailable,
-  stageQaLiveAnthropicSetupToken,
-  stageQaLiveApiKeyProfiles,
-} from "./providers/live-frontier/auth.js";
-import { readQaAuthProfiles } from "./providers/shared/auth-store.js";
-import { stageQaMockAuthProfiles } from "./providers/shared/mock-auth.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
-const resolveQaNodeExecPathMock = vi.hoisted(() => vi.fn(async () => process.execPath));
 const qaTempPathState = vi.hoisted(() => ({
   preferredTmpDir: process.env.TMPDIR || "/tmp",
 }));
@@ -59,10 +49,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/temp-path")>()),
   resolvePreferredOpenClawTmpDir: () => qaTempPathState.preferredTmpDir,
-}));
-
-vi.mock("./node-exec.js", () => ({
-  resolveQaNodeExecPath: resolveQaNodeExecPathMock,
 }));
 
 const tempDirs = createTempDirHarness();
@@ -79,7 +65,6 @@ function ownGateway() {
 
 afterEach(async () => {
   fetchWithSsrFGuardMock.mockReset();
-  resolveQaNodeExecPathMock.mockReset();
   qaTempPathState.preferredTmpDir = process.env.TMPDIR || "/tmp";
   for (const owner of owners.splice(0)) {
     await owner.stop();
@@ -142,18 +127,6 @@ type SsrFetchCall = {
   policy?: unknown;
   auditContext?: string;
 };
-
-function readAuthProfileStore(stateDir: string, agentId: string) {
-  return readQaAuthProfiles(path.join(stateDir, "agents", agentId, "agent"));
-}
-
-function requireAuthProfile<T>(profiles: Record<string, T> | undefined, id: string): T {
-  const profile = profiles?.[id];
-  if (!profile) {
-    throw new Error(`expected auth profile ${id}`);
-  }
-  return profile;
-}
 
 function requireSsrFetchCall(index = 0): SsrFetchCall {
   const call = fetchWithSsrFGuardMock.mock.calls[index];
@@ -941,153 +914,6 @@ describe("buildQaRuntimeEnv", () => {
     ).rejects.toThrow("qa gateway child did not reach restart boundary");
   });
 
-  it("stages a live Anthropic setup-token profile for isolated QA workers", async () => {
-    const stateDir = await tempDirs.makeTempDir("qa-setup-token-state-");
-    const token = `sk-ant-oat01-${"c".repeat(80)}`;
-
-    const cfg = await stageQaLiveAnthropicSetupToken({
-      cfg: {},
-      stateDir,
-      env: {
-        OPENCLAW_LIVE_SETUP_TOKEN_VALUE: token,
-      },
-    });
-
-    const configProfile = requireAuthProfile(cfg.auth?.profiles, "anthropic:qa-setup-token");
-    expect(configProfile.provider).toBe("anthropic");
-    expect(configProfile.mode).toBe("token");
-    const storeProfile = requireAuthProfile(
-      readAuthProfileStore(stateDir, "main").profiles,
-      "anthropic:qa-setup-token",
-    );
-    expect(storeProfile).toMatchObject({ type: "token", provider: "anthropic", token });
-  });
-
-  it.each([
-    { source: "provider env", apiKey: undefined, env: { OPENAI_API_KEY: "qa-live-key" } },
-    {
-      source: "live alias",
-      apiKey: undefined,
-      env: { OPENCLAW_LIVE_CODEX_API_KEY: "qa-live-key" },
-    },
-    { source: "config literal", apiKey: "qa-live-key", env: {} },
-  ])("stages $source API-key auth for isolated live QA workers", async ({ apiKey, env }) => {
-    const stateDir = await tempDirs.makeTempDir("qa-live-api-key-state-");
-    const cfg = await stageQaLiveApiKeyProfiles({
-      cfg:
-        apiKey === undefined
-          ? {}
-          : {
-              models: { providers: { openai: { baseUrl: "", models: [], apiKey } } },
-            },
-      stateDir,
-      providerIds: ["openai"],
-      env,
-    });
-    expect(requireAuthProfile(cfg.auth?.profiles, "qa-live-openai-env")).toMatchObject({
-      provider: "openai",
-      mode: "api_key",
-      displayName: "QA live openai env credential",
-    });
-    expect(Object.values(cfg.auth?.profiles ?? {})).not.toContainEqual(
-      expect.objectContaining({ provider: "anthropic" }),
-    );
-    for (const agentId of ["main", "qa"]) {
-      const profiles = readAuthProfileStore(stateDir, agentId).profiles;
-      expect(requireAuthProfile(profiles, "qa-live-openai-env")).toMatchObject({
-        type: "api_key",
-        provider: "openai",
-        key: "qa-live-key",
-      });
-      expect(Object.values(profiles)).not.toContainEqual(
-        expect.objectContaining({ provider: "anthropic" }),
-      );
-    }
-    expect(() =>
-      assertQaLiveCodexAuthAvailable({
-        cfg,
-        providerIds: ["openai"],
-        env: {},
-        readCodexCredentials: () => null,
-      }),
-    ).not.toThrow();
-  });
-
-  it("fails fast when live OpenAI runs have no portable QA auth", () => {
-    expect(() =>
-      assertQaLiveCodexAuthAvailable({
-        cfg: {},
-        providerIds: ["openai"],
-        env: {
-          CODEX_HOME: path.join(os.tmpdir(), "missing-openclaw-codex-home"),
-        },
-        readCodexCredentials: () => null,
-      }),
-    ).toThrow("QA live-frontier cannot run Codex-backed OpenAI models");
-  });
-
-  it("does not require Codex auth for custom OpenAI-compatible provider configs", () => {
-    expect(() =>
-      assertQaLiveCodexAuthAvailable({
-        cfg: {
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "https://proxy.example.test/v1",
-                models: [],
-              },
-            },
-          },
-        },
-        providerIds: ["openai"],
-        env: {
-          CODEX_HOME: path.join(os.tmpdir(), "missing-openclaw-codex-home"),
-        },
-        readCodexCredentials: () => null,
-      }),
-    ).not.toThrow();
-  });
-
-  it("accepts OpenAI API-key fallback auth for forced Codex runtime QA runs", () => {
-    expect(() =>
-      assertQaLiveCodexAuthAvailable({
-        cfg: {},
-        providerIds: ["openai"],
-        env: {
-          OPENCLAW_LIVE_OPENAI_KEY: "qa-live-codex-fallback-key",
-          OPENCLAW_QA_FORCE_RUNTIME: "codex",
-        },
-        readCodexCredentials: () => null,
-      }),
-    ).not.toThrow();
-  });
-
-  it("accepts a logged-in Codex CLI home for live OpenAI QA runs", () => {
-    const readCodexCredentials = vi.fn(() => ({
-      type: "oauth" as const,
-      provider: "openai",
-      access: "access-token",
-      refresh: "refresh-token",
-      expires: Date.now() + 60_000,
-    }));
-
-    expect(() =>
-      assertQaLiveCodexAuthAvailable({
-        cfg: {},
-        providerIds: ["openai"],
-        env: {
-          CODEX_HOME: "/host/.codex",
-        },
-        readCodexCredentials,
-      }),
-    ).not.toThrow();
-    expect(readCodexCredentials).toHaveBeenCalledWith({
-      codexHome: "/host/.codex",
-      allowKeychainPrompt: false,
-      ttlMs: 5_000,
-    });
-  });
-
   it("lets a legacy packaged candidate create its auth DB before gateway spawn", async () => {
     const { owner, start, recordPath } = await createPackagedFixture({
       QA_LEGACY_PLUGIN_SETUP: "1",
@@ -1156,58 +982,47 @@ describe("buildQaRuntimeEnv", () => {
     expect(new Set(records.map((record) => record.authDbPath)).size).toBe(1);
   });
 
-  it.each([
-    { retry: "bind", configBuilds: 2 },
-    { retry: "migration", configBuilds: 1 },
-  ])(
-    "preserves packaged config repair across $retry startup retries",
-    async ({ retry, configBuilds }) => {
-      const mutateConfig = vi.fn((cfg: OpenClawConfig) => cfg);
-      const { start, recordPath } = await createPackagedFixture(
-        {
-          QA_STARTUP_RETRY: retry,
-          QA_CONFIG_RUNTIME_VERSION: "2026.7.33",
-        },
-        mutateConfig,
-      );
-      await expect(start()).rejects.toThrow("fixture gateway exit");
-      const records = await readJsonLines(recordPath);
-      const gateways = records.filter((record) => record.kind === "gateway");
-      expect(gateways).toHaveLength(2);
-      expect(gateways.map((record) => record.sourcePluginConfigured)).toEqual([false, false]);
-      const repairs = records.filter((record) => record.kind === "plugins");
-      expect(repairs).toHaveLength(configBuilds);
-      for (const repair of repairs) {
-        expect(repair.args).toContain("--accept-capabilities");
-      }
-      expect(repairs.map((record) => record.configPort)).toEqual(
-        retry === "bind" ? gateways.map((record) => record.configPort) : [gateways[0]?.configPort],
-      );
-      expect(mutateConfig).toHaveBeenCalledTimes(configBuilds);
-      expect(records.filter((record) => record.kind === "auth")).toHaveLength(2);
-      expect(records.map((record) => record.kind)).toEqual([
-        "auth",
-        "auth",
-        "help",
-        "plugins",
-        "gateway",
-        ...(retry === "bind" ? ["help", "plugins"] : []),
-        "gateway",
-      ]);
-      expect(new Set(records.map((record) => record.stateDir)).size).toBe(1);
-      for (const gateway of gateways) {
-        expect(gateway.args).toContainEqual(String(gateway.configPort));
-        expect(gateway).toMatchObject({
-          dbExists: true,
-          authProfileIds: ["qa-mock-openai", "qa-mock-anthropic"],
-          configVersion: "2026.7.33",
-        });
-      }
-      if (retry === "migration") {
-        expect(gateways[1]?.configPort).toBe(gateways[0]?.configPort);
-      }
-    },
-  );
+  it("preserves packaged config repair across migration convergence", async () => {
+    const mutateConfig = vi.fn((cfg: OpenClawConfig) => cfg);
+    const { start, recordPath } = await createPackagedFixture(
+      {
+        QA_STARTUP_RETRY: "migration",
+        QA_CONFIG_RUNTIME_VERSION: "2026.7.33",
+      },
+      mutateConfig,
+    );
+    await expect(start()).rejects.toThrow("fixture gateway exit");
+    const records = await readJsonLines(recordPath);
+    const gateways = records.filter((record) => record.kind === "gateway");
+    expect(gateways).toHaveLength(2);
+    expect(gateways.map((record) => record.sourcePluginConfigured)).toEqual([false, false]);
+    const repairs = records.filter((record) => record.kind === "plugins");
+    expect(repairs).toHaveLength(1);
+    for (const repair of repairs) {
+      expect(repair.args).toContain("--accept-capabilities");
+    }
+    expect(repairs.map((record) => record.configPort)).toEqual([gateways[0]?.configPort]);
+    expect(mutateConfig).toHaveBeenCalledTimes(1);
+    expect(records.filter((record) => record.kind === "auth")).toHaveLength(2);
+    expect(records.map((record) => record.kind)).toEqual([
+      "auth",
+      "auth",
+      "help",
+      "plugins",
+      "gateway",
+      "gateway",
+    ]);
+    expect(new Set(records.map((record) => record.stateDir)).size).toBe(1);
+    for (const gateway of gateways) {
+      expect(gateway.args).toContainEqual(String(gateway.configPort));
+      expect(gateway).toMatchObject({
+        dbExists: true,
+        authProfileIds: ["qa-mock-openai", "qa-mock-anthropic"],
+        configVersion: "2026.7.33",
+      });
+    }
+    expect(gateways[1]?.configPort).toBe(gateways[0]?.configPort);
+  });
 
   it("preserves authored newer-version metadata so the packaged candidate refuses it", async () => {
     const { start, recordPath } = await createPackagedFixture(
@@ -1274,34 +1089,6 @@ describe("buildQaRuntimeEnv", () => {
       await expect(readdir(tempParentDir)).resolves.toEqual([]);
     },
   );
-
-  it("stages mock profiles only for the requested agents and providers when callers override the defaults", async () => {
-    const stateDir = await tempDirs.makeTempDir("qa-mock-auth-override-");
-
-    const cfg = await stageQaMockAuthProfiles({
-      cfg: {},
-      stateDir,
-      agentIds: ["qa"],
-      providers: ["openai"],
-    });
-
-    const openaiConfigProfile = requireAuthProfile(cfg.auth?.profiles, "qa-mock-openai");
-    expect(openaiConfigProfile.provider).toBe("openai");
-    expect(openaiConfigProfile.mode).toBe("api_key");
-    // Anthropic should NOT be staged when the caller restricts providers.
-    expect(cfg.auth?.profiles?.["qa-mock-anthropic"]).toBeUndefined();
-
-    const qaStore = readAuthProfileStore(stateDir, "qa");
-    const openaiStoreProfile = requireAuthProfile(qaStore.profiles, "qa-mock-openai");
-    expect(openaiStoreProfile.provider).toBe("openai");
-    expect(openaiStoreProfile.type).toBe("api_key");
-    expect(qaStore.profiles["qa-mock-anthropic"]).toBeUndefined();
-
-    // The main agent's canonical database should not exist because it was not requested.
-    await expect(
-      lstat(path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite")),
-    ).rejects.toThrow(/ENOENT/);
-  });
 
   it("force-stops gateway children that ignore the graceful signal", async () => {
     const child = Object.assign(new EventEmitter(), {
@@ -1495,80 +1282,17 @@ describe("buildQaRuntimeEnv", () => {
     }
   });
 
-  it.each([
-    ["another gateway instance is already listening on ws://127.0.0.1:43124", "bind-collision"],
-    [
-      "failed to bind gateway socket on ws://127.0.0.1:43124: Error: listen EADDRINUSE",
-      "bind-collision",
-    ],
-  ] as const)("classifies %s", (details, expectedKind) => {
-    expect(
-      resolveQaGatewayStartupRetry({
-        attempt: 1,
-        details,
-        migrationConvergenceRestartUsed: false,
-      })?.kind,
-    ).toBe(expectedKind);
-  });
-
   it("does not retry an incomplete migration-convergence diagnostic", () => {
     const details = "OpenClaw plugin migration inputs changed during startup convergence";
-    expect(
-      resolveQaGatewayStartupRetry({
-        attempt: 1,
-        details,
-        migrationConvergenceRestartUsed: false,
-      }),
-    ).toBeNull();
+    expect(needsQaGatewayMigrationRestart(details)).toBe(false);
   });
 
-  it("restarts migration convergence once with the same launch state", () => {
-    const first = resolveQaGatewayStartupRetry({
-      attempt: 1,
-      details:
+  it("recognizes a complete migration convergence diagnostic", () => {
+    expect(
+      needsQaGatewayMigrationRestart(
         "OpenClaw plugin migration inputs changed during startup convergence; refusing readiness.",
-      migrationConvergenceRestartUsed: false,
-    });
-
-    expect(first).toEqual({
-      kind: "migration-convergence-restart",
-      reuseLaunchState: true,
-      migrationConvergenceRestartUsed: true,
-    });
-    expect(
-      resolveQaGatewayStartupRetry({
-        attempt: 2,
-        details:
-          "OpenClaw plugin migration inputs changed during startup convergence; refusing readiness.",
-        migrationConvergenceRestartUsed: first?.migrationConvergenceRestartUsed ?? false,
-      }),
-    ).toBeNull();
-  });
-
-  it("fails immediately for generic exits and after the startup attempt budget", () => {
-    expect(
-      resolveQaGatewayStartupRetry({
-        attempt: 1,
-        details: "gateway exited with code 1",
-        migrationConvergenceRestartUsed: false,
-      }),
-    ).toBeNull();
-    expect(
-      resolveQaGatewayStartupRetry({
-        attempt: 5,
-        details: "listen EADDRINUSE",
-        migrationConvergenceRestartUsed: false,
-      }),
-    ).toBeNull();
-  });
-
-  it("treats startup token mismatches as retryable rpc startup errors", () => {
-    expect(
-      isRetryableRpcStartupError(
-        "unauthorized: gateway token mismatch (set gateway.remote.token to match gateway.auth.token)",
       ),
     ).toBe(true);
-    expect(isRetryableRpcStartupError("permission denied")).toBe(false);
   });
 
   it("preserves only sanitized gateway debug artifacts", async () => {

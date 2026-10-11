@@ -1,15 +1,17 @@
-import { render } from "lit";
 import { assert, describe, expect, it } from "vitest";
 import { installBrowserHistoryIsolation } from "../../test-helpers/browser-history.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { createBaseParams } from "./panels-tools-skills.test-support.ts";
-import { renderAgentTools } from "./panels-tools-skills.ts";
+import { AgentTools } from "./panels-tools-skills.tsx";
 
 installBrowserHistoryIsolation();
 
 describe("agent tool access diagnostics (browser)", () => {
-  it("explains policy exclusions beside the preview status and exposes their inherited source", () => {
+  it.each([false, true])("only verifies saved policy (configDirty=%s)", (configDirty) => {
     const container = document.createElement("div");
+    const label = configDirty ? "Old profile exclusion" : "Messaging profile";
     const params = createBaseParams({
+      configDirty,
       configForm: {
         tools: { profile: "full" },
         agents: { entries: { main: { tools: { profile: "messaging" } } } },
@@ -31,7 +33,7 @@ describe("agent tool access diagnostics (browser)", () => {
               reasons: [
                 {
                   kind: "profile",
-                  label: "Messaging profile",
+                  label,
                   source: "agents.entries.main.tools.profile",
                   profile: "messaging",
                 },
@@ -41,12 +43,18 @@ describe("agent tool access diagnostics (browser)", () => {
         },
       },
     });
-    render(renderAgentTools(params), container);
+    mountSolid(AgentTools, params, container);
 
     const card = container.querySelector<HTMLDetailsElement>("#agent-tool-exec");
     assert(card);
     expect(card.open).toBe(false);
     const summary = card.querySelector("summary");
+    if (configDirty) {
+      expect(summary?.textContent).toContain("Unverified");
+      expect(card.textContent).not.toContain("Old profile exclusion");
+      expect(card.textContent).toContain("Save your changes to refresh the preview.");
+      return;
+    }
     expect(summary?.textContent).toContain("Off");
     expect(summary?.textContent).toContain("Messaging profile");
     card.open = true;
@@ -67,35 +75,34 @@ describe("agent tool access diagnostics (browser)", () => {
       source: "plugin" as const,
       defaultProfiles: [],
     };
-    render(
-      renderAgentTools(
-        createBaseParams({
-          toolsCatalogResult: {
-            agentId: "main",
-            profiles: [],
-            groups: [{ id: "terminal", label: "Terminal", source: "plugin", tools: [tool] }],
-          },
-          toolsEffectiveResult: {
-            agentId: "main",
-            profile: "full",
-            groups: [
-              {
-                id: "mcp",
-                label: "MCP tools",
-                source: "mcp",
-                tools: [
-                  {
-                    ...tool,
-                    source: "mcp",
-                    rawDescription: tool.description,
-                    deniedBySession: true,
-                  },
-                ],
-              },
-            ],
-          },
-        }),
-      ),
+    mountSolid(
+      AgentTools,
+      createBaseParams({
+        toolsCatalogResult: {
+          agentId: "main",
+          profiles: [],
+          groups: [{ id: "terminal", label: "Terminal", source: "plugin", tools: [tool] }],
+        },
+        toolsEffectiveResult: {
+          agentId: "main",
+          profile: "full",
+          groups: [
+            {
+              id: "mcp",
+              label: "MCP tools",
+              source: "mcp",
+              tools: [
+                {
+                  ...tool,
+                  source: "mcp",
+                  rawDescription: tool.description,
+                  deniedBySession: true,
+                },
+              ],
+            },
+          ],
+        },
+      }),
       container,
     );
     const card = container.querySelector("#agent-tool-terminal__run");
@@ -105,33 +112,5 @@ describe("agent tool access diagnostics (browser)", () => {
     expect(card?.textContent).not.toContain("Included in preview");
     expect(container.querySelector(".agent-tools-runtime-chip")).toBeNull();
     expect(container.textContent).toContain("No tools are listed in this preview.");
-  });
-
-  it("does not present an unsaved draft as verified policy", () => {
-    const container = document.createElement("div");
-    const params = createBaseParams({
-      configDirty: true,
-      toolsEffectiveResult: {
-        agentId: "main",
-        profile: "messaging",
-        groups: [],
-        toolAccess: {
-          checked: "live-session",
-          profiles: [],
-          tools: [
-            {
-              id: "exec",
-              status: "excluded",
-              reasons: [{ kind: "profile", label: "Old profile exclusion" }],
-            },
-          ],
-        },
-      },
-    });
-    render(renderAgentTools(params), container);
-    const card = container.querySelector("#agent-tool-exec");
-    expect(card?.querySelector("summary")?.textContent).toContain("Unverified");
-    expect(card?.textContent).not.toContain("Old profile exclusion");
-    expect(card?.textContent).toContain("Save your changes to refresh the preview.");
   });
 });

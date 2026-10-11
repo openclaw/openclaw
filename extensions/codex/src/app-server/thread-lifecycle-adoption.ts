@@ -13,6 +13,7 @@ import { isJsonObject, type CodexThread } from "./protocol.js";
 import {
   sessionBindingIdentity,
   resolveCodexSessionBinding,
+  type CodexBindingAuthority,
   type CodexAppServerBindingIdentity,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
@@ -25,11 +26,13 @@ import {
   CodexThreadBindingConflictError,
 } from "./thread-lifecycle-errors.js";
 import { resumeExistingCodexThread } from "./thread-lifecycle-io.js";
-import { resolveCodexThreadAgentDir } from "./thread-lifecycle-preflight.js";
+import {
+  resolveCodexThreadAgentDir,
+  type CodexThreadRequestContext,
+} from "./thread-lifecycle-preflight.js";
 import type {
   CodexAppServerThreadLifecycleBinding,
   CodexStartOrResumeThreadParams,
-  CodexThreadRequestContext,
   CodexThreadResumePreparation,
 } from "./thread-lifecycle-types.js";
 import { releaseCodexConsumedLiveThread } from "./thread-lifecycle-warm.js";
@@ -48,7 +51,7 @@ export async function withCodexThreadLifecycleBinding(
   run: (
     identity: CodexAppServerBindingIdentity,
     binding: CodexAppServerThreadBinding | undefined,
-    assertCurrent: () => void,
+    authority: CodexBindingAuthority,
   ) => Promise<CodexAppServerThreadLifecycleBinding>,
 ): Promise<CodexAppServerThreadLifecycleBinding> {
   const identity = sessionBindingIdentity({
@@ -57,8 +60,9 @@ export async function withCodexThreadLifecycleBinding(
     agentId: params.agentId ?? params.params.agentId,
     config: params.params.config,
   });
-  const { binding: snapshot, assertCurrent } = await resolveCodexSessionBinding({
+  const { binding: snapshot, authority } = await resolveCodexSessionBinding({
     reclaimStale: true,
+    authority: params.authority,
     bindingStore: params.bindingStore,
     identity,
     config: params.params.config,
@@ -73,20 +77,25 @@ export async function withCodexThreadLifecycleBinding(
           assertCodexSessionRuntimeOwnership(binding, params.params.expectedSessionRuntimeOwnership)
       : undefined,
   });
+  const assertCurrent = authority.assertCurrent;
   const runWithLease = () =>
-    params.bindingStore.withLease(identity, async () => {
-      const binding = params.bindingStore.read(identity);
-      assertCodexSessionRuntimeOwnership(binding, params.params.expectedSessionRuntimeOwnership);
-      // Never prepare a replacement under the queue selected for an obsolete snapshot.
-      if (binding?.threadId !== snapshot?.threadId || binding?.clientId !== snapshot?.clientId) {
-        throw new CodexThreadBindingConflictError(
-          binding?.threadId ?? snapshot?.threadId ?? params.params.sessionId,
-          "acquiring thread lifecycle ownership",
-        );
-      }
-      assertCurrent();
-      return await run(identity, binding, assertCurrent);
-    });
+    params.bindingStore.withLease(
+      identity,
+      async () => {
+        const binding = await params.bindingStore.readAsync(identity);
+        assertCodexSessionRuntimeOwnership(binding, params.params.expectedSessionRuntimeOwnership);
+        // Never prepare a replacement under the queue selected for an obsolete snapshot.
+        if (binding?.threadId !== snapshot?.threadId || binding?.clientId !== snapshot?.clientId) {
+          throw new CodexThreadBindingConflictError(
+            binding?.threadId ?? snapshot?.threadId ?? params.params.sessionId,
+            "acquiring thread lifecycle ownership",
+          );
+        }
+        assertCurrent();
+        return await run(identity, binding, authority);
+      },
+      { assertCurrent, authority },
+    );
   // Ordinary resumes own their binding key even when a legacy row omits sessionId.
   // Foreign-owner rejection belongs to adoption, not an upgrade of that same binding.
   return snapshot?.pendingResumeConfiguration
@@ -150,6 +159,7 @@ export async function resumePendingCodexThread(
           lifecycleTiming,
           threadId: binding.threadId,
           assertCurrent,
+          withCurrent: params.authority?.withCurrent,
         });
       }
     },
@@ -190,7 +200,7 @@ async function preparePendingCodexThreadResume(
   const { thread } = await params.client.request(
     "thread/read",
     { threadId: binding.threadId, includeTurns: false },
-    { signal: params.signal, assertCurrent },
+    { signal: params.signal, assertCurrent, withCurrent: params.authority?.withCurrent },
   );
   assertCurrent();
   if (thread.id !== binding.threadId || !isCodexThreadNonRunning(thread.status)) {
@@ -198,7 +208,6 @@ async function preparePendingCodexThreadResume(
   }
   assertCodexThreadAcceptsDirectInput(thread);
   const observation = observeCodexThreadConfiguration(params, thread, assertCurrent);
-  const dispose = observation.dispose;
   try {
     const rolloutPath = thread.path ?? binding.rolloutPath;
     const metadata = rolloutPath
@@ -219,7 +228,7 @@ async function preparePendingCodexThreadResume(
     assertCurrent();
     return { ...observation, assertCurrent };
   } catch (error) {
-    dispose();
+    observation.dispose();
     throw error;
   }
 }

@@ -6,6 +6,21 @@ function cloudProfile(profile: Record<string, unknown>) {
 }
 
 describe("OpenClawSchema cloudWorkers config", () => {
+  it("retains a required profile before enrollment without blocking startup", () => {
+    expect(
+      OpenClawSchema.parse({ cloudWorkers: { requiredProfile: "not-enrolled-yet" } }).cloudWorkers,
+    ).toEqual({
+      requiredProfile: "not-enrolled-yet",
+    });
+  });
+
+  it.each(["", " ", " worker", "worker ", null, true, 3])(
+    "rejects invalid required profile %j",
+    (requiredProfile) => {
+      expect(OpenClawSchema.safeParse({ cloudWorkers: { requiredProfile } }).success).toBe(false);
+    },
+  );
+
   it("accepts normalized per-project default profiles", () => {
     const projectProfiles = { "github.com/acme/app": "development" };
     expect(OpenClawSchema.parse({ cloudWorkers: { projectProfiles } }).cloudWorkers).toStrictEqual({

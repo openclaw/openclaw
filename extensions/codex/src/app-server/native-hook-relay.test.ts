@@ -148,7 +148,7 @@ describe("Codex native hook relay managed policy", () => {
     },
   );
 
-  it.each(["native load", "routing replacement", "unknown active"] as const)(
+  it.each(["routing replacement", "native load", "unadmitted active"] as const)(
     "refuses an unqualified receiver read after %s",
     async (change) => {
       const client = createClient();
@@ -161,7 +161,7 @@ describe("Codex native hook relay managed policy", () => {
       const parent = await monitor.registerParent({
         parentThreadId: "parent-thread",
         modelSource:
-          change === "unknown active"
+          change === "unadmitted active"
             ? {
                 ...source,
                 modelPolicyRequired: false,
@@ -176,6 +176,7 @@ describe("Codex native hook relay managed policy", () => {
       });
       parent.bindTurn("parent-b");
       const threadId = "00000000-0000-4000-8000-000000000042";
+      await notifyChildStarted(client, "parent-thread", threadId);
       const entered = createDeferred<void>();
       const returned = createDeferred<ReturnType<typeof threadRead>>();
       client.setThreadReadFactory(threadId, () => {
@@ -183,6 +184,7 @@ describe("Codex native hook relay managed policy", () => {
         return returned.promise;
       });
       const nativeWrite = vi.fn();
+      let loadNotification: Promise<void> | undefined;
       const pending = monitor
         .prepareModelInput({
           threadId: "parent-thread",
@@ -200,24 +202,28 @@ describe("Codex native hook relay managed policy", () => {
             throw new Error("Input admission finished before target read");
           }),
         ]);
-        if (change === "native load") {
-          await notifyChildStarted(client, "parent-thread", threadId);
-        } else if (change === "routing replacement") {
+        if (change === "routing replacement") {
           targetQualification = { assertCurrent: () => {}, hasProvider: () => false };
+        } else if (change === "native load") {
+          loadNotification = client.notify({
+            method: "thread/status/changed",
+            params: { threadId, status: { type: "idle" } },
+          });
         }
         const stale = threadRead({
           childThreadId: threadId,
-          threadStatus: change === "unknown active" ? "active" : "notLoaded",
+          threadStatus: change === "unadmitted active" ? "active" : "notLoaded",
         });
         stale.thread.modelProvider = "unqualified-provider";
         returned.resolve(stale);
         await expect(pending).rejects.toThrow(
-          change === "unknown active"
+          change === "unadmitted active"
             ? "receiver's exact admitted execution"
             : "receiver changed during input preparation",
         );
         expect(nativeWrite).not.toHaveBeenCalled();
       } finally {
+        await loadNotification;
         await monitor.dispose();
         await parent.unregister();
       }
@@ -622,34 +628,6 @@ describe("Codex native hook relay config", () => {
     expect(JSON.stringify(config)).not.toContain('"matcher":null');
     expect(config).not.toHaveProperty("hooks.SessionStart");
     expect(config).not.toHaveProperty("hooks.UserPromptSubmit");
-  });
-
-  it("includes only requested hook events", () => {
-    expect(
-      buildCodexNativeHookRelayConfig({
-        relay: createRelay(),
-        events: ["permission_request"],
-      }),
-    ).toEqual({
-      "features.hooks": true,
-      "hooks.PermissionRequest": expectedCommandHook("permission_request"),
-      "hooks.state": expectedHookState(["permission_request"]),
-    });
-  });
-
-  it("clears requested hook events when the relay reports no local work", () => {
-    expect(
-      buildCodexNativeHookRelayConfig({
-        relay: createRelay({ inactiveEvents: ["post_tool_use", "before_agent_finalize"] }),
-        events: ["pre_tool_use", "post_tool_use", "before_agent_finalize"],
-      }),
-    ).toEqual({
-      "features.hooks": true,
-      "hooks.PreToolUse": expectedCommandHook("pre_tool_use"),
-      "hooks.PostToolUse": [],
-      "hooks.Stop": [],
-      "hooks.state": expectedHookState(["pre_tool_use"]),
-    });
   });
 
   it("clears selected PreToolUse when the relay has no local work", () => {

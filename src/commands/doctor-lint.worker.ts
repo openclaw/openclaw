@@ -1,5 +1,5 @@
 import { withConsoleLogsRoutedToStderrForJson } from "../cli/json-output-mode.js";
-import { exitCliAfterOutput, runCliWithExitFinalization } from "../cli/one-shot-exit.js";
+import { runCliWithExitFinalization } from "../cli/one-shot-exit.js";
 import { withCliCommandCleanup, withCliProcessScope } from "../cli/runtime-cleanup-scope.js";
 import { closeCliResources, runCliDisposer } from "../cli/runtime-cleanup.js";
 import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
@@ -40,7 +40,9 @@ async function runDoctorLintWorker(): Promise<void> {
           await runCliDisposer("plugin-registration-resources", () => resources.release());
         }
       }
-      exitCliAfterOutput(defaultRuntime, exitCode);
+      // Let Node drain closing native handles; forced exit can crash Windows libuv.
+      // The supervisor owns the bounded fallback if disposal keeps this worker alive.
+      process.exitCode = exitCode;
     }),
   );
 }

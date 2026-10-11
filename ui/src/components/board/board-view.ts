@@ -27,6 +27,7 @@ import type {
   BoardWidgetFrameUrl,
 } from "../../lib/board/view-types.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { renderPanelLoadingSkeleton } from "../panel-loading-skeleton.ts";
 import "../../styles/board.css";
 import "../web-awesome-tabs.ts";
 import "../web-awesome.ts";
@@ -76,6 +77,8 @@ class OpenClawBoardView extends OpenClawLightDomElement {
   @state() private actionError = "";
   @state() private focusName = "";
   @state() private mutationPending = false;
+  @property({ type: Boolean, reflect: true, attribute: "data-initial-loading" })
+  private initialLoading = true;
 
   private gesture: BoardPointerGesture | null = null;
   private mutationRequestId = 0;
@@ -103,14 +106,20 @@ class OpenClawBoardView extends OpenClawLightDomElement {
       (changed.has("snapshot") &&
         changed.get("snapshot")?.sessionKey !== this.snapshot?.sessionKey);
     if (ownerChanged) {
+      this.actionError = "";
+      this.initialLoading = true;
+      this.scrollTop = 0;
       this.visitedTabs.clear();
       this.stableCellOrder.clear();
       this.stableCellOrderSequence = 0;
       this.contentHeights.clear();
     }
     if (changed.has("snapshot")) {
-      this.actionError = "";
       const previousSnapshot = changed.get("snapshot");
+      // Recovery reads can publish unchanged state after a failed mutation.
+      if (previousSnapshot?.revision !== this.snapshot?.revision) {
+        this.actionError = "";
+      }
       if (previousSnapshot?.sessionKey !== this.snapshot?.sessionKey) {
         this.mutationRequestId += 1;
         this.mutationPending = false;
@@ -163,6 +172,22 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     this.cancelGesture();
     super.disconnectedCallback();
   }
+
+  override updated(): void {
+    this.reconcileInitialPresentation();
+  }
+
+  private readonly reconcileInitialPresentation = (): void => {
+    if (!this.initialLoading || !this.snapshot) {
+      return;
+    }
+    const cells = [...this.querySelectorAll("openclaw-board-widget-cell")].filter(
+      (cell) => !cell.hidden,
+    );
+    if (cells.every((cell) => cell.hasUpdated && !cell.isUpdatePending && cell.presentationReady)) {
+      this.initialLoading = false;
+    }
+  };
 
   private activeTab(tabs: readonly BoardTab[]): BoardTab | undefined {
     return tabs.find((tab) => tab.tabId === this.activeTabId) ?? tabs[0];
@@ -539,15 +564,6 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     }
   };
 
-  private readonly handleOverflowSelect = (
-    event: CustomEvent<{ item: { value?: string } }>,
-  ): void => {
-    const tabId = event.detail.item.value;
-    if (tabId && this.snapshot?.tabs.some((tab) => tab.tabId === tabId)) {
-      this.callbacks?.selectTab(tabId);
-    }
-  };
-
   private renderGrid(
     widgets: readonly BoardWidget[],
     tabs: readonly BoardTab[],
@@ -607,6 +623,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
                 ?hidden=${!activeNames.has(widget.name)}
                 ?inert=${!activeNames.has(widget.name)}
                 .widget=${widget}
+                .boardRevision=${this.snapshot?.revision ?? 0}
                 .rect=${rect}
                 .contentHeightPx=${this.contentHeights.get(widget.name)}
                 .fitAutoContent=${this.fitAutoContent}
@@ -625,6 +642,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
                 .busy=${this.mutationPending}
                 .canMutate=${this.canMutate}
                 .canGrant=${this.canGrant}
+                .loadingCovered=${this.initialLoading}
               ></openclaw-board-widget-cell>
             `;
           },
@@ -651,18 +669,15 @@ class OpenClawBoardView extends OpenClawLightDomElement {
 
   override render() {
     const snapshot = this.snapshot;
-    if (!snapshot) {
-      return nothing;
-    }
-    const tabs = orderedBoardTabs(snapshot.tabs);
+    const tabs = orderedBoardTabs(snapshot?.tabs ?? []);
     const activeTab = this.activeTab(tabs);
     const activeTabId = activeTab?.tabId ?? this.activeTabId;
-    const widgets = activeTab ? orderedWidgets(snapshot, activeTab.tabId) : [];
+    const widgets = snapshot && activeTab ? orderedWidgets(snapshot, activeTab.tabId) : [];
     if (activeTab) {
       this.visitedTabs.add(activeTabId);
     }
     // Moving a mounted widget to an unvisited tab must not reload its document.
-    const retainedWidgets = snapshot.widgets.filter(
+    const retainedWidgets = (snapshot?.widgets ?? []).filter(
       (widget) => this.visitedTabs.has(widget.tabId) || this.stableCellOrder.has(widget.name),
     );
     const fullWidth = widgets.length === 1 && widgets[0]?.sizeW === BOARD_GRID_COLUMNS;
@@ -671,19 +686,29 @@ class OpenClawBoardView extends OpenClawLightDomElement {
       (widgets[0]?.name === this.pageWidgetName ||
         widgets[0]?.pluginKind === "session:website" ||
         widgets[0]?.pluginKind === "browser:dashboard");
+    const loading = !snapshot || this.initialLoading;
     return html`
+      ${loading ? renderPanelLoadingSkeleton("board", t("common.loading"), false, true) : nothing}
       <section
-        class=${`board-view ${fullWidth ? "board-view--single-full-width" : ""} ${page ? "board-view--page" : ""}`}
+        class=${`board-view ${fullWidth ? "board-view--single-full-width" : ""} ${page ? "board-view--page" : ""} ${loading ? "board-view--loading" : ""}`}
         aria-label=${t("board.label")}
+        aria-busy=${loading}
+        ?inert=${loading}
+        @openclaw-board-widget-presentation=${this.reconcileInitialPresentation}
       >
         ${renderBoardTabs({
           tabs,
           activeTabId,
           hoverTabId: this.hoverTabId,
           onTabShow: this.handleTabShow,
-          onOverflowSelect: this.handleOverflowSelect,
+          onOverflowSelect: (event) => {
+            const tabId = event.detail.item.value;
+            if (tabId && snapshot?.tabs.some((tab) => tab.tabId === tabId)) {
+              this.callbacks?.selectTab(tabId);
+            }
+          },
         })}
-        ${this.renderGrid(retainedWidgets, tabs, snapshot.sessionKey, activeTabId)}
+        ${snapshot ? this.renderGrid(retainedWidgets, tabs, snapshot.sessionKey, activeTabId) : nothing}
         ${
           this.actionError
             ? html`<div class="board-view__error" role="alert">${this.actionError}</div>`

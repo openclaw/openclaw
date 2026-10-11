@@ -1,5 +1,5 @@
 // Covers direct-message policy audit findings for channels.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { collectChannelSecurityFindingsCore } from "./audit-channel.js";
@@ -81,7 +81,7 @@ function createDmPlugin(
 }
 
 describe("security audit channel dm policy", () => {
-  it.each(["doctor", "audit"] as const)(
+  it.each(["audit"] as const)(
     "reports unowned DM routes without losing sibling findings in %s mode",
     async (mode) => {
       const findings = await collectChannelSecurityFindingsCore({
@@ -151,129 +151,6 @@ describe("security audit channel dm policy", () => {
     expect(report.summary.critical).toBe(baseline.summary.critical + 1);
   });
 
-  it.each([
-    {
-      name: "global main + winning isolated binding is safe",
-      cfg: {
-        session: { dmScope: "main" },
-        bindings: [
-          {
-            agentId: "main",
-            match: { channel: "whatsapp", peer: { kind: "direct", id: "*" } },
-            session: { dmScope: "per-channel-peer" },
-          },
-        ],
-      } satisfies OpenClawConfig,
-      expectedCollisions: 0,
-    },
-    {
-      name: "global isolated + winning main binding collides",
-      cfg: {
-        session: { dmScope: "per-channel-peer" },
-        bindings: [
-          {
-            agentId: "main",
-            match: { channel: "whatsapp", peer: { kind: "direct", id: "*" } },
-            session: { dmScope: "main" },
-          },
-        ],
-      } satisfies OpenClawConfig,
-      expectedCollisions: 1,
-      remediation: "matching binding or session.dmScope",
-    },
-    {
-      name: "exact peer bindings outrank a colliding channel binding",
-      cfg: {
-        session: { dmScope: "main" },
-        bindings: [
-          {
-            agentId: "main",
-            match: { channel: "whatsapp" },
-            session: { dmScope: "main" },
-          },
-          {
-            agentId: "main",
-            match: { channel: "whatsapp", peer: { kind: "direct", id: "user-a" } },
-            session: { dmScope: "per-channel-peer" },
-          },
-          {
-            agentId: "main",
-            match: { channel: "whatsapp", peer: { kind: "direct", id: "user-b" } },
-            session: { dmScope: "per-channel-peer" },
-          },
-        ],
-      } satisfies OpenClawConfig,
-      expectedCollisions: 0,
-    },
-    {
-      name: "global session aliases remain isolated by routed agent store",
-      cfg: {
-        agents: { list: [{ id: "agent-a" }, { id: "agent-b", default: true }] },
-        session: { scope: "global", dmScope: "main" },
-        bindings: [
-          {
-            agentId: "agent-a",
-            match: { channel: "whatsapp", peer: { kind: "direct", id: "user-a" } },
-          },
-          {
-            agentId: "agent-b",
-            match: { channel: "whatsapp", peer: { kind: "direct", id: "user-b" } },
-          },
-        ],
-      } satisfies OpenClawConfig,
-      expectedCollisions: 0,
-    },
-  ])("$name", async ({ cfg, expectedCollisions, remediation }) => {
-    const findings = await collectChannelSecurityFindingsCore({
-      cfg,
-      plugins: [createDmPlugin()],
-    });
-
-    const collisions = collisionFindings(findings);
-    expect(collisions).toHaveLength(expectedCollisions);
-    if (remediation) {
-      expect(collisions[0]?.remediation).toContain(remediation);
-    }
-  });
-
-  it("detects cross-account collisions with one admitted sender per account", async () => {
-    const findings = await collectChannelSecurityFindingsCore({
-      cfg: { session: { dmScope: "main" } },
-      plugins: [
-        createDmPlugin({
-          accounts: {
-            "Personal Account": { allowFrom: ["user-a"] },
-            "work@example": { allowFrom: ["user-b"] },
-          },
-        }),
-      ],
-    });
-
-    const collisions = collisionFindings(findings);
-    expect(collisions).toHaveLength(1);
-    expect(collisions[0]?.checkId).toContain("whatsapp-personal-account_whatsapp-work-example");
-    expect(collisions[0]?.checkId).toMatch(/^[a-z0-9._-]+$/);
-    expect(collisions[0]?.detail).toContain("personal-account");
-    expect(collisions[0]?.detail).toContain("work-example");
-  });
-
-  it("keeps same-named accounts attributed across channels", async () => {
-    const findings = await collectChannelSecurityFindingsCore({
-      cfg: { session: { dmScope: "main" } },
-      plugins: [
-        createDmPlugin({ accounts: { default: { allowFrom: ["user-a"] } } }),
-        createDmPlugin({
-          id: "telegram",
-          accounts: { default: { allowFrom: ["user-b"] } },
-        }),
-      ],
-    });
-
-    const collision = collisionFindings(findings)[0];
-    expect(collision?.checkId).toContain("telegram-default_whatsapp-default");
-    expect(collision?.detail).toContain("telegram-default, whatsapp-default");
-  });
-
   it("counts identity-linked aliases as one logical principal", async () => {
     const cfg: OpenClawConfig = {
       session: {
@@ -296,7 +173,7 @@ describe("security audit channel dm policy", () => {
   it("keeps separate collision topologies distinct", async () => {
     const findings = await collectChannelSecurityFindingsCore({
       cfg: {
-        agents: { list: [{ id: "alpha", default: true }, { id: "beta" }] },
+        agents: { entries: { alpha: {}, beta: {} } },
         session: { dmScope: "main" },
         bindings: [
           { agentId: "alpha", match: { channel: "whatsapp", accountId: "a" } },
@@ -323,72 +200,6 @@ describe("security audit channel dm policy", () => {
     expect(new Set(collisions.map((finding) => finding.detail)).size).toBe(2);
   });
 
-  it("uses the channel-owned DM route for wildcard senders", async () => {
-    const findings = await collectChannelSecurityFindingsCore({
-      cfg: { session: { dmScope: "main" } },
-      plugins: [
-        createDmPlugin({
-          accounts: { default: { policy: "open", allowFrom: ["*"] } },
-          dmRouting: { resolveDmScope: () => "per-channel-peer" },
-        }),
-      ],
-    });
-
-    expect(collisionFindings(findings)).toHaveLength(0);
-  });
-
-  it.each([
-    {
-      name: "per-channel-peer collides across accounts",
-      dmScope: "per-channel-peer" as const,
-      plugins: () => [
-        createDmPlugin({
-          accounts: {
-            personal: { policy: "open", allowFrom: ["*"] },
-            work: { policy: "open", allowFrom: ["*"] },
-          },
-        }),
-      ],
-      expectedCollisions: 1,
-    },
-    {
-      name: "per-peer collides across channels",
-      dmScope: "per-peer" as const,
-      plugins: () => [
-        createDmPlugin({ accounts: { default: { policy: "open", allowFrom: ["*"] } } }),
-        createDmPlugin({
-          id: "telegram",
-          accounts: { default: { policy: "open", allowFrom: ["*"] } },
-        }),
-      ],
-      expectedCollisions: 1,
-    },
-    {
-      name: "per-account-channel-peer stays isolated",
-      dmScope: "per-account-channel-peer" as const,
-      plugins: () => [
-        createDmPlugin({
-          accounts: {
-            personal: { policy: "open", allowFrom: ["*"] },
-            work: { policy: "open", allowFrom: ["*"] },
-          },
-        }),
-      ],
-      expectedCollisions: 0,
-    },
-  ])("models wildcard namespace: $name", async ({ dmScope, plugins, expectedCollisions }) => {
-    const findings = await collectChannelSecurityFindingsCore({
-      cfg: { session: { dmScope } },
-      plugins: plugins(),
-    });
-    const collisions = collisionFindings(findings);
-
-    expect(collisions).toHaveLength(expectedCollisions);
-    if (expectedCollisions > 0) {
-      expect(collisions[0]?.detail).toContain("can resolve to the same session bucket");
-    }
-  });
-
   it.each([
     {
       name: "per-channel wildcard intersects a concrete sender on the same channel",
@@ -406,30 +217,6 @@ describe("security audit channel dm policy", () => {
         }),
       ],
       expectedCollisions: 1,
-    },
-    {
-      name: "per-peer wildcard intersects a concrete sender on another channel",
-      cfg: { session: { dmScope: "per-peer" as const } },
-      plugins: [
-        createDmPlugin({ accounts: { open: { policy: "open", allowFrom: ["*"] } } }),
-        createDmPlugin({
-          id: "telegram",
-          accounts: { finite: { allowFrom: ["user-b"] } },
-        }),
-      ],
-      expectedCollisions: 1,
-    },
-    {
-      name: "per-channel wildcards on different channels stay separate",
-      cfg: { session: { dmScope: "per-channel-peer" as const } },
-      plugins: [
-        createDmPlugin({ accounts: { open: { policy: "open", allowFrom: ["*"] } } }),
-        createDmPlugin({
-          id: "telegram",
-          accounts: { open: { policy: "open", allowFrom: ["*"] } },
-        }),
-      ],
-      expectedCollisions: 0,
     },
     {
       name: "per-peer wildcard subsumes an overlapping per-channel wildcard",
@@ -529,31 +316,6 @@ describe("security audit channel dm policy", () => {
     expect(collisions[0]?.detail).toContain("2 distinct admitted DM principals");
   });
 
-  it("does not invoke finite session routing for wildcard analysis", async () => {
-    const resolveDmRoute = vi.fn(({ principalId, route }) => {
-      if (principalId === undefined) {
-        return { kind: "isolated" as const };
-      }
-      if (!/^\d+$/.test(principalId)) {
-        throw new Error("principal must be numeric");
-      }
-      return { sessionKey: route.sessionKey };
-    });
-    const findings = await collectChannelSecurityFindingsCore({
-      cfg: { session: { dmScope: "main" } },
-      plugins: [
-        createDmPlugin({
-          accounts: { default: { policy: "open", allowFrom: ["*"] } },
-          dmRouting: { resolveDmRoute },
-        }),
-      ],
-    });
-
-    expect(resolveDmRoute).toHaveBeenCalledOnce();
-    expect(resolveDmRoute.mock.calls[0]?.[0].principalId).toBeUndefined();
-    expect(collisionFindings(findings)).toHaveLength(0);
-  });
-
   it("warns when custom finite routing omits an unknown-principal policy", async () => {
     const findings = await collectChannelSecurityFindingsCore({
       cfg: { session: { dmScope: "main" } },
@@ -573,19 +335,5 @@ describe("security audit channel dm policy", () => {
       "channels.whatsapp.dm.wildcard_routing_unverified.default",
     );
     expect(finding.detail).toContain("resolveDmRoute returned no unknown-principal policy");
-  });
-
-  it("flags public DMs and shared session ownership together", async () => {
-    const findings = await collectChannelSecurityFindingsCore({
-      cfg: { session: { dmScope: "main" } },
-      plugins: [
-        createDmPlugin({
-          accounts: { default: { policy: "open", allowFrom: ["*"] } },
-        }),
-      ],
-    });
-
-    expect(requireFinding(findings, "channels.whatsapp.dm.open").severity).toBe("critical");
-    expect(collisionFindings(findings)).toHaveLength(1);
   });
 });

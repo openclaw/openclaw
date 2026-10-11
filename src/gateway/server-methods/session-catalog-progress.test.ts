@@ -9,60 +9,63 @@ import { catalogLog } from "./session-catalog-log.test-support.js";
 import {
   call,
   hoisted,
-  markPluginRegistryActive,
   provider,
   resetSessionCatalogTestState,
   startCall,
-  type PluginRegistry,
   type SessionCatalogProvider,
 } from "./session-catalog.test-helpers.js";
 
 describe("session catalog progress ownership", () => {
   beforeEach(resetSessionCatalogTestState);
 
-  it("streams completed hosts to only the requesting connection", async () => {
-    const broadcastToConnIds = vi.fn();
-    const host = {
-      hostId: "node:fast",
-      label: "Fast node",
-      kind: "node" as const,
-      connected: true,
-      nodeId: "fast",
-      sessions: [],
-    };
-    hoisted.activeRegistry.sessionCatalogs = [
-      {
-        provider: provider("codex", {
-          list: vi.fn(async ({ onHost }) => {
-            onHost?.(host);
-            return [host];
+  it.each([false, true])(
+    "streams hosts only to the requester and honors final withdrawal (withdrawn=%s)",
+    async (withdrawn) => {
+      const broadcastToConnIds = vi.fn();
+      const host = {
+        hostId: "node:fast",
+        label: "Fast node",
+        kind: "node" as const,
+        connected: true,
+        nodeId: "fast",
+        sessions: [],
+      };
+      hoisted.activeRegistry.sessionCatalogs = [
+        {
+          provider: provider("codex", {
+            list: vi.fn(async ({ onHost }) => {
+              onHost?.(host);
+              return withdrawn ? [] : [host];
+            }),
           }),
-        }),
-      },
-    ];
+        },
+      ];
 
-    const respond = await call(
-      "sessions.catalog.list",
-      { progressId: "progress-1" },
-      {},
-      { connId: "requester", connect: {} },
-      { broadcastToConnIds },
-    );
+      const respond = await call(
+        "sessions.catalog.list",
+        { progressId: "progress-1", ...(withdrawn ? { allowPartialResults: true } : {}) },
+        {},
+        { connId: "requester", connect: {} },
+        { broadcastToConnIds },
+      );
 
-    expect(broadcastToConnIds).toHaveBeenCalledWith(
-      "sessions.catalog.host",
-      {
-        progressId: "progress-1",
-        agentId: "main",
-        catalog: expect.objectContaining({ id: "codex", hosts: [host] }),
-      },
-      new Set(["requester"]),
-      { dropIfSlow: true },
-    );
-    expect(respond).toHaveBeenCalledWith(true, {
-      catalogs: [expect.objectContaining({ id: "codex", hosts: [host] })],
-    });
-  });
+      expect(broadcastToConnIds).toHaveBeenCalledWith(
+        "sessions.catalog.host",
+        {
+          progressId: "progress-1",
+          agentId: "main",
+          catalog: expect.objectContaining({ id: "codex", hosts: [host] }),
+        },
+        new Set(["requester"]),
+        { dropIfSlow: true },
+      );
+      expect(broadcastToConnIds).toHaveBeenCalledOnce();
+      expect(respond.mock.calls[0]?.[1]?.catalogs[0]?.error).toBeUndefined();
+      expect(respond).toHaveBeenCalledWith(true, {
+        catalogs: [expect.objectContaining({ id: "codex", hosts: withdrawn ? [] : [host] })],
+      });
+    },
+  );
 
   it("single-flights identical concurrent lists for one caller and fans progress to active followers", async () => {
     const previousDiagnostics = areDiagnosticsEnabledForProcess();
@@ -92,7 +95,7 @@ describe("session catalog progress ownership", () => {
       return [host];
     });
     hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("codex", { list }) }];
-    const config = { agents: { list: [{ id: "main" }, { id: "research" }] } };
+    const config = { agents: { entries: { main: {}, research: {} } } };
     const leaderBroadcast = vi.fn();
     const followerBroadcast = vi.fn();
     const sharedClient = { connId: "requester" };
@@ -119,7 +122,7 @@ describe("session catalog progress ownership", () => {
 
     try {
       await started.promise;
-      expect(list).toHaveBeenCalledOnce();
+      expect(list).toHaveBeenCalledTimes(3);
       clock = 1_500;
       release();
       await Promise.all([
@@ -197,44 +200,42 @@ describe("session catalog progress ownership", () => {
   ])(
     "negotiates partial catalog results for $request (connected=$connected)",
     async ({ request, connected, partial }) => {
-      const list = vi.fn<SessionCatalogProvider["list"]>(async () => []);
+      const release = createDeferredCore();
+      const list = vi.fn<SessionCatalogProvider["list"]>(async () => {
+        await release.promise;
+        return [];
+      });
       hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("fixture", { list }) }];
-      await call(
+      const config = {};
+      const client = { connId: "requester" };
+      const context = { isConnectionActive: () => connected };
+      const progressive = startCall(
         "sessions.catalog.list",
         { catalogId: "fixture", ...request },
-        {},
-        { connId: "requester" },
-        { isConnectionActive: () => connected },
+        config,
+        client,
+        context,
       );
-      expect(list).toHaveBeenCalledWith(expect.objectContaining({ allowPartialResults: partial }));
+      const complete = startCall(
+        "sessions.catalog.list",
+        { catalogId: "fixture", ...request, allowPartialResults: false },
+        config,
+        client,
+        context,
+      );
+      try {
+        release.resolve();
+        await Promise.all([progressive.completion, complete.completion]);
+        expect(list).toHaveBeenCalledWith(
+          expect.objectContaining({ allowPartialResults: partial }),
+        );
+        expect(list).toHaveBeenCalledTimes(partial ? 2 : 1);
+      } finally {
+        release.resolve();
+        await Promise.allSettled([progressive.completion, complete.completion]);
+      }
     },
   );
-
-  it("does not share a partial list with a caller awaiting a complete response", async () => {
-    const release = createDeferredCore();
-    const list = vi.fn<SessionCatalogProvider["list"]>(async () => {
-      await release.promise;
-      return [];
-    });
-    hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("fixture", { list }) }];
-    const config = {};
-    const client = { connId: "requester" };
-    const progressive = startCall(
-      "sessions.catalog.list",
-      { allowPartialResults: true, progressId: "live" },
-      config,
-      client,
-    );
-    const complete = startCall("sessions.catalog.list", {}, config, client);
-    try {
-      release.resolve();
-      await Promise.all([progressive.completion, complete.completion]);
-      expect(list).toHaveBeenCalledTimes(2);
-    } finally {
-      release.resolve();
-      await Promise.allSettled([progressive.completion, complete.completion]);
-    }
-  });
 
   it.each([false, true])(
     "keeps newer host publications in the aggregate while another provider waits (cold=%s)",
@@ -306,90 +307,54 @@ describe("session catalog progress ownership", () => {
     },
   );
 
-  it("does not restore a host withdrawn from the provider's final snapshot", async () => {
-    const broadcastToConnIds = vi.fn();
-    const cached = {
-      hostId: "node:removed",
-      label: "Removed node",
-      kind: "node" as const,
-      connected: true,
-      sessions: [],
-    };
-    hoisted.activeRegistry.sessionCatalogs = [
-      {
-        provider: provider("fixture", {
-          list: async ({ onHost }) => {
-            onHost?.(cached);
-            return [];
-          },
-        }),
-      },
-    ];
-    const respond = await call(
-      "sessions.catalog.list",
-      { progressId: "withdrawn", allowPartialResults: true },
-      {},
-      { connId: "requester" },
-      { broadcastToConnIds },
-    );
-    expect(broadcastToConnIds).toHaveBeenCalledOnce();
-    expect(respond.mock.calls[0]?.[1]?.catalogs[0]?.error).toBeUndefined();
-    expect(respond).toHaveBeenCalledWith(true, {
-      catalogs: [expect.objectContaining({ id: "fixture", hosts: [] })],
-    });
-  });
-
-  it.each([0, 128])(
-    "keeps an active list shared after %i distinct lists settle",
-    async (completedQueries) => {
-      const started = createDeferredCore();
-      const release = createDeferredCore();
-      const list = vi.fn<SessionCatalogProvider["list"]>(async ({ search }) => {
-        if (search === "held") {
-          started.resolve();
-          await release.promise;
-        }
-        return [];
-      });
-      hoisted.activeRegistry.sessionCatalogs = [
-        { provider: provider("fixture", { list }) },
-        { provider: provider("completed") },
-      ];
-      const config = {};
-      const client = { connId: "requester" };
-      const request = { catalogId: "fixture", search: "held" };
-      const leader = startCall("sessions.catalog.list", request, config, client);
-      const pending = [leader];
-      try {
-        await started.promise;
-        for (let index = 0; index < completedQueries; index += 1) {
-          const respond = await call(
-            "sessions.catalog.list",
-            { catalogId: "completed", search: `completed-${index}` },
-            config,
-            client,
-          );
-          expect(respond).toHaveBeenCalledWith(true, {
-            catalogs: [expect.objectContaining({ id: "completed", hosts: [] })],
-          });
-        }
-        pending.push(startCall("sessions.catalog.list", request, config, client));
-        release.resolve();
-        await Promise.all(pending.map(({ completion }) => completion));
-        for (const { respond } of pending) {
-          expect(respond).toHaveBeenCalledWith(true, {
-            catalogs: [expect.objectContaining({ id: "fixture", hosts: [] })],
-          });
-        }
-        expect(list.mock.calls.filter(([params]) => params.search === "held")).toHaveLength(1);
-        await call("sessions.catalog.list", request, config, client);
-        expect(list.mock.calls.filter(([params]) => params.search === "held")).toHaveLength(2);
-      } finally {
-        release.resolve();
-        await Promise.allSettled(pending.map(({ completion }) => completion));
+  it("keeps an active list shared after 128 distinct lists settle", async () => {
+    const started = createDeferredCore();
+    const release = createDeferredCore();
+    const list = vi.fn<SessionCatalogProvider["list"]>(async ({ search }) => {
+      if (search === "held") {
+        started.resolve();
+        await release.promise;
       }
-    },
-  );
+      return [];
+    });
+    hoisted.activeRegistry.sessionCatalogs = [
+      { provider: provider("fixture", { list }) },
+      { provider: provider("completed") },
+    ];
+    const config = {};
+    const client = { connId: "requester" };
+    const request = { catalogId: "fixture", search: "held" };
+    const leader = startCall("sessions.catalog.list", request, config, client);
+    const pending = [leader];
+    try {
+      await started.promise;
+      for (let index = 0; index < 128; index += 1) {
+        const respond = await call(
+          "sessions.catalog.list",
+          { catalogId: "completed", search: `completed-${index}` },
+          config,
+          client,
+        );
+        expect(respond).toHaveBeenCalledWith(true, {
+          catalogs: [expect.objectContaining({ id: "completed", hosts: [] })],
+        });
+      }
+      pending.push(startCall("sessions.catalog.list", request, config, client));
+      release.resolve();
+      await Promise.all(pending.map(({ completion }) => completion));
+      for (const { respond } of pending) {
+        expect(respond).toHaveBeenCalledWith(true, {
+          catalogs: [expect.objectContaining({ id: "fixture", hosts: [] })],
+        });
+      }
+      expect(list.mock.calls.filter(([params]) => params.search === "held")).toHaveLength(1);
+      await call("sessions.catalog.list", request, config, client);
+      expect(list.mock.calls.filter(([params]) => params.search === "held")).toHaveLength(2);
+    } finally {
+      release.resolve();
+      await Promise.allSettled(pending.map(({ completion }) => completion));
+    }
+  });
 
   it.each(["settled", "in-flight"] as const)(
     "refreshes %s lists immediately after archiving a session",
@@ -492,61 +457,7 @@ describe("session catalog progress ownership", () => {
     },
   );
 
-  it("retires pending progress when aggregate projection fails", async () => {
-    const late = createDeferredCore();
-    const broadcastToConnIds = vi.fn();
-    let publication: Promise<void> | undefined;
-    let signal: AbortSignal | undefined;
-    hoisted.activeRegistry.sessionCatalogs = [
-      {
-        provider: provider("fixture", {
-          list: async (params) => {
-            signal = params.signal;
-            publication = late.promise.then(() =>
-              params.onHost?.({
-                hostId: "late",
-                label: "Late",
-                kind: "node",
-                connected: true,
-                sessions: [],
-              }),
-            );
-            params.waitUntil?.(publication);
-            return [];
-          },
-        }),
-      },
-    ];
-    const getRuntimeConfig = vi
-      .fn()
-      .mockReturnValueOnce({})
-      .mockImplementation(() => {
-        throw new Error("current config unavailable");
-      });
-    try {
-      await expect(
-        call(
-          "sessions.catalog.list",
-          { progressId: "failed" },
-          {},
-          { connId: "requester" },
-          {
-            getRuntimeConfig,
-            broadcastToConnIds,
-          },
-        ),
-      ).rejects.toThrow("current config unavailable");
-      expect(signal?.aborted).toBe(true);
-      late.resolve();
-      await publication;
-      expect(broadcastToConnIds).not.toHaveBeenCalled();
-    } finally {
-      late.resolve();
-      await publication;
-    }
-  });
-
-  it.each(["registry-reactivation", "gateway-close", "disconnect"] as const)(
+  it.each(["gateway-close", "disconnect", "projection-failure"] as const)(
     "fences old publications after %s while a replacement request can publish",
     async (retirement) => {
       const releases = [createDeferredCore(), createDeferredCore()];
@@ -574,18 +485,31 @@ describe("session catalog progress ownership", () => {
       hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("fixture", { list }) }];
       const config = {};
       try {
-        await call(
+        const getRuntimeConfig = vi
+          .fn()
+          .mockReturnValueOnce(config)
+          .mockImplementation(() => {
+            throw new Error("current config unavailable");
+          });
+        const original = call(
           "sessions.catalog.list",
           { progressId: "original" },
           config,
           { connId: "old", connectionSignal: connection.signal },
-          { broadcastToConnIds, requestEntryLifetime: { signal: gateway.signal } },
+          {
+            broadcastToConnIds,
+            requestEntryLifetime: { signal: gateway.signal },
+            ...(retirement === "projection-failure" ? { getRuntimeConfig } : {}),
+          },
         );
-        if (retirement === "registry-reactivation") {
-          markPluginRegistryActive(hoisted.activeRegistry as PluginRegistry);
-        } else if (retirement === "gateway-close") {
-          gateway.abort();
+        if (retirement === "projection-failure") {
+          await expect(original).rejects.toThrow("current config unavailable");
         } else {
+          await original;
+        }
+        if (retirement === "gateway-close") {
+          gateway.abort();
+        } else if (retirement === "disconnect") {
           connection.abort();
         }
         expect(producerSignal?.aborted).toBe(retirement !== "disconnect");

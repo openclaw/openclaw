@@ -61,7 +61,7 @@ function resolveChoice<T extends string>(value: unknown, choices: readonly T[], 
 }
 
 function normalizeTranscriptDir(value: unknown): string {
-  const raw = typeof value === "string" ? value.trim() : "";
+  const raw = normalizeOptionalString(value);
   if (!raw) {
     return DEFAULT_TRANSCRIPT_DIR;
   }
@@ -85,7 +85,14 @@ function normalizeConfiguredToolsAllow(value: unknown): string[] | undefined {
   return tools.length > 0 ? tools : undefined;
 }
 
-function resolveDefaultToolsAllow(cfg: OpenClawConfig | undefined): string[] {
+function resolveDefaultToolsAllow(
+  cfg: OpenClawConfig | undefined,
+  recallToolNames: readonly string[] | undefined,
+): string[] {
+  const providerTools = normalizeIdentifierList(recallToolNames);
+  if (providerTools.length > 0) {
+    return providerTools;
+  }
   return cfg?.plugins?.slots?.memory === "memory-lancedb"
     ? [...LANCEDB_ACTIVE_MEMORY_TOOLS_ALLOW]
     : [...DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW];
@@ -138,16 +145,14 @@ export function isMissingRegisteredMemoryToolsError(
     return false;
   }
   const sources = message.slice(prefix.length, -suffix.length);
-  const sourceParts = sources
-    .split(";")
-    .map((source) => source.trim())
-    .filter(Boolean);
+  const sourceParts = normalizeStringEntries(sources.split(";"));
   return sourceParts.includes(`runtime toolsAllow: ${toolsAllow.join(", ")}`);
 }
 
 export function normalizePluginConfig(
   pluginConfig: unknown,
   cfg?: OpenClawConfig,
+  recallToolNames?: readonly string[],
 ): ResolvedActiveRecallPluginConfig {
   const raw = (
     pluginConfig && typeof pluginConfig === "object" ? pluginConfig : {}
@@ -178,7 +183,9 @@ export function normalizePluginConfig(
       ["balanced", "strict", "contextual", "recall-heavy", "precision-heavy", "preference-only"],
       raw.queryMode === "message" ? "strict" : raw.queryMode === "full" ? "contextual" : "balanced",
     ),
-    toolsAllow: normalizeConfiguredToolsAllow(raw.toolsAllow) ?? resolveDefaultToolsAllow(cfg),
+    toolsAllow:
+      normalizeConfiguredToolsAllow(raw.toolsAllow) ??
+      resolveDefaultToolsAllow(cfg, recallToolNames),
     promptOverride: normalizeOptionalString(raw.promptOverride),
     promptAppend: normalizeOptionalString(raw.promptAppend),
     timeoutMs: resolveIntegerOption(

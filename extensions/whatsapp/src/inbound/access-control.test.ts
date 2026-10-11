@@ -3,7 +3,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
-import type { AcceptedInboundAccessControlResult } from "./access-control.js";
 import {
   readAllowFromStoreMock,
   sendMessageMock,
@@ -26,7 +25,7 @@ beforeAll(async () => {
 
 function expectAccepted(
   result: InboundAccessControlResult,
-): asserts result is AcceptedInboundAccessControlResult {
+): asserts result is Extract<InboundAccessControlResult, { allowed: true }> {
   expect(result.allowed).toBe(true);
   if (!result.allowed) {
     throw new Error("Expected accepted inbound access result");

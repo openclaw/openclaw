@@ -1,10 +1,7 @@
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
-import {
-  mutateRequesterSettleWakeBatch,
-  settleRequesterCompletionBatch,
-} from "../completion/subagent-completion-admission.store.js";
+import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
 import type { RequesterWakeMutation } from "../completion/subagent-completion-mutation.types.js";
 import type {
   PendingRequesterSettleWakeCommit,
@@ -112,16 +109,6 @@ export async function commitRequesterSettleWakeMutation(
       onPublished?.(published);
     },
   };
-  const result = await (operation.kind === "settle"
-    ? settleRequesterCompletionBatch({
-        ...options,
-        entries: entries.map((subagent) => ({ subagent })),
-        outcome: operation.outcome,
-        isCurrent: () => {
-          assertCurrent();
-          return true;
-        },
-      })
-    : mutateRequesterSettleWakeBatch({ ...options, entries, operation }));
+  const result = await mutateRequesterCompletionBatch({ ...options, entries, operation });
   return result.applied === true && result.publication === "published";
 }

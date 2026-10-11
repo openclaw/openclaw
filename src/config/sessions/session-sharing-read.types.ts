@@ -6,6 +6,7 @@ export type SessionMembersWorkerInput = {
   database: { agentId: string; path: string };
   sessionKey: string;
   env: NodeJS.ProcessEnv;
+  continuation?: CanonicalSessionReaderContinuation;
 };
 
 export type SessionSuggestionsWorkerInput = {

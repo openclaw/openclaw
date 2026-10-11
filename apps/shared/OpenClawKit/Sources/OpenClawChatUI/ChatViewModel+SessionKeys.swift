@@ -129,22 +129,15 @@ extension OpenClawChatViewModel {
     }
 
     @discardableResult
-    func applyLiveRunUsage(runID: String, sequence: Int, outputTokens: Int) -> Bool {
-        guard sequence > 0, outputTokens > 0, self.ownsLiveTelemetryRun(runID) else { return false }
+    func acceptLiveRunSequence(runID: String, sequence: Int, outputTokens: Int? = nil) -> Bool {
+        guard sequence > 0, outputTokens.map({ $0 > 0 }) != false,
+              self.ownsLiveTelemetryRun(runID) else { return false }
         var state = self.liveRunStateByRunID[runID] ?? ChatLiveRunState()
         guard sequence > state.sequence else { return false }
         state.sequence = sequence
-        state.outputTokens = max(outputTokens, state.outputTokens ?? 0)
-        self.liveRunStateByRunID[runID] = state
-        return true
-    }
-
-    @discardableResult
-    func acceptLiveRunSequence(runID: String, sequence: Int) -> Bool {
-        guard sequence > 0, self.ownsLiveTelemetryRun(runID) else { return false }
-        var state = self.liveRunStateByRunID[runID] ?? ChatLiveRunState()
-        guard sequence > state.sequence else { return false }
-        state.sequence = sequence
+        if let outputTokens {
+            state.outputTokens = max(outputTokens, state.outputTokens ?? 0)
+        }
         self.liveRunStateByRunID[runID] = state
         return true
     }
@@ -308,12 +301,14 @@ extension OpenClawChatViewModel {
         modelID: String?,
         modelProvider: String?,
         sessionKey: String,
+        agentID: String?,
         syncSelection: Bool)
     {
         let existingIndex = self.sessionIndexForModelState(sessionKey: sessionKey)
         var updated = existingIndex.map { self.sessions[$0] }
             ?? self.sidebarData?.row(key: sessionKey, agentID: self.currentSessionSnapshot().deliveryAgentID)
             ?? OpenClawChatSessionEntry(key: sessionKey)
+        if self.sidebarData != nil { updated.agentId = updated.agentId ?? agentID }
         // Thinking metadata follows model identity; stale options must not survive a model change.
         let preservesThinkingMetadata =
             ChatPayloadDecoding.trimmedNonEmptyString(updated.model) ==

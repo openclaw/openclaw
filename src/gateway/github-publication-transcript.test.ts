@@ -1,21 +1,36 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
+import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/index.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
 import {
   loadTranscriptEvents,
-  readLatestSessionTranscriptReport,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { withIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createGitHubPublicationTranscriptReporter } from "./github-publication-transcript.js";
+import { reportGitHubPublicationTranscript } from "./github-publication-transcript.js";
+
+const reportFault = useSqliteWorkerFault([
+  {
+    name: "reject_report",
+    match: /^insert into transcript_events /,
+    sql: `CREATE TEMP TRIGGER reject_report BEFORE INSERT ON main.transcript_events
+      WHEN json_extract(NEW.event_json, '$.type') = 'message'
+      BEGIN SELECT RAISE(ABORT, 'report insert failed'); END;`,
+  },
+]);
 
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
@@ -23,6 +38,75 @@ afterEach(() => {
 });
 
 describe("GitHub publication transcript reporting", () => {
+  it("commits one bound private report before marking its publication receipt", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const authority = { assertCurrent() {} };
+      const actor = await captureOpenClawAgentDatabaseExecution({
+        kind: "ephemeral",
+        agentId: "main",
+        env: state.env,
+        authority,
+      });
+      assert(actor);
+      const session = {
+        agentId: "main",
+        sessionKey: "agent:main:dashboard:incognito-publication-transcript",
+        sessionId: "private-publication",
+      };
+      await actor.sessions.create(authority, {
+        sessionKey: session.sessionKey,
+        entry: { sessionId: session.sessionId, updatedAt: Date.now() },
+      });
+      const result = {
+        requestId: "private-result",
+        status: "published" as const,
+        repository: "example/repository",
+        url: "https://github.com/example/repository/pull/1",
+        branch: "private-result",
+        headCommit: "a".repeat(40),
+      };
+      const loadRuntime = vi.fn(async () => {
+        throw new Error("Private reports must not select native storage");
+      });
+      const markReportedAsync = vi.fn().mockResolvedValue(undefined);
+      const sql = observeHostDataSql();
+      try {
+        await withIncognitoSessionBinding({ actor }, async () => {
+          await reportGitHubPublicationTranscript(
+            loadRuntime,
+            { markReportedAsync },
+            { ...session, result },
+          );
+          await reportGitHubPublicationTranscript(
+            loadRuntime,
+            { markReportedAsync },
+            { ...session, result },
+          );
+          const events = await loadTranscriptEvents({
+            ...session,
+            storePath: actor.path,
+            env: state.env,
+          });
+          const reports = events.filter(
+            (event) =>
+              isRecord(event) &&
+              event.type === "message" &&
+              isRecord(event.message) &&
+              event.message.responseId === `github-publication:${result.requestId}`,
+          );
+          expect(reports).toHaveLength(1);
+          expect(JSON.stringify(reports[0])).toContain(result.url);
+          expect(markReportedAsync).toHaveBeenCalledTimes(2);
+          expect(loadRuntime).not.toHaveBeenCalled();
+          expect(sql.queries).toEqual([]);
+        });
+      } finally {
+        sql.restore();
+        await actor.close();
+      }
+    });
+  });
+
   it.each(
     [
       {
@@ -154,11 +238,11 @@ describe("GitHub publication transcript reporting", () => {
           )
           .get(identity.sessionId);
         expect(encoded?.count).toBe(encoding === "compressed" ? 3 + beforeTail.length : 0);
-        const reporter = createGitHubPublicationTranscriptReporter(
+        await reportGitHubPublicationTranscript(
           () => import("./session-utils.js"),
-          { markReported: vi.fn() },
+          { markReportedAsync: vi.fn().mockResolvedValue(undefined) },
+          { ...identity, result },
         );
-        await reporter({ ...identity, result });
         const reports = (await loadTranscriptEvents(identity)).filter(
           (event) =>
             isRecord(event) &&
@@ -186,24 +270,24 @@ describe("GitHub publication transcript reporting", () => {
           { type: "provider_event", id: "opaque", parentId: null },
         ];
         await replaceTranscriptEvents(identity, events);
-        const markReported = vi.fn();
-        const reporter = createGitHubPublicationTranscriptReporter(
-          () => import("./session-utils.js"),
-          { markReported },
-        );
+        const markReportedAsync = vi.fn().mockResolvedValue(undefined);
         await expect(
-          reporter({
-            ...identity,
-            result: {
-              requestId: "header-publication",
-              status: "failed",
-              code: "push_rejected",
-              message: "Failed",
-              nextAction: "Retry",
+          reportGitHubPublicationTranscript(
+            () => import("./session-utils.js"),
+            { markReportedAsync },
+            {
+              ...identity,
+              result: {
+                requestId: "header-publication",
+                status: "failed",
+                code: "push_rejected",
+                message: "Failed",
+                nextAction: "Retry",
+              },
             },
-          }),
+          ),
         ).rejects.toThrow("doctor/import migration");
-        expect(markReported).not.toHaveBeenCalled();
+        expect(markReportedAsync).not.toHaveBeenCalled();
         expect(await loadTranscriptEvents(identity)).toEqual(events);
       });
     },
@@ -224,15 +308,7 @@ describe("GitHub publication transcript reporting", () => {
         nextAction: "Retry.",
       } satisfies SessionGitHubPublicationResult;
       const database = openOpenClawAgentDatabase({ agentId: identity.agentId });
-      // Admit the canonical schema first; inject this failure into the retained report writer.
-      await expect(readLatestSessionTranscriptReport(identity, [])).resolves.toEqual({
-        ok: true,
-        value: undefined,
-      });
-      database.db.exec(
-        "CREATE TRIGGER reject_report BEFORE INSERT ON transcript_events WHEN json_extract(NEW.event_json, '$.type') = 'message' BEGIN SELECT RAISE(ABORT, 'report insert failed'); END",
-      );
-      const markReported = vi.fn(() => {
+      const markReportedAsync = vi.fn(async () => {
         const reader = new DatabaseSync(database.path, { readOnly: true });
         try {
           expect(
@@ -244,16 +320,26 @@ describe("GitHub publication transcript reporting", () => {
           reader.close();
         }
       });
-      const reporter = createGitHubPublicationTranscriptReporter(
+      reportFault.enable();
+      try {
+        await expect(
+          reportGitHubPublicationTranscript(
+            () => import("./session-utils.js"),
+            { markReportedAsync },
+            { ...identity, result },
+          ),
+        ).rejects.toThrow("report insert failed");
+        expect(markReportedAsync).not.toHaveBeenCalled();
+        expect(await loadTranscriptEvents(identity)).toEqual([]);
+      } finally {
+        reportFault.disable();
+      }
+      await reportGitHubPublicationTranscript(
         () => import("./session-utils.js"),
-        { markReported },
+        { markReportedAsync },
+        { ...identity, result },
       );
-      await expect(reporter({ ...identity, result })).rejects.toThrow("report insert failed");
-      expect(markReported).not.toHaveBeenCalled();
-      expect(await loadTranscriptEvents(identity)).toEqual([]);
-      database.db.exec("DROP TRIGGER reject_report");
-      await reporter({ ...identity, result });
-      expect(markReported).toHaveBeenCalledOnce();
+      expect(markReportedAsync).toHaveBeenCalledOnce();
     });
   });
   it("reports on the active branch while preserving large unrelated evidence", async () => {
@@ -309,13 +395,17 @@ describe("GitHub publication transcript reporting", () => {
           .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq")
           .all(identity.sessionId);
       const before = readEvidence();
-      const markReported = vi.fn();
-      const reporter = createGitHubPublicationTranscriptReporter(
+      const markReportedAsync = vi.fn().mockResolvedValue(undefined);
+      await reportGitHubPublicationTranscript(
         () => import("./session-utils.js"),
-        { markReported },
+        { markReportedAsync },
+        { ...identity, result },
       );
-      await reporter({ ...identity, result });
-      await reporter({ ...identity, result });
+      await reportGitHubPublicationTranscript(
+        () => import("./session-utils.js"),
+        { markReportedAsync },
+        { ...identity, result },
+      );
       expect(readEvidence().slice(0, before.length)).toEqual(before);
       const reports = (await loadTranscriptEvents(identity)).filter(
         (event) =>
@@ -326,7 +416,7 @@ describe("GitHub publication transcript reporting", () => {
       );
       expect(reports).toHaveLength(2);
       expect(reports[1]).toMatchObject({ parentId: "opaque" });
-      expect(markReported).toHaveBeenCalledTimes(2);
+      expect(markReportedAsync).toHaveBeenCalledTimes(2);
     });
   });
   it.each([
@@ -360,22 +450,17 @@ describe("GitHub publication transcript reporting", () => {
         const sessionKey = "agent:main:main";
         const sessionId = "publication-transcript";
         await upsertSessionEntryCore({ agentId: "main", sessionKey }, { sessionId, updatedAt: 1 });
-        const markReported = vi.fn();
-        const reporter = createGitHubPublicationTranscriptReporter(
-          async () => {
-            const runtime = await import("./session-utils.js");
-            return {
-              resolveCanonicalSessionEntryFromStoreKeys:
-                runtime.resolveCanonicalSessionEntryFromStoreKeys,
-              resolveGatewaySessionStoreTargetWithStore:
-                runtime.resolveGatewaySessionStoreTargetWithStore,
-            };
-          },
-          { markReported },
+        const markReportedAsync = vi.fn().mockResolvedValue(undefined);
+        await reportGitHubPublicationTranscript(
+          () => import("./session-utils.js"),
+          { markReportedAsync },
+          { sessionId, sessionKey, agentId: "main", result },
         );
-
-        await reporter({ sessionId, sessionKey, agentId: "main", result });
-        await reporter({ sessionId, sessionKey, agentId: "main", result });
+        await reportGitHubPublicationTranscript(
+          () => import("./session-utils.js"),
+          { markReportedAsync },
+          { sessionId, sessionKey, agentId: "main", result },
+        );
 
         const events = await loadTranscriptEvents({ agentId: "main", sessionId, sessionKey });
         const messages = events.filter(
@@ -388,7 +473,7 @@ describe("GitHub publication transcript reporting", () => {
         );
         expect(messages).toHaveLength(1);
         expect(JSON.stringify(messages[0])).toContain(visibleText);
-        expect(markReported).toHaveBeenCalledWith(result.requestId);
+        expect(markReportedAsync).toHaveBeenCalledWith(result.requestId);
       });
     },
   );

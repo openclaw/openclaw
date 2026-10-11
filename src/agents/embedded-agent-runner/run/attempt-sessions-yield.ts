@@ -1,9 +1,9 @@
 import type { AssistantMessage, AssistantMessageEventStreamLike } from "../../../llm/types.js";
-import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SessionManager } from "../../sessions/index.js";
 import { buildUsageWithNoCost } from "../../stream-message-shared.js";
 import { isRunnerAbortError } from "../abort.js";
+import { preserveTrailingTranscriptMetadata } from "./transcript-tail-metadata.js";
 
 const SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE = "openclaw.sessions_yield_interrupt";
 
@@ -74,16 +74,14 @@ export async function stripSessionsYieldArtifacts(activeSession: {
 
   // The tool-calling assistant turn and synthetic abort artifacts form one
   // non-continuable suffix after sessions_yield.
-  while (strippedMessages.length > 0) {
-    const last = strippedMessages.at(-1);
-    const removable =
-      last?.role === "assistant" ||
-      (last?.role === "custom" && last.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE);
-    if (!removable) {
-      break;
-    }
-    strippedMessages.pop();
-  }
+  strippedMessages.length =
+    strippedMessages.findLastIndex(
+      (message) =>
+        message?.role !== "assistant" &&
+        !(
+          message?.role === "custom" && message.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE
+        ),
+    ) + 1;
 
   const removedMessages = activeSession.messages.slice(strippedMessages.length);
   if (removedMessages.length === 0) {
@@ -114,11 +112,7 @@ export async function stripSessionsYieldArtifacts(activeSession: {
       return true;
     },
     {
-      preserveTrailing: (entry) =>
-        entry.type === "custom" ||
-        entry.type === "label" ||
-        entry.type === "session_info" ||
-        (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message)),
+      preserveTrailing: preserveTrailingTranscriptMetadata,
     },
   );
   activeSession.agent.state.messages = strippedMessages;

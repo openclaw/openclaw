@@ -14,20 +14,11 @@ const TELEGRAM_TOPIC_SUFFIX_REGEX = /^(.+?):(?:(direct-topic|topic):)?(\d+)$/;
 export const TELEGRAM_INVALID_TOPIC_ID_MESSAGE =
   "Telegram topic ID must be a positive safe integer.";
 
+const TELEGRAM_INTERNAL_PREFIXES_RE = /^(?:telegram|tg):(?:\s*(?:telegram|tg|group):)*/i;
+
 export function stripTelegramInternalPrefixes(to: string): string {
-  let trimmed = to.trim();
-  let strippedTelegramPrefix = false;
-  while (true) {
-    if (/^(telegram|tg):/i.test(trimmed)) {
-      strippedTelegramPrefix = true;
-      trimmed = trimmed.replace(/^(telegram|tg):/i, "").trim();
-    } else if (strippedTelegramPrefix && /^group:/i.test(trimmed)) {
-      // Legacy internal form: `telegram:group:<id>` (still emitted by session keys).
-      trimmed = trimmed.replace(/^group:/i, "").trim();
-    } else {
-      return trimmed;
-    }
-  }
+  // A Telegram prefix admits the following legacy group and repeated Telegram prefixes.
+  return to.trim().replace(TELEGRAM_INTERNAL_PREFIXES_RE, "").trim();
 }
 
 export function normalizeTelegramChatId(raw: string): string | undefined {
@@ -42,57 +33,37 @@ export function isNumericTelegramChatId(raw: string): boolean {
 export function normalizeTelegramOutboundTarget(raw: string): string {
   const trimmed = raw.trim();
   const legacyGroupMatch = /^group:(-?\d+(?::(?:direct-topic|topic):\d+|:\d+)?)$/i.exec(trimmed);
-  if (legacyGroupMatch?.[1]) {
-    return legacyGroupMatch[1];
-  }
-  return raw;
+  return legacyGroupMatch?.[1] ?? raw;
 }
 
 export function normalizeTelegramLookupTarget(raw: string): string | undefined {
   const stripped = stripTelegramInternalPrefixes(raw);
-  if (!stripped) {
-    return undefined;
-  }
-  if (isNumericTelegramChatId(stripped)) {
+  if (TELEGRAM_NUMERIC_CHAT_ID_REGEX.test(stripped)) {
     return stripped;
   }
   const tmeMatch = /^(?:https?:\/\/)?t\.me\/([A-Za-z0-9_]+)$/i.exec(stripped);
   if (tmeMatch?.[1]) {
     return `@${tmeMatch[1]}`;
   }
-  if (stripped.startsWith("@")) {
-    const handle = stripped.slice(1);
-    if (!handle || !TELEGRAM_USERNAME_REGEX.test(handle)) {
-      return undefined;
-    }
-    return `@${handle}`;
-  }
-  if (TELEGRAM_USERNAME_REGEX.test(stripped)) {
-    return `@${stripped}`;
-  }
-  return undefined;
+  const handle = stripped.startsWith("@") ? stripped.slice(1) : stripped;
+  return TELEGRAM_USERNAME_REGEX.test(handle) ? `@${handle}` : undefined;
 }
 
-/**
- * Parse a Telegram delivery target into chatId and optional topic/thread ID.
- *
- * Supported formats:
- * - `chatId` (plain chat ID, t.me link, @username, or internal prefixes like `telegram:...`)
- * - `chatId:topicId` (numeric topic/thread ID)
- * - `chatId:topic:topicId` (explicit topic marker; preferred)
- * - `chatId:direct-topic:topicId` (channel Direct Messages topic)
- */
 function resolveTelegramChatType(chatId: string): "direct" | "group" | "unknown" {
   const trimmed = chatId.trim();
-  if (!trimmed) {
-    return "unknown";
-  }
-  if (isNumericTelegramChatId(trimmed)) {
+  if (TELEGRAM_NUMERIC_CHAT_ID_REGEX.test(trimmed)) {
     return trimmed.startsWith("-") ? "group" : "direct";
   }
   return "unknown";
 }
 
+/**
+ * Supported delivery targets:
+ * - `chatId` (plain chat ID, t.me link, @username, or internal prefixes like `telegram:...`)
+ * - `chatId:topicId` (numeric topic/thread ID)
+ * - `chatId:topic:topicId` (explicit topic marker; preferred)
+ * - `chatId:direct-topic:topicId` (channel Direct Messages topic)
+ */
 export function parseTelegramTarget(to: string): TelegramTarget {
   const normalized = stripTelegramInternalPrefixes(to);
   const match = TELEGRAM_TOPIC_SUFFIX_REGEX.exec(normalized);
@@ -123,8 +94,7 @@ export function hasRejectedTelegramTopic(raw: string): boolean {
   const base = TELEGRAM_TOPIC_SUFFIX_REGEX.exec(normalized)?.[1];
   return (
     base !== undefined &&
-    (normalizeTelegramChatId(base) !== undefined ||
-      normalizeTelegramLookupTarget(base) !== undefined) &&
+    normalizeTelegramLookupTarget(base) !== undefined &&
     parseTelegramTarget(normalized).chatId === normalized
   );
 }

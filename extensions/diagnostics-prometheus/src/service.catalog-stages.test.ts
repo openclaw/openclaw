@@ -82,3 +82,112 @@ describe("catalog list stage metrics", () => {
     }
   });
 });
+
+it("exports chat.send startup and deferred histograms with bounded, trusted labels", () => {
+  const metrics = createMetricsHarness();
+  const event = {
+    ...baseEvent(),
+    type: "diagnostic.phase.completed" as const,
+    name: "chat.send.snapshot",
+    startedAt: 10,
+    durationMs: 10,
+    details: { stage: "request", privateText: "synthetic-private-content" },
+  };
+  try {
+    metrics.record(event, trusted);
+    metrics.record({ ...event, durationMs: 0 }, trusted);
+    metrics.record({ ...event, durationMs: 3_000, details: { stage: "startup" } }, trusted);
+    metrics.record(
+      { ...event, name: "chat.send.replyInitialization", details: { stage: "startup" } },
+      trusted,
+    );
+    for (const stage of ["steer", "queued"]) {
+      metrics.record(
+        { ...event, name: "chat.send.dispatch", durationMs: 120_001, details: { stage } },
+        trusted,
+      );
+    }
+    const rendered = metrics.render();
+    expect(rendered).toContain(
+      'openclaw_chat_send_phase_seconds_count{phase="snapshot",stage="request"} 2\n',
+    );
+    expect(rendered).toContain(
+      'openclaw_chat_send_phase_seconds_sum{phase="snapshot",stage="request"} 0.01\n',
+    );
+    expect(rendered).toContain(
+      'openclaw_chat_send_phase_seconds_sum{phase="snapshot",stage="startup"} 3\n',
+    );
+    expect(rendered).toContain(
+      'openclaw_chat_send_phase_seconds_count{phase="replyInitialization",stage="startup"} 1\n',
+    );
+    for (const stage of ["steer", "queued"]) {
+      expect(rendered).toContain(
+        `openclaw_chat_send_phase_seconds_sum{phase="dispatch",stage="${stage}"} 120.001\n`,
+      );
+    }
+    expect(rendered).not.toContain("synthetic-private-content");
+    expect(rendered).not.toContain("privateText");
+
+    metrics.record(event, untrusted);
+    metrics.record({ ...event, name: "chat.send.private-session" }, trusted);
+    metrics.record({ ...event, details: { stage: "private-session" } }, trusted);
+    metrics.record({ ...event, details: undefined }, trusted);
+    for (const durationMs of [undefined, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      metrics.record({ ...event, durationMs }, trusted);
+    }
+    expect(metrics.render()).toBe(rendered);
+  } finally {
+    metrics.stop();
+  }
+});
+
+it("exports warm/cold preparation phases without identifiers or untrusted series", () => {
+  const metrics = createMetricsHarness();
+  const event = {
+    ...baseEvent(),
+    type: "diagnostic.phase.completed" as const,
+    name: "worktree.preparation",
+    startedAt: 100,
+    durationMs: 1_200,
+    details: {
+      kind: "sandbox",
+      template: "warm",
+      outcome: "returned",
+      allocate: 100,
+      templateApply: 20,
+      setup: 0,
+      sessionKey: "synthetic-private-session",
+    },
+  };
+  try {
+    const before = metrics.render();
+    metrics.record(event, untrusted);
+    metrics.record(event, { trusted: false, internal: true });
+    metrics.record({ ...event, details: { ...event.details, template: "private-key" } }, trusted);
+    expect(metrics.render()).toBe(before);
+    metrics.record(event, trusted);
+    metrics.record(
+      { ...event, details: { ...event.details, template: "cold", setup: 10_000 } },
+      trusted,
+    );
+    const rendered = metrics.render();
+    for (const [phase, sum] of [
+      ["total", 1.2],
+      ["allocate", 0.1],
+      ["templateApply", 0.02],
+      ["setup", 0],
+    ] as const) {
+      expect(rendered).toContain(
+        `openclaw_worktree_preparation_seconds_sum{kind="sandbox",outcome="returned",phase="${phase}",template="warm"} ${sum}\n`,
+      );
+    }
+    expect(rendered).toContain(
+      'openclaw_worktree_preparation_seconds_sum{kind="sandbox",outcome="returned",phase="setup",template="cold"} 10\n',
+    );
+    expect(rendered).not.toContain("synthetic-private-session");
+    expect(rendered).not.toContain("sessionKey");
+    expect(rendered).not.toContain('phase="checkout"');
+  } finally {
+    metrics.stop();
+  }
+});

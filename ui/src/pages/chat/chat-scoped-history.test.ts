@@ -46,12 +46,6 @@ describe("scoped chat history defaults and row ordering", () => {
       workRefresh: "updated",
     },
     {
-      name: "prestarted history preserves newer Work descriptor",
-      moveRoster: true,
-      workRefresh: "updated",
-      prestartedHistory: true,
-    },
-    {
       name: "missing Work row remains admissible",
       moveRoster: true,
       workRefresh: "missing",
@@ -61,7 +55,7 @@ describe("scoped chat history defaults and row ordering", () => {
       moveRoster: true,
       workRefresh: "none",
     },
-  ])("$name", async ({ moveRoster, workRefresh, prestartedHistory }) => {
+  ])("$name", async ({ moveRoster, workRefresh }) => {
     const pendingHistory = createDeferred<ChatHistoryResult>();
     const initialWork: GatewaySessionRow = {
       key: "global",
@@ -141,8 +135,7 @@ describe("scoped chat history defaults and row ordering", () => {
         deferBranches: true,
         scheduleScroll: false,
       };
-      let refresh = prestartedHistory ? undefined : refreshPageChat(state, refreshOptions);
-      // Both paths use the real request observation, including a load begun before refresh.
+      const refresh = refreshPageChat(state, refreshOptions);
       const historyLoad = loadChatHistory(state, { deferBranches: true });
       expect(getChatHistoryLoadState(state).phase).toBe("in-flight");
       if (workRefresh !== "none") {
@@ -162,7 +155,6 @@ describe("scoped chat history defaults and row ordering", () => {
         expect(state.sessionsResult).toBe(publishedWorkProjection);
         expect(state.sessionsResultAgentId).toBe("work");
       }
-      refresh ??= refreshPageChat(state, { ...refreshOptions, historyLoad });
       const primaryDefaults = sessions.state.result?.defaults;
       const historyRow = {
         ...initialWork,

@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import * as cli from "./cli-shared.js";
 import { resolveMatrixAccountConfig } from "./matrix/account-config.js";
 import type {
@@ -9,14 +8,6 @@ import type {
 } from "./matrix/direct-management.js";
 import { getMatrixRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
-
-const loadMatrixActionClientModule = createLazyRuntimeModule(
-  () => import("./matrix/actions/client.js"),
-);
-
-const loadMatrixDirectManagementModule = createLazyRuntimeModule(
-  () => import("./matrix/direct-management.js"),
-);
 
 type MatrixCliDirectRoomCandidate = Omit<MatrixDirectRoomCandidate, "explicit">;
 type MatrixCliDirectRoomInspection = Omit<
@@ -76,8 +67,8 @@ async function inspectMatrixDirectRoom(params: {
 }): Promise<MatrixCliDirectRoomInspection> {
   const cfg = getMatrixRuntime().config.current() as CoreConfig;
   const [{ withResolvedActionClient }, { inspectMatrixDirectRooms }] = await Promise.all([
-    loadMatrixActionClientModule(),
-    loadMatrixDirectManagementModule(),
+    import("./matrix/actions/client.js"),
+    import("./matrix/direct-management.js"),
   ]);
   return await withResolvedActionClient(
     { accountId: params.accountId, cfg },
@@ -99,8 +90,8 @@ async function repairMatrixDirectRoom(params: {
   const cfg = getMatrixRuntime().config.current() as CoreConfig;
   const accountConfig = resolveMatrixAccountConfig({ cfg, accountId: params.accountId });
   const [{ withStartedActionClient }, { repairMatrixDirectRooms }] = await Promise.all([
-    loadMatrixActionClientModule(),
-    loadMatrixDirectManagementModule(),
+    import("./matrix/actions/client.js"),
+    import("./matrix/direct-management.js"),
   ]);
   return await withStartedActionClient({ accountId: params.accountId, cfg }, async (client) => {
     const repaired = await repairMatrixDirectRooms({
@@ -141,15 +132,17 @@ function toCliDirectRoomInspection(
 
 export function registerMatrixDirectCommands(root: Command): void {
   const direct = root.command("direct").description("Inspect and repair Matrix direct-room state");
+  const command = (name: string, description: string) =>
+    direct
+      .command(name)
+      .description(description)
+      .requiredOption("--user-id <id>", "Peer Matrix user ID")
+      .option("--account <id>", "Account ID (for multi-account setups)")
+      .option("--verbose", "Show detailed diagnostics")
+      .option("--json", "Output as JSON");
 
-  direct
-    .command("inspect")
-    .description("Inspect direct-room mappings for a Matrix user")
-    .requiredOption("--user-id <id>", "Peer Matrix user ID")
-    .option("--account <id>", "Account ID (for multi-account setups)")
-    .option("--verbose", "Show detailed diagnostics")
-    .option("--json", "Output as JSON")
-    .action(async (options: cli.MatrixCliOptions & { userId: string }) => {
+  command("inspect", "Inspect direct-room mappings for a Matrix user").action(
+    async (options: cli.MatrixCliOptions & { userId: string }) => {
       const accountId = cli.resolveMatrixCliAccountContext(options.account).accountId;
       await cli.runMatrixCliCommand(options, {
         run: async () =>
@@ -160,16 +153,11 @@ export function registerMatrixDirectCommands(root: Command): void {
         onText: printDirectRoomInspection,
         errorPrefix: "Direct room inspection failed",
       });
-    });
+    },
+  );
 
-  direct
-    .command("repair")
-    .description("Repair Matrix direct-room mappings for a Matrix user")
-    .requiredOption("--user-id <id>", "Peer Matrix user ID")
-    .option("--account <id>", "Account ID (for multi-account setups)")
-    .option("--verbose", "Show detailed diagnostics")
-    .option("--json", "Output as JSON")
-    .action(async (options: cli.MatrixCliOptions & { userId: string }) => {
+  command("repair", "Repair Matrix direct-room mappings for a Matrix user").action(
+    async (options: cli.MatrixCliOptions & { userId: string }) => {
       const accountId = cli.resolveMatrixCliAccountContext(options.account).accountId;
       await cli.runMatrixCliCommand(options, {
         run: async () =>
@@ -193,5 +181,6 @@ export function registerMatrixDirectCommands(root: Command): void {
         },
         errorPrefix: "Direct room repair failed",
       });
-    });
+    },
+  );
 }

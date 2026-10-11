@@ -1,5 +1,6 @@
 import "./service-definition-backup.mocks.test-support.js";
 import { expect, it } from "vitest";
+import { escapeXml } from "../shared/xml.js";
 import { buildScheduledTaskXml } from "./schtasks-xml.js";
 import { auditGatewayServiceConfig } from "./service-audit.js";
 import { fixture, native } from "./service-definition-backup.test-support.js";
@@ -61,23 +62,69 @@ it.each(["omitted", "disabled-task", "disabled-trigger", "native-defaults", "mis
   },
 );
 
-it("verifies a refreshed restored task after Windows omits default fields", async () => {
-  const f = await fixture("win32");
-  const execute = native.task.getMockImplementation()!;
-  native.task.mockImplementation(async (args: string[]) => {
-    const result = await execute(args);
-    if (args[0] === "/Create") {
-      f.setTask(omitDefaults(f.task()));
+it.each(["omitted by Windows", "omitted in backup"])(
+  "verifies task defaults %s",
+  async (direction) => {
+    const f = await fixture("win32");
+    if (direction === "omitted by Windows") {
+      const execute = native.task.getMockImplementation()!;
+      native.task.mockImplementation(async (args: string[]) => {
+        const result = await execute(args);
+        if (args[0] === "/Create") {
+          f.setTask(omitDefaults(f.task()));
+        }
+        return result;
+      });
+      await expect(f.install()).resolves.toBeUndefined();
+      await expect(f.capture.hooks.beforeWrite()).resolves.toBeUndefined();
+    } else {
+      const expectedXml = omitDefaults(f.task());
+      await f.capture.hooks.taskPrepared(expectedXml);
+      await expect(f.capture.hooks.taskWritten(expectedXml)).resolves.toBeUndefined();
     }
-    return result;
-  });
-  await expect(f.install()).resolves.toBeUndefined();
-  await expect(f.capture.hooks.beforeWrite()).resolves.toBeUndefined();
-});
+  },
+);
 
-it("verifies restored XML when Windows exports defaults omitted in the backup", async () => {
-  const f = await fixture("win32");
-  const expectedXml = omitDefaults(f.task());
-  await f.capture.hooks.taskPrepared(expectedXml);
-  await expect(f.capture.hooks.taskWritten(expectedXml)).resolves.toBeUndefined();
-});
+it.each([
+  { kind: "legacy-wscript", key: "Actions.Exec.Command", classification: "outdated" },
+  { kind: "password", key: "Principals.Principal.LogonType", classification: "unknown-edit" },
+  { kind: "arguments", key: "Actions.Exec.Command", classification: "unknown-edit" },
+  { kind: "directory", key: "Actions.Exec.WorkingDirectory", classification: "unknown-edit" },
+])(
+  "preserves operator Windows task policy during $kind audit",
+  async ({ kind, key, classification }) => {
+    const f = await fixture("win32");
+    const hiddenPath = f.sourcePath.replace(/\.cmd$/u, ".vbs");
+    let xml = buildScheduledTaskXml({
+      taskDescription: "OpenClaw Gateway",
+      taskUser: "operator",
+      launchPath: kind === "legacy-wscript" ? hiddenPath : f.sourcePath,
+      interactive: kind === "legacy-wscript",
+    });
+    if (kind === "legacy-wscript") {
+      xml = xml.replace(
+        /<Command>[^<]*<\/Command>/u,
+        `<Command>wscript.exe</Command><Arguments>&quot;${escapeXml(hiddenPath)}&quot;</Arguments>`,
+      );
+    } else if (kind === "password") {
+      xml = xml.replace("<LogonType>S4U</LogonType>", "<LogonType>Password</LogonType>");
+    } else if (kind === "arguments") {
+      xml = xml.replace("</Arguments>", " &amp; operator-private</Arguments>");
+    } else {
+      xml = xml.replace(
+        /<WorkingDirectory>[^<]*<\/WorkingDirectory>/u,
+        "<WorkingDirectory>operator-private</WorkingDirectory>",
+      );
+    }
+    f.setTask(xml);
+    native.task.mockClear();
+    const result = await auditGatewayServiceConfig({ ...f, platform: "win32" });
+    expect(result.definitionDriftError).toBeUndefined();
+    expect(result.definitionDrift).toContainEqual(
+      expect.objectContaining({ kind: classification, key }),
+    );
+    expect(JSON.stringify(result.definitionDrift)).not.toContain("operator-private");
+    expect(f.task()).toBe(xml);
+    expect(native.task.mock.calls.every(([args]) => args[0] === "/Query")).toBe(true);
+  },
+);

@@ -1,6 +1,3 @@
-/**
- * Browser plugin runtime lifecycle helpers for startup and shutdown cleanup.
- */
 import type { Server } from "node:http";
 import {
   getExtensionRelayModule,
@@ -18,7 +15,6 @@ type CreateBrowserRuntimeStateParams = {
   server?: Server | null;
 };
 
-/** Creates Browser server state and starts runtime-wide cleanup handlers. */
 export async function createBrowserRuntimeState(
   params: CreateBrowserRuntimeStateParams,
 ): Promise<BrowserServerState> {
@@ -32,11 +28,8 @@ export async function createBrowserRuntimeState(
   return state;
 }
 
-/** Stops Browser profiles, the optional HTTP server, and loaded Playwright state. */
 type StopBrowserRuntimeParams = {
   current: BrowserServerState | null;
-  /** Public API compatibility; cleanup is intentionally pinned to `current`. */
-  getState: () => BrowserServerState | null;
   clearState: () => void;
   closeServer?: boolean;
   onWarn: (message: string) => void;
@@ -103,7 +96,6 @@ function toRuntimeLifecycleError(value: unknown, message: string): Error {
   return value instanceof Error ? value : new Error(message, { cause: value });
 }
 
-/** Stops Browser profiles, the optional HTTP server, and loaded Playwright state. */
 export async function stopBrowserRuntime(params: StopBrowserRuntimeParams): Promise<void> {
   await stopBrowserRuntimeInternal(params, true);
 }

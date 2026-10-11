@@ -12,7 +12,7 @@ import type {
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import type { ManagedRun, ProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit } from "../process/supervisor/types.js";
-import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import {
   CronStreamOutput,
@@ -123,7 +123,6 @@ export class CronStreamJobOwner {
   // Process generation changes across child restarts; logical identity does not.
   private generation = 0;
   private desiredRunning = false;
-  private retired = false;
   private removalRequested = false;
   // Preserve terminal restart exhaustion across a normal shutdown state write.
   private restartExhausted = false;
@@ -182,7 +181,6 @@ export class CronStreamJobOwner {
       getGeneration: () => this.generation,
       getState: () => this.state,
       isDesiredRunning: () => this.desiredRunning,
-      isRetired: () => this.retired,
       logger: params.logger,
     });
   }
@@ -233,7 +231,6 @@ export class CronStreamJobOwner {
           return;
         }
       }
-      this.retired = false;
       this.desiredRunning = true;
       this.adoptJob(job, nextScheduleKey, nextSourceIdentity);
       this.droppedBatches = Math.max(
@@ -354,7 +351,7 @@ export class CronStreamJobOwner {
   }
 
   private async spawnSource(): Promise<void> {
-    if (!this.desiredRunning || this.retired || this.params.scheduler.signal.aborted) {
+    if (!this.desiredRunning || this.params.scheduler.signal.aborted) {
       this.state = "stopped";
       return;
     }
@@ -375,7 +372,6 @@ export class CronStreamJobOwner {
       !ownsPersistedJob ||
       generation !== this.generation ||
       !this.desiredRunning ||
-      this.retired ||
       this.state !== "starting"
     ) {
       this.state = "stopped";
@@ -404,7 +400,7 @@ export class CronStreamJobOwner {
         onStderr: (chunk) => this.output.enqueueChunk("stderr", chunk, generation),
       });
     } catch (error) {
-      if (generation !== this.generation || !this.desiredRunning || this.retired) {
+      if (generation !== this.generation || !this.desiredRunning) {
         this.state = "stopped";
         return;
       }
@@ -412,7 +408,7 @@ export class CronStreamJobOwner {
       return;
     }
 
-    if (generation !== this.generation || !this.desiredRunning || this.retired) {
+    if (generation !== this.generation || !this.desiredRunning) {
       // Retain a late spawn until exit is confirmed so a later stop can retry it.
       this.run = run;
       await stopManagedRun(run);
@@ -438,7 +434,6 @@ export class CronStreamJobOwner {
       !ownsRunningJob ||
       generation !== this.generation ||
       !this.desiredRunning ||
-      this.retired ||
       this.state !== "running"
     ) {
       await this.stopOperation("schedule-update");
@@ -505,9 +500,6 @@ export class CronStreamJobOwner {
 
   private async stopOperation(reason: CronStreamStopReason, job?: CronStreamJob): Promise<void> {
     this.desiredRunning = false;
-    if (reason === "removed") {
-      this.retired = true;
-    }
     if (job) {
       this.adoptJob(job, cronStreamScheduleKey(job.schedule), sourceIdentityFor(job));
     }
@@ -606,12 +598,7 @@ export class CronStreamJobOwner {
 
   private scheduleRestart(delayMs: number, generation: number): Promise<void> {
     return this.enqueue("schedule-restart", async () => {
-      if (
-        !this.desiredRunning ||
-        this.retired ||
-        this.state !== "backoff" ||
-        generation !== this.generation
-      ) {
+      if (!this.desiredRunning || this.state !== "backoff" || generation !== this.generation) {
         return;
       }
       this.restartJob?.cancel();
@@ -643,12 +630,7 @@ export class CronStreamJobOwner {
 
   private restartAfterBackoff(generation: number): Promise<void> {
     return this.enqueue("restart", async () => {
-      if (
-        generation !== this.generation ||
-        this.state !== "backoff" ||
-        !this.desiredRunning ||
-        this.retired
-      ) {
+      if (generation !== this.generation || this.state !== "backoff" || !this.desiredRunning) {
         return;
       }
       this.restartJob?.cancel();

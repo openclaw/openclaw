@@ -233,7 +233,7 @@ it("keeps rekeyed source lineage separate from the adopted target", async () => 
   ]);
 });
 
-it.each(["user", "restart"])("invalidates restart ancestry: %s", async (terminal) => {
+it("invalidates restart-aborted ancestry", async () => {
   const storePath = store();
   const initial = await owner(storePath);
   const delivery = deferred();
@@ -243,18 +243,12 @@ it.each(["user", "restart"])("invalidates restart ancestry: %s", async (terminal
   await vi.waitFor(() => expect(waited).toHaveBeenCalledTimes(1));
   const predecessor = await owner(storePath);
   rotate(predecessor, storePath);
-  expect(terminal === "restart" ? predecessor.abortForRestart() : predecessor.abortByUser()).toBe(
-    true,
-  );
+  expect(predecessor.abortForRestart()).toBe(true);
   predecessor.completeWithAfterClearBarrier(delivery.promise);
   const successor = await owner(storePath);
   rotate(successor, storePath, "second-compaction");
   successor.complete();
   delivery.resolve();
   const result = await pending;
-  if (terminal === "restart") {
-    expect(result).toMatchObject(invalidated);
-  } else {
-    expectRotated(result, "second-compaction");
-  }
+  expect(result).toMatchObject(invalidated);
 });

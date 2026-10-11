@@ -17,22 +17,17 @@ type NormalizedServiceUrl = {
 
 function normalizeOptionalServiceUrl(value: string | undefined): NormalizedServiceUrl | null {
   const trimmed = value?.trim();
-  if (!trimmed) {
+  const parsed = trimmed ? URL.parse(trimmed) : null;
+  if (!parsed) {
     return null;
   }
-
-  try {
-    const parsed = new URL(trimmed);
-    parsed.hash = "";
-    parsed.search = "";
-    parsed.pathname = parsed.pathname.replace(/\/+$/, "");
-    return {
-      value: parsed.toString().replace(/\/+$/, ""),
-      host: parsed.hostname.toLowerCase(),
-    };
-  } catch {
-    return null;
-  }
+  parsed.hash = "";
+  parsed.search = "";
+  parsed.pathname = parsed.pathname.replace(/\/+$/, "");
+  return {
+    value: parsed.toString().replace(/\/+$/, ""),
+    host: parsed.hostname.toLowerCase(),
+  };
 }
 
 export function resolveMSTeamsSdkCloudOptions(cfg?: MSTeamsConfig): MSTeamsSdkCloudOptions {

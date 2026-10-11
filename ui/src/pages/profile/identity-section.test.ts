@@ -180,7 +180,7 @@ describe("renderIdentitySection", () => {
     expect(container.textContent).not.toContain("Disconnect");
     expect(container.textContent).toContain("public GitHub noreply address");
     expect(container.textContent).toContain("future commits only");
-    const toggle = container.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+    const toggle = container.querySelector<HTMLInputElement>("input.settings-toggle__input");
     expect(toggle?.checked).toBe(true);
     expect(toggle?.hasAttribute("disabled")).toBe(false);
     toggle!.checked = false;
@@ -197,7 +197,7 @@ describe("renderIdentitySection", () => {
     expect(container.textContent).toContain("GitHub-backed sign-in");
     expect(container.textContent).toContain("Refresh to retry");
     expect(container.querySelector(".identity-github-form")).toBeNull();
-    const toggle = container.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+    const toggle = container.querySelector<HTMLInputElement>("input.settings-toggle__input");
     expect(toggle?.checked).toBe(false);
     expect(toggle?.hasAttribute("disabled")).toBe(true);
   });
@@ -222,7 +222,7 @@ describe("renderIdentitySection", () => {
     );
     expect(container.textContent).not.toContain("Linked emails");
     expect(container.textContent).not.toContain("Refresh to retry");
-    const toggle = container.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+    const toggle = container.querySelector<HTMLInputElement>("input.settings-toggle__input");
     expect(toggle?.checked).toBe(false);
     expect(toggle?.hasAttribute("disabled")).toBe(true);
   });

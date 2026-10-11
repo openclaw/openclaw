@@ -285,10 +285,10 @@ describe("doctor runtime tool schema checks", () => {
     expectSchemaError(
       await collectRuntimeToolSchemaFindings({
         agents: {
-          list: [
-            { id: "main", default: true, workspace: "/tmp/shared-workspace" },
-            { id: "worker", workspace: "/tmp/shared-workspace" },
-          ],
+          entries: {
+            main: { workspace: "/tmp/shared-workspace" },
+            worker: { workspace: "/tmp/shared-workspace" },
+          },
         },
       }),
       {
@@ -325,10 +325,10 @@ describe("doctor runtime tool schema checks", () => {
     await expect(
       collectRuntimeToolSchemaFindings({
         agents: {
-          list: [
-            { id: "main", default: true, workspace: "/tmp/main-workspace" },
-            { id: "acp-worker", workspace: "/tmp/acp-workspace", runtime: { type: "acp" } },
-          ],
+          entries: {
+            main: { workspace: "/tmp/main-workspace" },
+            "acp-worker": { workspace: "/tmp/acp-workspace", runtime: { type: "acp" } },
+          },
         },
       }),
     ).resolves.toEqual([]);
@@ -347,10 +347,10 @@ describe("doctor runtime tool schema checks", () => {
     const findings = await collectRuntimeToolSchemaFindings({
       ...mcpConfig(),
       agents: {
-        list: [
-          { id: "main", default: true, workspace: "/tmp/main-workspace" },
-          { id: "worker", workspace: "/tmp/worker-workspace" },
-        ],
+        entries: {
+          main: { workspace: "/tmp/main-workspace" },
+          worker: { workspace: "/tmp/worker-workspace" },
+        },
       },
     });
     expect(findings).toEqual([
@@ -411,7 +411,7 @@ describe("doctor runtime tool schema checks", () => {
     const findings = await collectRuntimeToolSchemaFindings({
       agents: {
         entries: {
-          main: { default: true, workspace: "/tmp/main-workspace" },
+          main: { workspace: "/tmp/main-workspace" },
           worker: { workspace: "/tmp/worker-workspace" },
         },
       },
@@ -833,7 +833,7 @@ describe("doctor gateway runtime checks", () => {
     "reports recorded Node $version capabilities as $severity",
     async ({ version, text, status, severity }) => {
       const message = text
-        ? `Node ${version}: unsupported version, capability probe passed.`
+        ? `Node ${version}: unsupported version, capability check passed.`
         : `Node ${version}: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954)`;
       mocks.readGatewayServiceState.mockResolvedValueOnce({
         installed: true,

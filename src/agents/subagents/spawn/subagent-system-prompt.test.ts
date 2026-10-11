@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { stripInternalRuntimeContext } from "../../internal-runtime-context.js";
 import { buildSubagentSpawnEnvelope } from "./subagent-system-prompt.js";
 
 function buildEnvelope(overrides: Partial<Parameters<typeof buildSubagentSpawnEnvelope>[0]> = {}) {
@@ -30,7 +31,9 @@ describe("subagent spawn envelope", () => {
     }
     expect(systemPrompt).toContain("Always return a meaningful result or a concrete blocker");
     expect(systemPrompt.length).toBeLessThan(4_000);
-    expect(message).toContain("[Subagent Task]\n\nUNIQUE_SUBAGENT_TASK\n  preserve indentation");
+    expect(stripInternalRuntimeContext(message)).toBe(
+      "UNIQUE_SUBAGENT_TASK\n  preserve indentation",
+    );
     expect(systemPrompt).not.toContain("UNIQUE_SUBAGENT_TASK");
     expect(`${systemPrompt}\n${message}`.match(/UNIQUE_SUBAGENT_TASK/g)).toHaveLength(1);
     expect(systemPrompt).toMatch(/\[Subagent Task\].*current child session/);
@@ -124,5 +127,30 @@ describe("subagent spawn envelope", () => {
     expect(buildEnvelope({ requesterSessionKey, spawnMode: "session" }).acceptedNote).toContain(
       "completion event",
     );
+  });
+
+  it("keeps per-spawn identity out of the system prompt so prompts stay cacheable", () => {
+    const stablePrompt = buildEnvelope().systemPrompt;
+    for (const id of ["first", "second"]) {
+      const envelope = buildEnvelope({
+        childSessionKey: `agent:main:subagent:${id}`,
+        requesterSessionKey: `agent:main:dashboard:${id}`,
+        requesterOrigin: { channel: "webchat" },
+        label: `worker-${id}`,
+      });
+      for (const fact of [
+        `- Your session: agent:main:subagent:${id}.`,
+        `- Requester session: agent:main:dashboard:${id}.`,
+        "- Requester channel: webchat.",
+        `- Label: worker-${id}`,
+      ]) {
+        expect(envelope.systemPrompt).not.toContain(fact);
+        expect(envelope.message).toContain(fact);
+      }
+      expect(stripInternalRuntimeContext(envelope.message)).toBe(
+        "UNIQUE_SUBAGENT_TASK\n  preserve indentation",
+      );
+      expect(envelope.systemPrompt).toBe(stablePrompt);
+    }
   });
 });

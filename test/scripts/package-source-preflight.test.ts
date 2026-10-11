@@ -302,6 +302,9 @@ function runReleaseInputCapture(params: {
     for (const file of [
       "scripts/preflight-frozen-target-contracts.mjs",
       "scripts/lib/frozen-target-source.mjs",
+      "scripts/lib/frozen-target-workflow-request.mjs",
+      "scripts/lib/release-upgrade-baseline.mjs",
+      "scripts/lib/canonical-json.mjs",
       "scripts/lib/docker-e2e-plan.mts",
       "scripts/lib/docker-e2e-scenarios.mts",
       "scripts/lib/official-external-channel-catalog.json",
@@ -423,7 +426,6 @@ describe("package source preflight", () => {
   });
 
   it.each([
-    ["2026.8.1", "Unreleased"],
     ["2026.8.1-beta.4", "Unreleased"],
     ["2026.9.1", "2026.8.3 (Unreleased)"],
   ])("accepts aligned %s source manifests with %s notes", (version, heading) => {

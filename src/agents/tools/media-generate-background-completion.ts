@@ -67,11 +67,7 @@ export async function retainBlockedMediaCompletion(params: {
     expectedSessionId: target.sessionId,
     expectedLifecycleRevision: target.lifecycleRevision,
     idempotencyKey: `media-completion-retained:${handle.runId}`,
-    // Keyed appends run this inside the transaction, after awaited preparation.
-    beforeMessageWrite: ({ message }) => {
-      assertCurrent();
-      return message;
-    },
+    assertCurrent,
     text: "Generated media is ready, but completion delivery was not confirmed. The saved media is retained here.",
     mediaUrls: Array.from(
       new Set([
@@ -112,24 +108,6 @@ export function retainBlockedMediaReferences(
     ...terminalResult,
     terminalSummary: truncateUtf16Safe(terminalSummary, MEDIA_GENERATION_RETAINED_RESULT_MAX_CHARS),
   };
-}
-
-function buildMediaGenerationReplyInstruction(params: {
-  status: "ok" | "error";
-  completionLabel: string;
-}) {
-  if (params.status === "ok") {
-    return [
-      `The ${params.completionLabel} is ready for the original chat.`,
-      "Follow the current visible-reply contract with a short user-facing caption and every structured generated attachment from this event.",
-      "Keep internal task/session details private and do not copy the internal event text verbatim.",
-    ].join(" ");
-  }
-  return [
-    `${params.completionLabel[0]?.toUpperCase() ?? "T"}${params.completionLabel.slice(1)} generation task failed for the original chat.`,
-    "Follow the current visible-reply contract with a concise user-facing failure message.",
-    "Keep internal task/session details private and do not copy the internal event text verbatim.",
-  ].join(" ");
 }
 
 export async function wakeMediaGenerationTaskCompletion(params: {
@@ -222,10 +200,15 @@ export async function wakeMediaGenerationTaskCompletion(params: {
       result: params.result,
       ...(params.attachments?.length ? { attachments: params.attachments } : {}),
       ...(mediaUrls.length ? { mediaUrls } : {}),
-      replyInstruction: buildMediaGenerationReplyInstruction({
-        status: params.status,
-        completionLabel: params.completionLabel,
-      }),
+      replyInstruction: [
+        params.status === "ok"
+          ? `The ${params.completionLabel} is ready for the original chat.`
+          : `${params.completionLabel[0]?.toUpperCase() ?? "T"}${params.completionLabel.slice(1)} generation task failed for the original chat.`,
+        params.status === "ok"
+          ? "Follow the current visible-reply contract with a short user-facing caption and every structured generated attachment from this event."
+          : "Follow the current visible-reply contract with a concise user-facing failure message.",
+        "Keep internal task/session details private and do not copy the internal event text verbatim.",
+      ].join(" "),
     },
   ];
   const triggerMessage = formatAgentInternalEventsForPrompt(internalEvents);

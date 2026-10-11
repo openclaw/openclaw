@@ -10,9 +10,11 @@ sidebarTitle: "Advanced configuration"
 
 ## GPT-5 prompt contribution
 
-OpenClaw adds a shared GPT-5 prompt contribution to matching GPT-5-family
-OpenClaw-assembled prompts. The OpenAI plugin setting below controls the
-friendly style on OpenAI-family routes. Older GPT-4.x model ids do not match.
+OpenClaw adds a shared GPT-5 prompt contribution to matching GPT-5 and GPT-6
+OpenClaw-assembled prompts (`gpt-5*` and `gpt-6*`, such as the default
+`gpt-6-astra`). The OpenAI plugin setting below controls the friendly style on
+OpenAI-family routes. Older GPT-4.x, `gpt-oss`, o-series, and `codex-mini` model
+ids do not match.
 
 The native Codex app-server harness does not receive the persona/tool-
 discipline behavior contract or the friendly interaction-style overlay through
@@ -125,6 +127,17 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     }
     ```
 
+    ChatGPT Responses SSE turns may exceed 16 MiB in total. The parser bounds
+    each buffered event to 16 MiB of bytes before decoding or parsing it, and
+    cancels oversized events, including events without a closing delimiter.
+
+    For cached ChatGPT Responses WebSocket requests, an explicit "Rustponses
+    cannot replay" rejection before any response event triggers one retry on a
+    fresh connection with full input instead of the cached response reference.
+    The retry preserves reasoning, compaction, and completed tool results; it
+    does not rerun tools. Rejections of full input and failures after response
+    events remain terminal.
+
     Related OpenAI docs:
     - [Responses API WebSocket mode](https://developers.openai.com/api/docs/guides/websocket-mode)
     - [Streaming API responses (SSE)](https://platform.openai.com/docs/guides/streaming-responses)
@@ -152,6 +165,31 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     auto cutoff, then starts later retry, fallback, tool-result, or continuation
     calls without fast mode. The cutoff defaults to 60 seconds; set
     `params.fastAutoOnSeconds` on the active model to change it.
+
+    For the embedded OpenClaw runtime, the Control UI uses provider model and
+    route limits when offering Standard, Fast, and Ultrafast. This works for
+    auth profiles, environment keys, and provider config (including SecretRefs).
+    Models limited to Standard or Fast keep those restrictions. Custom endpoints
+    and ChatGPT account catalogs retain their own tier policy.
+
+    If a response to an Ultrafast request echoes a different `service_tier`,
+    OpenClaw records a temporary observation for that credential, model, and route.
+    Ultrafast stays selectable, and the composer's Speed tooltip shows the requested
+    and served tiers. Later calls keep requesting the selected tier. A response
+    honoring it clears the hint immediately; otherwise the observation expires
+    five minutes after its latest occurrence.
+
+    If the native OpenAI API explicitly rejects `service_tier` before output,
+    tool activity, or active-response steering, OpenClaw automatically retries
+    that request at a slower tier: Ultrafast → Fast → Standard. The hint records
+    that recovery without changing saved preferences or later requests. It does
+    not retry tier errors after cancellation or an ambiguous connection failure.
+    Explicit low-level tier overrides are still sent as configured.
+
+    Observations also clear on credential replacement, profile discovery refresh,
+    or retirement of the prepared runtime, and are not persisted across restarts.
+    ChatGPT-account availability remains based on authenticated account catalog
+    discovery.
 
     ```json5
     {
@@ -215,9 +253,9 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     <Warning>
     `params.serviceTier` is an authored embedded-provider setting, not native
     Codex app-server configuration. It is forwarded only by the embedded
-    runtime to native OpenAI endpoints (`api.openai.com`) and native ChatGPT
-    endpoints (`chatgpt.com/backend-api`). If you route either provider through
-    a proxy, OpenClaw leaves `service_tier` untouched. Configure the native
+    runtime on OpenAI Responses routes, including compatible base URLs, and native
+    ChatGPT endpoints (`chatgpt.com/backend-api`). Compatible endpoints must honor
+    the requested tier; a saved preference does not guarantee fulfillment. Configure the native
     harness separately with `plugins.entries.codex.config.appServer.serviceTier`;
     the shared Fast-mode run control can supersede that value.
     </Warning>
@@ -308,11 +346,10 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     <Note>
     `responsesServerCompaction` only controls `context_management` injection.
     The public OpenAI Responses API also uses `/responses/compact` by default
-    for budget-triggered compaction. Set
-    `params.responsesCompactEndpoint: false` to disable this separate endpoint.
-    Provider-confirmed overflow and endpoint failures use client-side
-    summarization. Manual compaction keeps its existing behavior unless this
-    endpoint is explicitly enabled with `params.responsesCompactEndpoint: true`.
+    for budget-triggered compaction and for `/compact` without focus
+    instructions. Set `params.responsesCompactEndpoint: false` to disable this
+    separate endpoint. `/compact <focus>`, provider-confirmed overflow, and
+    endpoint failures use client-side summarization.
 
     Direct OpenAI Responses models still force `store: true` unless compat
     sets `supportsStore: false`.
@@ -373,6 +410,10 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
       OpenAI does not get these headers, even though it is a native route)
     - Keep OpenAI-only request shaping (`service_tier`, `store`,
       reasoning-compat, prompt-cache hints)
+    - Send tool-bearing turns for reasoning models configured with
+      `openai-completions` on `api.openai.com` to `/v1/responses`, because
+      Chat Completions rejects function tools with reasoning for current GPT
+      models. Credentials, endpoint host, and proxy routes are unchanged.
 
     **Proxy/compatible routes:**
     - Use looser compat behavior
@@ -387,6 +428,8 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     `strict: false`. Debug logs report the downgrade under `openai-transport`,
     with a bounded sample of incompatible tools. Built-in and managed Responses
     requests share duplicate suppression for the same model and schemas.
+    Compatibility checks inspect schema constraints, not literal names in schema maps
+    or annotation data such as examples and defaults.
 
   </Accordion>
 </AccordionGroup>

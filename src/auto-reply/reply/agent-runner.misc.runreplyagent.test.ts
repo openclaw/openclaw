@@ -40,6 +40,7 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { GatewayDrainingError } from "../../process/command-queue.js";
+import type { VisibleWorkSession } from "../get-reply-options.types.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import type { VerboseLevel } from "../thinking.shared.js";
@@ -59,7 +60,12 @@ import { type BaseRunOptions, createBaseRun } from "./agent-runner.runreplyagent
 import { clearPendingFinalDeliveryAfterSuccess } from "./dispatch-from-config.pending-final.js";
 import { scheduleFollowupDrain } from "./queue.js";
 import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
-import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
+import {
+  createReplyOperation,
+  replyRunRegistry,
+  type ReplyOperation,
+} from "./reply-run-registry.js";
+import { buildTestCtx } from "./test-ctx.js";
 
 function createCliBackendTestConfig() {
   return {};
@@ -107,7 +113,7 @@ function firstMockCallArg(mock: MockCallSource, label: string): unknown {
 await vi.hoisted(async () => {
   await import("./agent-runner.misc.runreplyagent.test-support.js");
 });
-const { runReplyAgent } = await import("./agent-runner.js");
+const { runReplyAgent } = await import("./agent-runner-run.js");
 
 setupAgentRunnerTestHooks();
 
@@ -169,64 +175,6 @@ describe("runReplyAgent auto-compaction token update", () => {
       { storePath: params.storePath, sessionKey: params.sessionKey },
       params.entry as unknown as SessionEntry,
     );
-  }
-
-  async function runEmptyDirectReply(
-    agentResult: Record<string, unknown>,
-    options?: {
-      agentEvents?: Array<{ stream: string; data: Record<string, unknown> }>;
-      config?: OpenClawConfig;
-      onBlockReply?: (payload: unknown) => Promise<void> | void;
-      onAgentRunTerminalOutcome?: (outcome: "completed" | "failed") => void;
-    },
-  ) {
-    const sessionKey = "main";
-    const sessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokens: 50_000,
-    };
-    const resultMeta = requireRecord(agentResult.meta, "agent result meta");
-    const agentMeta = requireRecord(resultMeta.agentMeta, "agent result agent meta");
-    runEmbeddedAgentMock.mockImplementationOnce(async (params) => {
-      const onAgentEvent = requireRecord(params, "embedded agent params").onAgentEvent;
-      if (typeof onAgentEvent === "function") {
-        for (const event of options?.agentEvents ?? []) {
-          await onAgentEvent(event);
-        }
-      }
-      return {
-        payloads: [],
-        ...agentResult,
-        meta: {
-          ...resultMeta,
-          agentMeta: {
-            provider: "anthropic",
-            model: "claude",
-            ...agentMeta,
-          },
-          finalAssistantVisibleText: "",
-        },
-      };
-    });
-
-    return createBaseRun({
-      run: {
-        agentId: "main",
-        agentDir: path.join(rootDir, "agent"),
-        config: options?.config ?? {},
-        reasoningLevel: "on",
-      },
-      reply: {
-        opts: {
-          onBlockReply: options?.onBlockReply,
-          onAgentRunTerminalOutcome: options?.onAgentRunTerminalOutcome,
-        },
-        sessionEntry,
-        sessionStore: { [sessionKey]: sessionEntry },
-        sessionKey,
-      },
-    }).run();
   }
 
   async function runBaseReplyWithAgentMeta(params: {
@@ -354,11 +302,7 @@ describe("runReplyAgent auto-compaction token update", () => {
         compactionCount: 0,
       };
       const prompt = "What is two plus two? Answer in one short sentence without tools.";
-      const operation = createReplyOperation({
-        sessionKey,
-        sessionId: "session",
-        resetTriggered: false,
-      });
+      const onReplyOperationOwned = vi.fn<(operation: ReplyOperation) => boolean>(() => true);
       const delivery = createDeferred();
       const requestBudget = {
         contextWindow: 32_768,
@@ -485,7 +429,7 @@ describe("runReplyAgent auto-compaction token update", () => {
             sessionStore: { [sessionKey]: sessionEntry },
             sessionKey,
             storePath,
-            replyOperation: operation,
+            opts: { onReplyOperationOwned },
           },
         });
         const result = await withPluginRuntimeGatewayRequestScope(
@@ -501,12 +445,21 @@ describe("runReplyAgent auto-compaction token update", () => {
           },
           turn.run,
         );
+        const operation = expectDefined(
+          onReplyOperationOwned.mock.calls[0]?.[0],
+          "admitted reply operation",
+        );
 
         expect(compactState.compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
         expect(runtimeErrorMock).not.toHaveBeenCalled();
         expect(runEmbeddedAgentMock.mock.calls.map(([params]) => params.trigger)).toEqual(["user"]);
         expectReplyText(result, "Two plus two is four.");
         expect(loadSessionEntry(scope)?.memoryFlush).toBeUndefined();
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        operation.completeWithAfterClearBarrier(delivery.promise, 1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(runEmbeddedAgentMock.mock.calls.map(([params]) => params.trigger)).toEqual(["user"]);
+        // Foreground priority has cleared, but maintenance still waits for actual delivery.
         let maintenanceSettled = false;
         const maintenance = waitForSessionMaintenance(sessionKey).then(() => {
           maintenanceSettled = true;
@@ -514,10 +467,6 @@ describe("runReplyAgent auto-compaction token update", () => {
         await Promise.resolve();
         await Promise.resolve();
         expect(maintenanceSettled).toBe(false);
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-        operation.completeWithAfterClearBarrier(delivery.promise, 1);
-        await vi.advanceTimersByTimeAsync(1);
-        expect(runEmbeddedAgentMock.mock.calls.map(([params]) => params.trigger)).toEqual(["user"]);
         if (preempted) {
           releaseForeground = await beginForegroundSessionMaintenance(sessionKey);
         }
@@ -560,141 +509,13 @@ describe("runReplyAgent auto-compaction token update", () => {
       } finally {
         vi.useRealTimers();
         delivery.resolve();
-        operation.complete();
+        onReplyOperationOwned.mock.calls[0]?.[0].complete();
         releaseForeground?.();
         await waitForSessionMaintenance(sessionKey);
         setLoggerOverride(null);
       }
     },
   );
-
-  it.each([
-    ["without side effects", { meta: { agentMeta: {} } }],
-    [
-      "with only a reply directive",
-      { payloads: [{ text: "[[reply_to_current]]" }], meta: { agentMeta: {} } },
-    ],
-    ["after hidden compaction", { meta: { agentMeta: { compactionCount: 1 } } }],
-    [
-      "after an intentional terminal tool batch",
-      { meta: { agentMeta: {}, intentionalTerminalCompletion: "tool-batch" } },
-    ],
-    [
-      "after a child spawn without a pending continuation",
-      {
-        acceptedSessionSpawns: [{ runId: "child-run", childSessionKey: "agent:main:child" }],
-        meta: { agentMeta: {} },
-      },
-    ],
-  ] satisfies Array<[string, Record<string, unknown>]>)(
-    "surfaces missing required direct replies %s",
-    async (_label, agentResult) => {
-      const onAgentRunTerminalOutcome = vi.fn();
-      const result = await runEmptyDirectReply(agentResult, { onAgentRunTerminalOutcome });
-      expect(onAgentRunTerminalOutcome).toHaveBeenLastCalledWith("failed");
-      expectRecordFields(result, { isError: true }, "empty interactive fallback");
-    },
-  );
-
-  it("threads the empty interactive direct fallback through normal final preparation", async () => {
-    const result = await runEmptyDirectReply(
-      { meta: { agentMeta: {} } },
-      { config: { channels: { whatsapp: { replyToMode: "first" } } } },
-    );
-
-    const payload = expectRecordFields(result, { isError: true }, "empty interactive fallback");
-    expect(payload.replyToId).toBe("msg");
-  });
-
-  it.each([
-    ["reasoning", { text: "internal reasoning", isReasoning: true }],
-    ["commentary", { text: "internal commentary", isCommentary: true }],
-  ])("surfaces a fallback for disabled %s-only direct output", async (_label, payload) => {
-    const onBlockReply = vi.fn();
-    const result = await runEmptyDirectReply(
-      {
-        payloads: [payload],
-        meta: { agentMeta: {} },
-      },
-      { onBlockReply },
-    );
-
-    const fallback = expectRecordFields(result, { isError: true }, "empty interactive fallback");
-    expect(fallback.text).toContain("did not produce a visible reply");
-    expect(onBlockReply).not.toHaveBeenCalled();
-  });
-
-  it("surfaces terminal direct failures after runtime compaction progress", async () => {
-    const onBlockReply = vi.fn();
-    const result = await runEmptyDirectReply(
-      {
-        meta: {
-          agentMeta: {},
-          error: { kind: "tool_result_mismatch", message: "terminal failure after notice" },
-        },
-      },
-      {
-        agentEvents: [
-          { stream: "compaction", data: { phase: "start" } },
-          { stream: "compaction", data: { phase: "end", completed: true } },
-        ],
-        config: {
-          agents: { defaults: { compaction: { notifyUser: true } } },
-        },
-        onBlockReply,
-      },
-    );
-
-    expect(onBlockReply).toHaveBeenCalledTimes(2);
-    expectRecordFields(result, { isError: true }, "terminal failure");
-  });
-
-  it("surfaces empty direct replies when runtime compaction notice delivery fails", async () => {
-    const result = await runEmptyDirectReply(
-      { meta: { agentMeta: {} } },
-      {
-        agentEvents: [{ stream: "compaction", data: { phase: "start" } }],
-        config: {
-          agents: { defaults: { compaction: { notifyUser: true } } },
-        },
-        onBlockReply: vi.fn().mockRejectedValue(new Error("delivery failed")),
-      },
-    );
-
-    const payload = expectRecordFields(result, { isError: true }, "empty interactive fallback");
-    expect(payload.text).toContain("did not produce a visible reply");
-  });
-
-  it("starts queued followup drain only after clearing the active reply operation", async () => {
-    const sessionKey = "main";
-    const sessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokens: 50_000,
-    };
-    runEmbeddedAgentMock.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { agentMeta: {} },
-    });
-
-    vi.mocked(scheduleFollowupDrain).mockImplementation((key) => {
-      expect(key).toBe(sessionKey);
-      expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
-    });
-
-    const result = await createBaseRun({
-      run: { agentId: "main", agentDir: path.join(rootDir, "agent"), reasoningLevel: "on" },
-      reply: {
-        queueKey: sessionKey,
-        sessionEntry,
-        sessionStore: { [sessionKey]: sessionEntry },
-        sessionKey,
-      },
-    }).run();
-
-    expectReplyText(result, "ok");
-    expect(scheduleFollowupDrain).toHaveBeenCalledTimes(1);
-  });
 
   it("loads post-compaction context before starting a queued followup drain", async () => {
     const workspaceDir = tempDirs.make("openclaw-post-compaction-queued-followup-");
@@ -818,12 +639,7 @@ describe("runReplyAgent auto-compaction token update", () => {
         totalTokens: 50_000,
       };
       await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
-      const replyOperation = createReplyOperation({
-        sessionKey,
-        sessionId: sessionEntry.sessionId,
-        resetTriggered: false,
-        upstreamAbortSignal: upstreamAbort.signal,
-      });
+      const onReplyOperationOwned = vi.fn<(operation: ReplyOperation) => boolean>(() => true);
       let releaseFallback: () => void = () => undefined;
       let markCandidateSettled: () => void = () => undefined;
       const candidateSettled = new Promise<void>((resolve) => {
@@ -875,13 +691,17 @@ describe("runReplyAgent auto-compaction token update", () => {
           sessionStore: { [sessionKey]: sessionEntry },
           sessionKey,
           storePath,
-          replyOperation,
+          opts: { abortSignal: upstreamAbort.signal, onReplyOperationOwned },
         },
       });
 
       try {
         const pending = baseRun.run();
         await candidateSettled;
+        const replyOperation = expectDefined(
+          onReplyOperationOwned.mock.calls[0]?.[0],
+          "admitted reply operation",
+        );
         if (superseded) {
           replyOperation.supersede();
         } else {
@@ -903,7 +723,7 @@ describe("runReplyAgent auto-compaction token update", () => {
         expect(peekSystemEvents(resolveSystemEventQueueKey(sessionKey, "main"))).toEqual([]);
       } finally {
         releaseFallback();
-        replyOperation.complete();
+        onReplyOperationOwned.mock.calls[0]?.[0].complete();
       }
     },
   );
@@ -1413,23 +1233,6 @@ describe("runReplyAgent Active Memory inline debug", () => {
     }).run();
   }
 
-  it("appends inline Active Memory status and trace payloads when verbose and trace are enabled", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      verboseLevel: "on",
-      traceLevel: "on",
-    };
-
-    const result = await runActiveMemoryDebugCase(sessionEntry);
-
-    expect(Array.isArray(result)).toBe(true);
-    expect((result as { text?: string }[]).map((payload) => payload.text)).toEqual([
-      "Normal reply",
-      "🧩 Active Memory: status=ok elapsed=842ms query=recent summary=34 chars\n🔎 Active Memory Debug: Lemon pepper wings with blue cheese.",
-    ]);
-  });
-
   it("appends raw trace payloads when trace raw is enabled", async () => {
     const tmp = tempDirs.make("openclaw-trace-raw-usage-");
     const storePath = path.join(tmp, "sessions.json");
@@ -1712,42 +1515,6 @@ describe("runReplyAgent Active Memory inline debug", () => {
 });
 
 describe("runReplyAgent claude-cli routing", () => {
-  function createRun() {
-    return createBaseRun({
-      context: {
-        Provider: "webchat",
-        OriginatingTo: "session:1",
-        AccountId: "primary",
-        MessageSid: "msg",
-      },
-      run: {
-        messageProvider: "webchat",
-        provider: "claude-cli",
-        model: "opus-4.5",
-        thinkLevel: "low",
-      },
-      reply: { defaultModel: "claude-cli/opus-4.5" },
-    }).run();
-  }
-
-  it("uses the CLI runner for claude-cli provider", async () => {
-    runCliAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "ok" }],
-      meta: {
-        agentMeta: {
-          provider: "claude-cli",
-          model: "opus-4.5",
-        },
-      },
-    });
-
-    const result = await createRun();
-
-    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-    expectReplyText(result, "ok");
-  });
-
   it("does not leak hook-blocked CLI input in raw trace payloads", async () => {
     runCliAgentMock.mockResolvedValueOnce({
       payloads: [
@@ -2021,23 +1788,6 @@ describe("runReplyAgent reminder commitment guard", () => {
     }).run();
   }
 
-  it("appends guard note when reminder commitment is not backed by cron.add", async () => {
-    mockReminderReply("I'll remind you tomorrow morning.");
-
-    const result = await createRun();
-    expectReplyText(
-      result,
-      "I'll remind you tomorrow morning.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
-    );
-  });
-
-  it("does not append a reminder note to a plain memory promise", async () => {
-    mockReminderReply("I'll remember that preference.");
-
-    const result = await createRun();
-    expectReplyText(result, "I'll remember that preference.");
-  });
-
   it("keeps reminder commitment unchanged when cron.add succeeded", async () => {
     mockReminderReply("I'll remind you tomorrow morning.", 1);
 
@@ -2234,31 +1984,6 @@ describe("runReplyAgent response usage footer", () => {
     }).run();
   }
 
-  it("uses the built-in compact footer when responseUsage=full", async () => {
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "ok" }],
-      meta: {
-        agentMeta: {
-          provider: "anthropic",
-          model: "claude",
-          usage: { input: 12, output: 3, cacheRead: 4, cacheWrite: 2 },
-        },
-      },
-    });
-
-    const sessionKey = "agent:main:whatsapp:dm:+1000";
-    const res = await createRun({ responseUsage: "full", sessionKey });
-    const payload = Array.isArray(res) ? res[0] : res;
-    const text = payload?.text ?? "";
-    expect(text).toContain("ok\nanthropic🤖claude🌘🐌");
-    expect(text).not.toContain("ok\n\nanthropic");
-    expect(text).toContain("anthropic🤖claude🌘🐌");
-    expect(text).not.toContain("↕️");
-    expect(text).not.toContain("🗄");
-    expect(text).not.toContain("Usage:");
-    expect(text).not.toContain("· session ");
-  });
-
   it.each([
     {
       name: "split token counts",
@@ -2335,29 +2060,6 @@ describe("runReplyAgent response usage footer", () => {
     expect(text).toBe(`ok\n${expected}`);
     expect(text).not.toContain("est $");
     expect(text).not.toContain("· session ");
-  });
-
-  it("omits partial token counts from the built-in full footer", async () => {
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "ok" }],
-      meta: {
-        agentMeta: {
-          provider: "anthropic",
-          model: "claude",
-          usage: { output: 125 },
-        },
-      },
-    });
-
-    const res = await createRun({
-      responseUsage: "full",
-      sessionKey: "agent:main:whatsapp:dm:+1000",
-    });
-    const payload = Array.isArray(res) ? res[0] : res;
-    const text = payload?.text ?? "";
-    expect(text).toContain("anthropic🤖claude");
-    expect(text).not.toContain("↕️");
-    expect(text).not.toContain("Usage:");
   });
 
   it("omits aggregate-only token totals in the built-in full footer", async () => {
@@ -2550,3 +2252,83 @@ describe("runReplyAgent mid-turn rate-limit fallback", () => {
 });
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+describe("runReplyAgent visible work delivery", () => {
+  it.each(["completed", "failed", "hidden"] as const)(
+    "reports accepted visible work before final dispatch for a %s run",
+    async (outcome) => {
+      const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
+      const { createReplyDispatcher } = await import("./reply-dispatcher.js");
+      const order: string[] = [];
+      const visibleWork: VisibleWorkSession[][] = [];
+      const visible = {
+        runId: "visible-run",
+        childSessionKey: "agent:main:dashboard:visible-work",
+        sessionUrl: "https://openclaw.example/chat/main/visible-work",
+        label: "Review",
+      };
+      runEmbeddedAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "Finished", ...(outcome === "failed" ? { isError: true } : {}) }],
+        acceptedSessionSpawns: [
+          { runId: "hidden-run", childSessionKey: "agent:main:subagent:hidden" },
+          ...(outcome === "hidden" ? [] : [visible, { ...visible, runId: "duplicate-run" }]),
+        ],
+        meta: outcome === "failed" ? { error: { kind: "unknown", message: "Run failed" } } : {},
+      });
+      const storePath = path.join(rootDir, "sessions.sqlite");
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { workspace: rootDir } },
+        session: { store: storePath },
+        plugins: { enabled: false },
+      };
+      const sessionEntry = { sessionId: "session", updatedAt: Date.now() };
+      await replaceSessionEntry({ storePath, sessionKey: "agent:main:main" }, sessionEntry);
+      const ctx = buildTestCtx({
+        Body: "Start visible work",
+        SessionKey: "agent:main:main",
+        MessageSid: `visible-work-${outcome}`,
+      });
+      const dispatcher = createReplyDispatcher({
+        deliver: async (_payload, info) => {
+          order.push(info.kind);
+        },
+      });
+      try {
+        await dispatchReplyFromConfig({
+          ctx,
+          cfg,
+          dispatcher,
+          replyOptions: {
+            onVisibleWorkSessions: (sessions) => {
+              visibleWork.push([...sessions]);
+              order.push("visible-work");
+            },
+          },
+          replyResolver: async (_ctx, opts) =>
+            createBaseRun({
+              context: ctx,
+              run: { config: cfg, sessionKey: ctx.SessionKey },
+              reply: {
+                opts,
+                replyOperation: opts?.replyOperation,
+                sessionKey: ctx.SessionKey,
+                storePath,
+                sessionEntry,
+                sessionStore: { "agent:main:main": sessionEntry },
+              },
+            }).run(),
+        });
+      } finally {
+        dispatcher.markComplete();
+        await dispatcher.waitForIdle();
+      }
+
+      expect(visibleWork).toEqual(
+        outcome === "hidden"
+          ? []
+          : [[{ sessionKey: visible.childSessionKey, url: visible.sessionUrl, label: "Review" }]],
+      );
+      expect(order).toEqual(outcome === "hidden" ? ["final"] : ["visible-work", "final"]);
+    },
+  );
+});

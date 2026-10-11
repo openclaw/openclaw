@@ -57,12 +57,18 @@ export function createGatewayInflightSuccess(params: {
   return createGatewayInflightResult({ ...params, result: { ok: true, payload: params.payload } });
 }
 
-export function createGatewayInflightUnavailableFailure(params: {
-  context: GatewayRequestContext;
-  dedupeKey: string | undefined;
-  channel: string;
-  err: unknown;
-}): GatewayInflightResult {
+export function createGatewayInflightFailure(
+  params: {
+    context: GatewayRequestContext;
+    dedupeKey: string | undefined;
+    channel: string;
+    err: unknown;
+  },
+  isAuthorized: () => boolean,
+): GatewayInflightResult {
+  if (!isChannelPartialDeliveryError(params.err) && !isAuthorized()) {
+    return createGatewayInflightAuthorityFailure(params);
+  }
   // Preserve ingress-policy errors only when delivery has no accepted effect or queue custody.
   const unsentError =
     params.err instanceof OutboundDeliveryError &&
@@ -120,30 +126,6 @@ export function createGatewayInflightAuthorityFailure(params: {
   });
 }
 
-async function mirrorDeliveredSourceReplyToTranscriptBestEffort(params: {
-  context: GatewayRequestContext;
-  mirror: Parameters<typeof mirrorDeliveredSourceReplyToTranscript>[0];
-}) {
-  try {
-    const mirrored = await mirrorDeliveredSourceReplyToTranscript(params.mirror);
-    if (!mirrored && params.mirror.sourceReplyFinal === true) {
-      params.context.logGateway?.warn?.(
-        "Terminal source reply receipt was not mirrored; restart recovery is fail-closed.",
-        {
-          channel: params.mirror.channel,
-          sessionKey: params.mirror.sessionKey,
-        },
-      );
-    }
-  } catch (err) {
-    params.context.logGateway?.warn?.("Source reply transcript mirror failed after delivery.", {
-      error: formatForLog(err),
-      channel: params.mirror.channel,
-      sessionKey: params.mirror.sessionKey,
-    });
-  }
-}
-
 const sourceReplyTranscriptMirrorQueue = new KeyedAsyncQueue();
 
 export function scheduleDeliveredSourceReplyTranscriptMirror(params: {
@@ -154,7 +136,24 @@ export function scheduleDeliveredSourceReplyTranscriptMirror(params: {
   const queueKey = params.mirror.sessionKey?.trim() || "__global__";
   // Queue per session so current-conversation source replies are visible before
   // a following turn can read the transcript.
-  return sourceReplyTranscriptMirrorQueue.enqueue(queueKey, () =>
-    mirrorDeliveredSourceReplyToTranscriptBestEffort(params),
-  );
+  return sourceReplyTranscriptMirrorQueue.enqueue(queueKey, async () => {
+    try {
+      const mirrored = await mirrorDeliveredSourceReplyToTranscript(params.mirror);
+      if (!mirrored && params.mirror.sourceReplyFinal === true) {
+        params.context.logGateway?.warn?.(
+          "Terminal source reply receipt was not mirrored; restart recovery is fail-closed.",
+          {
+            channel: params.mirror.channel,
+            sessionKey: params.mirror.sessionKey,
+          },
+        );
+      }
+    } catch (err) {
+      params.context.logGateway?.warn?.("Source reply transcript mirror failed after delivery.", {
+        error: formatForLog(err),
+        channel: params.mirror.channel,
+        sessionKey: params.mirror.sessionKey,
+      });
+    }
+  });
 }

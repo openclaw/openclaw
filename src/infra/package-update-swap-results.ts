@@ -59,6 +59,15 @@ export function createPackageSwapResults(
   return {
     warnings,
     step,
+    activationWarning: (message: string | undefined) => {
+      if (message === undefined) {
+        return;
+      }
+      if (!warnings.includes(message)) {
+        warnings.push(message);
+      }
+      params.activation?.onWarning?.(message);
+    },
     rollbackError(error: unknown): string {
       if (error instanceof PackageIntegrityMismatchError && error.differences.length > 0) {
         integrityFailures.splice(
@@ -74,15 +83,6 @@ export function createPackageSwapResults(
         );
       }
       return formatErrorMessage(error);
-    },
-    invalidLayout(activePackageRoot: string | null): StagedPackageSwapResult {
-      return {
-        status: "failed",
-        activePackageRoot,
-        step: step(1, null, "cannot resolve npm global prefix layout"),
-        postVerifyStep: null,
-        packageRollbackVerified: false,
-      };
     },
     verificationFailed(
       activePackageRoot: string | null,

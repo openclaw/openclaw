@@ -1,7 +1,7 @@
 import { AsyncResource } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { acquirePluginRegistryForInspection } from "./loader.js";
@@ -12,12 +12,13 @@ import {
   writePlugin,
 } from "./loader.test-fixtures.js";
 import {
-  startOneShotDiagnosticsExporters,
+  startOneShotDiagnosticsExporters as startWithoutHost,
   type OneShotDiagnosticsHandle,
 } from "./one-shot-diagnostics.js";
+import { createOneShotDiagnosticsTestHost } from "./one-shot-diagnostics.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "./runtime.js";
-import { startPluginServices } from "./services.js";
+import { startPluginServices } from "./services.test-support.js";
 import type { OpenClawPluginServiceContext } from "./types.js";
 
 type NativeConnection = {
@@ -28,6 +29,12 @@ type NativeConnection = {
   context?: OpenClawPluginServiceContext;
 };
 let fixtureSequence = 0;
+let host: ReturnType<typeof createOneShotDiagnosticsTestHost>;
+const startOneShotDiagnosticsExporters: typeof startWithoutHost = (params) => host.start(params);
+
+beforeEach(() => {
+  host = createOneShotDiagnosticsTestHost();
+});
 
 function createNativeExporter(
   options: { service?: boolean; failStart?: boolean; pauseDisposal?: boolean } = {},

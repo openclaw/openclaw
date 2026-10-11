@@ -20,11 +20,9 @@ import {
   importSqliteSessionRows,
   seedUnindexedTranscriptForTest,
 } from "./session-accessor.sqlite-import.test-support.js";
-import {
-  hasSessionTranscriptMessage,
-  loadTranscriptEventsSync,
-} from "./session-accessor.sqlite-read.js";
+import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
 import { runSessionColdStorageMaintenance } from "./session-cold-storage.js";
+import { hasSessionTranscriptMessage } from "./session-transcript-message-presence.js";
 
 function target(state: OpenClawTestState, id: string) {
   return {
@@ -43,30 +41,28 @@ const message = {
 };
 afterEach(() => vi.restoreAllMocks());
 
-it("rechecks a required empty destination after staging before writing any batch rows", async () => {
-  await withOpenClawTestState({ label: "import-empty-admission" }, async (state) => {
+it("preserves a current session introduced after staging while importing unrelated rows", async () => {
+  await withOpenClawTestState({ label: "import-current-admission" }, async (state) => {
     const first = target(state, "first");
     const second = target(state, "second");
-    const occupied = target(state, "occupied");
-    expect(loadExactSessionEntry(occupied)).toBeUndefined();
+    const current = { sessionId: "current", updatedAt: 100, label: "Current metadata" };
     await expect(
       importSqliteSessionRowsBatch([
         {
           ...first,
-          requireEmptyStore: true,
+          historicalOnly: true,
           beforePersistentApply: () => {
             runOpenClawAgentWriteTransaction(
-              (database) => writeSessionEntry(database, occupied.sessionKey, occupied.entry),
+              (database) => writeSessionEntry(database, first.sessionKey, current),
               { agentId: "main", env: state.env },
             );
           },
         },
-        { ...second, requireEmptyStore: true },
+        { ...second, historicalOnly: true },
       ]),
-    ).rejects.toThrow("SQLite destination is not empty");
-    expect(loadExactSessionEntry(first)).toBeUndefined();
-    expect(loadExactSessionEntry(second)).toBeUndefined();
-    expect(loadExactSessionEntry(occupied)?.entry.sessionId).toBe("occupied");
+    ).resolves.toHaveLength(2);
+    expect(loadExactSessionEntry(first)?.entry).toMatchObject(current);
+    expect(loadExactSessionEntry(second)?.entry.sessionId).toBe("second");
   });
 });
 
@@ -190,7 +186,7 @@ it("refuses imports into archived history without replacing its owner or saved b
     await expect(
       runSessionColdStorageMaintenance({
         config: {
-          agents: { list: [{ id: "main" }] },
+          agents: { entries: { main: {} } },
           session: {
             store: database.path,
             maintenance: { coldStorage: { enabled: true, afterDays: 30 } },

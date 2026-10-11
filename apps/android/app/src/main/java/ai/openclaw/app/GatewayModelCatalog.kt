@@ -30,18 +30,16 @@ data class GatewayModelSummary(
   val agentRuntime: JsonObject? = null,
 ) {
   val runtimeName: String?
-    get() =
-      if (agentRuntime?.get("source")?.jsonPrimitive?.content in setOf("model", "provider")) {
-        when (agentRuntime?.get("id")?.jsonPrimitive?.content) {
-          "codex", "codex-cli" -> "Codex"
-          "claude-cli" -> "Claude CLI"
-          "google-gemini-cli" -> "Gemini CLI"
-          "openclaw" -> "OpenClaw"
-          else -> null
-        }
-      } else {
-        null
+    get() {
+      if (agentRuntime?.get("source")?.jsonPrimitive?.content !in setOf("model", "provider")) return null
+      return when (agentRuntime?.get("id")?.jsonPrimitive?.content) {
+        "codex", "codex-cli" -> "Codex"
+        "claude-cli" -> "Claude CLI"
+        "google-gemini-cli" -> "Gemini CLI"
+        "openclaw" -> "OpenClaw"
+        else -> null
       }
+    }
 }
 
 enum class GatewayModelUnavailableReason {

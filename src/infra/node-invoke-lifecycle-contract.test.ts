@@ -5,11 +5,7 @@ import {
   validateNodeInvokeResultParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import type fixtureData from "../../test/fixtures/node-invoke-lifecycle-contract.json";
-import {
-  buildNodeInvokeCancel,
-  buildNodeInvokeInput,
-  buildNodeInvokeRequest,
-} from "../gateway/node-invoke-request.js";
+import { buildNodeInvokeRequest } from "../gateway/node-invoke-request.js";
 import {
   coerceNodeInvokeCancelPayload,
   coerceNodeInvokeInputPayload,
@@ -27,18 +23,8 @@ describe("node invocation lifecycle contract", () => {
   it("matches the Gateway request producer and node-host consumer", () => {
     expect(fixture.version).toBe(3);
     const request = fixture.request.canonical;
-    expect(
-      buildNodeInvokeRequest({
-        id: request.id,
-        nodeId: request.nodeId,
-        command: request.command,
-        timeoutMs: request.timeoutMs,
-        idempotencyKey: request.idempotencyKey,
-        sessionKey: request.sessionKey,
-      }),
-    ).toEqual(request);
+    expect(buildNodeInvokeRequest(request)).toEqual(request);
     expect(coerceNodeInvokePayload(request)).toEqual(request);
-    expect(fixture.request.withExtensions).toHaveProperty("unexpected", true);
     expect(coerceNodeInvokePayload(fixture.request.withExtensions)).toEqual(request);
     expect(coerceNodeInvokePayload(fixture.request.legacyParams)).toEqual({
       id: "invoke-legacy",
@@ -61,14 +47,6 @@ describe("node invocation lifecycle contract", () => {
 
   it("matches input and cancellation payload handling", () => {
     for (const input of fixture.input.canonical) {
-      expect(
-        buildNodeInvokeInput({
-          invokeId: input.id,
-          nodeId: input.nodeId,
-          seq: input.seq,
-          payloadJSON: input.payloadJSON,
-        }),
-      ).toEqual(input);
       expect(coerceNodeInvokeInputPayload(input)).toEqual({
         invokeId: input.id,
         nodeId: input.nodeId,
@@ -77,7 +55,6 @@ describe("node invocation lifecycle contract", () => {
       });
     }
     expect(coerceNodeInvokeInputPayload(fixture.input.invalid)).toBeNull();
-    expect(buildNodeInvokeCancel(fixture.cancel.canonical)).toEqual(fixture.cancel.canonical);
     expect(coerceNodeInvokeCancelPayload(fixture.cancel.canonical)).toEqual(
       fixture.cancel.canonical,
     );

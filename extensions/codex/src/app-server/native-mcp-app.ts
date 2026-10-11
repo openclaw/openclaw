@@ -9,9 +9,6 @@ import {
   createHarnessMcpFormResourceContext,
   captureMcpClientElicitation,
   normalizeMcpCodexToolAnnotations,
-  readMcpAppIcons,
-  readMcpAppSettingsCapability,
-  readMcpAppToolExtensions,
   requiresMcpCodexToolApproval,
   resolveProjectedMcpCodexToolApprovalMode,
 } from "openclaw/plugin-sdk/codex-mcp-projection";
@@ -21,10 +18,14 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
-import { parseCodexPluginMarketplaceId } from "../plugin-marketplace-discovery.js";
 import { protectCodexAppServerLiveThread } from "./client-runtime.js";
 import { getCodexAppServerClientInstanceId, type CodexAppServerClient } from "./client.js";
-import { readCodexMcpToolConnectorId, readCodexMcpToolUiVisibility } from "./mcp-tool-metadata.js";
+import {
+  projectCodexMcpServerMetadata,
+  projectCodexMcpToolMetadata,
+  readCodexMcpToolConnectorId,
+  readCodexMcpToolUiVisibility,
+} from "./mcp-tool-metadata.js";
 import { requestPluginApprovalOutcome } from "./plugin-approval-roundtrip.js";
 import type { ToolCallResult } from "./protocol-mcp.js";
 import type { CodexMcpServerStatus, CodexThreadItem, JsonObject, JsonValue } from "./protocol.js";
@@ -36,14 +37,6 @@ import { getCodexAppServerTurnRouter } from "./turn-router.js";
 
 const CODEX_APPS_MCP_SERVER = "codex_apps";
 const toolCallMetadataSchema = z.record(z.string(), z.json());
-
-function readMcpAppResourceUri(item: CodexThreadItem): string | undefined {
-  const appContext = asOptionalRecord(item.appContext);
-  const uri =
-    normalizeOptionalString(appContext?.resourceUri) ??
-    normalizeOptionalString(item.mcpAppResourceUri);
-  return uri?.startsWith("ui://") ? uri : undefined;
-}
 
 function readMcpToolResult(item: CodexThreadItem): ToolCallResult | undefined {
   const result = asOptionalRecord(item.result);
@@ -154,24 +147,7 @@ export function createNativeMcpRuntime(params: {
       version: 1,
       generatedAt: Date.now(),
       servers: Object.fromEntries(
-        loaded.map((status) => [
-          status.name,
-          {
-            serverName: status.name,
-            launchSummary: "Codex native MCP connection",
-            ...(status.pluginId
-              ? {
-                  pluginId:
-                    parseCodexPluginMarketplaceId(status.pluginId)?.pluginName ?? status.pluginId,
-                  marketplace: parseCodexPluginMarketplaceId(status.pluginId)?.marketplaceName,
-                }
-              : {}),
-            title: status.serverInfo?.title ?? undefined,
-            icons: readMcpAppIcons(status.serverInfo?.icons),
-            settings: readMcpAppSettingsCapability(status.serverCapabilities),
-            toolCount: Object.keys(status.tools).length,
-          },
-        ]),
+        loaded.map((status) => [status.name, projectCodexMcpServerMetadata(status)]),
       ),
       tools: loaded.flatMap((status) =>
         statusTools(status).map((tool) => {
@@ -181,17 +157,9 @@ export function createNativeMcpRuntime(params: {
               serverName: status.name,
               safeServerName: status.name,
               toolName: String(tool.name),
-              title:
-                normalizeOptionalString(tool.title) ??
-                normalizeOptionalString(asOptionalRecord(tool.annotations)?.title),
-              appExtensions: readMcpAppToolExtensions(tool),
-              codexAnnotations: normalizeMcpCodexToolAnnotations(tool.annotations),
-              uiResourceUri: normalizeOptionalString(
-                asOptionalRecord(asOptionalRecord(tool._meta)?.ui)?.resourceUri,
-              ),
               inputSchema: (asOptionalRecord(tool.inputSchema) ?? { type: "object" }) as never,
-              fallbackDescription: normalizeOptionalString(tool.description) ?? String(tool.name),
             },
+            projectCodexMcpToolMetadata(String(tool.name), tool),
             uiVisibility ? { uiVisibility } : {},
           );
         }),
@@ -345,10 +313,13 @@ export function createCodexNativeMcpAppResultDetailsPreparer(params: {
   return async (item) => {
     const serverName = normalizeOptionalString(item.server);
     const toolName = normalizeOptionalString(item.tool);
-    const uiResourceUri = readMcpAppResourceUri(item);
-    const connectorId = normalizeOptionalString(asOptionalRecord(item.appContext)?.connectorId);
+    const appContext = asOptionalRecord(item.appContext);
+    const uiResourceUri =
+      normalizeOptionalString(appContext?.resourceUri) ??
+      normalizeOptionalString(item.mcpAppResourceUri);
+    const connectorId = normalizeOptionalString(appContext?.connectorId);
     const toolResult = readMcpToolResult(item);
-    if (!serverName || !toolName || !uiResourceUri || !toolResult) {
+    if (!serverName || !toolName || !uiResourceUri?.startsWith("ui://") || !toolResult) {
       return undefined;
     }
     if (serverName === CODEX_APPS_MCP_SERVER && !connectorId) {
@@ -397,44 +368,50 @@ export async function prepareCodexNativeMcpFormResourceContext(params: {
   threadId: string;
   attempt: EmbeddedRunAttemptParams;
   request: { requestId: string | number; snapshot: Record<string, unknown>; signal: AbortSignal };
-  origin: { id: string; server: string; tool: string };
-  assertCurrent: () => void;
+  readOrigin: (serverName: string) => { id: string; server: string; tool: string } | undefined;
 }) {
+  const serverName =
+    typeof params.request.snapshot.serverName === "string"
+      ? params.request.snapshot.serverName
+      : "";
+  const origin = params.readOrigin(serverName);
+  const { agentId, sessionKey } = params.attempt;
+  if (!origin || !sessionKey || !agentId) {
+    throw new Error("Native MCP form has no unambiguous live origin");
+  }
   const assertCurrent = () => {
-    params.assertCurrent();
-    params.request.signal.throwIfAborted();
     params.attempt.hostCapabilities.assertActive();
+    if (params.readOrigin(serverName)?.id !== origin.id) {
+      throw new Error("Native MCP form origin expired");
+    }
+    params.request.signal.throwIfAborted();
   };
   assertCurrent();
   const initial = createNativeMcpRuntime({
     client: params.client,
     threadId: params.threadId,
     attempt: params.attempt,
-    originCallId: params.origin.id,
+    originCallId: origin.id,
     assertCurrent,
   });
-  const tools = (await initial.listTools?.(params.origin.server))?.tools ?? [];
+  const tools = (await initial.listTools?.(origin.server))?.tools ?? [];
   assertCurrent();
-  const source = tools.find((tool) => tool.name === params.origin.tool);
+  const source = tools.find((tool) => tool.name === origin.tool);
   if (!source) {
     throw new Error("Native MCP form origin is no longer listed");
   }
   const connectorId = readCodexMcpToolConnectorId(source);
-  if (params.origin.server === CODEX_APPS_MCP_SERVER && !connectorId) {
+  if (origin.server === CODEX_APPS_MCP_SERVER && !connectorId) {
     throw new Error("Native MCP form connector is unavailable");
   }
   const runtime = createNativeMcpRuntime({
     client: params.client,
     threadId: params.threadId,
     attempt: params.attempt,
-    originCallId: params.origin.id,
+    originCallId: origin.id,
     connectorId,
     assertCurrent,
   });
-  const { agentId, sessionKey } = params.attempt;
-  if (!agentId || !sessionKey) {
-    throw new Error("Native MCP form origin has no session owner");
-  }
   await runtime.getCatalog();
   assertCurrent();
   return await createHarnessMcpFormResourceContext({
@@ -444,7 +421,7 @@ export async function prepareCodexNativeMcpFormResourceContext(params: {
     signal: params.request.signal,
     origin: {
       runtime,
-      serverName: params.origin.server,
+      serverName: origin.server,
       agentId,
       sessionKey,
       requesterId: runtime.appRequester?.profileId,
@@ -455,28 +432,26 @@ export async function prepareCodexNativeMcpFormResourceContext(params: {
         const target = tools.find((tool) => tool.name === request.toolName);
         if (
           !target ||
-          params.attempt.toolOverrides?.mcpServers?.[params.origin.server] === false ||
-          params.attempt.toolOverrides?.mcpToolsDeny?.[params.origin.server]?.includes(
-            request.toolName,
-          ) ||
+          params.attempt.toolOverrides?.mcpServers?.[origin.server] === false ||
+          params.attempt.toolOverrides?.mcpToolsDeny?.[origin.server]?.includes(request.toolName) ||
           readCodexMcpToolUiVisibility(target)?.includes("app") === false ||
-          (params.origin.server === CODEX_APPS_MCP_SERVER &&
+          (origin.server === CODEX_APPS_MCP_SERVER &&
             readCodexMcpToolConnectorId(target) !== connectorId)
         ) {
           throw new Error("Native form preview tool is not authorized");
         }
-        const server = params.attempt.config?.mcp?.servers?.[params.origin.server];
+        const server = params.attempt.config?.mcp?.servers?.[origin.server];
         if (
           requiresMcpCodexToolApproval({
             mode: server
-              ? resolveProjectedMcpCodexToolApprovalMode(params.origin.server, server)
+              ? resolveProjectedMcpCodexToolApprovalMode(origin.server, server)
               : "prompt",
             fullPermission: params.attempt.permissionMode === "full",
             annotations: normalizeMcpCodexToolAnnotations(target.annotations),
           })
         ) {
           const description = JSON.stringify({
-            server: params.origin.server,
+            server: origin.server,
             tool: request.toolName,
             arguments: request.input,
           });

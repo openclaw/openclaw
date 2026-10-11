@@ -1,5 +1,5 @@
 import path from "node:path";
-import { retainCurrentWorkerNativeSection } from "../../infra/worker-task-native-sections.js";
+import { retainCurrentWorkerNativeSection } from "@openclaw/worker-runtime/worker";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { OAUTH_REFRESH_CALL_TIMEOUT_MS } from "./constants.js";
 import { observeOAuthRefreshSettlement } from "./oauth-refresh-fence.js";
@@ -50,10 +50,6 @@ export function beginOAuthRefreshObservation(params: {
       const existing = refresh.targets.get(key);
       const target = existing?.current ? existing : createRefreshTarget();
       refresh.targets.set(key, target);
-      return () => {
-        target.current = false;
-        target.retired.resolve();
-      };
     },
     beginSettlement: () => {
       refresh.settling = true;
