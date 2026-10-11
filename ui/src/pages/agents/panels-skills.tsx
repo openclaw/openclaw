@@ -15,9 +15,8 @@ import {
   computeSkillMissing,
   computeSkillReasons,
   isWorkshopSkill,
-  renderSkillStatusChips,
 } from "../../lib/skills-shared.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
+import { SkillStatusChips } from "../skills/skill-status.tsx";
 import { AgentConfigButtons, type AgentConfigActions } from "./config-actions.tsx";
 import { AgentPanelAction } from "./panel-ui.tsx";
 
@@ -164,9 +163,7 @@ export function AgentSkills(
                                 {skill().name}
                               </span>
                               <span class="settings-row__desc">{skill().description}</span>
-                              <LitContent
-                                render={() => renderSkillStatusChips({ skill: skill() })}
-                              />
+                              <SkillStatusChips skill={skill()} />
                               <For
                                 each={
                                   [

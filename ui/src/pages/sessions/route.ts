@@ -1,7 +1,8 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
-import { html } from "lit";
+import { createComponent } from "solid-js";
 import { routePageSpec } from "../../app-route-paths.ts";
+import type { SolidRouteProps } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
 
@@ -34,9 +35,13 @@ export const page = definePage({
     return routeOptions(location);
   },
   component: () =>
-    import("./sessions-page.tsx").then(() => ({
+    import("./sessions-page.tsx").then((module) => ({
       header: true,
-      render: (data: SessionsRouteData | undefined) =>
-        html`<openclaw-sessions-page .routeData=${data}></openclaw-sessions-page>`,
+      renderSolid: (props: SolidRouteProps<SessionsRouteData>) =>
+        createComponent(module.SessionsPage, {
+          get routeData() {
+            return props.data;
+          },
+        }),
     })),
 });

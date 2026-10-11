@@ -4,8 +4,9 @@ import {
   type RouteLoaderOptions,
   type RouteLocation,
 } from "@openclaw/uirouter";
-import { html } from "lit";
+import { createComponent } from "solid-js";
 import { routePageSpec } from "../../app-route-paths.ts";
+import type { SolidRouteProps } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { loadPluginCatalog } from "../../lib/plugins/index.ts";
@@ -58,13 +59,15 @@ function definePluginsPage(routeId: "plugins" | "plugin-settings", surface: Plug
       return loadPluginsRouteData(context, options);
     },
     component: () =>
-      import("./plugins-page.tsx").then(() => ({
+      import("./plugins-page.tsx").then((module) => ({
         header: true,
-        render: (data: PluginsRouteData | undefined) =>
-          html`<openclaw-plugins-page
-            .routeData=${data}
-            .surface=${surface}
-          ></openclaw-plugins-page>`,
+        renderSolid: (props: SolidRouteProps<PluginsRouteData>) =>
+          createComponent(module.PluginsPage, {
+            get routeData() {
+              return props.data;
+            },
+            surface,
+          }),
       })),
   });
 }

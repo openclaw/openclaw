@@ -13,6 +13,7 @@ import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import type { ApplicationContext } from "./context.ts";
 import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import { RouterOutletController, selectRenderedRouteMatch } from "./router-outlet-controller.ts";
+import { renderSolidRoute } from "./solid-route-legacy.tsx";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
@@ -24,6 +25,7 @@ type ApplicationRouteMatch = ReturnType<ApplicationRouter["getState"]>["matches"
 type RouterOutletOptions = {
   retryContext?: ApplicationContext;
   presented?: boolean;
+  host: Element;
 };
 
 function measureRoutedRender<T>(routeId: string, render: () => T): T {
@@ -102,7 +104,7 @@ function renderRouterOutlet(
   router: ApplicationRouter,
   showPending: boolean,
   renderedMatch: ApplicationRouteMatch | undefined,
-  options: RouterOutletOptions = {},
+  options: RouterOutletOptions,
 ): unknown {
   if (
     !renderedMatch ||
@@ -122,11 +124,21 @@ function renderRouterOutlet(
   }
   const routeModule = renderedMatch.module;
   const renderedPage = () =>
-    measureRoutedRender(routeId, () =>
-      options.presented === false
-        ? routeModule.render(renderedMatch.data, renderedMatch.isFetching === "loader", false)
-        : routeModule.render(renderedMatch.data, renderedMatch.isFetching === "loader"),
-    );
+    measureRoutedRender(routeId, () => {
+      if (routeModule.renderSolid) {
+        return renderSolidRoute({
+          render: routeModule.renderSolid,
+          data: renderedMatch.data,
+          loaderPending: renderedMatch.isFetching === "loader",
+          presented: options.presented !== false,
+          context: options.retryContext,
+          host: options.host,
+        });
+      }
+      return options.presented === false
+        ? routeModule.render?.(renderedMatch.data, renderedMatch.isFetching === "loader", false)
+        : routeModule.render?.(renderedMatch.data, renderedMatch.isFetching === "loader");
+    });
   return renderedMatch.error
     ? renderError(
         router,
@@ -371,12 +383,14 @@ class OpenClawRouterOutlet extends OpenClawLightDomElement implements ControlUiR
         if (renderedMatch?.routeId === "chat" && snapshot.settled?.routeId === "new-session") {
           return renderRouterOutlet(router, snapshot.showPending, snapshot.settled, {
             retryContext: this.retryContext,
+            host: this,
           });
         }
         return renderLoadingState();
       }
       return renderRouterOutlet(router, snapshot.showPending, renderedMatch, {
         retryContext: this.retryContext,
+        host: this,
       });
     };
     const rendered = html`
@@ -393,6 +407,7 @@ class OpenClawRouterOutlet extends OpenClawLightDomElement implements ControlUiR
                   .renderPage=${(presented: boolean) =>
                     renderRouterOutlet(router, snapshot.showPending, retained, {
                       retryContext: this.retryContext,
+                      host: this,
                       presented,
                     })}
                 ></openclaw-route-presentation>`,

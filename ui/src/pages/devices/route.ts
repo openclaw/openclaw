@@ -1,6 +1,7 @@
 import { definePage } from "@openclaw/uirouter";
-import { html } from "lit";
+import { createComponent } from "solid-js";
 import { routePageSpec } from "../../app-route-paths.ts";
+import type { SolidRouteProps } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
 import type { DevicesRouteData } from "./devices-page.tsx";
@@ -33,9 +34,13 @@ export const page = definePage({
     return { gateway, gatewaySnapshot, devices };
   },
   component: () =>
-    import("./devices-page.tsx").then(() => ({
+    import("./devices-page.tsx").then((module) => ({
       header: true,
-      render: (data: DevicesRouteData | undefined) =>
-        html`<openclaw-devices-page .routeData=${data}></openclaw-devices-page>`,
+      renderSolid: (props: SolidRouteProps<DevicesRouteData>) =>
+        createComponent(module.DevicesPage, {
+          get routeData() {
+            return props.data;
+          },
+        }),
     })),
 });

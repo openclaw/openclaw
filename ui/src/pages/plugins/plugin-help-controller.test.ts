@@ -8,12 +8,7 @@ import { createDiscoveryDetail, createPlugin, createResult } from "./plugins-pag
 import type { PluginSettingsField } from "./settings-editor.tsx";
 
 function createController() {
-  return new PluginHelpController({
-    addController: vi.fn(),
-    removeController: vi.fn(),
-    requestUpdate: vi.fn(),
-    updateComplete: Promise.resolve(true),
-  });
+  return new PluginHelpController();
 }
 
 afterEach(() => {
@@ -45,7 +40,7 @@ it.each(["plugin", "route", "connection", "disconnect"])(
       setGatewayToken("replacement-operator");
       controller.update(model("first"));
     } else {
-      controller.hostDisconnected();
+      controller.dispose();
     }
     const toggled = vi.fn();
     window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, toggled);
@@ -61,7 +56,7 @@ it.each(["plugin", "route", "connection", "disconnect"])(
       expect(takePluginHelpDraft(context)).toBe("");
     } finally {
       window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, toggled);
-      controller.hostDisconnected();
+      controller.dispose();
     }
   },
 );
@@ -143,7 +138,7 @@ it.each<{
         });
       }
     } finally {
-      controller.hostDisconnected();
+      controller.dispose();
     }
   },
 );
@@ -189,7 +184,7 @@ it.each([
       expect(draft).toBe(`Explain ${label}\n\nCurrent value: ${expected}`);
       expect(draft).not.toContain("synthetic-sensitive-value");
     } finally {
-      controller.hostDisconnected();
+      controller.dispose();
     }
   },
 );

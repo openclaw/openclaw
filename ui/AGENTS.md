@@ -10,6 +10,11 @@ assigned migration work order. It owns conversion, lifecycle, interop, and proof
 guidance. The state-ownership rules below still apply. The browser floor is in place;
 the Lit-specific guidance below goes with the final Lit sweep.
 
+Solid route modules expose `renderSolid(props)` from the existing lazy page import.
+The outlet mounts that renderer once and supplies live `data`, `loaderPending`, and
+`presented` props; loader updates must preserve page-local state. Unported route
+modules keep `render`. Keep page imports inside their route's `component` loader.
+
 ## State Ownership And Async Results
 
 - The Gateway owns shared state that other clients or channels can change.

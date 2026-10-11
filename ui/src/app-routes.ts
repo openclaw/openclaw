@@ -7,6 +7,7 @@ import type {
   Router,
   RouterHistory,
 } from "@openclaw/uirouter";
+import type { JSX } from "@solidjs/web";
 import {
   agentRouteFromPath,
   canonicalPluginTabLocation,
@@ -69,8 +70,16 @@ import { resolveWorkboardRouteLocation } from "./pages/workboard/route-location.
 import { page as workboardPage } from "./pages/workboard/route.ts";
 import { page as worktreesPage } from "./pages/worktrees/route.ts";
 
+export type SolidRouteProps<Data = unknown> = {
+  data: Data;
+  loaderPending: boolean;
+  presented: boolean;
+};
+
 type AppRouteModule = {
-  render: (data: unknown, loaderPending: boolean, presented?: boolean) => unknown;
+  render?: (data: unknown, loaderPending: boolean, presented?: boolean) => unknown;
+  /** Mounted once per route renderer; props follow the current loader and presentation. */
+  renderSolid?: (props: SolidRouteProps) => JSX.Element;
   /** Optional lower-sidebar content owned by the same route and loader as the page. */
   renderSidebar?: (data: unknown, loaderPending: boolean, presented?: boolean) => unknown;
   retainOnNavigate?: boolean;

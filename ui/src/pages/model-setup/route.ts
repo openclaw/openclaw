@@ -1,7 +1,8 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage, redirect } from "@openclaw/uirouter";
-import { html } from "lit";
+import { createComponent } from "solid-js";
 import { pathForRoute, routePageSpec } from "../../app-route-paths.ts";
+import type { SolidRouteProps } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ModelSetupRouteData } from "./first-run-setup.ts";
 
@@ -25,9 +26,13 @@ export const page = definePage({
         });
   },
   component: () =>
-    import("./model-setup-page.tsx").then(() => ({
+    import("./model-setup-page.tsx").then((module) => ({
       header: true,
-      render: (data: ModelSetupRouteData | undefined) =>
-        html`<openclaw-model-setup-page .routeData=${data}></openclaw-model-setup-page>`,
+      renderSolid: (props: SolidRouteProps<ModelSetupRouteData>) =>
+        createComponent(module.ModelSetupPage, {
+          get routeData() {
+            return props.data;
+          },
+        }),
     })),
 });

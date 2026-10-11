@@ -199,8 +199,15 @@ export class CronPageController {
   };
 
   activate() {
+    if (!this.active) {
+      return;
+    }
     document.addEventListener("visibilitychange", this.onActivation);
     globalThis.addEventListener("focus", this.onActivation);
+    // Solid constructs the host before insertion, so its cold read starts after attachment.
+    if (!this.cron.cronStatus && !this.cron.cronLoading) {
+      this.ensureInitialData();
+    }
   }
 
   dispose() {

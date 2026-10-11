@@ -1,7 +1,9 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
+import { createComponent } from "solid-js";
 import type { AgentsListResult } from "../../api/types.ts";
 import { routePageSpec } from "../../app-route-paths.ts";
+import type { SolidRouteProps } from "../../app-routes.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { selectableAgentsList } from "../../lib/agents/display.ts";
 import { resolveAgentsRouteLocation, type AgentsRouteLocation } from "./route-location.ts";
@@ -38,5 +40,14 @@ export const page = definePage({
       agentsList: rawAgentsList ? selectableAgentsList(rawAgentsList) : null,
     };
   },
-  component: () => import("./agents-page.ts"),
+  component: () =>
+    import("./agents-page.tsx").then((module) => ({
+      header: true,
+      renderSolid: (props: SolidRouteProps<AgentsRouteData>) =>
+        createComponent(module.AgentsPage, {
+          get routeData() {
+            return props.data;
+          },
+        }),
+    })),
 });

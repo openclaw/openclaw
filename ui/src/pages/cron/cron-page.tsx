@@ -1,3 +1,4 @@
+import type { JSX } from "@solidjs/web";
 import { createEffect, createMemo, createSignal, onCleanup, onSettled, untrack } from "solid-js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
@@ -164,7 +165,8 @@ export function CronPage(props: { routeSearch?: string; host: HTMLElement }) {
     () => props.routeSearch ?? "",
     (search) => controller.setRouteSearch(search),
   );
-  onSettled(() => controller.activate());
+  // A legacy route island can settle before its outer host is inserted.
+  onSettled(() => queueMicrotask(() => controller.activate()));
   onCleanup(() => controller.dispose());
   return <CronPageContent controller={controller} revision={revision} />;
 }
@@ -176,4 +178,12 @@ if (!customElements.get("openclaw-cron-page")) {
     (props, host) => <CronPage routeSearch={props.routeSearch} host={host} />,
     { properties: { routeSearch: { default: "", attribute: false } } },
   );
+}
+
+export function CronPageBridge(props: { routeSearch?: string }): JSX.Element {
+  // SAFETY: The registration above installs the Solid bridge's static renderer.
+  const Bridge = customElements.get("openclaw-cron-page") as CustomElementConstructor & {
+    render: (props: { routeSearch?: string }) => JSX.Element;
+  };
+  return Bridge.render(props);
 }

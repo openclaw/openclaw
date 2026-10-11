@@ -1,8 +1,7 @@
-import type { ReactiveControllerHost } from "lit";
 import { WizardLoginController } from "../../components/wizard-login-controller.ts";
 import { t } from "../../i18n/index.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
-import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
+import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import type { ModelSetupWizardCompletion } from "../model-setup/wizard-runner.ts";
 import type { PluginsPageDetail } from "./plugins-page-model.ts";
 
@@ -12,8 +11,8 @@ export class PluginMcpLoginController {
   private readonly dialog: WizardLoginController;
 
   constructor(
-    host: ReactiveControllerHost,
-    private readonly gateway: GatewayPageController,
+    host: { requestUpdate: () => void },
+    private readonly gateway: GatewayPageBinding,
     private readonly options: {
       getDetail: () => PluginsPageDetail | null;
       getName: (pluginId: string) => string | undefined;

@@ -1,5 +1,4 @@
 import type { JSX } from "@solidjs/web";
-import type { ReactiveControllerHost } from "lit";
 import { createMemo } from "solid-js";
 import type {
   PluginsSkillsReadParams,
@@ -11,8 +10,8 @@ import { registerFilePreviewEnglish } from "../../i18n/locales/en-file-preview.t
 import "../../components/file-preview-modal-registration.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import "./custom-elements.ts";
 import { renderPluginCapabilitySection as PluginCapabilitySection } from "./overview.tsx";
 import { showPluginToolPreview, type PluginToolPreview } from "./tool-preview.tsx";
@@ -36,8 +35,8 @@ export class PluginPreviewController {
   private toolAbort = new AbortController();
 
   constructor(
-    private readonly host: ReactiveControllerHost,
-    private readonly gateway: GatewayPageController,
+    private readonly host: { requestUpdate: () => void },
+    private readonly gateway: GatewayPageBinding,
   ) {}
 
   async open(request: PluginsSkillsReadParams): Promise<void> {

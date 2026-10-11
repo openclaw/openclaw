@@ -1,6 +1,10 @@
 import { definePage, type RouteLoaderOptions } from "@openclaw/uirouter";
+import { createComponent } from "solid-js";
 import { routePageSpec } from "../../app-route-paths.ts";
+import type { SolidRouteProps } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
+import type { UsageRouteData } from "./types.ts";
 
 export const page = definePage({
   ...routePageSpec("usage"),
@@ -19,5 +23,24 @@ export const page = definePage({
       loadUsageRouteData(context, options, snapshot),
     );
   },
-  component: () => import("./usage-page.ts").then((module) => module.usagePageComponent),
+  component: () =>
+    import("./usage-page.ts").then((module) => ({
+      header: true,
+      renderSolid: (props: SolidRouteProps<UsageRouteData>) =>
+        createComponent(ShellLayoutBoundary, {
+          traits: {
+            toolbarHeader: true,
+            settingsPage: true,
+            settingsWide: true,
+            settingsWorkspace: true,
+          },
+          get children() {
+            return createComponent(module.UsagePage, {
+              get routeData() {
+                return props.data;
+              },
+            });
+          },
+        }),
+    })),
 });

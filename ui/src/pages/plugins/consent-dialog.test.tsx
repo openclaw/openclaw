@@ -5,10 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildCapabilityConsentErrorDetails } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { i18n } from "../../i18n/index.ts";
 import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
-import {
-  renderArtTile,
-  renderPluginConsentDialog as PluginConsentDialog,
-} from "./consent-dialog.tsx";
+import { renderPluginConsentDialog as PluginConsentDialog } from "./consent-dialog.tsx";
+import { renderArtTile } from "./plugin-art-tile.tsx";
 import { createInspectResult } from "./plugins-page.test-support.ts";
 
 type ConsentProps = Parameters<typeof PluginConsentDialog>[0];

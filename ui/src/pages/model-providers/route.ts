@@ -1,6 +1,7 @@
 import { definePage, type RouteLoaderOptions } from "@openclaw/uirouter";
-import { html } from "lit";
+import { createComponent } from "solid-js";
 import { routePageSpec } from "../../app-route-paths.ts";
+import type { SolidRouteProps } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ModelProvidersData } from "./load.ts";
 
@@ -76,12 +77,16 @@ export const page = definePage({
   loaderDeps: (_context, location) => location.search,
   loader: loadModelProvidersRouteData,
   component: () =>
-    import("./model-providers-page.tsx").then(() => ({
+    import("./model-providers-page.tsx").then((module) => ({
       header: true,
-      render: (data: ModelProvidersRouteData | undefined, loaderPending = false) =>
-        html`<openclaw-model-providers-page
-          .routeData=${data}
-          .loaderPending=${loaderPending}
-        ></openclaw-model-providers-page>`,
+      renderSolid: (props: SolidRouteProps<ModelProvidersRouteData>) =>
+        createComponent(module.ModelProvidersPage, {
+          get routeData() {
+            return props.data;
+          },
+          get loaderPending() {
+            return props.loaderPending;
+          },
+        }),
     })),
 });

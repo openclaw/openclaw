@@ -1,5 +1,5 @@
 import { definePage } from "@openclaw/uirouter";
-import { html } from "lit";
+import { createComponent } from "solid-js";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 
@@ -18,8 +18,8 @@ export const page = definePage({
     );
   },
   component: () =>
-    import("./channels-page.tsx").then(() => ({
+    import("./channels-page.tsx").then((module) => ({
       header: true,
-      render: () => html`<openclaw-channels-page></openclaw-channels-page>`,
+      renderSolid: () => createComponent(module.ChannelsPageBridge, {}),
     })),
 });

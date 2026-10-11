@@ -1,5 +1,3 @@
-import { initialState, Task, TaskStatus } from "@lit/task";
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import {
   pathForRoute,
   pluginCatalogIdFromPath,
@@ -10,6 +8,7 @@ import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { GatewayPageBinding, type GatewayPageChange } from "../../lib/gateway-page-binding.ts";
 import { isComposingKeyboardEvent } from "../../lib/ime.ts";
 import {
   loadPluginDiscoveryDetail,
@@ -18,15 +17,11 @@ import {
   type PluginMutationResult,
 } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import {
-  GatewayPageController,
-  type GatewayPageChange,
-} from "../../lit/gateway-page-controller.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { installedPluginDetailTabFromHash, type InstalledPluginDetailTab } from "./detail-tabs.ts";
 import { PluginDiscoveryController } from "./plugin-discovery-controller.ts";
 import { PluginHelpController } from "./plugin-help-controller.ts";
 import { PluginMcpLoginController } from "./plugin-mcp-login-controller.ts";
+import { PluginRequest } from "./plugin-request.ts";
 import { pluginRowKey, type PluginRowMessage } from "./plugin-row-message.tsx";
 import { PluginSettingsController } from "./plugin-settings-controller.ts";
 import { pluginMutationWarnings, PluginsConsentController } from "./plugins-consent-controller.ts";
@@ -45,8 +40,9 @@ import type { PluginsRouteData } from "./route-data.ts";
 import type { PluginSettingsTab } from "./settings-view.tsx";
 import { PluginPreviewController } from "./skill-preview.tsx";
 
-export class PluginsPageController implements ReactiveControllerHost {
-  private readonly controllers = new Set<ReactiveController>();
+export class PluginsPageController {
+  private stopRuntimeConfig?: () => void;
+  private runtimeConfig?: ApplicationContext["runtimeConfig"];
   private active = false;
   element!: HTMLElement;
   routeData?: PluginsRouteData;
@@ -65,22 +61,10 @@ export class PluginsPageController implements ReactiveControllerHost {
   get isConnected() {
     return this.active;
   }
-  addController(controller: ReactiveController) {
-    this.controllers.add(controller);
-    if (this.active) {
-      controller.hostConnected?.();
-    }
-  }
-  removeController(controller: ReactiveController) {
-    this.controllers.delete(controller);
-  }
   requestUpdate() {
     if (this.active) {
       this.options.notify();
     }
-  }
-  get updateComplete() {
-    return Promise.resolve(true);
   }
 
   readonly state: {
@@ -117,7 +101,7 @@ export class PluginsPageController implements ReactiveControllerHost {
   }
 
   private installRequestGeneration = 0;
-  readonly help = new PluginHelpController(this);
+  readonly help = new PluginHelpController();
   private configAutoSaveStatus = "idle";
   pluginConfigEditPending = false;
   private routeDataConsumed = false;
@@ -133,7 +117,7 @@ export class PluginsPageController implements ReactiveControllerHost {
     },
     onLoadingChange: () => this.requestUpdate(),
   });
-  readonly gateway = new GatewayPageController(this, {
+  readonly gateway = new GatewayPageBinding(() => this.requestUpdate(), {
     getGateway: () => this.context?.gateway,
     onIdentityChange: () => {
       this.setState({ result: null });
@@ -155,7 +139,7 @@ export class PluginsPageController implements ReactiveControllerHost {
     canSignIn: () => canCallGatewayMethod(this.gateway.snapshot, "mcp.authLogin", "operator.admin"),
     refresh: (pluginId) => this.showDetails(pluginId),
   });
-  readonly discovery = new PluginDiscoveryController(this, {
+  readonly discovery = new PluginDiscoveryController(() => this.requestUpdate(), {
     getClient: () => this.gateway.client,
     isConnected: () => this.gateway.connected,
   });
@@ -188,10 +172,9 @@ export class PluginsPageController implements ReactiveControllerHost {
     refreshCatalogAfterMutation: (client) => this.refreshCatalog(client),
     requestUpdate: () => this.requestUpdate(),
   });
-  private readonly catalogTask = new Task(this, {
-    autoRun: false,
-    task: ([client]: readonly [GatewayPageController["client"]], { signal }) =>
-      client ? client.request<PluginListResult>("plugins.list", {}, { signal }) : initialState,
+  private readonly catalogTask = new PluginRequest(() => this.requestUpdate(), {
+    task: ([client]: readonly [NonNullable<GatewayPageBinding["client"]>], { signal }) =>
+      client.request<PluginListResult>("plugins.list", {}, { signal }),
     onComplete: (result) => {
       this.replaceResult(result);
       if (this.surface === "settings") {
@@ -203,22 +186,25 @@ export class PluginsPageController implements ReactiveControllerHost {
     },
   });
 
-  private readonly subscriptions = new SubscriptionsController(this).effect(
-    () => this.context?.runtimeConfig,
-    (runtimeConfig) => {
-      this.configAutoSaveStatus = runtimeConfig.state.configAutoSaveStatus;
-      return runtimeConfig.subscribe(() => {
-        const nextStatus = runtimeConfig.state.configAutoSaveStatus;
-        const completedSave = this.configAutoSaveStatus === "saving" && nextStatus === "saved";
-        this.configAutoSaveStatus = nextStatus;
-        this.requestUpdate();
-        if (completedSave && this.pluginConfigEditPending) {
-          this.pluginConfigEditPending = false;
-          void this.refreshCatalog();
-        }
-      });
-    },
-  );
+  private bindRuntimeConfig() {
+    const runtimeConfig = this.context.runtimeConfig;
+    if (runtimeConfig === this.runtimeConfig) {
+      return;
+    }
+    this.stopRuntimeConfig?.();
+    this.runtimeConfig = runtimeConfig;
+    this.configAutoSaveStatus = runtimeConfig.state.configAutoSaveStatus;
+    this.stopRuntimeConfig = runtimeConfig.subscribe(() => {
+      const nextStatus = runtimeConfig.state.configAutoSaveStatus;
+      const completedSave = this.configAutoSaveStatus === "saving" && nextStatus === "saved";
+      this.configAutoSaveStatus = nextStatus;
+      this.requestUpdate();
+      if (completedSave && this.pluginConfigEditPending) {
+        this.pluginConfigEditPending = false;
+        void this.refreshCatalog();
+      }
+    });
+  }
 
   update(routeData: PluginsRouteData | undefined, surface: "discovery" | "settings") {
     const previous = this.routeData;
@@ -227,13 +213,10 @@ export class PluginsPageController implements ReactiveControllerHost {
     if (!this.active) {
       this.active = true;
       document.addEventListener("keydown", this.handleDocumentKeydown, true);
-      for (const controller of this.controllers) {
-        controller.hostConnected?.();
-      }
+      this.gateway.connect();
     }
-    for (const controller of this.controllers) {
-      controller.hostUpdate?.();
-    }
+    this.gateway.refresh();
+    this.bindRuntimeConfig();
     if (previous !== routeData) {
       this.skillPreview.close();
       if (previous?.location.pathname !== routeData?.location.pathname) {
@@ -260,12 +243,13 @@ export class PluginsPageController implements ReactiveControllerHost {
     document.removeEventListener("keydown", this.handleDocumentKeydown, true);
     this.skillPreview.close();
     this.discovery.disconnect();
-    this.subscriptions.clear();
+    this.stopRuntimeConfig?.();
+    this.stopRuntimeConfig = undefined;
+    this.runtimeConfig = undefined;
     this.icons.reset();
-    for (const controller of this.controllers) {
-      controller.hostDisconnected?.();
-    }
-    this.controllers.clear();
+    this.catalogTask.reset();
+    this.help.dispose();
+    this.gateway.dispose();
   }
 
   private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
@@ -412,7 +396,7 @@ export class PluginsPageController implements ReactiveControllerHost {
   private invalidateRequests(invalidateCatalog: boolean) {
     this.mcpLogin.reset();
     if (invalidateCatalog) {
-      void this.catalogTask.run([null]);
+      this.catalogTask.reset();
       this.discovery.invalidate();
     }
     this.skillPreview.close();
@@ -458,10 +442,7 @@ export class PluginsPageController implements ReactiveControllerHost {
   }
 
   get loading(): boolean {
-    return (
-      this.gateway.connected &&
-      (!this.routeDataConsumed || this.catalogTask.status === TaskStatus.PENDING)
-    );
+    return this.gateway.connected && (!this.routeDataConsumed || this.catalogTask.pending);
   }
 
   private get activeRoutePluginId(): string | null {

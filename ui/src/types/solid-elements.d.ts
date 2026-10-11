@@ -22,6 +22,7 @@ declare module "@solidjs/web" {
       messageActions: MessageActionDetails | null | undefined;
     }
     interface IntrinsicElements {
+      "openclaw-github-identity": HTMLAttributes<HTMLElement>;
       "openclaw-plugin-view": HTMLAttributes<HTMLElement> & {
         "prop:surface": "tool-result";
         "prop:props": ControlUiSurfaceProps["tool-result"];

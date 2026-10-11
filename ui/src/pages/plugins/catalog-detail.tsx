@@ -7,11 +7,10 @@ import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import type { PluginDiscoveryDetailResult, PluginInstallRequest } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { PluginArtTile } from "./consent-dialog.tsx";
 import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx";
 import { PluginInstallAction } from "./install-action.tsx";
-import "../../styles/sidebar-markdown.css";
 import type { PluginInstallProgress } from "./install-progress.ts";
+import "../../styles/sidebar-markdown.css";
 import {
   renderPluginCapabilitySection,
   renderPluginDeclaredCapabilities,
@@ -20,6 +19,7 @@ import {
   renderPluginPublisher,
   renderPluginAskAction,
 } from "./overview.tsx";
+import { PluginArtTile } from "./plugin-art-tile.tsx";
 import { renderPluginRowMessage, type PluginRowMessage } from "./plugin-row-message.tsx";
 import { ReasonedDisabledControl } from "./reasoned-disabled-control.tsx";
 

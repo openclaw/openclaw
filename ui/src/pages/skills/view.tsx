@@ -24,13 +24,17 @@ import {
   computeSkillMissing,
   computeSkillReasons,
   isSkillAvailable,
-  renderSkillStatusChips,
 } from "../../lib/skills-shared.ts";
 import type { ClawHubSkillSecurityVerdict } from "../../lib/skills/index.ts";
 import { LitContent } from "../../lit/solid-bridge.ts";
 import { SkillDiscovery } from "./discovery-view.tsx";
 import { ClawHubDetailDialog, MarkdownContent, SkillReaderDialog } from "./skill-reader-dialog.tsx";
-import { SkillStateStatus, verdictForSkill, verdictStatus } from "./skill-status.tsx";
+import {
+  SkillStateStatus,
+  SkillStatusChips,
+  verdictForSkill,
+  verdictStatus,
+} from "./skill-status.tsx";
 import type { SkillDetailTab, SkillsProps, SkillsStatusFilter } from "./view-types.ts";
 
 registerSkillsBrowserEnglish();
@@ -302,13 +306,9 @@ function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
           <div style={{ "font-size": "14px", "line-height": "1.5", color: "var(--text)" }}>
             {props.skill.description}
           </div>
-          <LitContent
-            render={() =>
-              renderSkillStatusChips({
-                skill: props.skill,
-                showBundledBadge: props.skill.bundled && props.skill.source !== "openclaw-bundled",
-              })
-            }
+          <SkillStatusChips
+            skill={props.skill}
+            showBundledBadge={props.skill.bundled && props.skill.source !== "openclaw-bundled"}
           />
         </div>
         <Show when={hasTabs()}>

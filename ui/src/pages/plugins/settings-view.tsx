@@ -19,9 +19,8 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { LitContent } from "../../lit/solid-bridge.ts";
 import { renderPluginReadme } from "./catalog-detail.tsx";
 import "../../plugins/control-ui-contributions.ts";
-import { renderArtTile } from "./consent-dialog.tsx";
-import "./custom-elements.ts";
 import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx";
+import "./custom-elements.ts";
 import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
 import { PluginInstallAction } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
@@ -33,6 +32,7 @@ import {
   renderPluginPublisher,
   renderPluginAskAction,
 } from "./overview.tsx";
+import { renderArtTile } from "./plugin-art-tile.tsx";
 import { renderPluginStateStatus } from "./plugin-card.tsx";
 import {
   pluginRowKey,

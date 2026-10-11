@@ -16,8 +16,8 @@ import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-ma
 import { REDACTED_SENTINEL } from "../../lib/config-form-utils.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
+import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import "./credential-editor.css";
 
@@ -28,7 +28,7 @@ const credentialSources = ["env", "file", "exec", "store"] as const;
 export type PluginCredentialEditorContext = {
   pluginId: string;
   baseHash: string | null;
-  gateway: Pick<GatewayPageController, "capture" | "isCurrent" | "epoch" | "connected">;
+  gateway: Pick<GatewayPageBinding, "capture" | "isCurrent" | "epoch" | "connected">;
   canInspect: boolean;
   saveError?: string | null;
   /** Adapter stages through field.onPatch and awaits that exact config-owner write. */

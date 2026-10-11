@@ -9,10 +9,10 @@ import {
   renderPluginCatalogResults as PluginCatalogResults,
   type PluginCatalogResultsProps,
 } from "./catalog-results.tsx";
-import { renderArtTile } from "./consent-dialog.tsx";
 import { renderPluginDetailShell } from "./detail-shell.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import { renderPluginMcpServers } from "./overview.tsx";
+import { renderArtTile } from "./plugin-art-tile.tsx";
 import baseStyles from "../../styles/base.css?inline";
 import componentStyles from "../../styles/components.css?inline";
 import pluginStyles from "../../styles/plugins.css?inline";

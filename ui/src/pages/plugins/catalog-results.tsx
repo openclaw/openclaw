@@ -13,9 +13,9 @@ import type {
 } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { PluginCatalogSkeleton, renderCatalogGridSkeleton } from "./catalog-skeleton.tsx";
-import { PluginArtTile } from "./consent-dialog.tsx";
 import { PluginInstallAction } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
+import { PluginArtTile } from "./plugin-art-tile.tsx";
 import {
   renderPluginAuthor,
   renderPluginCardSummary,
