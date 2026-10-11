@@ -1,16 +1,5 @@
-import { css } from "lit";
-
-export const imageLightboxStyles = css`
-  :host {
-    --image-lightbox-control-background: rgba(12, 16, 24, 0.64);
-    --image-lightbox-control-background-hover: rgba(12, 16, 24, 0.78);
-    display: contents;
-  }
-
-  :host-context([data-theme-mode="dark"]) {
-    --image-lightbox-control-background: rgba(255, 255, 255, 0.16);
-    --image-lightbox-control-background-hover: rgba(255, 255, 255, 0.22);
-  }
+openclaw-image-lightbox {
+  display: contents;
 
   openclaw-modal-dialog {
     --openclaw-modal-width: 100vw;
@@ -44,7 +33,7 @@ export const imageLightboxStyles = css`
   .actions .action,
   .action.zoom-control {
     color: var(--media-foreground);
-    background-color: var(--image-lightbox-control-background);
+    background-color: var(--media-control-bg);
     -webkit-backdrop-filter: blur(16px) saturate(140%);
     backdrop-filter: blur(16px) saturate(140%);
     box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
@@ -57,7 +46,7 @@ export const imageLightboxStyles = css`
 
   .actions .action:hover,
   .zoom-control:hover:not([aria-disabled="true"]) {
-    background-color: var(--image-lightbox-control-background-hover);
+    background-color: var(--media-control-bg-hover);
   }
 
   .title {
@@ -73,7 +62,7 @@ export const imageLightboxStyles = css`
     border: 0;
     border-radius: var(--radius-md);
     background: transparent;
-    color: #fff;
+    color: var(--media-foreground);
     font: inherit;
     font-size: 12px;
     font-weight: 650;
@@ -86,7 +75,7 @@ export const imageLightboxStyles = css`
   }
 
   .action:focus-visible {
-    outline: 2px solid #fff;
+    outline: 2px solid var(--media-foreground);
     outline-offset: 2px;
   }
 
@@ -155,11 +144,11 @@ export const imageLightboxStyles = css`
     border-radius: 50%;
     transform: translateY(-50%);
     color: var(--media-foreground);
-    background: var(--image-lightbox-control-background);
+    background: var(--media-control-bg);
   }
 
   .navigation:hover:not([aria-disabled="true"]) {
-    background: var(--image-lightbox-control-background-hover);
+    background: var(--media-control-bg-hover);
   }
 
   .navigation[aria-disabled="true"] {
@@ -191,7 +180,7 @@ export const imageLightboxStyles = css`
     padding: 6px 12px;
     border-radius: 999px;
     color: var(--media-foreground);
-    background: var(--image-lightbox-control-background);
+    background: var(--media-control-bg);
     font-size: 12px;
     font-variant-numeric: tabular-nums;
   }
@@ -321,4 +310,4 @@ export const imageLightboxStyles = css`
       transition: none;
     }
   }
-`;
+}

@@ -1,9 +1,5 @@
-import { css } from "lit";
-
-export const filePreviewModalStyles = css`
-  :host {
-    display: contents;
-  }
+openclaw-file-preview-modal {
+  display: contents;
 
   .modal {
     width: 100%;
@@ -517,4 +513,21 @@ export const filePreviewModalStyles = css`
       padding: 10px 12px;
     }
   }
-`;
+
+  .shortcut-kbd:where(:not([hidden])) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    vertical-align: middle;
+  }
+  .shortcut-kbd > span + span {
+    margin-inline-start: 0.15em;
+  }
+  .kbd__text {
+    text-box: trim-both cap alphabetic;
+  }
+  .shortcut-kbd::before {
+    content: "";
+    height: 1lh;
+  }
+}
