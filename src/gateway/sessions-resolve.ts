@@ -104,27 +104,22 @@ export async function withPreparedSessionResolve<T>(
   };
   while (true) {
     try {
-      if (key || pending.size > 0) {
-        return await withReadySessionRows(
-          projection,
-          (cfg) => {
-            const selected = [...pending.values()];
-            if (key) {
-              const agent = resolveRequestedSessionAgentId(cfg, key, p.agentId);
-              if (agent.ok) {
-                selected.push({ key, agentId: agent.agentId });
-              }
+      return await withReadySessionRows(
+        projection,
+        (cfg) => {
+          const selected = [...pending.values()];
+          if (key) {
+            const agent = resolveRequestedSessionAgentId(cfg, key, p.agentId);
+            if (agent.ok) {
+              selected.push({ key, agentId: agent.agentId });
             }
-            return selected;
-          },
-          resolve,
-        );
-      }
-      do {
-        await projection.ensureMaterialized();
-        assertCurrent();
-      } while (projection.needsMaterialization);
-      return resolve();
+          }
+          return selected;
+        },
+        resolve,
+        // Discovery needs current selection metadata, not every session's display row.
+        { selection: !key },
+      );
     } catch (error) {
       if (!(error instanceof SessionResolvePreparationRequired)) {
         throw error;

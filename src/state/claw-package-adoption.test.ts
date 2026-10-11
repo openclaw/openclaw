@@ -66,12 +66,12 @@ function plan(agentId: string, workspace: string): ClawAddPlan {
 }
 
 describe("Claw package independent adoption", () => {
-  it("does not fail an ordinary install when Claw state is unavailable", () => {
+  it("does not fail an ordinary install when Claw state is unavailable", async () => {
     const path = join(tempDirs.make("claw-adoption-invalid-"), "state.sqlite");
     writeFileSync(path, "not sqlite");
 
     expect(
-      markClawPackageIndependentlyOwned(
+      await markClawPackageIndependentlyOwned(
         {
           kind: "plugin",
           source: "clawhub",
@@ -83,7 +83,7 @@ describe("Claw package independent adoption", () => {
     ).toBe(0);
   });
 
-  it("marks every shared plugin reference independently owned", () => {
+  it("marks every shared plugin reference independently owned", async () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("claw-adoption-") };
     for (const agentId of ["first", "second"]) {
       const current = plan(agentId, `/tmp/${agentId}`);
@@ -115,8 +115,8 @@ describe("Claw package independent adoption", () => {
       ref: "@acme/audit",
       version: "1.0.0",
     } as const;
-    expect(markClawPackageIndependentlyOwned(artifact, { env, nowMs: 42 })).toBe(2);
-    expect(markClawPackageIndependentlyOwned(artifact, { env, nowMs: 99 })).toBe(0);
+    expect(await markClawPackageIndependentlyOwned(artifact, { env, nowMs: 42 })).toBe(2);
+    expect(await markClawPackageIndependentlyOwned(artifact, { env, nowMs: 99 })).toBe(0);
     const refs = readClawPackageRefs({ env }).toSorted(
       (left, right) =>
         left.agentId.localeCompare(right.agentId) || left.version.localeCompare(right.version),
@@ -130,7 +130,7 @@ describe("Claw package independent adoption", () => {
     expect(refs.every((ref) => ref.origin === "claw-introduced")).toBe(true);
   });
 
-  it("scopes skill adoption to the owning agent workspace", () => {
+  it("scopes skill adoption to the owning agent workspace", async () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("claw-adoption-") };
     for (const agentId of ["first", "second"]) {
       const current = plan(agentId, `/tmp/${agentId}`);
@@ -154,7 +154,7 @@ describe("Claw package independent adoption", () => {
     }
 
     expect(
-      markClawPackageIndependentlyOwned(
+      await markClawPackageIndependentlyOwned(
         {
           kind: "skill",
           source: "clawhub",

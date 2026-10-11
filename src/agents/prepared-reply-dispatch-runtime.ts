@@ -160,7 +160,6 @@ export class PreparedReplyDispatchPublicationOwner {
         assertPreparedModelRuntimeAdmissionCanWait(pendingOwner);
       }
       if (!demandPrepared) {
-        // Demand can join recovery, so preserve admission before that first wait.
         await this.host.ensureReady(params);
         demandPrepared = true;
         continue;

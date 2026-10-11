@@ -292,8 +292,8 @@ describe("projects vitest config", () => {
     [
       "fake-timer unit-fast",
       createUnitFastFakeTimersVitestConfig,
-      ["src/acp/translator.stop-reason.test.ts"],
-      ["src/acp/translator.stop-reason.test.ts"],
+      ["src/utils.test.ts"],
+      ["src/utils.test.ts"],
     ],
   ] as const)(
     "limits %s include files to the project's owned tests",
@@ -303,7 +303,7 @@ describe("projects vitest config", () => {
         ...owned,
         "src/plugin-sdk/text-chunking.test.ts",
         "src/system-agent/assistant.configured.test.ts",
-        "src/acp/translator.stop-reason.test.ts",
+        "src/utils.test.ts",
         "src/gateway/openresponses-http.test.ts",
         unrelated,
       ]);
