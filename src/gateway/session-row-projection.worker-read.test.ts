@@ -19,7 +19,6 @@ import {
   loadSessionEntry,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
-import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { withSessionActor } from "../config/sessions/session-actor-scope.js";
 import { updateSessionGroupCategoriesInWorker } from "../config/sessions/session-group-categories.js";
 import type { SessionRowDatabaseFacts } from "../config/sessions/session-row-facts.types.js";
@@ -40,9 +39,9 @@ import {
   type SqliteWorkerOperations,
   type SqliteWorkerStore,
 } from "../infra/sqlite-worker-contract.js";
+import { patchSessionEntry as patchSdkSessionEntry } from "../plugin-sdk/session-store-runtime.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import * as agentWorkers from "../state/openclaw-agent-worker-store.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -111,14 +110,14 @@ it("reuses actor row facts after metadata writes and refreshes Board presence af
       scope,
       { assertCurrent() {}, assertReadable() {} },
       async (actor) => {
-        expect((await actor.read(authority)).hasBoard).toBe(false);
+        await actor.read(authority);
         const updateLabel = (label: string, updatedAt: number) =>
-          runOpenClawAgentWriteTransaction(
-            (database) =>
-              writeSessionEntry(database, scope.sessionKey, { ...entry, updatedAt, label }),
-            { agentId: scope.agentId },
-          );
-        updateLabel("Committed metadata", 2);
+          patchSdkSessionEntry({
+            ...scope,
+            skipMaintenance: true,
+            update: () => ({ updatedAt, label }),
+          });
+        await updateLabel("Committed metadata", 2);
         const reads: string[][] = [];
         observeRowFacts((owner) => (input) => {
           reads.push([...input.sessionKeys]);
@@ -147,8 +146,13 @@ it("reuses actor row facts after metadata writes and refreshes Board presence af
             name: "status",
             content: { kind: "html", html: "<p>Current</p>" },
           });
-          // An entry-only receipt must not resurrect Board facts revoked by the preceding write.
-          updateLabel("Metadata after Board", 3);
+          await projection.ensureMaterialized();
+          expect(projection.snapshot(query).row).toMatchObject({
+            hasBoard: true,
+            label: "Committed metadata",
+          });
+          expect(reads).toEqual([[scope.sessionKey]]);
+          await updateLabel("Metadata after Board", 3);
           await projection.ensureMaterialized();
           expect(projection.snapshot(query).row).toMatchObject({
             hasBoard: true,
