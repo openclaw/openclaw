@@ -7,6 +7,7 @@ import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-rea
 import { OpenClawStateLeaseAcquisitionError } from "../state/openclaw-state-lease-error.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { exactClaimForPlacement } from "./github-publication-coordinator-methods.js";
+import { matchesRepositoryGitHubPublicationClaim } from "./github-publication-defer.kernel.js";
 import { createGitHubPublicationExecutionIdentity } from "./github-publication-execution-identity.js";
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
@@ -142,22 +143,6 @@ export async function settleDeniedRepositoryGitHubPublication(params: {
       ...error.failure,
       message: error.message,
     }),
-  );
-}
-
-export function matchesRepositoryGitHubPublicationClaim(
-  row: RepositoryGitHubPublicationRow,
-  claim: WorkerSessionTurnClaim,
-): boolean {
-  return (
-    row.environment_id !== null &&
-    row.owner_epoch !== null &&
-    row.session_id === claim.sessionId &&
-    row.claim_id === claim.claimId &&
-    row.run_id === claim.runId &&
-    row.placement_generation === claim.placementGeneration &&
-    row.environment_id === (claim.owner.environmentId ?? null) &&
-    row.owner_epoch === (claim.owner.ownerEpoch ?? null)
   );
 }
 
