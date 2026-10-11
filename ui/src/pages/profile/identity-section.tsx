@@ -1,4 +1,3 @@
-import type { JSX as SolidJSX } from "@solidjs/web";
 import { Show } from "solid-js";
 import {
   GATEWAY_OWNER_PROFILE_ID,
@@ -26,7 +25,7 @@ type ViewerAvatarElement = HTMLElementTagNameMap["openclaw-viewer-avatar"];
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-viewer-avatar": SolidJSX.HTMLAttributes<ViewerAvatarElement> & {
+      "openclaw-viewer-avatar": HTMLAttributes<ViewerAvatarElement> & {
         "prop:user": ViewerAvatarElement["user"];
         variant?: ViewerAvatarElement["variant"];
       };

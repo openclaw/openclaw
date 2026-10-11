@@ -2,7 +2,6 @@ import type WaTabGroup from "@awesome.me/webawesome/dist/components/tab-group/ta
 import type WaTab from "@awesome.me/webawesome/dist/components/tab/tab.js";
 import type { TranscriptSessionSummary } from "@openclaw/gateway-protocol";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
-import type { JSX as SolidJSX } from "@solidjs/web";
 import { For, Show, createMemo, createEffect } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -29,12 +28,12 @@ import type { TranscriptsViewProps } from "./view-types.ts";
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "wa-tab": SolidJSX.HTMLAttributes<WaTab> & {
+      "wa-tab": HTMLAttributes<WaTab> & {
         panel: string;
         active: boolean;
         "prop:tabIndex": WaTab["tabIndex"];
       };
-      "wa-tab-group": SolidJSX.HTMLAttributes<WaTabGroup> & {
+      "wa-tab-group": HTMLAttributes<WaTabGroup> & {
         activation: "manual";
         "prop:active": WaTabGroup["active"];
         "without-scroll-controls": boolean;

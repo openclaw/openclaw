@@ -241,7 +241,7 @@ export const DEBUG_OVERLAY_SECTIONS: readonly DebugOverlaySectionDescriptor[] = 
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-sparkline": SolidJSX.HTMLAttributes<HTMLElementTagNameMap["openclaw-sparkline"]> & {
+      "openclaw-sparkline": HTMLAttributes<HTMLElementTagNameMap["openclaw-sparkline"]> & {
         "prop:label"?: string;
         "prop:sub"?: string;
         "prop:samples"?: readonly SparklineSample[];

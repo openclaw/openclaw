@@ -1,4 +1,3 @@
-import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import type {
   MemoryMigrationItem,
@@ -32,7 +31,7 @@ type AgentSelectElement = HTMLElementTagNameMap["openclaw-agent-select"];
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-agent-select": SolidJSX.HTMLAttributes<AgentSelectElement> & {
+      "openclaw-agent-select": HTMLAttributes<AgentSelectElement> & {
         name?: string;
         "prop:options": AgentSelectElement["options"];
         "prop:value": string;
