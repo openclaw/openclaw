@@ -41,6 +41,20 @@ function nativeResult(stdout = "", status: number | null = 0, error?: Error) {
   return { pid: 0, output: [null, stdout, ""], stdout, stderr: "", status, signal: null, error };
 }
 
+it("returns an unknown result when PowerShell execution is denied", () => {
+  vi.mocked(spawnSync).mockImplementationOnce(() => {
+    throw Object.assign(new Error("spawnSync powershell.exe ERR_ACCESS_DENIED"), {
+      code: "ERR_ACCESS_DENIED",
+    });
+  });
+
+  expect(probeScheduledTaskState("OpenClaw Gateway")).toEqual({
+    status: "unknown",
+    detail: "spawnSync powershell.exe ERR_ACCESS_DENIED",
+    diagnostic: { kind: "spawn" },
+  });
+});
+
 it.each([false, true])(
   "reads native action metadata without a hidden console (inventory=%s)",
   (inventory) => {
