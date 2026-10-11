@@ -34,3 +34,37 @@ export type AgentDeletionJournalAuthority = Readonly<{
   operationId: string;
   cleanupCompleted: boolean;
 }>;
+
+export type AgentDeletionJournalCleanupPath = {
+  path: string;
+  canonicalPath: string;
+  parentPath: string;
+  kind: "target" | "symlink";
+  sourcePaths: string[];
+  dev: number | null;
+  ino: number | null;
+  coversDescendants: boolean;
+  done: boolean;
+  note?: string;
+};
+
+export type AgentDeletionJournalEntry = {
+  agentId: string;
+  operationId: string;
+  agentDir: string;
+  workspaceDir: string;
+  sessionsDir: string;
+  databasePaths: string[];
+  cleanupPaths: AgentDeletionJournalCleanupPath[];
+  createdAt: number;
+  cleanupCompleted: boolean;
+  deleteFiles: boolean;
+};
+
+export type AgentDeletionJournalInput = Omit<
+  AgentDeletionJournalEntry,
+  "createdAt" | "cleanupCompleted" | "databasePaths" | "cleanupPaths"
+> & {
+  databasePaths?: string[];
+  cleanupPaths?: AgentDeletionJournalCleanupPath[];
+};

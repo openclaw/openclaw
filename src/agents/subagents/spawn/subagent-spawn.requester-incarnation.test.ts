@@ -26,6 +26,7 @@ import {
   replaceSessionEntrySync,
 } from "../../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry-store.js";
+import { markCanonicalSessionValidationPending } from "../../../config/sessions/session-canonical-key.js";
 import { LegacyContextEngine } from "../../../context-engine/legacy.js";
 import { runOpenClawAgentWriteTransaction } from "../../../state/openclaw-agent-db.js";
 import { normalizeSessionDeliveryState } from "../../../utils/delivery-context.shared.js";
@@ -107,6 +108,7 @@ it("reads the requester off-thread while retaining dirty-sibling validation", as
   database.db
     .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
     .run(sibling);
+  markCanonicalSessionValidationPending(database, [sibling]);
   expect(await readRequester()).toMatchObject({
     status: "error",
     error: expect.stringContaining("non-canonical persisted row"),

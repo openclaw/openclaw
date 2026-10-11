@@ -7,7 +7,7 @@ import {
   registerOpenClawStateDatabaseLifecycleListener,
 } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import type { PairedDeviceTokenIdentity } from "./device-pairing-identity.js";
+import type { PairedDeviceTokenIdentity } from "./device-pairing-core.types.js";
 import type {
   DevicePairingBinding,
   DevicePairingBindingFact,
@@ -73,6 +73,15 @@ const publications = resolveGlobalSingleton(
   },
 );
 
+/** Native pairing writers retire the node projection after their transaction commits. */
+export function invalidateDevicePairingNodeSnapshot(path: string): void {
+  const publication = publications.get(path);
+  if (publication) {
+    publication.epoch++;
+    publication.nodes = undefined;
+  }
+}
+
 export function captureDevicePairingPublication(admission: OpenClawStateDatabaseReadAdmission) {
   const path = admission.databasePath;
   const { identity } = admission;
@@ -113,6 +122,17 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
       publications.get(path) === captured && captured.epoch === epoch && !captured.mutation,
     completeRevision: () =>
       !captured.blocked && captured.complete ? captured.revision : undefined,
+    readNodes() {
+      for (const service of captured.pending) {
+        service();
+      }
+      return publications.get(path) === captured &&
+        !captured.blocked &&
+        !captured.mutation &&
+        captured.complete
+        ? captured.nodes
+        : undefined;
+    },
     fail() {
       if (publications.get(path) === captured && captured.epoch === epoch) {
         captured.blocked = true;

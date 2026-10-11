@@ -1,7 +1,10 @@
 import type { SessionEntryCurrentSource } from "../config/sessions/session-entry-current.types.js";
 import type { SessionUpstreamJsonValue } from "../plugins/session-catalog.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import type { SessionUpstreamLink } from "./session-upstream-links.kernel.js";
+import type {
+  SessionUpstreamLink,
+  SessionUpstreamLinkInput,
+} from "./session-upstream-links.kernel.js";
 
 /** Host-owned fork assertion; its source is checked in the committing transaction. */
 export type SessionUpstreamLinkCurrentCheck = {
@@ -17,7 +20,7 @@ export type SessionUpstreamSettlement =
 export type SessionUpstreamWorkerOperations = {
   "sessionUpstream.upsert": {
     input: {
-      link: Omit<SessionUpstreamLink, "lastScannedAt" | "createdAt" | "updatedAt">;
+      link: SessionUpstreamLinkInput;
       now: number;
       ifAbsent?: true;
       source?: SessionUpstreamLink;

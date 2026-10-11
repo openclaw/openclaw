@@ -118,17 +118,14 @@ describe("WhatsApp delivery recovery", () => {
         durability: "required",
       });
       expect(result.status).toBe("sent");
+      // Marker overhead carries into the next chunk instead of a tiny "*xx*" message.
       expect(sendMessage.mock.calls.map(([, text]) => text)).toEqual([
         `*${"x".repeat(158)}*`,
-        "*xx*",
         `*${"x".repeat(158)}*`,
-        "*xx*",
-        `*${"x".repeat(20)}*`,
+        `*${"x".repeat(24)}*`,
       ]);
       expect(sendMessage.mock.calls.map((call) => call[4]?.quotedMessageKey?.id)).toEqual([
         "quoted",
-        undefined,
-        undefined,
         undefined,
         undefined,
       ]);
@@ -136,14 +133,12 @@ describe("WhatsApp delivery recovery", () => {
         "part-1",
         "part-2",
         "part-3",
-        "part-4",
-        "part-5",
       ]);
       expect(
         onDeliveryResult.mock.calls.map(([progress]) =>
           progress.receipt?.parts.map((part: { replyToId?: string }) => part.replyToId),
         ),
-      ).toEqual([["quoted"], [undefined], [undefined], [undefined], [undefined]]);
+      ).toEqual([["quoted"], [undefined], [undefined]]);
     });
   });
 

@@ -210,39 +210,28 @@ async function originSubjectAuthentication(
   }
 
   const context = input.conversation.kind === "direct" ? "dm" : "group";
-  const originEntries = await normalizeSubjectIdentifiersForMatch({
-    input,
-    subject: origin,
-    context,
-    opaquePrefix: "origin",
-  });
-  if (originEntries.length > 0) {
-    const currentMatch = await input.adapter.matchSubject({
-      subject: input.subject,
-      entries: originEntries,
+  for (const [subject, against, opaquePrefix, requireMatched] of [
+    [origin, input.subject, "origin", true],
+    [input.subject, origin, "current", false],
+  ] as const) {
+    const entries = await normalizeSubjectIdentifiersForMatch({
+      input,
+      subject,
       context,
+      opaquePrefix,
     });
-    if (currentMatch.matched) {
-      const authentication = matchedAuthentication({ entries: originEntries, match: currentMatch });
-      if (authentication) {
-        strongest = strongerAuthentication(strongest, authentication);
-      }
+    if (entries.length === 0) {
+      continue;
     }
-  }
-
-  const currentEntries = await normalizeSubjectIdentifiersForMatch({
-    input,
-    subject: input.subject,
-    context,
-    opaquePrefix: "current",
-  });
-  if (currentEntries.length > 0) {
-    const originMatch = await input.adapter.matchSubject({
-      subject: origin,
-      entries: currentEntries,
+    const match = await input.adapter.matchSubject({
+      subject: against,
+      entries,
       context,
     });
-    const authentication = matchedAuthentication({ entries: currentEntries, match: originMatch });
+    if (requireMatched && !match.matched) {
+      continue;
+    }
+    const authentication = matchedAuthentication({ entries, match });
     if (authentication) {
       strongest = strongerAuthentication(strongest, authentication);
     }
@@ -423,25 +412,17 @@ export async function resolveChannelIngressState(
         : undefined,
     },
   };
+  const resolveAllowlist = (
+    key: keyof NormalizedStateInput["allowlists"],
+    context: "dm" | "group" | "command",
+  ) => resolveIngressAllowlist({ input, rawEntries: input.allowlists[key], context });
   const [dm, pairingStore, group, commandOwner, commandGroup, routeFacts, eventOriginMatched] =
     await Promise.all([
-      resolveIngressAllowlist({ input, rawEntries: input.allowlists.dm, context: "dm" }),
-      resolveIngressAllowlist({
-        input,
-        rawEntries: input.allowlists.pairingStore,
-        context: "dm",
-      }),
-      resolveIngressAllowlist({ input, rawEntries: input.allowlists.group, context: "group" }),
-      resolveIngressAllowlist({
-        input,
-        rawEntries: input.allowlists.commandOwner,
-        context: "command",
-      }),
-      resolveIngressAllowlist({
-        input,
-        rawEntries: input.allowlists.commandGroup,
-        context: "command",
-      }),
+      resolveAllowlist("dm", "dm"),
+      resolveAllowlist("pairingStore", "dm"),
+      resolveAllowlist("group", "group"),
+      resolveAllowlist("commandOwner", "command"),
+      resolveAllowlist("commandGroup", "command"),
       resolveRouteFacts(input),
       originSubjectAuthentication(input),
     ]);

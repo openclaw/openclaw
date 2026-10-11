@@ -7,7 +7,7 @@ import {
   type AgentMessage,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { withCodexSessionTranscriptMirrorWriteLock } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
+import { withCodexSessionTranscriptMirrorWrite } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
 import {
   composeSessionTranscriptWriteAssertion,
   publishSessionTranscriptUpdateByIdentity,
@@ -150,7 +150,7 @@ export async function mirror(params: {
     params.assertWriteCurrent,
   ]);
   assertWritable();
-  const result = await withCodexSessionTranscriptMirrorWriteLock(
+  const result = await withCodexSessionTranscriptMirrorWrite(
     { ...transcriptTarget, config: params.config },
     async (transcript) => {
       assertWritable();
@@ -312,10 +312,11 @@ export async function mirror(params: {
           message: messageToAppend,
           ...(params.assertCurrent || params.assertWriteCurrent
             ? {
-                prepareMessageAfterIdempotencyCheckAsync: async (
-                  preparedMessage: typeof messageToAppend,
-                ) => preparedMessage,
-                beforeFreshMessageCommit: assertWritable,
+                preparation: {
+                  prepareMessage: async (preparedMessage: typeof messageToAppend) =>
+                    preparedMessage,
+                  source: assertWritable,
+                },
               }
             : {}),
           // Preliminary facts avoid hooks and payload work on normal retries.

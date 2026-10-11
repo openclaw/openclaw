@@ -2,7 +2,10 @@
 import type { AuditMessageFailureStage } from "../../audit/audit-event-types.js";
 import { assertSessionWriterDeliveryAuthorized } from "../../auto-reply/reply/session-writer-delivery-authority.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { isProvenDeliveryNotSentError } from "../delivery-recovery.shared.js";
+import {
+  isAmbiguousDeliveryTransportError,
+  isProvenDeliveryNotSentError,
+} from "../delivery-recovery.shared.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import type {
@@ -130,8 +133,9 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
   const failAfterPlatformSend = async (
     owner: QueuedDeliveryOwner,
     error: string,
+    ambiguousTransportError?: true,
   ): Promise<void> => {
-    await owner.fail(failDeliveryAfterPlatformSend, error);
+    await owner.fail(failDeliveryAfterPlatformSend, error, ambiguousTransportError);
     queuedPostSendState = "failed";
   };
   const emitTerminals = (
@@ -473,49 +477,47 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
           return results;
         }
         const acked =
-          postSendState === "acked"
-            ? true
-            : postSendState === "failed"
-              ? false
-              : await queueOwner
-                  .ack(
-                    results.length === 0 && typeof params.completionRetention === "object"
-                      ? { suppressCompletionReceipt: true }
-                      : undefined,
-                  )
-                  .then(() => true)
-                  .catch(async (err: unknown) => {
-                    const hasSendEvidence =
-                      deliveredResults.length > 0 ||
-                      (queuedPreSendState !== undefined && !allPayloadsSuppressed);
-                    try {
-                      if (hasSendEvidence) {
-                        await failAfterPlatformSend(
-                          queueOwner,
-                          `failed to ack sent delivery: ${formatErrorMessage(err)}`,
-                        );
-                      } else {
-                        // Proven omission clears the handoff marker so recovery can safely retry.
-                        await queueOwner.fail(
-                          allPayloadsSuppressed ? failDeliveryBeforePlatformSend : failDelivery,
-                          `failed to ack unsent delivery: ${formatErrorMessage(err)}`,
-                        );
-                      }
-                    } catch (persistErr: unknown) {
-                      log.warn(
-                        `failed to preserve queued delivery ${queueId} after ack failure: ${formatErrorMessage(persistErr)}`,
-                      );
-                    }
-                    if (queuePolicy === "required") {
-                      throw err;
-                    }
-                    log.warn(
-                      hasSendEvidence
-                        ? `failed to ack queued delivery ${queueId}; preserved unknown-after-send state: ${formatErrorMessage(err)}`
-                        : `failed to ack unsent queued delivery ${queueId}; retained it for retry: ${formatErrorMessage(err)}`,
+          postSendState === "acked" ||
+          (postSendState !== "failed" &&
+            (await queueOwner
+              .ack(
+                results.length === 0 && typeof params.completionRetention === "object"
+                  ? { suppressCompletionReceipt: true }
+                  : undefined,
+              )
+              .then(() => true)
+              .catch(async (err: unknown) => {
+                const hasSendEvidence =
+                  deliveredResults.length > 0 ||
+                  (queuedPreSendState !== undefined && !allPayloadsSuppressed);
+                try {
+                  if (hasSendEvidence) {
+                    await failAfterPlatformSend(
+                      queueOwner,
+                      `failed to ack sent delivery: ${formatErrorMessage(err)}`,
                     );
-                    return false;
-                  });
+                  } else {
+                    // Proven omission clears the handoff marker so recovery can safely retry.
+                    await queueOwner.fail(
+                      allPayloadsSuppressed ? failDeliveryBeforePlatformSend : failDelivery,
+                      `failed to ack unsent delivery: ${formatErrorMessage(err)}`,
+                    );
+                  }
+                } catch (persistErr: unknown) {
+                  log.warn(
+                    `failed to preserve queued delivery ${queueId} after ack failure: ${formatErrorMessage(persistErr)}`,
+                  );
+                }
+                if (queuePolicy === "required") {
+                  throw err;
+                }
+                log.warn(
+                  hasSendEvidence
+                    ? `failed to ack queued delivery ${queueId}; preserved unknown-after-send state: ${formatErrorMessage(err)}`
+                    : `failed to ack unsent queued delivery ${queueId}; retained it for retry: ${formatErrorMessage(err)}`,
+                );
+                return false;
+              })));
         if (acked) {
           await finishAck(completedTerminals);
         }
@@ -593,8 +595,14 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
             await finishAck(() => failedTerminals("queue"));
           }
         } else if (!platformResultsReturned) {
+          const ambiguousFinalTransport =
+            params.retryAmbiguousFinalText === true &&
+            platformSendStarted &&
+            deliveredResults.length === 0 &&
+            isAmbiguousDeliveryTransportError(err);
           const sendEvidence =
             deliveredResults.length > 0 ||
+            ambiguousFinalTransport ||
             (!failureIsProvenNotSent &&
               (platformDispatchedPayloads.size > 0 ||
                 (err instanceof OutboundDeliveryError && err.sentBeforeError)));
@@ -602,7 +610,11 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
             try {
               queuedPostSendState ??= await persistPostSendState(queueOwner);
               if (queuedPostSendState === "marked") {
-                await failAfterPlatformSend(queueOwner, formatErrorMessage(err));
+                await failAfterPlatformSend(
+                  queueOwner,
+                  formatErrorMessage(err),
+                  ambiguousFinalTransport ? true : undefined,
+                );
               }
             } catch (persistErr: unknown) {
               // Do not convert concrete send evidence back into a generic retry.

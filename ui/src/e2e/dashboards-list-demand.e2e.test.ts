@@ -167,6 +167,7 @@ suite.define(() => {
       const page = await context.newPage();
       try {
         const gateway = await installMockGateway(page, {
+          awaitInitialRoster: !suspending,
           gatewaySuspensionPhase: suspending ? "draining" : "accepting",
           methodResponses: {
             "sessions.list": {
@@ -344,7 +345,20 @@ suite.define(() => {
             "sessions.list",
             sessionsResult(`agent:main:canonical-${index + 1}`, canonicalLabel, 10 + index),
           );
-          await page.getByText(canonicalLabel, { exact: true }).first().waitFor();
+          const sidebar = page.locator("openclaw-app-sidebar");
+          await sidebar
+            .locator(".sidebar-rail")
+            .getByRole("button", { name: "Sessions", exact: true })
+            .click();
+          // A resolved profileless connection exposes the all-owner canonical roster.
+          await expect
+            .poll(() =>
+              sidebar
+                .getByRole("button", { name: "All", exact: true })
+                .getAttribute("aria-pressed"),
+            )
+            .toBe("true");
+          await sidebar.getByText(canonicalLabel, { exact: true }).waitFor();
         }),
       );
 

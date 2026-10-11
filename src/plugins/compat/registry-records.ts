@@ -1,10 +1,12 @@
 import { AGENT_HARNESS_COMPAT_RECORDS } from "./agent-harness-records.js";
 import { AGENT_LIST_RUNTIME_PROJECTION_COMPAT_RECORDS } from "./agent-list-runtime-projection-records.js";
+import { BINDING_PERSISTENCE_COMPAT_RECORDS } from "./binding-persistence-records.js";
 import { CHANNEL_PAIRING_COMPAT_RECORD } from "./channel-pairing-record.js";
 import { DEPRECATION_MARKING_COMPAT_RECORDS } from "./deprecation-marking.js";
 import { MEDIA_LEGACY_PROJECTION_COMPAT_RECORD } from "./media-legacy-projection.js";
 import { MENTION_INBOX_COMPAT_RECORD } from "./mention-inbox-record.js";
 import { MODEL_ACCOUNT_CONNECT_COMPAT_RECORD } from "./model-account-connect-record.js";
+import { PLUGIN_SDK_REMOVED_EXPORT_RECORDS } from "./plugin-sdk-removed-export-records.js";
 import {
   BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS,
   PLUGIN_SDK_SUBPATH_RECORDS,
@@ -27,7 +29,9 @@ const ACTIVATION_HINT_METADATA = {
 } as const;
 
 export const PLUGIN_COMPAT_RECORDS = [
+  ...PLUGIN_SDK_REMOVED_EXPORT_RECORDS,
   ...AGENT_HARNESS_COMPAT_RECORDS,
+  ...BINDING_PERSISTENCE_COMPAT_RECORDS,
   CHANNEL_PAIRING_COMPAT_RECORD,
   MENTION_INBOX_COMPAT_RECORD,
   MODEL_ACCOUNT_CONNECT_COMPAT_RECORD,
@@ -198,7 +202,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     warningStarts: "2026-09-11",
     removalGate: "next-plugin-sdk-major",
     replacement:
-      "`api.runtime.state.openKeyedStore` and `PluginStateKeyedStore`; await operations while keeping transactional callbacks synchronous. Retain the sync adapter until a supported external-plugin migration and explicit breaking-release approval.",
+      "Use api.runtime.state.openKeyedStoreV2 or createPluginStateKeyedStoreV2, await data-only operations, and replace update/deleteIf closures with observe/compareAndApply. Synchronous methods retain commit-before-return until they are removed in the next Plugin SDK major and explicit breaking-release approval.",
     docsPath: "/plugins/sdk-runtime/state-and-system#synchronous-keyed-store-migration",
     surfaces: [
       "api.runtime.state.openSyncKeyedStore",
@@ -209,7 +213,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     ],
     diagnostics: [
       "TypeScript @deprecated annotations and state-store migration documentation",
-      "plugin compatibility inventory; no new runtime warnings",
+      "plugin compatibility inventory; legacy writer migrations use the shared once-per-plugin-and-capability-family warning policy",
     ],
     tests: [
       "src/plugins/compat/registry.test.ts",
@@ -219,7 +223,7 @@ export const PLUGIN_COMPAT_RECORDS = [
       "src/plugins/loader.runtime-registry.test.ts",
     ],
     releaseNote:
-      "Synchronous plugin keyed stores remain supported through the next Plugin SDK major while plugins migrate to awaited keyed-store operations; trust eligibility and transactional callbacks are unchanged.",
+      "Bundled plugins use worker-owned keyed-state operations and conditional prepared writes. Released synchronous stores and opaque callbacks retain their timing with a bounded migration warning; schemas, retention, and update behavior are unchanged.",
   },
   {
     code: "memory-read-result-statusless-success",
@@ -329,35 +333,6 @@ export const PLUGIN_COMPAT_RECORDS = [
     tests: ["src/plugins/compat/registry.test.ts"],
     releaseNote:
       "Memory-specific embedding provider registration was removed; plugins now use the generic embedding provider contract.",
-  },
-  {
-    code: "deprecated-session-store-beta5-api",
-    status: "removed",
-    owner: "sdk",
-    introduced: "2026-05-21",
-    deprecated: "2026-07-12",
-    warningStarts: "2026-07-12",
-    replacement:
-      "Use `getSessionEntry(...)` and `listSessionEntries(...)` for reads; `patchSessionEntry(...)`, `upsertSessionEntry(...)`, and `deleteSessionEntry(...)` for row mutations; and session identity with `session-transcript-runtime` for active transcripts. The supported-plugin cutoff excludes v2026.7.1-beta.5 and other packages importing the retired bridge.",
-    docsPath: "/plugins/sdk-migration/removed-surfaces#removed-session-and-transcript-file-apis",
-    surfaces: [
-      "openclaw/plugin-sdk/session-store-runtime loadSessionStore",
-      "openclaw/plugin-sdk/session-store-runtime updateSessionStore",
-      "openclaw/plugin-sdk/session-store-runtime resolveSessionFilePath",
-      "openclaw/plugin-sdk/session-store-runtime resolveSessionStoreEntry",
-      "openclaw/plugin-sdk/session-store-runtime LoadSessionStoreOptions",
-      "openclaw/plugin-sdk/session-store-runtime UpdateSessionStoreOptions",
-      "openclaw package root loadSessionStore",
-      "openclaw package root saveSessionStore",
-    ],
-    diagnostics: ["plugin compatibility registry and migration guide"],
-    tests: [
-      "src/plugin-sdk/session-store-runtime.test.ts",
-      "src/index.test.ts",
-      "src/plugins/compat/registry.test.ts",
-    ],
-    releaseNote:
-      "The September 30, 2026 approved cutoff retired the beta.5 session-store bridge, its option types, and package-root loadSessionStore/saveSessionStore aliases ahead of the former October 12 window. Plugins must use scoped row APIs and identity-backed transcript APIs; the session-store-runtime subpath and resolveStorePath remain available.",
   },
   {
     code: "plugin-sdk-session-agent-resolution-aliases",

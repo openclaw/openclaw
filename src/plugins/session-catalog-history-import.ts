@@ -7,7 +7,7 @@ import type {
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentMessage } from "../plugin-sdk/agent-core.js";
-import { withSessionTranscriptWriteLock } from "../plugin-sdk/session-transcript-runtime.js";
+import { withSessionTranscriptWrite } from "../plugin-sdk/session-transcript-runtime.js";
 import { wrapExternalContent } from "../security/external-content.js";
 
 const SESSION_CATALOG_CONTINUATION_LIMITS = { maxItems: 200, maxBytes: 512 * 1024 };
@@ -190,7 +190,7 @@ export async function importSessionCatalogHistory(params: {
     limits: SESSION_CATALOG_CONTINUATION_LIMITS,
   });
   const fallbackTimestamp = Date.now();
-  await withSessionTranscriptWriteLock(params, async (transcript) => {
+  await withSessionTranscriptWrite(params, async (transcript) => {
     for (const [index, item] of items.entries()) {
       const imported = importedSessionCatalogMessage({
         catalogId: params.catalogId,
@@ -208,7 +208,7 @@ export async function importSessionCatalogHistory(params: {
         message,
         idempotencyLookup: "scan",
         cwd: params.cwd,
-        ...(params.commitGuard ? { beforeFreshMessageCommit: params.commitGuard } : {}),
+        ...(params.commitGuard ? { preparation: { source: params.commitGuard } } : {}),
       });
     }
     const notice = params.continuationNotice?.trim();
@@ -225,7 +225,7 @@ export async function importSessionCatalogHistory(params: {
         },
         idempotencyLookup: "scan",
         cwd: params.cwd,
-        ...(params.commitGuard ? { beforeFreshMessageCommit: params.commitGuard } : {}),
+        ...(params.commitGuard ? { preparation: { source: params.commitGuard } } : {}),
       });
     }
   });
@@ -247,7 +247,7 @@ export async function preserveSessionCatalogHistory(params: {
   const occurrences = new Map<string, number>();
   let importedItems = 0;
   params.commitGuard?.();
-  await withSessionTranscriptWriteLock(params, async (transcript) => {
+  await withSessionTranscriptWrite(params, async (transcript) => {
     params.commitGuard?.();
     await transcript.appendMessage({
       message: {
@@ -262,8 +262,10 @@ export async function preserveSessionCatalogHistory(params: {
       idempotencyLookup: "scan",
       // Replays retain the first notice's timestamp, just as source items retain
       // their first fallback timestamp and randomized untrusted-content boundary.
-      prepareMessageAfterIdempotencyCheckAsync: async (message) => message,
-      beforeFreshMessageCommit: params.commitGuard,
+      preparation: {
+        prepareMessage: async (message) => message,
+        source: params.commitGuard,
+      },
     });
     for (const [index, item] of params.history.items.entries()) {
       const imported = importedSessionCatalogMessage({
@@ -299,24 +301,26 @@ export async function preserveSessionCatalogHistory(params: {
         // Despite its name, scan uses the transcript identity index, not a
         // transcript walk. Each source item needs one indexed lookup.
         idempotencyLookup: "scan",
-        prepareMessageAfterIdempotencyCheckAsync: async (message) => {
-          const wrapped = importedSessionCatalogMessage({
-            catalogId: params.catalogId,
-            item: {
-              ...item,
-              text: wrapExternalContent(
-                item.text?.trim() || "[Unsupported catalog transcript item]",
-                {
-                  source: "unknown",
-                  includeWarning: false,
-                },
-              ),
-            },
-            fallbackTimestamp: fallbackTimestamp + index + 1,
-          });
-          return wrapped ? { ...wrapped, idempotencyKey } : message;
+        preparation: {
+          prepareMessage: async (message) => {
+            const wrapped = importedSessionCatalogMessage({
+              catalogId: params.catalogId,
+              item: {
+                ...item,
+                text: wrapExternalContent(
+                  item.text?.trim() || "[Unsupported catalog transcript item]",
+                  {
+                    source: "unknown",
+                    includeWarning: false,
+                  },
+                ),
+              },
+              fallbackTimestamp: fallbackTimestamp + index + 1,
+            });
+            return wrapped ? { ...wrapped, idempotencyKey } : message;
+          },
+          source: params.commitGuard,
         },
-        beforeFreshMessageCommit: params.commitGuard,
       });
       if (appended?.appended) {
         importedItems += 1;

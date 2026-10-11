@@ -1,6 +1,11 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  sessionEntryCommitGuardOptions,
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   cancelProviderLoginFlow,
@@ -23,6 +28,7 @@ import {
 import { defaultRuntime } from "../../runtime.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { ReplyPayload } from "../types.js";
+import { commandReply } from "./command-gates.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 
@@ -124,7 +130,7 @@ async function switchLoginSessionProfile(params: {
   loginProvider: string;
   nextProfileId: string;
   signal: AbortSignal;
-  assertCurrent: () => void;
+  assertCurrent: SessionSourceAssertion;
 }): Promise<"unchanged" | "updated" | "failed"> {
   const { commandParams, loginProvider, nextProfileId } = params;
   const currentEntry = commandParams.sessionEntry;
@@ -176,10 +182,12 @@ async function switchLoginSessionProfile(params: {
           return persistedDecision.status === "patch" ? persistedDecision.patch : null;
         },
         {
-          assertCommitAllowed: () => {
-            params.signal.throwIfAborted();
-            params.assertCurrent();
-          },
+          ...sessionEntryCommitGuardOptions(
+            composeSessionSourceAssertion([params.assertCurrent], (assertSource) => {
+              params.signal.throwIfAborted();
+              assertSource();
+            }),
+          ),
           requireWriteSuccess: true,
           skipMaintenance: true,
         },
@@ -350,21 +358,18 @@ export const handleLoginCommand: CommandHandler = async (params, allowTextComman
   if (!prepared) {
     return null;
   }
-  if (prepared.status !== "ready") {
-    return { shouldContinue: false, reply: prepared.reply };
-  }
-  const reply = await runChannelProviderLogin(params, prepared.choice);
-  return { shouldContinue: false, reply };
-};
-
-const commandsLoginTestApi = {
-  clearActiveFlows() {
-    activeProviderLoginFlows.logins.clear();
-    activeProviderLoginFlows.modelAccess.clear();
-  },
+  return commandReply(
+    prepared.status === "ready"
+      ? await runChannelProviderLogin(params, prepared.choice)
+      : prepared.reply,
+  );
 };
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.commandsLoginTestApi")] =
-    commandsLoginTestApi;
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.commandsLoginTestApi")] = {
+    clearActiveFlows() {
+      activeProviderLoginFlows.logins.clear();
+      activeProviderLoginFlows.modelAccess.clear();
+    },
+  };
 }

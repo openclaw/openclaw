@@ -4,6 +4,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { releasePluginCacheInstance, withPluginCache, type PluginCache } from "./plugin-cache.js";
+import { createPluginBackgroundRunner } from "./plugin-instance-background.js";
 import { createPluginInstanceBindings } from "./plugin-instance-bindings.js";
 import { DisposalFailures, type DisposalCleanup } from "./plugin-instance-disposal.js";
 import {
@@ -35,6 +36,7 @@ import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.j
 const { values: valueInstances } = pluginInstanceState;
 const SHUTDOWN_TIMEOUT_MS = 5_000;
 const log = createSubsystemLogger("plugins/cleanup");
+type PluginInstanceCall = { registry?: PluginRegistry; cleanup: boolean; ownerJoined: boolean };
 
 export class PluginInstance {
   readonly slots = new Map<string | symbol, { runtime: unknown }>();
@@ -50,7 +52,7 @@ export class PluginInstance {
   private accepting = true;
   private replacementReserved = false;
   private readonly retainedWork = new Set<object>();
-  private readonly calls = new Map<object, { registry?: PluginRegistry; cleanup: boolean }>();
+  private readonly calls = new Map<object, PluginInstanceCall>();
   private forcedRetirement = false;
   private disposalFailures?: Set<unknown>;
   private timedOutCalls?: {
@@ -109,6 +111,10 @@ export class PluginInstance {
     this.lifecycle = Object.freeze({
       signal: this.controller.signal,
       onDispose: (cleanup: () => void | Promise<void>) => this.addCleanup(cleanup, "plugin"),
+      runInBackgroundContext: createPluginBackgroundRunner(
+        this,
+        (token) => this.calls.get(token)?.cleanup === true,
+      ),
     });
   }
 
@@ -169,7 +175,7 @@ export class PluginInstance {
   }
 
   runInRegistry<T>(
-    registry: PluginRegistry,
+    registry: PluginRegistry | undefined,
     run: () => T,
     options?: { joinDisposal?: boolean },
   ): T {
@@ -186,25 +192,7 @@ export class PluginInstance {
 
   /** Associates an identity-sensitive public value without replacing it with a view. */
   adopt<T>(value: T): T {
-    const seen = new Set<object>();
-    const visit = (candidate: unknown) => {
-      if (
-        !candidate ||
-        (typeof candidate !== "object" && typeof candidate !== "function") ||
-        seen.has(candidate)
-      ) {
-        return;
-      }
-      seen.add(candidate);
-      valueInstances.set(candidate, this);
-      for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(candidate))) {
-        if ("value" in descriptor) {
-          visit(descriptor.value);
-        }
-      }
-    };
-    visit(value);
-    return value;
+    return valueInstances.adopt(value, this);
   }
 
   createRegistryView(registry: PluginRegistry, invoke: <T>(run: () => T) => T): <T>(value: T) => T {
@@ -464,7 +452,8 @@ export class PluginInstance {
     ) = {},
   ): PluginInstanceCallLease {
     const current = this.activeCall();
-    const registry = options.registry ?? (current && this.calls.get(current.token)?.registry);
+    const parent = current && this.calls.get(current.token);
+    const registry = options.registry ?? parent?.registry;
     const joinDisposal = !options.cleanup && options.joinDisposal !== false;
     // Nested callbacks and streams keep the consumer's exact token; ordinary
     // tokens could expire early or remain usable after that consumer closes.
@@ -476,12 +465,10 @@ export class PluginInstance {
       (options.cleanup && options.hostCleanup) ||
         (current !== undefined && PluginCallToken.isHostCleanup(current.token)),
     );
-    this.calls.set(token, {
-      registry,
-      // Not joining disposal never grants teardown authority to ordinary work.
-      cleanup:
-        options.cleanup === true || (current && this.calls.get(current.token)?.cleanup) === true,
-    });
+    const cleanup = options.cleanup === true || parent?.cleanup === true;
+    // Not joining disposal never grants teardown authority to ordinary work; its
+    // lifecycle owner stops and joins that work during cleanup instead.
+    this.calls.set(token, { registry, cleanup, ownerJoined: !cleanup && !joinDisposal });
     return {
       token,
       release: () => {
@@ -556,7 +543,7 @@ export class PluginInstance {
     this.quiesce();
     const ownToken = this.activeCall()?.token;
     try {
-      await this.waitForCalls(ownToken, options?.signal);
+      await this.waitForCalls((token) => token === ownToken, options?.signal);
       if (options?.includeConsumers) {
         await waitForPluginInstanceSettlement(
           this.pluginId,
@@ -572,8 +559,11 @@ export class PluginInstance {
     }
   }
 
-  private async waitForCalls(ownToken?: object, signal?: AbortSignal): Promise<void> {
-    const settled = () => [...this.calls.keys()].every((token) => token === ownToken);
+  private async waitForCalls(
+    ignored: (token: object) => boolean,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const settled = () => [...this.calls.keys()].every(ignored);
     if (signal) {
       // Reload owns its observation budget; disposal keeps its independent deadline.
       return waitForPluginInstanceSettlement(this.pluginId, this.waiters, settled, signal);
@@ -648,11 +638,7 @@ export class PluginInstance {
           };
           this.forcedRetirement = true;
           void this.trackTimedOutCalls();
-          for (const [token, call] of this.calls) {
-            if (!call.cleanup) {
-              this.calls.delete(token);
-            }
-          }
+          this.revokeOrdinaryCalls(false);
           // Admitted consumers keep their own authority until the host closes or releases them.
           this.abortDisposal(work);
           const error = new PluginInstanceDrainTimeoutError(
@@ -670,6 +656,14 @@ export class PluginInstance {
       void this.disposal.catch(() => {});
     }
     return this.activeCall() ? Promise.resolve({ errors: [] }) : this.disposal;
+  }
+
+  private revokeOrdinaryCalls(keepOwnerJoined: boolean): void {
+    for (const [token, call] of this.calls) {
+      if (!call.cleanup && !(keepOwnerJoined && call.ownerJoined)) {
+        this.calls.delete(token);
+      }
+    }
   }
 
   private abortDisposal(work: AsyncWorkScope): void {
@@ -695,7 +689,9 @@ export class PluginInstance {
         this.invoke(cleanup, this.lease({ cleanup: true, hostCleanup }), terminalFailures),
       );
     try {
-      await this.waitForCalls();
+      // Owner-joined work often stops only when its cleanup runs; draining it
+      // first would hold disposal until the deadline.
+      await this.waitForCalls((token) => this.calls.get(token)?.ownerJoined === true);
     } catch (error) {
       failures.push(
         new PluginInstanceDrainTimeoutError(formatErrorMessage(error), this.trackTimedOutCalls(), {
@@ -704,13 +700,10 @@ export class PluginInstance {
       );
     }
     // Revoke ordinary call tokens even when they miss their drain deadline.
-    // Logical consumers retain only their own scope through engine disposal;
-    // physical cleanup waits for those consumers to close.
-    for (const [token, call] of this.calls) {
-      if (!call.cleanup) {
-        this.calls.delete(token);
-      }
-    }
+    // Owner-joined work keeps its token until it settles. Logical consumers
+    // retain only their own scope through engine disposal; physical cleanup
+    // waits for those consumers to close.
+    this.revokeOrdinaryCalls(true);
     while (this.consumers.size > 0) {
       await Promise.all([...this.consumers.values()].map(({ completion }) => completion));
     }
@@ -749,6 +742,11 @@ export class PluginInstance {
     terminalFailures: DisposalFailures,
   ): Promise<PluginInstanceDisposalResult> {
     const { failures, hostFailure, moduleCleanups } = await cleanupCompletion;
+    // Owner-joined work kept its admission through cleanup; module teardown still waits for it.
+    await this.waitForCalls(
+      (token) => !this.calls.get(token)?.ownerJoined,
+      new AbortController().signal,
+    );
     // Logical expiry revokes results; it cannot delete code still used by the original calls.
     await this.timedOutCalls?.settled.promise;
     for (const cleanup of moduleCleanups) {

@@ -1,4 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
 import type { RouteId } from "./app-route-paths.ts";
 import type {
@@ -6,15 +5,15 @@ import type {
   NativeDeviceSettingsSnapshot,
 } from "./app/native-device-settings.ts";
 import type { IconName } from "./components/icons.ts";
-import { i18n, t } from "./i18n/index.ts";
+import { t } from "./i18n/index.ts";
 
 export type NavigationRouteId = RouteId;
 
 type NavigationPresentation = readonly [icon: IconName, titleKey: string, subtitleKey: string];
 
-// The sidebar shows a small user-customizable ordered zone; every other nav route
-// lives in the collapsed "More" section. Chat is reachable through the session
-// list and Settings/Docs live in the sidebar footer, so neither is listed here.
+// Pages derives its built-in catalog from these destinations. Personal rail
+// pins reference the catalog without changing its availability. Chat has the
+// Sessions view; Settings/Docs remain in the profile menu.
 // Skills and Skill Workshop are reached from the Plugins workspace, not sidebar items.
 // Worktrees is a tab of the Sessions hub, so it is not listed either.
 // Workboard is plugin-owned and enters the zone through its Control UI descriptor.
@@ -54,7 +53,8 @@ function isPersistedSidebarRoute(value: unknown): value is PersistedSidebarRoute
 export type SidebarZoneEntry =
   | { type: "route"; route: PersistedSidebarRoute }
   | { type: "plugin"; key: string }
-  | { type: "session"; key: string };
+  | { type: "session"; key: string }
+  | { type: "person"; profileId: string };
 
 // Keep the highest-value operational destinations visible on first use. Users
 // can still replace this route set through the customize menu.
@@ -75,6 +75,18 @@ export function parseSidebarEntry(value: unknown): SidebarZoneEntry | null {
       return { type: "plugin", key: "workboard/workboard" };
     }
     return isPersistedSidebarRoute(route) ? { type: "route", route } : null;
+  }
+  if (value.startsWith("person:")) {
+    const profileId = value.slice("person:".length).trim();
+    if (!profileId || /\s/u.test(profileId)) {
+      return null;
+    }
+    for (let index = 0; index < profileId.length; index += 1) {
+      if (profileId.charCodeAt(index) < 32) {
+        return null;
+      }
+    }
+    return { type: "person", profileId };
   }
   if (value.startsWith("session:")) {
     const key = value.slice("session:".length).trim();
@@ -100,6 +112,9 @@ export function parseSidebarEntry(value: unknown): SidebarZoneEntry | null {
 export function serializeSidebarEntry(entry: SidebarZoneEntry): string {
   if (entry.type === "route") {
     return `route:${entry.route}`;
+  }
+  if (entry.type === "person") {
+    return `person:${entry.profileId}`;
   }
   return entry.type === "plugin" ? `plugin:${entry.key}` : `session:${entry.key}`;
 }
@@ -149,41 +164,6 @@ export type SettingsSearchBlock = {
   search?: string;
   hash: string;
 };
-
-let settingsSearchSegmenterLocale = "";
-let settingsSearchSegmenter: Intl.Segmenter | null = null;
-
-function settingsSearchHasWordPrefix(value: string, query: string): boolean {
-  const locale = i18n.getLocale();
-  if (settingsSearchSegmenterLocale !== locale) {
-    settingsSearchSegmenterLocale = locale;
-    settingsSearchSegmenter =
-      typeof Intl !== "undefined" && "Segmenter" in Intl
-        ? new Intl.Segmenter(locale, { granularity: "word" })
-        : null;
-  }
-  if (!settingsSearchSegmenter) {
-    return value.split(/[^\p{L}\p{N}]+/u).some((word) => word.startsWith(query));
-  }
-  for (const segment of settingsSearchSegmenter.segment(value)) {
-    if (segment.isWordLike !== false && segment.segment.startsWith(query)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-export function settingsSearchTextMatches(value: string, query: string): boolean {
-  const candidate = normalizeLowercaseStringOrEmpty(value).normalize("NFC");
-  const normalizedQuery = normalizeLowercaseStringOrEmpty(query).normalize("NFC");
-  if (!normalizedQuery) {
-    return false;
-  }
-  if (normalizedQuery.length > 2) {
-    return candidate.includes(normalizedQuery);
-  }
-  return settingsSearchHasWordPrefix(candidate, normalizedQuery);
-}
 
 // Grouping feeds the full-page settings sidebar (settings-sidebar.ts). Ordered
 // by user attention: personal/look-and-feel first, system plumbing last.
@@ -310,12 +290,6 @@ const SETTINGS_SUBPAGE_ROUTES: readonly NavigationRouteId[] = [
   "lobsterdex",
 ];
 export const SETTINGS_SEARCHABLE_SUBPAGE_ROUTES: readonly NavigationRouteId[] = ["ai-agents"];
-const SETTINGS_SUBPAGE_OWNER_ROUTES: Partial<
-  Readonly<Record<NavigationRouteId, NavigationRouteId>>
-> = {
-  "ai-agents": "agents",
-  "model-setup": "model-providers",
-};
 
 const SETTINGS_NAVIGATION_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
   ...SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes),
@@ -393,60 +367,8 @@ export function isSettingsTakeover(routeId: RouteId | undefined): boolean {
   return routeId !== undefined && isSettingsNavigationRoute(routeId);
 }
 
-export function settingsNavigationOwnerRoute(routeId: NavigationRouteId): NavigationRouteId {
-  return SETTINGS_SUBPAGE_OWNER_ROUTES[routeId] ?? routeId;
-}
-
 export function navigationIconForRoute(routeId: NavigationRouteId): IconName {
   return NAVIGATION_PRESENTATION[routeId]?.[0] ?? "folder";
-}
-
-export function scheduleRoutePreload<TRouteId extends string>(
-  timers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>,
-  routeId: TRouteId,
-  event: Event,
-  preload: ((routeId: TRouteId) => Promise<void> | void) | undefined,
-  disabled = false,
-  immediate = false,
-) {
-  if (disabled || !preload) {
-    return;
-  }
-  const target = event.currentTarget;
-  if (!target) {
-    return;
-  }
-  const start = () => {
-    timers.delete(target);
-    try {
-      void Promise.resolve(preload(routeId)).catch(() => undefined);
-    } catch {
-      // Preloading is opportunistic; navigation still handles real route errors.
-    }
-  };
-  if (immediate) {
-    cancelRoutePreload(timers, event);
-    start();
-    return;
-  }
-  if (!timers.has(target)) {
-    timers.set(target, globalThis.setTimeout(start, 50));
-  }
-}
-
-export function cancelRoutePreload(
-  timers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>,
-  event: Event,
-) {
-  const target = event.currentTarget;
-  if (!target) {
-    return;
-  }
-  const timer = timers.get(target);
-  if (timer !== undefined) {
-    globalThis.clearTimeout(timer);
-    timers.delete(target);
-  }
 }
 
 export function titleForRoute(routeId: NavigationRouteId): string {
@@ -461,11 +383,13 @@ export function titleForRoute(routeId: NavigationRouteId): string {
 export function formatDocumentTitle(options: {
   context: string;
   attentionCount?: number;
+  brandName?: string;
   gatewayDisconnected?: boolean;
 }): string {
-  const base = options.context.endsWith("OpenClaw")
+  const brandName = options.brandName ?? "OpenClaw";
+  const base = options.context.endsWith(brandName)
     ? options.context
-    : `${options.context} — OpenClaw`;
+    : `${options.context} — ${brandName}`;
   if (options.gatewayDisconnected) {
     return `(${t("connection.disconnectedTitle")}) ${base}`;
   }
@@ -473,19 +397,6 @@ export function formatDocumentTitle(options: {
     return `(${options.attentionCount}) ${base}`;
   }
   return base;
-}
-
-export function settingsNavigationLabelForRoute(
-  routeId: NavigationRouteId,
-  snapshot?: NativeDeviceSettingsSnapshot | null,
-): string {
-  if (routeId === "device" && snapshot) {
-    return t(deviceSettingsGroupLabelKey(snapshot));
-  }
-  if (routeId === "custodian") {
-    return t("nav.askOpenClaw");
-  }
-  return titleForRoute(routeId);
 }
 
 export function subtitleForRoute(routeId: NavigationRouteId): string {

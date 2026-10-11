@@ -60,7 +60,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
-import { buildCommandContext } from "./commands-context.js";
+import { buildCommandContextForTest as buildCommandContext } from "./commands-context.test-support.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 import { resolveDispatchResetAdmission } from "./dispatch-from-config.context.js";
@@ -71,6 +71,10 @@ import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js"
 import { admitReplyTurn, runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
+import {
+  registerSessionInitializationAdmissionTests,
+  telegramTurn,
+} from "./session.initialization-admission.test-support.js";
 import { resolveReplySessionPreprocessingState } from "./session.js";
 import { expectSessionParticipantInputs } from "./session.participant.test-support.js";
 import {
@@ -146,20 +150,6 @@ async function makeStorePath(prefix: string, agentId?: string): Promise<string> 
   const root = await makeCaseDir(prefix);
   const sessionsDir = agentId ? path.join(root, "agents", agentId, "sessions") : root;
   return path.join(sessionsDir, "sessions.json");
-}
-
-function telegramTurn(sessionKey: string, body: string, from: string) {
-  return {
-    Body: body,
-    RawBody: body,
-    CommandBody: body,
-    From: from,
-    To: "bot",
-    ChatType: "direct",
-    SessionKey: sessionKey,
-    Provider: "telegram",
-    Surface: "telegram",
-  };
 }
 
 const TEST_NATIVE_MODEL_PROFILE_ID = "openai:secondary@example.test";
@@ -313,6 +303,8 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
 });
 describe("initSessionState guarded initialization", () => {
+  registerSessionInitializationAdmissionTests({ makeStorePath });
+
   it("pins an admitted non-default-agent incognito session to its process-local store", async () => {
     const stateDir = await makeCaseDir("openclaw-session-incognito-init-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
@@ -442,7 +434,7 @@ describe("initSessionState guarded initialization", () => {
       ).rejects.toThrow(/ended during restart recovery/i);
       expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject(tombstoneEntry);
 
-      const resetAdmission = resolveDispatchResetAdmission({
+      const resetAdmission = await resolveDispatchResetAdmission({
         agentId: "main",
         cfg,
         ctx,
@@ -2077,7 +2069,7 @@ describe("initSessionState browser tab cleanup", () => {
       "closeTrackedBrowserTabsForSessions",
     );
     expect(cleanupParams.sessionKeys).toEqual([
-      existingSessionId,
+      `agent:main:${existingSessionId}`,
       canonicalKey,
       "agent:main:telegram:default:direct:12345",
     ]);

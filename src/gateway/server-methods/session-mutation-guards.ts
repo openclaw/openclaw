@@ -103,15 +103,25 @@ function assertRequestAuthorityCurrent(options: RequestMutationOptions): void {
   options.sessionMutationCommitGuard?.();
 }
 
-function captureRequestAuthorityAssertion(options: RequestMutationOptions) {
+function captureRequestAuthorityAssertion(
+  options: RequestMutationOptions,
+  nativeTransport: boolean,
+) {
   const source = captureExternalSessionCommitGuard(options.sessionMutationCommitGuard);
+  const transportSource =
+    nativeTransport && options.hasCurrentClientAuthority
+      ? captureExternalSessionCommitGuard(() => assertRequestTransportCurrent(options))
+      : undefined;
   return composeSessionSourceAssertion(
-    [source],
+    [transportSource, source],
     (assertSource) => {
-      assertRequestTransportCurrent(options);
+      if (!transportSource) {
+        assertRequestTransportCurrent(options);
+      }
       assertSource();
     },
     {
+      hasOpaqueCheck: nativeTransport,
       preparedCheck: (assertSource) => {
         options.signal?.throwIfAborted();
         if (!hasPreparedGatewayDeviceAuthority(options.client, options.hasCurrentClientAuthority)) {
@@ -123,9 +133,8 @@ function captureRequestAuthorityAssertion(options: RequestMutationOptions) {
   );
 }
 
-function captureRequestMutationOptions(options: GatewayRequestOptions) {
-  const { req, client, context, signal, hasCurrentClientAuthority, sessionMutationCommitGuard } =
-    options;
+function captureRequestMutationOptions(options: GatewayRequestOptions, client = options.client) {
+  const { req, context, signal, hasCurrentClientAuthority, sessionMutationCommitGuard } = options;
   return {
     transport: { req, client, signal, hasCurrentClientAuthority, sessionMutationCommitGuard },
     assertCurrent: () => {
@@ -157,7 +166,7 @@ export function readGatewayRequestMutationAuthority(
   }
   const { req, client, signal, hasCurrentClientAuthority, sessionMutationCommitGuard } = options;
   const captured = { req, client, signal, hasCurrentClientAuthority, sessionMutationCommitGuard };
-  const assertLifetimeCurrent = captureRequestAuthorityAssertion(captured);
+  const assertLifetimeCurrent = captureRequestAuthorityAssertion(captured, true);
   const compatibility: GatewayRequestMutationAuthority = {
     family: "native-compatibility",
     assertPreparationCurrent: () => assertRequestTransportCurrent(captured),
@@ -237,16 +246,13 @@ export function bindWebSocketRequestMutationAuthority<T extends GatewayRequestOp
   ) {
     return options;
   }
-  const { req, context, signal, hasCurrentClientAuthority } = options;
+  const captured = captureRequestMutationOptions(options, client);
+  const { signal, hasCurrentClientAuthority } = captured.transport;
   const assertWorkerCurrent = () => {
     signal?.throwIfAborted();
     const acceptedSource = readAcceptedGatewayDeviceSourceAuthority(hasCurrentClientAuthority);
+    captured.assertCurrent();
     if (
-      options.req !== req ||
-      options.client !== client ||
-      options.context !== context ||
-      options.signal !== signal ||
-      options.hasCurrentClientAuthority !== hasCurrentClientAuthority ||
       options.sessionMutationCommitGuard !== undefined ||
       !hasCurrentDeviceRevocation() ||
       client.internal?.agentRuntimeIdentity
@@ -303,7 +309,7 @@ export function bindGatewayRequestHandlerMutationAuthority<T extends GatewayRequ
     assertHandlerCurrent,
     source.assertOperatorCurrent,
     source.family === "worker" ? source.assertWorkerCurrent : undefined,
-    captureRequestAuthorityAssertion(handler),
+    captureRequestAuthorityAssertion(handler, source.family === "native-compatibility"),
   ]);
   const assertLifetimeCurrent = composeSessionSourceAssertion(
     [source.assertLifetimeCurrent],
@@ -442,13 +448,26 @@ export function withSessionMutationCommitGuard(
     ...authorization,
     ...(authorization?.prepareWorkerGrant
       ? {
-          prepareWorkerGrant: async () => {
-            const prepared = await withCommitGuards(() => authorization.prepareWorkerGrant!());
-            const wrap = (assertSource: () => void) => () => withCommitGuards(assertSource);
+          prepareWorkerGrant: async (target) => {
+            const prepared = await withCommitGuards(() =>
+              authorization.prepareWorkerGrant!(target),
+            );
+            const wrap =
+              <Args extends unknown[]>(assertSource: (...args: Args) => void) =>
+              (...args: Args) =>
+                withCommitGuards(() => assertSource(...args));
             return {
               ...prepared,
               assertCurrent: wrap(prepared.assertCurrent),
               assertLifetimeCurrent: wrap(prepared.assertLifetimeCurrent),
+              ...(prepared.transaction
+                ? {
+                    transaction: {
+                      ...prepared.transaction,
+                      assertCurrent: wrap(prepared.transaction.assertCurrent),
+                    },
+                  }
+                : {}),
             };
           },
         }

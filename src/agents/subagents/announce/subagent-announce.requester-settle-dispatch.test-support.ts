@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import { resetCommandQueueStateForTest } from "../../../process/command-queue.test-support.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import * as deliveryRuntime from "./subagent-announce-delivery.runtime.js";
 import * as announceOutput from "./subagent-announce-output.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
 import {
@@ -8,15 +9,21 @@ import {
   registryRead,
   startTurn,
   readDescendantFacts,
+  loadRequester,
 } from "./subagent-announce.requester-settle-dispatch-mocks.test-support.js";
 import type { RequesterSettleWakeBatchCallbacks } from "./subagent-announce.requester-settle-state.js";
 
-export { deliver, registryRead, startTurn, readDescendantFacts };
+export { deliver, registryRead, startTurn, readDescendantFacts, loadRequester };
 
 const readChildCompletionFindings = announceOutput.readChildCompletionFindings;
 
 export function useRequesterSettleDispatchFixture() {
+  let restoreRequesterCurrent: (() => void) | undefined;
   beforeEach(() => {
+    const requesterCurrent = vi
+      .spyOn(deliveryRuntime, "captureRequesterSessionEntryCurrent")
+      .mockReturnValue(() => ({ sessionId: "requester-session" }));
+    restoreRequesterCurrent = () => requesterCurrent.mockRestore();
     vi.spyOn(announceOutput, "readChildCompletionFindings").mockImplementation((children) =>
       readChildCompletionFindings(children, (runId) =>
         registryRead.listSubagentRunsForRequester().find((entry) => entry.runId === runId),
@@ -25,6 +32,11 @@ export function useRequesterSettleDispatchFixture() {
     resetCommandQueueStateForTest();
     startTurn.mockReset();
     deliver.mockReset();
+    loadRequester.mockReset().mockResolvedValue({
+      cfg: {},
+      canonicalKey: REQUESTER_KEY,
+      entry: { sessionId: "requester-session", updatedAt: 1 },
+    });
     readDescendantFacts.mockReset().mockResolvedValue({ unsettled: false, active: 0 });
     registryRead.getLatestLiveSubagentRunByChildSessionKey.mockReset().mockReturnValue(undefined);
     registryRead.getLatestSubagentRunByChildSessionKey.mockReset().mockReturnValue(undefined);
@@ -34,6 +46,7 @@ export function useRequesterSettleDispatchFixture() {
     vi.mocked(announceOutput.readChildCompletionFindings).mockRestore();
     resetCommandQueueStateForTest();
     setSubagentAnnounceDeliveryDepsForTest();
+    restoreRequesterCurrent?.();
     vi.useRealTimers();
   });
 }

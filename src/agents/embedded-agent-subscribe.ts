@@ -13,6 +13,7 @@ import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
 import { MAX_MESSAGING_HISTORY_ENTRIES } from "./embedded-agent-messaging-history.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "./embedded-agent-runner/delivery-evidence.js";
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
+import { installToolAuthoredSourceReplyTerminalHook } from "./embedded-agent-runner/run/message-tool-terminal.js";
 import { consumeEmbeddedToolReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
 import type { EmbeddedRunLivenessState } from "./embedded-agent-runner/types.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
@@ -316,26 +317,12 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
     state.deterministicApprovalPromptPending = false;
     state.deterministicApprovalPromptSent = false;
     state.lastDeliveredBlockReplyText = undefined;
+    state.lastReasoningSent = undefined;
     state.toolExecutionSinceLastBlockReply = false;
     state.replayState = mergeEmbeddedRunReplayState(state.replayState, params.initialReplayState);
     state.livenessState = "working";
     streamRendering.resetAssistantMessageState(0);
   };
-
-  // Re-filter the full raw buffer. Reusing live scanner state would hide the
-  // visible prefix when timeout interrupts an open <think> or <final> block.
-  const finalizeFlushedAssistantText = (text: string) =>
-    stripDowngradedToolCallText(
-      streamRendering.stripBlockTags(
-        text,
-        {
-          thinking: false,
-          final: false,
-          inlineCode: createInlineCodeState(),
-        },
-        { final: true },
-      ),
-    ).trimEnd();
 
   // Settlement calls this only for the final, failure-free run-budget terminal.
   // Retain and re-filter the full buffer so queued suffixes keep hidden-tag
@@ -349,7 +336,18 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
       state.hasFlushedPartialText = false;
       return;
     }
-    const visibleText = finalizeFlushedAssistantText(text);
+    // Re-filter the full raw buffer; live scanner state may hide an interrupted prefix.
+    const visibleText = stripDowngradedToolCallText(
+      streamRendering.stripBlockTags(
+        text,
+        {
+          thinking: false,
+          final: false,
+          inlineCode: createInlineCodeState(),
+        },
+        { final: true },
+      ),
+    ).trimEnd();
     if (assistantTexts.length > state.assistantTextBaseline || state.hasFlushedPartialText) {
       replyDelivery.replaceCurrentAssistantText(visibleText);
     } else if (visibleText) {
@@ -397,6 +395,14 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
     getLastCompactionTokensAfter: () => state.lastCompactionTokensAfter,
   };
 
+  const removeSourceReplyTerminalHook = installToolAuthoredSourceReplyTerminalHook({
+    agent: params.session.agent,
+    sourceReplyCapableToolNames: params.sourceReplyCapableToolNames,
+    idempotencyScope: params.runId,
+    onSourceReplies: (payloads) => {
+      state.messagingToolSourceReplyPayloads.push(...payloads);
+    },
+  });
   const sessionUnsubscribe = params.session.subscribe(createEmbeddedAgentSessionEventHandler(ctx));
   setSessionModelUsageSink(params.session.sessionManager, recordAuxiliaryUsage);
 
@@ -407,6 +413,7 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
     // Mark as unsubscribed FIRST to prevent waitForCompactionRetry from creating
     // new un-resolvable promises during teardown.
     state.unsubscribed = true;
+    removeSourceReplyTerminalHook();
     clearAssistantStream();
     cleanupRunToolStartData(params.runId);
     state.liveEditDiffStateById.clear();

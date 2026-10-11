@@ -226,36 +226,33 @@ export async function runBridgeRequest(params: {
       case "resultSave":
       case "resultLoad":
       case "resultDelete": {
-        if (sessionStoreRequest) {
-          if (!params.sessionStore) {
-            throw new ToolInputError(
-              "Code Mode store/load is unavailable in headless execution; use an interactive session-bound cell.",
-            );
-          }
-          if (params.request.method === "resultSave") {
-            await params.sessionStore.save(
-              values[2],
-              values[0],
-              params.runtime.hasNetworkContent(),
-            );
-          } else if (params.request.method === "resultLoad") {
-            const loaded = await params.sessionStore.load(values[0]);
-            if (loaded.networkContent) {
-              params.runtime.observeNetworkContent(params.parentToolCallId);
-            }
-            // An envelope preserves missing/undefined across the JSON bridge.
-            value = loaded.value === undefined ? {} : { value: loaded.value };
+        const sessionStore = sessionStoreRequest ? params.sessionStore : undefined;
+        if (sessionStoreRequest && !sessionStore) {
+          throw new ToolInputError(
+            "Code Mode store/load is unavailable in headless execution; use an interactive session-bound cell.",
+          );
+        }
+        if (params.request.method === "resultSave") {
+          if (sessionStore) {
+            await sessionStore.save(values[2], values[0], params.runtime.hasNetworkContent());
           } else {
-            await params.sessionStore.delete(values[0]);
+            value = params.results.save(values[0], params.runtime.hasNetworkContent());
           }
-        } else if (params.request.method === "resultSave") {
-          value = params.results.save(values[0], params.runtime.hasNetworkContent());
         } else if (params.request.method === "resultLoad") {
-          const loaded = params.results.load(values[0]);
+          const loaded = sessionStore
+            ? await sessionStore.load(values[0])
+            : params.results.load(values[0]);
           if (loaded.networkContent) {
             params.runtime.observeNetworkContent(params.parentToolCallId);
           }
-          value = loaded.value;
+          // Session values need an envelope to preserve missing/undefined across the JSON bridge.
+          value = sessionStore
+            ? loaded.value === undefined
+              ? {}
+              : { value: loaded.value }
+            : loaded.value;
+        } else if (sessionStore) {
+          await sessionStore.delete(values[0]);
         } else {
           value = params.results.delete(values[0]);
         }

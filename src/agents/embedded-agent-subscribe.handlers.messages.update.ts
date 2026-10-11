@@ -1,7 +1,9 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { resolveAssistantMessagePhase } from "../shared/chat-message-content.js";
+import { toolCallXmlTextFilter } from "../shared/text/assistant-visible-text.js";
 import { downgradedToolCallTextFilter } from "../shared/text/downgraded-tool-call-text.js";
 import { createTextProjection, trimTextFilter } from "../shared/text/text-projection.js";
 import { resolveCurrentSourceMessagingToolPartial } from "./embedded-agent-helpers/messaging-dedupe.js";
@@ -18,10 +20,10 @@ import {
 import {
   emitAssistantCommentaryStreamData,
   emitAssistantMessageStart,
+  emitPersistentReasoning,
   emitReasoningEnd,
   hasMessageToolOnlySourceDelivery,
-  isAnthropicAssistantMessage,
-  isOpenAiCompletionsAssistantMessage,
+  isAssistantTextPhasePending,
   isResponsesApiAssistantMessage,
   isSubscribeTranscriptOnlyOpenClawAssistantMessage,
   openReasoningStream,
@@ -60,11 +62,7 @@ export function handleMessageUpdate(
   }
 
   ctx.noteLastAssistant(msg);
-  const assistantEvent = evt.assistantMessageEvent;
-  const assistantRecord =
-    assistantEvent && typeof assistantEvent === "object"
-      ? (assistantEvent as Record<string, unknown>)
-      : undefined;
+  const assistantRecord = asOptionalObjectRecord(evt.assistantMessageEvent);
   const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
   if (evtType !== "text_delta") {
     ctx.flushAssistantStream();
@@ -104,15 +102,13 @@ export function handleMessageUpdate(
       }),
       ctx.params.sessionKey,
     );
-  const assistantPhase = resolveAssistantMessagePhase(msg);
-  const suppressVisibleAssistantOutput = assistantPhase === "commentary";
-  if (suppressVisibleAssistantOutput && !isResponsesTextEvent) {
+  if (resolveAssistantMessagePhase(msg) === "commentary" && !isResponsesTextEvent) {
     // Even hidden commentary closes the preceding visible-text scope.
     ctx.flushAssistantStream();
     const commentaryText = extractAssistantCommentaryText(msg);
     if (commentaryText) {
       recordRawStream("assistant_text_stream", "commentary_update", "", commentaryText);
-      emitAssistantCommentaryStreamData(ctx, msg, false, commentaryText);
+      emitAssistantCommentaryStreamData(ctx, msg);
     }
     return undefined;
   }
@@ -150,6 +146,10 @@ export function handleMessageUpdate(
         openReasoningStream(ctx);
       }
       emitReasoningEnd(ctx);
+      if (ctx.state.includeReasoning && ctx.state.blockReplyBreak === "text_end") {
+        // Waiting for message_end lets text_end answer blocks overtake completed reasoning.
+        emitPersistentReasoning(ctx, extractAssistantThinking(msg) || thinkingContent);
+      }
     }
     return undefined;
   }
@@ -194,12 +194,8 @@ export function handleMessageUpdate(
     isResponsesApiAssistantMessage(partialAssistant);
   // These transports resolve commentary only at the tool boundary. Withhold
   // early unphased deltas from durable block replies until that decision exists.
-  const isPhasePendingAnthropicText =
-    evtType !== "text_end" && !deliveryPhase && isAnthropicAssistantMessage(partialAssistant);
-  const isCompletionsAssistant = isOpenAiCompletionsAssistantMessage(partialAssistant);
-  const isPhasePendingCompletionsText = !deliveryPhase && isCompletionsAssistant;
-  const isReasoningCompletionsText =
-    isCompletionsAssistant && partialAssistant.openclawDelivery?.textPhaseRequiresTerminal === true;
+  const isPhasePendingText =
+    !deliveryPhase && isAssistantTextPhasePending(partialAssistant, evtType);
   const hasResponsesContentIndex =
     streamContentIndex !== undefined && isResponsesApiAssistantMessage(partialAssistant);
   let streamItemChanged = false;
@@ -300,12 +296,6 @@ export function handleMessageUpdate(
     ctx.state.assistantStream?.projection?.kind !== "final" &&
     ctx.blockChunker.consumedLength === 0;
   const finalText = evtType === "text_end";
-
-  // A completions stream cannot classify text interrupted by later reasoning
-  // until terminal. Keep that text out of live reply lanes until its phase resolves.
-  if (isReasoningCompletionsText) {
-    return undefined;
-  }
 
   if (chunk) {
     ctx.state.deltaBuffer += chunk;
@@ -444,6 +434,7 @@ export function handleMessageUpdate(
             kind === "raw"
               ? createTextProjection([
                   downgradedToolCallTextFilter(),
+                  toolCallXmlTextFilter({ stripFunctionCallsXmlPayloads: true }, true),
                   trimTextFilter("both", { preserveCodeIndentation: true }),
                 ])
               : createAssistantVisibleStreamText(kind === "final" ? "final_answer" : undefined),
@@ -462,23 +453,16 @@ export function handleMessageUpdate(
       appendDelta = projected.delta;
       // Generic directives retain their raw chunk coordinates: restored trim whitespace
       // could otherwise make an inline tag look like an indented code block.
-      if (kind !== "raw") {
+      if (kind !== "raw" || next !== nextRawStreamText.trim()) {
         visibleDelta = projected.delta ?? (previousText.startsWith(next) ? "" : next);
       }
     }
-    if (
-      !suppressMessageToolOnlySourceReplyOutput &&
-      !wasThinking &&
-      ctx.state.partialBlockState.thinking
-    ) {
-      openReasoningStream(ctx);
-    }
-    if (
-      !suppressMessageToolOnlySourceReplyOutput &&
-      wasThinking &&
-      !ctx.state.partialBlockState.thinking
-    ) {
-      emitReasoningEnd(ctx);
+    if (!suppressMessageToolOnlySourceReplyOutput) {
+      if (!wasThinking && ctx.state.partialBlockState.thinking) {
+        openReasoningStream(ctx);
+      } else if (wasThinking && !ctx.state.partialBlockState.thinking) {
+        emitReasoningEnd(ctx);
+      }
     }
     const parsedStreamDirectives = isTerminalSnapshot
       ? ctx.consumePartialReplyDirectives(next, { final: finalText })
@@ -525,7 +509,7 @@ export function handleMessageUpdate(
       (hasVisibleReply || replace) &&
       (replace ? cleanedText !== previousCleaned || hasAudio : Boolean(deltaText || hasAudio));
 
-    if (!isPhasePendingAnthropicText && !isPhasePendingCompletionsText) {
+    if (!isPhasePendingText) {
       const plainAppend =
         evtType === "text_delta" &&
         unchangedBlockAppend &&

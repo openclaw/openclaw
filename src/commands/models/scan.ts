@@ -21,9 +21,6 @@ import { formatMs, formatTokenK, updateConfig } from "./shared.js";
 const MODEL_PAD = 42;
 const CTX_PAD = 8;
 
-const multiselect = <T>(params: Parameters<typeof clackMultiselect<T>>[0]) =>
-  clackMultiselect(styleSelectParams(params));
-
 function guardPromptCancel<T>(value: T | typeof CANCEL_SYMBOL, runtime: RuntimeEnv): T {
   if (typeof value === "symbol") {
     cancel(stylePromptTitle("Model scan cancelled.") ?? "Model scan cancelled.");
@@ -76,21 +73,6 @@ function printScanSummary(results: ModelScanResult[], runtime: RuntimeEnv) {
   const imageOnly = imageOk.filter((r) => !r.tool.ok);
   runtime.log(
     `Scan results: tested ${results.length}, tool ok ${toolOk.length}, image ok ${imageOk.length}, tool+image ok ${toolImageOk.length}, image only ${imageOnly.length}`,
-  );
-}
-
-function printMetadataOnlyNotice(params: {
-  results: ModelScanResult[];
-  runtime: RuntimeEnv;
-  autoDowngraded: boolean;
-}) {
-  if (params.autoDowngraded) {
-    params.runtime.log(
-      "OpenRouter free models still require OPENROUTER_API_KEY for live checks and inference. Listing public catalog metadata only.",
-    );
-  }
-  params.runtime.log(
-    `Found ${params.results.length} OpenRouter free models (metadata only; configure OPENROUTER_API_KEY to test tools/images).`,
   );
 }
 
@@ -240,11 +222,14 @@ export async function modelsScanCommand(
 
   if (!probe) {
     if (!opts.json) {
-      printMetadataOnlyNotice({
-        results,
-        runtime,
-        autoDowngraded: requestedProbe,
-      });
+      if (requestedProbe) {
+        runtime.log(
+          "OpenRouter free models still require OPENROUTER_API_KEY for live checks and inference. Listing public catalog metadata only.",
+        );
+      }
+      runtime.log(
+        `Found ${results.length} OpenRouter free models (metadata only; configure OPENROUTER_API_KEY to test tools/images).`,
+      );
       printScanTable(sorted, runtime);
     } else {
       writeRuntimeJson(runtime, sorted);
@@ -288,15 +273,17 @@ export async function modelsScanCommand(
       initialValues: string[],
     ) =>
       guardPromptCancel(
-        await multiselect({
-          message,
-          options: candidates.map((entry) => ({
-            value: entry.modelRef,
-            label: entry.modelRef,
-            hint: buildScanHint(entry),
-          })),
-          initialValues,
-        }),
+        await clackMultiselect(
+          styleSelectParams({
+            message,
+            options: candidates.map((entry) => ({
+              value: entry.modelRef,
+              label: entry.modelRef,
+              hint: buildScanHint(entry),
+            })),
+            initialValues,
+          }),
+        ),
         runtime,
       );
     selected = await choose("Select fallback models (ordered)", toolSorted, preselected);

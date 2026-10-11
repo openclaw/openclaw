@@ -52,6 +52,7 @@ function settings(): UiSettings {
     navCollapsed: false,
     navWidth: 280,
     sidebarEntries: [],
+    navigationScope: "mine",
   };
 }
 
@@ -442,14 +443,11 @@ describe("chat header session menu", () => {
           "Pin session",
           "Rename…",
           "Mark as unread",
-          "Archive session",
-          "Icon & color",
-          "Move to group",
+          "Copy link",
           "Assign to…",
-          "Fork conversation",
-          "Copy",
-          "Open in",
-          "Delete…",
+          "Move to group",
+          "Archive session",
+          "Advanced",
         ]);
         expect(menu.querySelector("[slot='submenu']")).toBeNull();
         select(menu, "open-command-palette");
@@ -457,7 +455,6 @@ describe("chat header session menu", () => {
         await navigate("open-copy");
         expect(rootLabels(menu)).toEqual([
           "Back",
-          "Session link",
           "Preview link",
           "Conversation as Markdown",
           "Session ID",

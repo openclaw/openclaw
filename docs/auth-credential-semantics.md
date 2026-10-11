@@ -58,6 +58,12 @@ confirm application, the key remains saved and the response includes a restart
 warning. This preserves the configured reload policy, including disabled reloads.
 Removing a key still rejects a binding or credential that changed concurrently.
 
+Provider `apiKey` values that name an existing compatible API-key or token profile
+are profile bindings, not literal credentials. Model discovery resolves those
+bindings through the same profile classification used by chat requests, including
+provider and base-URL compatibility checks. Values that do not name a stored
+profile remain literal keys. Saving a key does not change the stored binding format.
+
 ## Setup replacements
 
 Setup replacement credentials are saved under separate profile IDs with an
@@ -112,6 +118,9 @@ lease; they do not borrow ordinary worker authority.
 Model-catalog workers use their request's native auth-write scope, pinned to the
 captured state root. The request waits for claimed OAuth refreshes to settle before
 closing that scope; retained callbacks cannot write after it closes.
+Each catalog request carries the Gateway's committed shared-store ownership. A
+reused worker installs that fact before reading credentials, so the first login's
+empty-store relocation cannot leave discovery attached to the legacy location.
 Temporary probe stores wait for their database work and shared-registry removal
 before deleting credential files. If disposal fails, cleanup retains the directory
 and reports its location.
@@ -252,6 +261,12 @@ eligibility rules. A cooldown limited to one model does not suppress account-wid
 catalog discovery. Configured subscription modes remain attached to direct
 credentials, and successful OAuth preparation supplies the resolved current token
 to its catalog consumer rather than the captured store's older token.
+
+Deferred provider catalogs retain discovered models when a configured SecretRef
+has a matching credential in the active runtime snapshot. Catalog admission uses
+that credential only as availability evidence: it does not resolve the reference
+again or copy the value into model rows. Unresolved references and credentials
+retained in a generated catalog do not grant admission.
 
 Environment-backed profiles keep usable values from the discovery environment,
 including cold command and worker paths. When that material is missing, only the

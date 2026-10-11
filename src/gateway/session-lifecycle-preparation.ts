@@ -7,6 +7,11 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { prepareSessionEntryMutationDatabases } from "../config/sessions/session-accessor.entry-mutation.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import {
+  composeSessionSourceAssertion,
+  sessionEntryCommitGuardOptions,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
@@ -357,7 +362,7 @@ export async function rollbackGatewaySessionPreparation(params: {
 export async function commitPreparedSessionWorkspace(params: {
   prepared: PreparedGatewaySessionLifecycle;
   target: { agentId: string; sessionKey: string; storePath: string };
-  assertCurrent: () => void;
+  assertCurrent: SessionSourceAssertion;
   assertEntry: (entry: SessionEntry) => void;
   projectId?: string;
   clearPendingIntent?: boolean;
@@ -365,11 +370,11 @@ export async function commitPreparedSessionWorkspace(params: {
   missingSessionMessage: string;
 }): Promise<SessionEntry> {
   const { prepared } = params;
-  const bind = async (assertSourceCurrent: () => void) => {
-    const assertCurrent = () => {
-      params.assertCurrent();
-      assertSourceCurrent();
-    };
+  const bind = async (assertSourceCurrent: SessionSourceAssertion) => {
+    const assertCurrent = composeSessionSourceAssertion([
+      params.assertCurrent,
+      assertSourceCurrent,
+    ]);
     return await patchSessionEntryCore(
       params.target,
       (entry) => {
@@ -386,7 +391,7 @@ export async function commitPreparedSessionWorkspace(params: {
         };
       },
       {
-        assertCommitAllowed: assertCurrent,
+        ...sessionEntryCommitGuardOptions(assertCurrent),
         requireWriteSuccess: true,
         skipMaintenance: true,
         onCommitted: params.onCommitted,
@@ -410,7 +415,7 @@ export async function ensureSessionWorkspaceForPlacement(params: {
   cfg: OpenClawConfig;
   target: { agentId: string; canonicalKey: string; storePath: string; storeKeys: string[] };
   entry: SessionEntry;
-  assertCurrent: () => void;
+  assertCurrent: SessionSourceAssertion;
   signal?: AbortSignal;
   onCommitted?: () => void;
   canPrepare: () => boolean;

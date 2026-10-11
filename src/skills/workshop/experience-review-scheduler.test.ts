@@ -128,7 +128,7 @@ describe("skill experience review scheduler", () => {
     expect(runReview).not.toHaveBeenCalled();
   });
 
-  it("reviews right after a turn that used a learned skill, but not other skills", async () => {
+  it("waits for ten accumulated iterations even when turns use a learned skill", async () => {
     const { turn, fireTimers, runReview, timers } = createHarness();
     const workshopSkill = path.join(resolveWorkshopSkillsDir({}, "main"), "deploy", "SKILL.md");
 
@@ -138,11 +138,14 @@ describe("skill experience review scheduler", () => {
       ],
     });
     expect(timers).toHaveLength(0);
-    turn(1, {
-      usedSkills: [
-        { name: "deploy", source: "workspace", activation: "read", skillFile: workshopSkill },
-      ],
-    });
+    const usedSkills = [
+      { name: "deploy", source: "workspace", activation: "read", skillFile: workshopSkill },
+    ] as const;
+    turn(1, { usedSkills });
+    expect(timers).toHaveLength(0);
+    turn(7, { usedSkills });
+    expect(timers).toHaveLength(0);
+    turn(1, { usedSkills });
     expect(timers).toHaveLength(1);
     fireTimers();
     await vi.waitFor(() => expect(runReview).toHaveBeenCalledTimes(1));

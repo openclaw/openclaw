@@ -10,7 +10,6 @@ import { isToolResultError } from "../tool-result-error.js";
 import { resolveEmbeddedCliBackendDispatchEligibility } from "./cli-backend-dispatch-eligibility.js";
 import { createCliDispatchTranscriptRecorder } from "./cli-backend-dispatch-transcript.js";
 import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
-import type { RunEmbeddedAgentParams } from "./run/params.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
 const log = createSubsystemLogger("agents/embedded-cli-dispatch");
@@ -36,10 +35,19 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
   if (!sessionFile) {
     return undefined;
   }
-  const toolsAllow = resolveDispatchableToolsAllow(params);
-  if (!toolsAllow) {
+  // The CLI bridge supports only a non-empty named allowlist bounded by its loopback grant.
+  // Other policies stay on the embedded path so dispatch cannot widen tool access (#57326).
+  if (params.disableTools || params.modelRun) {
     return undefined;
   }
+  if (!params.toolsAllow || params.toolsAllow.length === 0) {
+    return undefined;
+  }
+  const names = params.toolsAllow.map(normalizeToolPolicyName);
+  if (names.some((name) => !name || name.includes("*"))) {
+    return undefined;
+  }
+  const toolsAllow = [...new Set(names)];
   const eligibility = resolveEmbeddedCliBackendDispatchEligibility(params);
   if (!eligibility) {
     return undefined;
@@ -143,6 +151,7 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
       agentId: params.agentId,
       storePath,
       trigger: params.trigger,
+      heartbeatEventQueueSessionKey: params.heartbeatEventQueueSessionKey,
       sessionFile,
       workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
@@ -190,7 +199,22 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
     finalAssistantText = result.payloads?.find(
       (payload) => payload.isReasoning !== true && typeof payload.text === "string",
     )?.text;
-    return withoutCliSessionBinding(result);
+    // A one-shot dispatch has no session owner for a returned CLI binding.
+    const agentMeta = result.meta.agentMeta;
+    if (!agentMeta?.cliSessionBinding && agentMeta?.clearCliSessionBinding !== true) {
+      return result;
+    }
+    return {
+      ...result,
+      meta: {
+        ...result.meta,
+        agentMeta: {
+          ...agentMeta,
+          cliSessionBinding: undefined,
+          clearCliSessionBinding: undefined,
+        },
+      },
+    };
   } finally {
     params.abortSignal?.removeEventListener("abort", flushOnAbort);
     unsubscribe();
@@ -198,39 +222,4 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
     // file as soon as the caller observes the rejection.
     await transcript?.finalize(finalAssistantText);
   }
-}
-
-// The CLI bridge supports only a non-empty named allowlist bounded by its loopback grant.
-// Other policies stay on the embedded path so dispatch cannot widen tool access (#57326).
-function resolveDispatchableToolsAllow(params: RunEmbeddedAgentParams): string[] | undefined {
-  if (params.disableTools || params.modelRun) {
-    return undefined;
-  }
-  if (!params.toolsAllow || params.toolsAllow.length === 0) {
-    return undefined;
-  }
-  const names = params.toolsAllow.map(normalizeToolPolicyName);
-  if (names.some((name) => !name || name.includes("*"))) {
-    return undefined;
-  }
-  return [...new Set(names)];
-}
-
-/** Dispatch runs own no session entry, so a returned CLI binding has no owner to persist it. */
-function withoutCliSessionBinding(result: EmbeddedAgentRunResult): EmbeddedAgentRunResult {
-  const agentMeta = result.meta.agentMeta;
-  if (!agentMeta?.cliSessionBinding && agentMeta?.clearCliSessionBinding !== true) {
-    return result;
-  }
-  return {
-    ...result,
-    meta: {
-      ...result.meta,
-      agentMeta: {
-        ...agentMeta,
-        cliSessionBinding: undefined,
-        clearCliSessionBinding: undefined,
-      },
-    },
-  };
 }

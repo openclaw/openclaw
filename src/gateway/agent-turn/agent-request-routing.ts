@@ -45,6 +45,7 @@ export async function prepareAgentRequestRouting(params: {
     sessionId?: string;
   }) => void;
   clearDedupe: () => void;
+  assertCurrent?: () => void;
 }) {
   const rejectInvalidRequest = (message: string): undefined => {
     params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
@@ -71,10 +72,12 @@ export async function prepareAgentRequestRouting(params: {
       ? requestedToRaw
       : undefined;
   const requestedSessionKeyRaw = requestedSessionKeyParam ?? sessionKeyFromTo;
-  if (requestedSessionKeyRaw) {
+  const agentSelectionKey =
+    requestedSessionKeyRaw ?? (!requestedSessionId && !agentId ? "main" : undefined);
+  if (agentSelectionKey) {
     const requestedSessionAgent = resolveRequestedSessionAgentId(
       params.cfg,
-      requestedSessionKeyRaw,
+      agentSelectionKey,
       agentId,
     );
     if (!requestedSessionAgent.ok) {
@@ -95,14 +98,6 @@ export async function prepareAgentRequestRouting(params: {
     } catch (error) {
       return rejectInvalidRequest(formatForLog(error));
     }
-  }
-  if (!requestedSessionKeyRaw && !requestedSessionId && !agentId) {
-    const implicitMainOwner = resolveRequestedSessionAgentId(params.cfg, "main");
-    if (!implicitMainOwner.ok) {
-      params.respond(false, undefined, implicitMainOwner.error);
-      return undefined;
-    }
-    agentId = implicitMainOwner.agentId;
   }
   const explicitRecipientChannel = normalizeMessageChannel(params.request.channel);
   const explicitRecipient =
@@ -153,18 +148,29 @@ export async function prepareAgentRequestRouting(params: {
   if (expectedSessionTargetError) {
     return rejectInvalidRequest(expectedSessionTargetError);
   }
-  if (
-    requestedSessionKey &&
-    respondUnavailableAgentSessionForKey({
+  if (requestedSessionKey) {
+    const unavailable = respondUnavailableAgentSessionForKey({
       sessionKey: requestedSessionKey,
       requestedSessionId,
       isRawModelRun: params.isRawModelRun,
       agentId,
       respond: params.respond,
-    })
-  ) {
-    params.clearDedupe();
-    return undefined;
+      assertCurrent: params.assertCurrent,
+    });
+    if (unavailable instanceof Promise) {
+      // Only the free ACP metadata read yields here. Reserve before that read
+      // settles so another invocation cannot claim this idempotency key.
+      params.reserveDedupe(requestedSessionKey, agentId);
+    }
+    try {
+      if (unavailable instanceof Promise ? await unavailable : unavailable) {
+        params.clearDedupe();
+        return undefined;
+      }
+    } catch (error) {
+      params.clearDedupe();
+      throw error;
+    }
   }
   if (params.execApprovalFollowupApprovalId && requestedSessionKeyRaw) {
     const expectedSessionId = normalizeOptionalString(
@@ -179,9 +185,7 @@ export async function prepareAgentRequestRouting(params: {
           projection: "list",
         }).entry?.sessionId,
       );
-    } catch {
-      currentSessionId = undefined;
-    }
+    } catch {}
     if (
       isExecApprovalFollowupSessionRebound({
         expectedSessionId,

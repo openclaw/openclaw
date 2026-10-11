@@ -56,6 +56,7 @@ import {
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord, UpdateRunStep } from "../../infra/update-run-record.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
+import { isUpdateRecoveryPending } from "../../infra/update-run-recovery-schema.js";
 import {
   inspectUpdateRecoveries,
   loadUpdateRecovery,
@@ -392,7 +393,7 @@ export async function withUpdatePreviewSignals<T>(
 export function createUpdateRunProgress(
   run: NonNullable<UpdateCommandOptions["run"]>,
   progress: UpdateDisplayProgress,
-  recordStep: (step: UpdateRunStep) => Promise<UpdateRunRecord>,
+  recordStep: (step: UpdateRunStep) => Promise<UpdateRunRecord | undefined>,
 ): UpdateStepProgress & {
   deferLedgerWrites: () => void;
   flushLedgerWrites: () => Promise<void>;
@@ -491,12 +492,10 @@ export function completeUpdateCommandRun(
   }
   // A process-local result cannot complete an operationally pending update or
   // authorize package retirement. Only the durable finalizer may close it.
-  const inspected = inspectUpdateRecoveries({ env: run.env }).find(
-    (entry) => entry.record.runId === run.runId,
-  );
-  // A matching historical record can only project its saved outcome or remain
-  // pending below. The mutable fallback still uses strict execution admission;
-  // unrelated legacy evidence must not become an absent/clean recovery state.
+  const recoveries = inspectUpdateRecoveries({ env: run.env });
+  const inspected = recoveries.find((entry) => entry.record.runId === run.runId);
+  // A matching historical record only projects its saved outcome. Execution
+  // remains strict, while unrelated completed history grants no authority.
   const recovery =
     inspected?.format === "legacy-serving"
       ? inspected.record
@@ -519,6 +518,9 @@ export function completeUpdateCommandRun(
           : (result.reason ?? "update-recovery-pending"),
       runId: run.runId,
     });
+  }
+  if (recoveries.some(({ record }) => isUpdateRecoveryPending(record))) {
+    return { ...result, status: "error", reason: "update-recovery-pending", runId: run.runId };
   }
   const recordOptions = { env: run.env, redactPaths: result.root ? [result.root] : [] };
   // Both finalization and outer CLI unwind come here. A verified restored generation

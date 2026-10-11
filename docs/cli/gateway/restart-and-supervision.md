@@ -24,6 +24,13 @@ openclaw gateway restart --wait 30s
 Manual restart signals now use `SIGUSR2`. `SIGUSR1` starts Node's inspector and no longer restarts the Gateway. Update scripts that send the old signal; prefer `openclaw gateway restart` for service-aware restarts.
 </Warning>
 
+If restart cannot verify a live serving owner, it leaves the process untouched.
+Run `openclaw gateway status --deep`, fix the reported startup failure (for example,
+a stopped Tailscale backend when Serve is configured), then run
+`openclaw gateway start` to wait for readiness. A loaded service or a running PID
+alone does not prove that the Gateway is serving. Reinstallation is not a remedy
+for an unresolved startup dependency or unknown process ownership.
+
 `--safe` asks the running Gateway to preflight active work and schedule one coalesced restart after that work drains. The wait is bounded to 5 minutes; when the budget expires the restart is forced. `--safe` cannot combine with `--force` or `--wait`.
 
 `--skip-deferral` bypasses only the safe-restart active-work deferral gate. It can move the Gateway into shutdown even while active-work blockers are reported, but the close-stage pending-reply drain still applies before the process exits. It requires `--safe` — use it when a deferral is stuck on a runaway task and reply delivery can still be allowed to settle.
@@ -36,9 +43,14 @@ leave time for cancellation and cleanup. These caps also apply to `--wait 0`. Lo
 heartbeat timeouts do not extend it. When available, the drain log reports the
 largest observed model request timeout for context.
 
+Queued heartbeat wakes settle as `gateway-draining` when shutdown closes admission,
+including wakes waiting to retry. They cannot start another turn in the draining runtime.
+Already-running wakes and pending final reply writes retain their drain grace.
+
 If work still ignores cancellation at the shutdown deadline under systemd or launchd,
 a native service stop or supervisor-owned restart logs
-the remaining work categories, writes a diagnostic stability bundle, and exits
+the remaining work categories and pending owners (including command lanes and
+request origins), writes a diagnostic stability bundle, and exits
 with status `0`. It does not reuse that unfinished runtime for an in-process
 restart. This lets a requested stop finish cleanly and lets the service manager
 start a fresh Gateway for a restart.
@@ -64,6 +76,12 @@ those schemas, or stop the service and restore your pre-upgrade backup. Startup
 retains exit status `78` and parks a managed LaunchAgent when possible. A refused
 shared-state database cannot record a new lifecycle row; the error log explains
 the refusal, and deep status reports it instead of an unavailable shutdown record.
+
+When the shared-state database cannot be read at all (for example, the file is
+damaged), `openclaw gateway status --deep` fails with exit status `1` and names
+the database path and read error instead of reporting a config read failure.
+Stop OpenClaw processes, then restore that file from a verified backup, as
+`openclaw doctor` also advises.
 
 Foreground/manual Gateways, in-process restarts selected by `OPENCLAW_NO_RESPAWN=1`, and other supervisors retain exit status `1` when
 cleanup cannot finish before the shutdown deadline.
@@ -184,7 +202,7 @@ OPENCLAW_SUPERVISOR_MODE=external \
   openclaw database ownership claim --manager gateway-supervisor --json
 ```
 
-Before claiming, stop and verify every Gateway, CLI, Doctor, updater, and native app process older than 2026.8.1 that can write the shared state database. Processes from before the ownership contract ([#121069](https://github.com/openclaw/openclaw/pull/121069)) do not understand the ownership row and cannot be retroactively fenced. Claim only after every remaining writer uses ownership-aware code and carries `OPENCLAW_SUPERVISOR_MODE=external`.
+Before claiming, stop the Gateway through the external supervisor and stop any embedded agents. The CLI enforces this procedure: it refuses a live Gateway or embedded-agent owner and holds exclusive offline ownership while committing the claim. Also stop and verify every CLI, Doctor, updater, and native app process older than 2026.8.1 that can write the shared state database. Processes from before the ownership contract ([#121069](https://github.com/openclaw/openclaw/pull/121069)) do not understand the ownership row and cannot be retroactively fenced. Claim only after every remaining writer uses ownership-aware code and carries `OPENCLAW_SUPERVISOR_MODE=external`.
 
 The claim is idempotent for the same stable manager identifier and refuses a different manager. There is no automatic claim or unclaim path. Once claimed, unmarked writable shared-state opens fail before permissions, schema migration, additive repair, compaction, or other mutation. Read-only access remains available. This is protection against accidental unmarked same-user writers, not an authentication or lease protocol.
 

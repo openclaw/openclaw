@@ -115,6 +115,25 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("sessions page lifecycle", () => {
+  it("pins from the page menu without changing shared pin metadata", async () => {
+    const row = sessionRow("personal-pin", { pinned: true, sharingRole: "viewer" });
+    const sessions = createSessions();
+    const connection = createGateway({} as GatewayBrowserClient);
+    const context = createContext(connection.gateway, sessions);
+    const page = await createRenderedPage(context, sessionsResult([row], 1));
+    const menu = await openRowMenu(page, row);
+    const entry = menu.querySelector('[value="toggle-pin"]');
+    expect(entry).not.toBeNull();
+    expect(entry?.hasAttribute("disabled")).toBe(false);
+    menu.querySelector("wa-dropdown")!.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: { value: "toggle-pin" } },
+      }),
+    );
+    expect(context.navigation.snapshot.sidebarEntries).toContain("session:" + row.key);
+    expect(sessions.patch).not.toHaveBeenCalled();
+    expect(row.pinned).toBe(true);
+  });
   it.each([false, true])(
     "reports owner assignment failure only in its current page (retired: %s)",
     async (retired) => {

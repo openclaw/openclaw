@@ -8,7 +8,6 @@ import {
   readAgentRuntimeRestrictionErrorDetails,
   type ErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
 import { resolveAgentEntry } from "../../agents/agent-scope-config.js";
 import {
   modelFallbackOverrideFromAvailability,
@@ -54,7 +53,7 @@ import {
 } from "../session-utils-store.js";
 import {
   loadSessionEntry,
-  resolveDeletedAgentIdFromSessionKey,
+  prepareDeletedAgentSessionCheck,
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
@@ -244,23 +243,16 @@ async function loadChatSendSessionContext(params: {
     },
   );
   assertConfigCurrent();
+  const preparationFor = (config: OpenClawConfig) =>
+    chatSendPreparationConfig(
+      config,
+      requestedAgentId,
+      sessionLoadResult.entry,
+      request,
+      sessionLoadKey,
+    );
   if (
-    !isDeepStrictEqual(
-      chatSendPreparationConfig(
-        runtimeConfig,
-        requestedAgentId,
-        sessionLoadResult.entry,
-        request,
-        sessionLoadKey,
-      ),
-      chatSendPreparationConfig(
-        context.getRuntimeConfig(),
-        requestedAgentId,
-        sessionLoadResult.entry,
-        request,
-        sessionLoadKey,
-      ),
-    )
+    !isDeepStrictEqual(preparationFor(runtimeConfig), preparationFor(context.getRuntimeConfig()))
   ) {
     throw new Error("Session preparation changed; retry.");
   }
@@ -310,6 +302,7 @@ export async function prepareChatSendSession(params: {
   request: NormalizedChatSendRequest;
   context: GatewayRequestHandlerOptions["context"];
   client: GatewayRequestHandlerOptions["client"];
+  assertCurrent?: () => void;
 }) {
   const loaded = await loadChatSendSessionContext(params);
   if (!loaded.ok) {
@@ -327,18 +320,16 @@ export async function prepareChatSendSession(params: {
     return { ok: false as const, error: missingHarnessSessionError };
   }
 
-  // Explicit metadata, including misses, keeps this synchronous resolver off SQLite.
-  let deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, sessionKey, entry, {
-    acpMeta: null,
+  const deletedAgent = prepareDeletedAgentSessionCheck({
+    cfg,
+    sessionKey,
+    entry,
+    acpMetadataSessionKey: legacyKey,
+    assertCurrent: params.assertCurrent,
   });
-  if (deletedAgentId !== null) {
-    const [acpMeta] = await readAcpSessionMetaForEntries({
-      cfg,
-      entries: [{ agentId: deletedAgentId, sessionKey: legacyKey ?? sessionKey, entry }],
-    });
-    deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, sessionKey, entry, {
-      acpMeta: acpMeta ?? null,
-    });
+  const deletedAgentId = deletedAgent instanceof Promise ? await deletedAgent : deletedAgent;
+  if (deletedAgent instanceof Promise) {
+    params.assertCurrent?.();
   }
   if (deletedAgentId !== null) {
     return {

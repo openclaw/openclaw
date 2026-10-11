@@ -37,6 +37,7 @@ import {
   readDispatchRecord,
   retainDispatchRecord,
   dispatchInputsDigest,
+  formatDispatchSelection,
   observeQualificationAdmission,
   qualifyAdmission,
   type DispatchInputs,
@@ -171,6 +172,8 @@ always performs read-only reconciliation. --reconcile-request refuses a missing 
 mutation; after a qualification POST it is observation-only, never a redispatch.
 Retain the artifact until operator cleanup; its loss never proves non-execution.
 Frozen tooling must declare FULL_RELEASE_DISPATCH_WITNESS_CONTRACT=1 before a new request.
+Prints the frozen candidate/tooling, effective profile, group, soak and redacted
+waiver selection before dispatch and when reconciling the retained request.
 
 Preflights the Validation SHA with a bare-SHA fetch into a fresh temporary repository.
 Creates one immutable release-ci/* workflow ref pinned to the exact Tooling SHA,
@@ -1175,6 +1178,7 @@ async function reopenDispatch(path: string, args: ReturnType<typeof parseArgs>, 
       ),
     "Reopen arguments conflict with the retained request",
   );
+  console.log(formatDispatchSelection(request));
   try {
     if (record.admission && record.phase === "prepared") {
       const observed = observeQualificationAdmission(record, qualificationDispatchClient);
@@ -1844,9 +1848,6 @@ async function main() {
   console.log(`Validation SHA: ${targetSha}`);
   console.log(`Tooling SHA: ${workflowSha}`);
   console.log(`Trusted workflow ref: ${args.trustedWorkflowRef}`);
-  console.log(
-    `Frozen validation tuple: candidate=${targetSha} tooling=${workflowSha} rerun_group=${args.inputs.rerun_group}`,
-  );
   console.log(`Temporary workflow ref: ${branch}`);
 
   await executeFrozenDispatch({
@@ -1871,6 +1872,11 @@ async function executeFrozenDispatch(options: {
 }) {
   const { args, requestPath, workflowSha, branch, admissionWorkflowSha } = options;
   let { record, selection } = options;
+  console.log(
+    formatDispatchSelection(
+      record?.request ?? { targetSha: String(selection.inputs.ref), workflowSha, ...selection },
+    ),
+  );
   const candidateOwned = args.trustedWorkflowRef === "candidate";
   const remoteBranchRef = `refs/heads/${branch}`;
   let parentRunId: string | undefined;

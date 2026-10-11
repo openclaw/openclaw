@@ -1,3 +1,4 @@
+import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import {
@@ -8,6 +9,7 @@ import { createContext as createGatewayContext } from "../../../gateway/server-p
 import * as snapshotSource from "../../../infra/sqlite-snapshot-source.js";
 import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
 import * as operationAdmission from "../../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
@@ -22,7 +24,6 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
-import * as workerContext from "../../../state/openclaw-state-worker-context.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import {
@@ -35,6 +36,7 @@ import { mutateRequesterCompletionBatch } from "../completion/subagent-completio
 import { bindSubagentRunGatewayOwners } from "./subagent-registry-gateway-owner.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
+  assertSubagentRegistryWriteSourceCurrent,
   mutateSubagentRuns,
   restoreSubagentRunsFromDisk,
   SubagentRegistryMutationRejectedError,
@@ -105,6 +107,34 @@ async function register(...entries: SubagentRunRecord[]) {
   );
 }
 
+it("revalidates the live registry source without enumerating the process environment", () => {
+  const context = captureOpenClawStateWorkerContext();
+  const originalEnv = process.env;
+  let stateDir = originalEnv.OPENCLAW_STATE_DIR;
+  let enumerations = 0;
+  process.env = new Proxy(originalEnv, {
+    get(target, key) {
+      return key === "OPENCLAW_STATE_DIR" ? stateDir : Reflect.get(target, key);
+    },
+    ownKeys(target) {
+      enumerations++;
+      return Reflect.ownKeys(target);
+    },
+  });
+  try {
+    for (let index = 0; index < 30; index++) {
+      assertSubagentRegistryWriteSourceCurrent(context);
+    }
+    stateDir = path.join(state.stateDir, "replacement");
+    expect(() => assertSubagentRegistryWriteSourceCurrent(context)).toThrow(
+      "Queued registry write lost its original database",
+    );
+  } finally {
+    process.env = originalEnv;
+  }
+  expect(enumerations).toBe(0);
+});
+
 it("streams bounded restore batches in one read and retains snapshot row versions", async () => {
   const entries = [3, 1, 2].map((createdAt, index) =>
     Object.assign(entry(`paged-${index}`), {
@@ -124,6 +154,7 @@ it("streams bounded restore batches in one read and retains snapshot row version
     .mockImplementation((options, command, readOptions) =>
       read(options, command, {
         ...readOptions,
+        onChunkAsync: undefined,
         onChunk(value) {
           payloadBytes.push(Buffer.byteLength(JSON.stringify(value)));
           readOptions?.onChunk?.(value);
@@ -183,6 +214,7 @@ it("joins a cancelled stream without publishing partial restored rows", async ()
       read(options, command, {
         ...readOptions,
         signal: controller.signal,
+        onChunkAsync: undefined,
         onChunk(value) {
           readOptions?.onChunk?.(value);
           controller.abort(failure);
@@ -239,28 +271,16 @@ function change(runId: string, update: (row: SubagentRunRecord) => void) {
 }
 
 function interceptWrites(callback: (phase: "before" | "after") => void | Promise<void>) {
-  const execute = stateWorker.runOpenClawStateWorkerOperation;
-  return vi
-    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-    .mockImplementation((context, run, options) =>
-      execute(
-        context,
-        (scope) =>
-          run({
-            execute: async (command, executeOptions) => {
-              if (command.type === "subagents.persistChanges") {
-                await callback("before");
-              }
-              const receipt = await scope.execute(command, executeOptions);
-              if (command.type === "subagents.persistChanges") {
-                await callback("after");
-              }
-              return receipt;
-            },
-          }),
-        options,
-      ),
-    );
+  return probe.command(stateWorker, async (command, executeOptions, scope) => {
+    if (command.type === "subagents.persistChanges") {
+      await callback("before");
+    }
+    const receipt = await scope.execute(command, executeOptions);
+    if (command.type === "subagents.persistChanges") {
+      await callback("after");
+    }
+    return receipt;
+  });
 }
 
 it("publishes overlapping same-row mutations in FIFO order after each real commit ACK", async () => {
@@ -663,16 +683,12 @@ it.each(["transaction", "commit"] as const)(
   async (stage) => {
     await register(entry("guarded"));
     let current = true;
-    const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === stage) {
-            current = false;
-          }
-          admit(request, grant);
-        }, attachment),
-    );
+    probe.admission(operationAdmission, (request, grant, admit) => {
+      if (request.stage === stage) {
+        current = false;
+      }
+      admit(request, grant);
+    });
     const mutation = mutateSubagentRuns(
       ["guarded"],
       (rows) => ({
@@ -753,20 +769,13 @@ it.each(["before ACK", "inside callback", "inside failing callback"] as const)(
   "keeps an old-source commit from notifying a replacement database (%s)",
   async (transition) => {
     await register(entry("source"));
-    const original = captureOpenClawStateWorkerContext();
     const reached = createDeferredCore();
     const release = createDeferredCore();
     const observed = vi.fn();
     const stop = subscribeSubagentRunChanges("persistence", observed);
     const revision = getSubagentRegistryPublicationRevision();
     const replaceSource = () => {
-      vi.spyOn(workerContext, "captureOpenClawStateWorkerContext").mockReturnValue({
-        ...original,
-        admission: {
-          ...original.admission,
-          identity: { ...original.admission.identity, key: "replacement" },
-        },
-      });
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(state.stateDir, "replacement"));
     };
     interceptWrites(async (phase) => {
       if (phase === "after" && transition === "before ACK") {
@@ -802,6 +811,7 @@ it.each(["before ACK", "inside callback", "inside failing callback"] as const)(
         outcome: "committed",
         publication: transition === "before ACK" ? "superseded" : "published",
       });
+      vi.unstubAllEnvs();
       // Callback retirement cannot undo old-source rows that were already installed.
       expect(subagentRuns.get("source")?.label).toBe(
         transition === "before ACK" ? undefined : "old database commit",
@@ -838,7 +848,7 @@ it("retains prepared announcement authority across bookkeeping and revokes it fo
   const prepared = await readSubagentRunAnnounceResultUsing(subagentRuns.get(child.runId)!, {
     readSubagentRun: (runId) => subagentRuns.get(runId),
     getRuntimeConfig: () => ({}),
-    readSubagentSessionEntry: () => undefined,
+    readSubagentSessionEntry: async () => undefined,
     resolveAgentIdFromSessionKey: () => "main",
     resolveSessionStorePathCore: () => "/synthetic/sessions",
     findTranscriptEvent: async () => ({

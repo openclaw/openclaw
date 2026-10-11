@@ -16,6 +16,7 @@ import {
   createCanarySnapshotResult,
   FakeChild,
   stubHealthyGateway,
+  canaryOutcomeStep,
 } from "./update-candidate-canary.test-support.js";
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
 import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
@@ -217,16 +218,17 @@ describe("canary teardown evidence", () => {
         reason: "candidate-checks-timeout",
       });
       expect(result.logTail.join("\n")).toContain(`${cause} ([state/sqlite] ${progress})`);
-      expect(result.steps.at(-1)).toMatchObject({ exitCode: null, termination: "timeout" });
-      expect(result.steps.at(-1)?.failureFacts).toEqual([
+      const failed = canaryOutcomeStep(result.steps)!;
+      expect(failed).toMatchObject({ exitCode: null, termination: "timeout" });
+      expect(failed.failureFacts).toEqual([
         expect.objectContaining({
           check: "doctor",
           code: "candidate-checks-timeout",
           message: expect.stringContaining(cause),
         }),
       ]);
-      const detail = updateRunStepsFromResultStep(result.steps.at(-1)!).at(-1)?.detail;
-      expect(result.steps.at(-1)?.stderrTail).toContain("phase=checking");
+      const detail = updateRunStepsFromResultStep(failed).at(-1)?.detail;
+      expect(failed.stderrTail).toContain("phase=checking");
       expect(detail).toContain(cause);
       const report = renderUpdateRunReport(
         updateRunReportInputFromResult({ ...result, mode: "git", root }),
@@ -673,11 +675,11 @@ describe("canary teardown evidence", () => {
             reason: "doctor-failed",
           });
           if (missing === "error") {
-            expect(result.steps.at(-1)?.failureFacts?.[0]?.message).toContain(
+            expect(canaryOutcomeStep(result.steps)?.failureFacts?.[0]?.message).toContain(
               "synthetic validation process error",
             );
           } else {
-            expect(result.steps.at(-1)?.exitCode).toBe(1);
+            expect(canaryOutcomeStep(result.steps)?.exitCode).toBe(1);
           }
           expect(mocks.spawn.mock.calls.some(([, args]) => args.includes("--update-canary"))).toBe(
             false,
@@ -774,7 +776,9 @@ describe("canary teardown evidence", () => {
     try {
       const result = await validateUpdateCandidateCanary(canaryStateOptions(3_000));
       expect(result).toMatchObject({ status: "error", phase: "doctor", reason: "doctor-failed" });
-      expect(result.steps.at(-1)?.failureFacts?.[0]?.message).toContain("synthetic spawn failure");
+      expect(canaryOutcomeStep(result.steps)?.failureFacts?.[0]?.message).toContain(
+        "synthetic spawn failure",
+      );
       expect(mocks.signal).not.toHaveBeenCalled();
       expect(result.steps.some((step) => step.advisory)).toBe(false);
     } finally {

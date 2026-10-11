@@ -1,5 +1,9 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { Type } from "typebox";
+import { Value } from "typebox/value";
 import { z } from "zod";
+import { ProgressCardSchema } from "../../../../packages/gateway-protocol/src/schema/progress-card.js";
+import { SessionRowSchema } from "../../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { requestResult, transactionComplete } from "../../lib/chat/control-ui-database.runtime.ts";
 import {
   getSessionCacheValue,
@@ -11,6 +15,7 @@ import {
   type ChatCacheObserver,
   type ChatMessageCache,
   type ChatSessionSnapshot,
+  type ChatTranscriptMetadata,
 } from "./session-message-cache.ts";
 import {
   isPersistableChatSnapshotKey,
@@ -31,7 +36,7 @@ import {
   consumePrewarmedChatSnapshot,
   discardPrewarmedChatSnapshot,
 } from "./session-snapshot-prewarm.ts";
-const CHAT_SNAPSHOT_PROJECTION_VERSION = 1;
+const CHAT_SNAPSHOT_PROJECTION_VERSION = 2;
 const CHAT_SNAPSHOT_WRITE_DELAY_MS = 500;
 const CHAT_SNAPSHOT_IDLE_TIMEOUT_MS = 1000;
 
@@ -52,8 +57,29 @@ const paginationSchema = z.discriminatedUnion("hasMore", [
     .strict(),
 ]);
 
+const transcriptMetadataSchema = Type.Pick(SessionRowSchema, [
+  "key",
+  "kind",
+  "classification",
+  "participants",
+  "expandedParticipants",
+  "owner",
+  "lastRunId",
+  "status",
+  "runtimeMs",
+]);
+
 const snapshotSchema = z
   .object({
+    transcriptMetadata: z
+      .custom<ChatTranscriptMetadata>((value) => Value.Check(transcriptMetadataSchema, value))
+      .optional(),
+    progressCard: z
+      .custom<NonNullable<ChatSessionSnapshot["progressCard"]>>((value) =>
+        Value.Check(ProgressCardSchema, value),
+      )
+      .nullable()
+      .optional(),
     deltaCursor: z.string().optional(),
     displayedLeafEntryId: z.string().nullable().optional(),
     // Message contents are opaque; only the array boundary needs validation.
@@ -94,17 +120,6 @@ type PendingSessionState = {
 
 const activeStores = new Set<SessionSnapshotStore>();
 
-function sanitizeSnapshot(
-  snapshot: ChatSessionSnapshot,
-): { snapshot: unknown; weight: number } | null {
-  try {
-    const json = JSON.stringify(snapshot);
-    return json ? { snapshot: JSON.parse(json), weight: json.length } : null;
-  } catch {
-    return null;
-  }
-}
-
 function parseSnapshotRecord(value: unknown, sessionKey?: string): SessionSnapshotRecord | null {
   const parsed = recordSchema.safeParse(value);
   return parsed.success && (!sessionKey || parsed.data.sessionKey === sessionKey)
@@ -116,8 +131,17 @@ function createSnapshotRecord(
   sessionKey: string,
   pending: PendingSessionState,
 ): PreparedSnapshotRecord | null {
-  const sanitized = sanitizeSnapshot(pending.snapshot);
-  if (!sanitized) {
+  const sourceSnapshot = pending.snapshot;
+  let snapshot: unknown;
+  let weight: number;
+  try {
+    const json = JSON.stringify(sourceSnapshot);
+    if (!json) {
+      return null;
+    }
+    snapshot = JSON.parse(json);
+    weight = json.length;
+  } catch {
     return null;
   }
   const envelope = {
@@ -126,7 +150,7 @@ function createSnapshotRecord(
     sessionId: pending.snapshot.sessionId,
     sessionKey,
   };
-  const record = parseSnapshotRecord({ ...envelope, snapshot: sanitized.snapshot });
+  const record = parseSnapshotRecord({ ...envelope, snapshot });
   // Validation does not transform JSON values. Preserve the existing code-unit
   // budget: snapshot JSON plus envelope JSON, excluding the enclosing snapshot key.
   return record
@@ -135,7 +159,7 @@ function createSnapshotRecord(
         metadata: {
           savedAt: record.savedAt,
           sessionKey,
-          weight: sanitized.weight + JSON.stringify(envelope).length,
+          weight: weight + JSON.stringify(envelope).length,
         },
       }
     : null;
@@ -243,7 +267,6 @@ export class SessionSnapshotStore implements ChatCacheObserver {
   // cooldown bounds the resulting redundant fetches without per-row IDB reads.
   private readonly savedAtBySession = new Map<string, number>();
   private savedAtSeed: Promise<void> | null = null;
-  private savedAtSeedRetirements: Set<string> | null = null;
   private cancelScheduledWrite: (() => void) | null = null;
   private writeChain = Promise.resolve();
 
@@ -282,10 +305,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
       onPrewarm?.(prewarm.readyAt);
     }
     const value = await (prewarm?.promise ?? readStoredChatSnapshotRecord(sessionKey));
-    if (value === undefined || !isCurrent()) {
-      return null;
-    }
-    if (!isPersistableChatSnapshotKey(sessionKey)) {
+    if (value === undefined || !isCurrent() || !isPersistableChatSnapshotKey(sessionKey)) {
       return null;
     }
     // Older display projections cannot resume a cursor or contribute a retained history prefix.
@@ -379,7 +399,6 @@ export class SessionSnapshotStore implements ChatCacheObserver {
   }
 
   forgetScope(prefix: string): void {
-    this.savedAtSeedRetirements?.add(prefix);
     for (const key of new Set([
       ...this.revisions.keys(),
       ...this.pending.keys(),
@@ -432,31 +451,15 @@ export class SessionSnapshotStore implements ChatCacheObserver {
   }
 
   private async seedSavedAtIndex(): Promise<void> {
-    const retiredScopes = new Set<string>();
-    this.savedAtSeedRetirements = retiredScopes;
-    const generation = snapshotStoreGeneration;
-    const revisions = new Map(this.revisions);
-    try {
-      const records = await readSnapshotMetadata();
-      if (generation !== snapshotStoreGeneration) {
-        return;
-      }
-      if (!records) {
-        this.resetSavedAtIndex();
-        return;
-      }
-      for (const record of records) {
-        if (
-          [...retiredScopes].some((prefix) => record.sessionKey.startsWith(prefix)) ||
-          (revisions.get(record.sessionKey) ?? 0) !== (this.revisions.get(record.sessionKey) ?? 0)
-        ) {
-          continue;
-        }
-        const current = this.savedAtBySession.get(record.sessionKey) ?? 0;
-        this.savedAtBySession.set(record.sessionKey, Math.max(current, record.savedAt));
-      }
-    } finally {
-      this.savedAtSeedRetirements = null;
+    const records = await readSnapshotMetadata();
+    if (!records) {
+      this.resetSavedAtIndex();
+      return;
+    }
+    // This index only avoids redundant prefetches; concurrent eviction may leave it stale.
+    for (const record of records) {
+      const current = this.savedAtBySession.get(record.sessionKey) ?? 0;
+      this.savedAtBySession.set(record.sessionKey, Math.max(current, record.savedAt));
     }
   }
 

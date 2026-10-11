@@ -44,13 +44,6 @@ export function mergeReplyDirectiveResults(
   };
 }
 
-function clearPendingToolMedia(state: PendingToolMediaState) {
-  state.pendingToolMediaUrls = [];
-  state.pendingToolMediaAttachments = [];
-  state.pendingToolMediaTrustByUrl.clear();
-  state.pendingToolAudioAsVoice = false;
-}
-
 /** Moves queued tool media into a non-reasoning assistant reply payload. */
 export function consumePendingToolMediaIntoReply(
   state: PendingToolMediaState,
@@ -63,6 +56,7 @@ export function consumePendingToolMediaIntoReply(
   if (!pendingMedia) {
     return payload;
   }
+  let mergedPayload: BlockReplyPayload;
   if ((payload.mediaUrls ?? []).some((url) => url.trim().length > 0)) {
     // Pending tool media is a fallback delivery queue; explicit final media is
     // the assistant's user-visible selection, while tool output remains in the transcript.
@@ -83,23 +77,25 @@ export function consumePendingToolMediaIntoReply(
       selectedAttachments.every((entry) => Object.keys(entry).length === 0)
         ? payload
         : { ...payload, attachments: selectedAttachments };
-    const selectedPayload =
+    mergedPayload =
       allSelectedMediaIsPending &&
       (payload.mediaUrls ?? []).every(
         (url) => state.pendingToolMediaTrustByUrl.get(url.trim()) === true,
       )
         ? { ...payloadWithMetadata, trustedLocalMedia: true }
         : payloadWithMetadata;
-    clearPendingToolMedia(state);
-    return selectedPayload;
+  } else {
+    mergedPayload = {
+      ...payload,
+      ...pendingMedia,
+      audioAsVoice: payload.audioAsVoice || pendingMedia.audioAsVoice || undefined,
+      ...(payload.trustedLocalMedia ? { trustedLocalMedia: true } : {}),
+    };
   }
-  const mergedPayload: BlockReplyPayload = {
-    ...payload,
-    ...pendingMedia,
-    audioAsVoice: payload.audioAsVoice || pendingMedia.audioAsVoice || undefined,
-    ...(payload.trustedLocalMedia ? { trustedLocalMedia: true } : {}),
-  };
-  clearPendingToolMedia(state);
+  state.pendingToolMediaUrls = [];
+  state.pendingToolMediaAttachments = [];
+  state.pendingToolMediaTrustByUrl.clear();
+  state.pendingToolAudioAsVoice = false;
   return mergedPayload;
 }
 

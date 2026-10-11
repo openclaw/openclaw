@@ -95,6 +95,12 @@ jobs use the current operator read policy. Agent-created jobs retain their recor
 creator origin and account, and the channel's delegated read restrictions still
 apply. Delivery settings do not grant read access.
 
+Manual runs use the same scheduled execution context as timer-fired runs after
+the request passes admission. Ending the chat turn or tool call that started a
+run does not expire the job's tool access. The job still uses its stored authority
+and current tool restrictions; starting it manually does not grant the caller's
+extra permissions to the job.
+
 Current global, agent, profile, and provider tool policy is checked when each new
 scheduled message invocation starts. Configuration changes apply to later invocations;
 an invocation already admitted retains its configuration. Disabling or removing a job,
@@ -153,6 +159,8 @@ current invocation. A confirmed write still returns its result if authority ends
 while the response is pending.
 
 `--model` sets the job's primary model; it does not replace a session `/model` override, so configured fallback chains still apply on top of it. An unresolved or disallowed model fails the run with an explicit validation error rather than silently falling back to the default. If a job has `--model` but no explicit or configured fallback list, OpenClaw passes an empty fallback override instead of silently appending the agent primary as a hidden retry target.
+
+A fallback after a provider timeout continues the same scheduled turn and reuses its saved user input. Failed attempts do not complete the turn or duplicate the scheduled prompt.
 
 Pick the model for the job's difficulty, not the agent's default. Routine
 automation - summaries, triage, classification, status checks - runs well on a
@@ -290,11 +298,15 @@ only when it needs Codex app access. See
 
 Agent-turn jobs default to the creating conversation when the create request carries session context. Callers without a session key, including CLI and API callers that do not supply one, fall back to `isolated`. System events and heartbeats still default to `main`; command and script payloads still default to `isolated`.
 
+An explicitly isolated agent-turn job created from a conversation keeps that conversation's identity for delivery. With default `announce` delivery and no explicit or remembered external route, its final result is committed into the creating conversation, including WebChat/Control UI. The run remains isolated and does not read the conversation's history. See [Automation delivery](/automation/cron-jobs/delivery) for generation checks, duplicate prevention, and external-route behavior.
+
 <AccordionGroup>
   <Accordion title="Main session vs current vs isolated vs custom">
     **Main session** jobs enqueue a system event into the owning agent's main session and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). The event is processed with that session's existing context and last delivery context. Internal automation turns do not extend daily or idle reset freshness; only visible user activity updates session freshness. **Current-session** jobs execute in a detached run session, read a bounded tail of the conversation captured when the job was created, and commit the final visible assistant result back to that exact conversation. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
 
     `current` binds conversation context and result delivery, not the original agent execution or its worktree. The detached run has its own session identity and uses the scheduled agent's workspace and captured tool restrictions. It does not inherit the conversation's cloud worker placement. Messages sent to the job's cron session address its latest detached run, independently of the bound conversation. In-flight turns sent through that stable cron key are canceled if the key is reassigned. A task-specific checkout path in the prompt does not grant access to it. Before using a job to continue repository work, verify that its execution environment can access the required checkout and tools; otherwise keep the work with its existing execution owner. A result committed to the conversation does not itself resume the original agent.
+
+    Custom-session agent turns wait for active work in that session before preparing or resetting its context, so a scheduled tick cannot invalidate an in-progress compaction.
 
     Custom-session agent turns use the existing session’s saved workspace and working directory, including its managed worktree. Requester-scoped jobs may use a saved workspace only for their owning conversation; trusted operator-scheduled jobs can target another conversation’s saved workspace. A missing, retired, or mismatched worktree stops the run instead of falling back to the agent’s default workspace. Filesystem containment and the job’s tool restrictions still apply; a path in the job prompt does not grant access. Persistent-session rollover keeps the saved workspace binding, permission mode, containment root, and inherited tool restrictions; detached runs do not inherit this workspace context. A new `session:custom-id` without an existing session starts in the configured agent workspace. Use `delivery: { mode: "none" }` without an external target for quiet named-session work that needs no runner fallback announcement.
 

@@ -1,7 +1,7 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { RetrySupervisor } from "../../packages/retry/src/index.js";
 import { isChannelAccountExplicitlyDisabled } from "../channels/account-config-enabled.js";
-import { resolveChannelAccount } from "../channels/account-resolution.js";
+import { describeChannelAccount, resolveChannelAccount } from "../channels/account-resolution.js";
 import {
   getCredentialUnavailableDiagnostics,
   projectSafeChannelAccountSnapshotFields,
@@ -92,6 +92,7 @@ import {
   runChannelAccountMonitor,
   runChannelAccountStartup,
   waitForChannelStartupHandoff,
+  waitForDeferredAccountStart,
 } from "./server-channel-startup.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 
@@ -174,23 +175,6 @@ type ChannelAccountStopState = (
   cleanup?: Promise<ChannelAccountStopOutcome>;
 };
 
-async function waitForDeferredAccountStart(
-  deferred: Promise<void>,
-  abortSignal: AbortSignal,
-): Promise<void> {
-  if (abortSignal.aborted) {
-    return;
-  }
-  const aborted = createDeferredCore();
-  const onAbort = () => aborted.resolve();
-  abortSignal.addEventListener("abort", onAbort, { once: true });
-  try {
-    await Promise.race([deferred, aborted.promise]);
-  } finally {
-    abortSignal.removeEventListener("abort", onAbort);
-  }
-}
-
 export type ChannelManager = {
   getRuntimeSnapshot: (options?: ChannelRuntimeSnapshotOptions) => ChannelRuntimeSnapshot;
   pauseChannelStarts: (
@@ -252,6 +236,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   // this: the timed-out-stop recovery sets it too, and that one needs the health
   // monitor to keep driving it.
   const pendingAutoRestarts = new Set<string>();
+  const clearRecoveryState = (key: string) => {
+    recoveryStopTimedOut.delete(key);
+    recoveryStartRequested.delete(key);
+  };
   let autostartSuppression: ChannelAutostartSuppression | null = null;
   let ambientAutostartSuppressedChannelIds = new Set(
     opts.ambientAutostartSuppressedChannelIds ?? [],
@@ -599,8 +587,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               return;
             }
             // A repeated recovery request retires the stuck predecessor before replacement.
-            recoveryStopTimedOut.delete(rKey);
-            recoveryStartRequested.delete(rKey);
+            clearRecoveryState(rKey);
             restarts.delete(rKey);
             store.lifetimes.get(id)?.capabilityLease.revoke();
             store.lifetimes.delete(id);
@@ -708,7 +695,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 runPluginCleanup(stopAccount, () => stopAccount.call(gateway, context)),
             };
           }
-          const described = plugin.config.describeAccount?.(account, cfg);
+          const described = await describeChannelAccount({ plugin, account, cfg });
+          assertStartCurrent();
+          capabilityLease.assertActive("startup");
           const enabled = plugin.config.isEnabled
             ? plugin.config.isEnabled(account, cfg)
             : isAccountEnabled(account);
@@ -959,15 +948,13 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 return;
               }
               if (manuallyStopped.has(rKey)) {
-                recoveryStopTimedOut.delete(rKey);
-                recoveryStartRequested.delete(rKey);
+                clearRecoveryState(rKey);
                 return;
               }
               if (getRuntime(channelId, id).terminalDisconnect) {
                 // Terminal startup/session failures win over pending recovery.
                 // Leaving recovery state behind would restart a channel that needs user action.
-                recoveryStopTimedOut.delete(rKey);
-                recoveryStartRequested.delete(rKey);
+                clearRecoveryState(rKey);
                 restarts.delete(rKey);
                 setRuntime(channelId, id, {
                   restartPending: false,
@@ -1296,8 +1283,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             };
           }
           if (outcome.status === "rejected" && retainCleanupOwner) {
-            recoveryStopTimedOut.delete(rKey);
-            recoveryStartRequested.delete(rKey);
+            clearRecoveryState(rKey);
             if (stoppedCleanly && store.tasks.get(id) === task) {
               store.tasks.delete(id);
             }
@@ -1324,8 +1310,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             }
             return outcome;
           }
-          recoveryStopTimedOut.delete(rKey);
-          recoveryStartRequested.delete(rKey);
+          clearRecoveryState(rKey);
           if (store.tasks.get(id) === task) {
             store.tasks.delete(id);
           }
@@ -1509,7 +1494,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               accountId: id,
               runtime: current,
             });
-        } else if (!plugin.config.resolveAccountAsync) {
+        } else if (!plugin.config.resolveAccountAsync && !plugin.config.describeAccountAsync) {
           const account = plugin.config.resolveAccount(cfg, id);
           const enabled = plugin.config.isEnabled
             ? plugin.config.isEnabled(account, cfg)

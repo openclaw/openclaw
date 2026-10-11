@@ -13,7 +13,5 @@ export function parseSendPolicyCommand(raw?: string): {
   if (!trimmed) {
     return { hasCommand: false };
   }
-  const stripped = stripInboundMetadata(trimmed);
-  const normalized = normalizeCommandBody(stripped);
-  return parseSendPolicyCommandBody(normalized);
+  return parseSendPolicyCommandBody(normalizeCommandBody(stripInboundMetadata(trimmed)));
 }

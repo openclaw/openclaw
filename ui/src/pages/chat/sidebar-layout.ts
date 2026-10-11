@@ -138,6 +138,15 @@ export function promoteSidebarPanel(layout: SidebarLayout, panelId: string): Sid
   return next;
 }
 
+function selectPanel(layout: SidebarLayout, column: SidebarColumn, panelId: string): void {
+  column.activePanelId = panelId;
+  layout.open = true;
+  if (layout.expanded) {
+    layout.expanded = false;
+    delete layout.expandedSide;
+  }
+}
+
 export function openSlot(layout: SidebarLayout, slot: SidebarSlotId): SidebarLayout {
   const next = structuredClone(layout);
   if ((sidebarMainPanel(next)?.slot ?? "conversation") === slot) {
@@ -151,12 +160,7 @@ export function openSlot(layout: SidebarLayout, slot: SidebarSlotId): SidebarLay
     panel = { id: nextPanelId(next, slot), slot };
     column.panels.push(panel);
   }
-  column.activePanelId = panel.id;
-  next.open = true;
-  if (next.expanded) {
-    next.expanded = false;
-    delete next.expandedSide;
-  }
+  selectPanel(next, column, panel.id);
   return next;
 }
 
@@ -198,12 +202,7 @@ export function activatePanel(layout: SidebarLayout, panelId: string): SidebarLa
   const next = structuredClone(layout);
   const column = next.columns.find((entry) => entry.panels.some((panel) => panel.id === panelId));
   if (column && panelId !== next.mainPanelId) {
-    column.activePanelId = panelId;
-    next.open = true;
-    if (next.expanded) {
-      next.expanded = false;
-      delete next.expandedSide;
-    }
+    selectPanel(next, column, panelId);
   }
   return next;
 }

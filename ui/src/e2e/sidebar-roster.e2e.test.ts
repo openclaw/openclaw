@@ -8,7 +8,12 @@ import type {
   SessionsListResult,
 } from "../api/types.ts";
 import type { AppSidebarSessionNavigationElement } from "../components/app-sidebar-session-navigation.ts";
-import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import { finishElementAnimations } from "../test-helpers/animations.ts";
+import {
+  controlUiBundledSettingsStorageKey,
+  installMockGateway,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { captureSidebarUiProof } from "./sidebar-customization.test-support.ts";
@@ -68,7 +73,6 @@ suite.define(() => {
                   label: `${agent.name} ${suffix}`,
                   updatedAt: now - (index + 1) * 60_000 - sessionIndex * 1_000,
                   agentId: agent.id,
-                  pinned: sessionIndex === 0,
                   owner: { actor: sessionIndex === 0 ? owners[0] : owners[1] },
                   hasActiveRun: agent.id === "forge" && sessionIndex === 0,
                   status: agent.id === "forge" && sessionIndex === 0 ? "running" : "done",
@@ -111,6 +115,18 @@ suite.define(() => {
             JSON.stringify({ dismissedAtMs: Date.now() }),
           );
         });
+        await page.addInitScript(
+          ({ key, entries }) => {
+            const stored = JSON.parse(localStorage.getItem(key) ?? "{}");
+            if (!Array.isArray(stored.sidebarEntries)) {
+              localStorage.setItem(key, JSON.stringify({ ...stored, sidebarEntries: entries }));
+            }
+          },
+          {
+            key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+            entries: agentsList.agents.map((agent) => `session:agent:${agent.id}:project`),
+          },
+        );
         const gateway = await installMockGateway(page, {
           sessions: sessions.sessions,
           methodResponses: {
@@ -156,7 +172,7 @@ suite.define(() => {
         const sessionRows = sidebar.locator(".sidebar-recent-session");
         await expect.poll(() => chip.isVisible()).toBe(true);
         await expect.poll(() => sessionRows.count()).toBe(2);
-        expect(await sidebar.getByRole("link", { name: "Home", exact: true }).count()).toBe(1);
+        expect(await sidebar.locator(".sidebar-footer-bar__home").count()).toBe(1);
         expect(await sidebar.locator('[data-session-key="agent:forge:notes"]').count()).toBe(0);
         await captureSidebarUiProof(suite, page, "sidebar-roster-before.png");
         await chip.click();
@@ -179,7 +195,7 @@ suite.define(() => {
           )
           .toEqual(["main", "forge", "scout", "bloom"]);
         await expect.poll(() => sessionRows.count()).toBe(8);
-        expect(await sidebar.getByRole("link", { name: "Home", exact: true }).count()).toBe(0);
+        expect(await sidebar.locator(".sidebar-footer-bar__home").count()).toBe(1);
         await expectWorkspace();
         expect(await sidebar.locator(".sidebar-session-toolbar").count()).toBe(0);
         expect(await sidebar.locator(".sidebar-brand__actions .sidebar-session-sort").count()).toBe(
@@ -188,12 +204,14 @@ suite.define(() => {
         for (const agent of agentsList.agents) {
           const group = sidebar.locator(`[data-agent-group="${agent.id}"]`);
           const pin = sidebar.locator(
-            `.sidebar-nav [data-session-key="agent:${agent.id}:project"]`,
+            `.sidebar-rail [data-sidebar-entry="session:agent:${agent.id}:project"]`,
           );
           expect(await pin.count()).toBe(1);
-          expect(await pin.textContent()).toContain(`${agent.name} project`);
-          expect(await pin.locator(".identity-avatar--agent").count()).toBe(1);
+          const pinLink = pin.getByRole("link", { name: `${agent.name} project`, exact: true });
+          expect(await pinLink.getAttribute("href")).toBe(`/chat/${agent.id}/project`);
+          expect(await pin.locator(".sidebar-recent-session").count()).toBe(0);
           expect(await group.locator(".sidebar-recent-session").allTextContents()).toEqual([
+            expect.stringContaining(`${agent.name} project`),
             expect.stringContaining(`${agent.name} notes`),
           ]);
           expect(
@@ -214,13 +232,15 @@ suite.define(() => {
           (await headers.first().locator(".sidebar-agent-roster__copy").textContent())?.trim(),
         ).toBe("Harbor");
         expect(await headers.first().getAttribute("aria-current")).toBe("page");
+        // Agent-scope changes update both the rail shortcuts and ordinary rows;
+        // measure their settled layout.
+        await sidebar.evaluate(finishElementAnimations);
         for (const row of await sessionRows.all()) {
           const lead = await row.locator(".sidebar-session-indicator .session-glyph").boundingBox();
           const title = await row.locator(".sidebar-recent-session__name").boundingBox();
           expect(lead).not.toBeNull();
           expect(title).not.toBeNull();
-          // The renderer reports fractional layout values; allow 0.01 px of rounding.
-          expect(title!.x - (lead!.x + lead!.width)).toBeGreaterThanOrEqual(8 - 0.01);
+          expect(title!.x - (lead!.x + lead!.width)).toBeGreaterThanOrEqual(8);
         }
         await page.mouse.move(600, 60);
         await captureSidebarUiProof(suite, page, "sidebar-roster-after.png");
@@ -317,7 +337,11 @@ suite.define(() => {
           .poll(() => sidebar.locator('[data-agent-id="forge"]').getAttribute("aria-current"))
           .toBe("page");
         expect(await sidebar.locator('[data-session-key="agent:forge:main"]').count()).toBe(0);
-        await sidebar.getByRole("link", { name: "Automations", exact: true }).click();
+        await sidebar.locator('[data-navigation-view="pages"]').click();
+        await sidebar
+          .locator(".sidebar-pages")
+          .getByRole("link", { name: "Automations", exact: true })
+          .click();
         await waitForControlUiRoute(page, { routeId: "cron" });
         await expect.poll(() => page.locator(".cron-table__row").count()).toBe(2);
         expect(
@@ -328,6 +352,7 @@ suite.define(() => {
         );
         await captureSidebarUiProof(suite, page, "sidebar-team-automations.png");
 
+        await sidebar.locator('[data-navigation-view="sessions"]').click();
         await sidebar
           .locator('[data-session-key="agent:forge:notes"] .sidebar-recent-session__link')
           .click();
@@ -365,7 +390,7 @@ suite.define(() => {
         await expect.poll(() => sessionRows.count()).toBe(8);
 
         await sidebar.locator('[data-agent-collapse="bloom"]').click();
-        await expect.poll(() => sessionRows.count()).toBe(7);
+        await expect.poll(() => sessionRows.count()).toBe(6);
         expect(new URL(page.url()).pathname).toBe("/chat/forge/notes");
         await page.reload();
         await expect.poll(() => headers.count()).toBe(4);
@@ -374,7 +399,7 @@ suite.define(() => {
             sidebar.locator('[data-agent-collapse="bloom"]').getAttribute("aria-expanded"),
           )
           .toBe("false");
-        await expect.poll(() => sessionRows.count()).toBe(7);
+        await expect.poll(() => sessionRows.count()).toBe(6);
         await expectWorkspace();
         const forgeGroup = sidebar.locator('[data-agent-group="forge"]');
         const actions = forgeGroup.locator(".sidebar-agent-roster__actions");
@@ -434,7 +459,7 @@ suite.define(() => {
         await workspace.click();
         await workspaceMenu.locator('[value="agent:forge"]').press("Enter");
         await expect.poll(() => headers.count()).toBe(0);
-        expect(await sidebar.getByRole("link", { name: "Home", exact: true }).count()).toBe(1);
+        expect(await sidebar.locator(".sidebar-footer-bar__home").count()).toBe(1);
         expect(await chip.isVisible()).toBe(true);
         expect(await workspace.count()).toBe(0);
         await chip.click();
@@ -599,9 +624,10 @@ suite.define(() => {
               boxes.signals.bottom <= boxes.actions.top ||
               boxes.actions.bottom <= boxes.signals.top,
           ).toBe(true);
+          // The agent avatar is the header identity; Home's creator never renders beside it.
+          expect(boxes.badges.map((badge) => badge.label)).not.toContain("Created by Riley");
           expect(boxes.badges.map((badge) => badge.label)).toEqual(
             expect.arrayContaining([
-              "Created by Riley",
               "#103 · Open",
               "2 messages need attention",
               touch ? "Incognito session" : "Unsent draft",

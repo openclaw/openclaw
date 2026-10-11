@@ -1,7 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { ensureExecutionOwnerLifecycleBindingSchema } from "../audit/execution-owner-lifecycle-binding-store.js";
-import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -225,44 +224,35 @@ it("bounds quiet evaluations separately without evicting payload history or acti
   );
 });
 
-it("admits actual worker writes and rolls back history pruning when commit is refused", async () => {
+it("retains history when worker pruning fails and retries after storage recovers", async () => {
   await withOpenClawTestState(
-    { layout: "state-only", prefix: "cron-history-worker-admission-" },
+    { layout: "state-only", prefix: "cron-history-worker-pruning-" },
     async (state) => {
       const storeKey = cronStoreKey(state.statePath("cron/jobs.json"));
-      const stages: string[] = [];
-      let refuseCommit = false;
-      const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-      const admissionSpy = vi
-        .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          createAdmission((request, grant) => {
-            stages.push(request.stage);
-            if (refuseCommit && request.stage === "commit") {
-              throw new Error("Cron history commit refused");
-            }
-            admit(request, grant);
-          }, attachment),
-        );
+      await recordCronRun(outcome(storeKey, "worker"));
+      const before = await readCronRunHistoryPage({ storeKey });
+      expect(before.total).toBe(1);
+      const context = captureOpenClawStateWorkerContext();
+      const maintain = () => maintainCronRunHistory(context, context.admission.assertCurrent);
+      runOpenClawStateWriteTransaction(({ db }) => {
+        db.exec(`
+          CREATE TRIGGER reject_cron_history_pruning
+          BEFORE DELETE ON task_runs
+          BEGIN
+            SELECT RAISE(ABORT, 'Cron history pruning refused');
+          END;
+        `);
+      });
       try {
-        await recordCronRun(outcome(storeKey, "worker"));
-        expect(stages).toEqual(["transaction", "commit"]);
-        expect((await readCronRunHistoryPage({ storeKey })).total).toBe(1);
-        stages.length = 0;
-        refuseCommit = true;
-        const context = captureOpenClawStateWorkerContext();
-        const maintain = () => maintainCronRunHistory(context, context.admission.assertCurrent);
-        await expect(maintain()).rejects.toThrow("Cron history commit refused");
-        expect(stages).toEqual(["transaction", "commit"]);
-        expect((await readCronRunHistoryPage({ storeKey })).total).toBe(1);
-        stages.length = 0;
-        refuseCommit = false;
-        await maintain();
-        expect(stages).toEqual(["transaction", "commit"]);
-        expect((await readCronRunHistoryPage({ storeKey })).entries).toEqual([]);
+        await expect(maintain()).rejects.toThrow("Cron history pruning refused");
+        expect(await readCronRunHistoryPage({ storeKey })).toEqual(before);
       } finally {
-        admissionSpy.mockRestore();
+        runOpenClawStateWriteTransaction(({ db }) => {
+          db.exec("DROP TRIGGER reject_cron_history_pruning");
+        });
       }
+      await maintain();
+      expect((await readCronRunHistoryPage({ storeKey })).entries).toEqual([]);
     },
   );
 });

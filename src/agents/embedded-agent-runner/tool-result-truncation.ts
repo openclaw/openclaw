@@ -6,9 +6,9 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import type { AgentContextPruningConfig } from "../../config/types.agent-defaults.js";
-import { sha256Base64Url } from "../../infra/crypto-digest.js";
 import { createDedupeCache } from "../../infra/dedupe.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { copyPreparedModelVisibleToolText } from "../../logging/redact-internal.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../glob-pattern.js";
 import type { AgentMessage } from "../runtime/index.js";
@@ -27,6 +27,13 @@ import {
   type ToolResultPromptProjectionState,
 } from "./session-prompt-state.js";
 import { dropThinkingBlocks } from "./thinking.js";
+import {
+  getToolResultProjectionBaseKey,
+  getToolResultProjectionKeys,
+  getToolResultTextBlocks,
+  hashToolResultText,
+  TOOL_RESULT_PROJECTION_KEY,
+} from "./tool-result-projection-key.js";
 import {
   estimateToolResultTextChars,
   isToolResultTextBlock,
@@ -53,7 +60,6 @@ type CacheTtlPruningSettings = {
   isToolPrunable: (toolName: string) => boolean;
 };
 type CacheTtlToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
-const TOOL_RESULT_PROJECTION_KEY = Symbol("toolResultProjectionKey");
 
 export function resolveCacheTtlPruningSettings(
   config: AgentContextPruningConfig | undefined,
@@ -185,7 +191,6 @@ export function pruneExpiredCacheTtlToolResults(params: {
   const projection = projectToolResultBranch({
     branch: buildToolResultPlanningBranch(params.messages),
     projectionState,
-    recordSources: true,
   });
   const messages = params.messages.map(
     (message, index) => projection.branch[index]?.message ?? message,
@@ -496,6 +501,16 @@ function getToolResultTextBudget(msg: AgentMessage): number {
 }
 
 export function truncateToolResultMessage(
+  msg: Extract<AgentMessage, { role: "toolResult" }>,
+  maxChars: number,
+  options?: ToolResultTruncationOptions,
+): Extract<AgentMessage, { role: "toolResult" }>;
+export function truncateToolResultMessage(
+  msg: AgentMessage,
+  maxChars: number,
+  options?: ToolResultTruncationOptions,
+): AgentMessage;
+export function truncateToolResultMessage(
   msg: AgentMessage,
   maxChars: number,
   options: ToolResultTruncationOptions = {},
@@ -570,6 +585,7 @@ export function truncateToolResultMessage(
     if (typeof block.content === "string") {
       nextBlock.content = truncatedText;
     }
+    copyPreparedModelVisibleToolText(block, nextBlock);
     return nextBlock;
   });
 
@@ -666,7 +682,6 @@ export function truncateOversizedToolResultsInMessages(
     ? projectToolResultBranch({
         branch: sourceBranch,
         projectionState,
-        recordSources: true,
       })
     : undefined;
   const plan = buildToolResultReplacementPlan({
@@ -757,82 +772,6 @@ type MeasuredToolResultBranchEntry = {
 };
 
 type MeasuredToolResultReplacement = Readonly<ToolResultReplacement & { textLength: number }>;
-
-function getToolResultProjectionBaseKey(message: AgentMessage): string | undefined {
-  if (message.role !== "toolResult") {
-    return undefined;
-  }
-  const toolCallId = (message as { toolCallId?: unknown }).toolCallId;
-  const timestamp = (message as { timestamp?: unknown }).timestamp;
-  const timestampKey = typeof timestamp === "number" ? `:${timestamp}` : "";
-  if (typeof toolCallId === "string" && toolCallId.length > 0) {
-    return `tool:${toolCallId}${timestampKey}`;
-  }
-  return typeof timestamp === "number" ? `timestamp:${timestamp}` : undefined;
-}
-
-function getToolResultProjectionKeys(
-  messages: AgentMessage[],
-  projectionState: ToolResultPromptProjectionState,
-): Array<string | undefined> {
-  const baseKeys = messages.map((message) => getToolResultProjectionBaseKey(message));
-  const baseKeyCounts = new Map<string, number>();
-  for (const baseKey of baseKeys) {
-    if (baseKey) {
-      const count = (baseKeyCounts.get(baseKey) ?? 0) + 1;
-      baseKeyCounts.set(baseKey, count);
-      if (count > 1) {
-        projectionState.ambiguousBaseKeys.add(baseKey);
-      }
-    }
-  }
-  const occurrences = new Map<string, number>();
-  return baseKeys.map((baseKey, index) => {
-    const message = messages[index];
-    if (
-      message &&
-      TOOL_RESULT_PROJECTION_KEY in message &&
-      typeof message[TOOL_RESULT_PROJECTION_KEY] === "string"
-    ) {
-      return message[TOOL_RESULT_PROJECTION_KEY];
-    }
-    if (baseKey && !projectionState.ambiguousBaseKeys.has(baseKey)) {
-      return baseKey;
-    }
-    if (!message || message.role !== "toolResult") {
-      return undefined;
-    }
-    // Stable identities keep ambiguous tool ids from rewriting cache-tail projections (#99495).
-    const messageId = (message as { id?: unknown }).id;
-    const sourceIdentity =
-      typeof messageId === "string" && messageId.length > 0
-        ? `id:${messageId}`
-        : `text:${hashToolResultText(getToolResultTextBlocks(message))}`;
-    const fallbackBase = `fallback:${baseKey ?? "tool"}:${sourceIdentity}`;
-    const occurrence = occurrences.get(fallbackBase) ?? 0;
-    occurrences.set(fallbackBase, occurrence + 1);
-    const key = `${fallbackBase}:${occurrence}`;
-    const previousSource = baseKey ? projectionState.sourceHashByKey.get(baseKey) : undefined;
-    if (
-      baseKey &&
-      previousSource &&
-      previousSource === hashToolResultText(getToolResultTextBlocks(message))
-    ) {
-      // A later duplicate must move the original projection, not make its sent bytes disappear.
-      const replacement = projectionState.replacements.get(baseKey);
-      if (replacement) {
-        projectionState.replacements.set(key, replacement);
-        projectionState.replacements.delete(baseKey);
-      }
-      projectionState.sourceHashByKey.set(key, previousSource);
-      projectionState.sourceHashByKey.delete(baseKey);
-      if (projectionState.frozen.delete(baseKey)) {
-        projectionState.frozen.add(key);
-      }
-    }
-    return key;
-  });
-}
 
 /** Reads pruned keys from the active transcript branch, never from a sibling branch. */
 export function restoreCacheTtlToolResultProjections(
@@ -941,8 +880,7 @@ function mergeProjectedToolResultMessage(
 function projectToolResultBranch(params: {
   branch: ToolResultBranchEntry[];
   projectionState: ToolResultPromptProjectionState;
-  frozenOnly?: boolean;
-  recordSources?: boolean;
+  recovering?: true;
 }): { branch: ToolResultBranchEntry[]; keys: Array<string | undefined> } {
   const messageEntries = params.branch.filter(
     (entry): entry is ToolResultBranchEntry & { message: AgentMessage } =>
@@ -961,10 +899,10 @@ function projectToolResultBranch(params: {
       const key = keys[messageIndex++];
       const frozen = key !== undefined && params.projectionState.frozen.has(key);
       const projected =
-        key && (!params.frozenOnly || frozen)
+        key && (!params.recovering || frozen)
           ? params.projectionState.replacements.get(key)
           : undefined;
-      if (key && params.recordSources && !params.projectionState.sourceHashByKey.has(key)) {
+      if (key && !params.recovering && !params.projectionState.sourceHashByKey.has(key)) {
         params.projectionState.sourceHashByKey.set(
           key,
           hashToolResultText(getToolResultTextBlocks(entry.message)),
@@ -986,10 +924,10 @@ function projectToolResultBranch(params: {
         ...entry,
         message,
         // Frozen bytes are immutable on dispatch projections; eliding them would
-        // rewrite provider-sent prompt bytes. Recovery projections (frozenOnly)
+        // rewrite provider-sent prompt bytes. Recovery projections
         // run after a provider context failure, so the cached prefix is already
         // forfeit and frozen history must stay reducible.
-        aggregateEligible: params.frozenOnly || !key || !frozen,
+        aggregateEligible: params.recovering || !key || !frozen,
       };
     }),
   };
@@ -1034,22 +972,6 @@ function materializeRestoredCacheTtl(
   }
   // Marks whose source left the branch (compaction, reset) are dropped with this pass.
   state.restoredCacheTtl.clear();
-}
-
-function getToolResultTextBlocks(message: AgentMessage): string[] {
-  const content = (message as { content?: unknown }).content;
-  return Array.isArray(content)
-    ? content.flatMap((block) =>
-        isRecord(block) && block.type === "text"
-          ? [typeof block.text === "string" ? block.text : ""]
-          : [],
-      )
-    : [];
-}
-
-function hashToolResultText(texts: string[]): string {
-  // JSON framing preserves block boundaries and lone surrogates, including persisted fallback keys.
-  return sha256Base64Url(JSON.stringify(texts));
 }
 
 function buildAggregateToolResultReplacements(params: {
@@ -1321,7 +1243,7 @@ function buildRecoveryToolResultReplacementPlan(params: {
     ? projectToolResultBranch({
         branch: params.branch,
         projectionState: params.projectionState,
-        frozenOnly: true,
+        recovering: true,
       }).branch
     : params.branch;
   const plan = buildToolResultReplacementPlan({

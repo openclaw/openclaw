@@ -5,6 +5,11 @@ import {
   mergeSessionSnapshotChanges,
   sessionSnapshotTouchedFieldsConflict,
 } from "../../config/sessions/session-snapshot-merge.js";
+import {
+  sessionEntryCommitGuardOptions,
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 
 type PersistReplySessionEntryParams = {
   allowCreate?: boolean;
@@ -16,6 +21,10 @@ type PersistReplySessionEntryParams = {
   skipMaintenance?: boolean;
   storePath: string;
   touchedFields?: ReadonlyArray<keyof SessionEntry>;
+  commitGuard?: SessionSourceAssertion;
+  /** Released SDK validators retain their synchronous native transaction contract. */
+  nativeCommitValidation?: true;
+  /** Prepared model/account checks only; session source checks travel in commitGuard. */
   validateCommit?: () => string | undefined;
 };
 
@@ -36,6 +45,19 @@ export async function persistReplySessionEntry(
   let lockedEntry: SessionEntry | undefined;
   let commitEntry = params.initialEntry;
   let persisted: SessionEntry | null;
+  const commitGuard = composeSessionSourceAssertion([params.commitGuard], (assertSource) => {
+    try {
+      assertSource();
+    } catch (error) {
+      throw new SessionCommitRejectedError(error instanceof Error ? error.message : String(error), {
+        cause: error,
+      });
+    }
+    const error = params.validateCommit?.();
+    if (error) {
+      throw new SessionCommitRejectedError(error);
+    }
+  });
   try {
     persisted = await patchSessionEntryCore(
       { sessionKey: params.sessionKey, storePath: params.storePath },
@@ -79,14 +101,9 @@ export async function persistReplySessionEntry(
         fallbackEntry: params.entry,
         replaceEntry: true,
         skipMaintenance: params.skipMaintenance,
-        assertCommitAllowed: params.validateCommit
-          ? () => {
-              const error = params.validateCommit?.();
-              if (error) {
-                throw new SessionCommitRejectedError(error);
-              }
-            }
-          : undefined,
+        ...(params.nativeCommitValidation
+          ? { assertCommitAllowed: commitGuard }
+          : sessionEntryCommitGuardOptions(commitGuard)),
       },
     );
   } catch (error) {

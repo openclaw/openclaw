@@ -25,9 +25,35 @@ sidebarTitle: "Models"
 | Image generation or editing                       | `openai/gpt-image-2`                                               | Works with `OPENAI_API_KEY` or Codex OAuth.                         |
 | Transparent-background images                     | `openai/gpt-image-1.5`                                             | Set `outputFormat` to `png` or `webp` and `background=transparent`. |
 
+Isolated and utility completions on the Codex runtime use the same account routes
+as the model picker. A model listed by your ChatGPT account does not require an
+OpenAI API key for these completions. An explicit auth profile or utility-model
+override still controls the request; OpenClaw does not replace it with another
+account.
+
 ### Retired subscription model references
 
 GPT-5.4 and GPT-5.4 Mini are retired from the ChatGPT-account Codex route. Run `openclaw doctor --fix` to replace persisted subscription references with their documented successors: `openai/gpt-5.6-terra` and `openai/gpt-5.6-luna`, respectively. This includes defaults, per-agent model selections, automation overrides, and unlocked session overrides whose selected route is known. The Platform API-key route is unaffected. Doctor retains pinned overrides when their successor is outside the agent's model policy, or when clearing an override would keep the same retired model and account. Doctor also retains the original reference and warns when its declared successor is retired or definitively unsupported on the selected account route; unknown availability and temporary cooldowns do not block migration. It reports the model or policy change needed, along with unresolved or conflicting account routes. Review the repair output, restart the Gateway, and re-enable any automation that was disabled after repeated failures.
+
+## Models your API key lists
+
+With an OpenAI API key, `openclaw models list --provider openai` shows every chat
+model your account's `/v1/models` lists that runs on the Responses API, including
+models newer than your OpenClaw release. Models without a catalog row use
+conservative defaults: text input, a 128k context window, and unknown cost.
+Embedding, image, video, audio, realtime, speech, transcription, moderation, and
+legacy completions models stay hidden, as do models past their OpenAI shutdown
+date. Search models stay hidden because they run only on Chat Completions; live,
+cyber, experiment, and alpha IDs stay hidden because Responses rejects them.
+GPT-3.5, GPT-4 (including GPT-4o and GPT-4.1), o1, o3, and o4 models stay hidden
+from the list because they fail on the default Codex runtime. You can still select
+one by its reference, for example as `agents.defaults.model.primary` or a session
+model; set `agents.defaults.models["openai/<model>"].agentRuntime.id` to
+`"openclaw"` so it runs. o1, o3-mini, GPT-3.5, GPT-4, GPT-4 Turbo, and GPT-4.1
+nano also reject OpenAI's hosted web search, which that runtime adds by default:
+set `tools.web.search.provider` to a managed provider such as `brave`, or
+`tools.web.search.enabled: false`, before using them (see
+[Native OpenAI web search](/tools/web#native-openai-web-search)).
 
 ## Daybreak Blue and Red
 

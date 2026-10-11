@@ -163,8 +163,7 @@ export async function stageQueuePayloadMedia(
   const stagedPayloads: ReplyPayload[] = [];
   try {
     for (const payload of params.payloads) {
-      const sources = payloadMediaSources(payload).filter(isSpoolableSource);
-      if (sources.length === 0) {
+      if (!payloadMediaSources(payload).some(isSpoolableSource)) {
         stagedPayloads.push(payload);
         continue;
       }

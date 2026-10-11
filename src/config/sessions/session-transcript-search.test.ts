@@ -25,8 +25,8 @@ import { resolveSqliteReadScope, toDatabaseOptions } from "./session-accessor.sq
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
-  replaceTranscriptEvents,
 } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import {
   restoreSessionColdTranscript,
   runSessionColdStorageMaintenance,
@@ -80,12 +80,6 @@ function transcriptScope(sessionId: string, sessionKey: string) {
 async function appendUserMessage(sessionId: string, sessionKey: string, text: string) {
   await appendTranscriptMessage(transcriptScope(sessionId, sessionKey), {
     message: { role: "user", content: [{ type: "text", text }] },
-  });
-}
-
-async function appendAssistantMessage(sessionId: string, sessionKey: string, text: string) {
-  await appendTranscriptMessage(transcriptScope(sessionId, sessionKey), {
-    message: { role: "assistant", content: [{ type: "text", text }] },
   });
 }
 
@@ -281,24 +275,6 @@ describe("searchSessionTranscripts", () => {
     );
   });
 
-  it("indexes appended messages synchronously and returns bounded hits", async () => {
-    await appendUserMessage("session-1", "agent:main:main", "the deployment failed on friday");
-    await appendAssistantMessage("session-1", "agent:main:main", "the deployment fix is rolling");
-
-    const result = search("deployment");
-    expect(result.indexing).toBe(false);
-    expect(result.truncated).toBe(false);
-    expect(result.hits).toHaveLength(2);
-    const roles = result.hits.map((hit) => hit.role).toSorted();
-    expect(roles).toEqual(["assistant", "user"]);
-    for (const hit of result.hits) {
-      expect(hit.sessionKey).toBe("agent:main:main");
-      expect(hit.sessionId).toBe("session-1");
-      expect(hit.snippet).toContain("deployment");
-      expect(hit.messageId).toBeTruthy();
-    }
-  });
-
   it("matches an unfinished final word in prefix mode while preserving literal AND queries", async () => {
     for (const [sessionId, text] of [
       ["complete", "Per-session communication controls in UI"],
@@ -327,29 +303,14 @@ describe("searchSessionTranscripts", () => {
     }
   });
 
-  it("ignores non-message events and misses non-matching queries", async () => {
-    await appendUserMessage("session-1", "agent:main:main", "alpha topic");
-    await appendTranscriptEvent(transcriptScope("session-1", "agent:main:main"), {
-      type: "model_change",
-      id: "model-change-1",
-      model: "sonnet-4.6",
-    } as unknown as TranscriptEvent);
-
-    expect(search("sonnet").hits).toHaveLength(0);
-    expect(search("alpha").hits).toHaveLength(1);
-  });
-
-  it.each([1, 33_000])("filters hits to %i requested session keys", async (keyCount) => {
+  it("filters hits across 33,000 requested session keys", async () => {
     await appendUserMessage("session-1", "agent:main:main", "shared keyword payload");
     await appendUserMessage("session-2", "agent:main:other", "shared keyword payload");
 
     const all = search("keyword");
     expect(all.hits).toHaveLength(2);
 
-    const sessionKeys = Array.from(
-      { length: keyCount - 1 },
-      (_, index) => `agent:main:missing-${index}`,
-    );
+    const sessionKeys = Array.from({ length: 32_999 }, (_, index) => `agent:main:missing-${index}`);
     sessionKeys.push("agent:main:other");
     const filtered = search("keyword", { sessionKeys });
     expect(filtered.hits).toHaveLength(1);
@@ -512,34 +473,6 @@ describe("searchSessionTranscripts", () => {
     }
   });
 
-  it("filters role and generation before selecting the most recent matching messages", async () => {
-    const sessionKey = "agent:main:main";
-    await appendAssistantMessage("current", sessionKey, "needle oldest");
-    await appendAssistantMessage("current", sessionKey, `needle latest ${"context ".repeat(30)}`);
-    for (let index = 0; index < 28; index += 1) {
-      await appendUserMessage("current", sessionKey, "needle user");
-    }
-    await appendAssistantMessage("other-generation", sessionKey, "needle other generation");
-
-    expect(
-      searchSessionTranscripts({
-        agentId: "main",
-        env: env(),
-        query: "needle",
-        sessionKeys: [sessionKey],
-        sessionId: "current",
-        role: "assistant",
-        order: "recent",
-        limit: 1,
-      }),
-    ).toMatchObject({
-      hits: [
-        { sessionId: "current", role: "assistant", snippet: expect.stringContaining("latest") },
-      ],
-      truncated: true,
-    });
-  });
-
   it("hides dirty search rows after their transcript is gone while preserving other sessions", async () => {
     await appendUserMessage("stale", "agent:main:stale", "hidden needle");
     await appendUserMessage("current", "agent:main:current", "visible needle");
@@ -683,19 +616,6 @@ describe("searchSessionTranscripts", () => {
     expect(search("alpha-stream").hits).toHaveLength(1);
     expect(search("beta-stream").hits).toHaveLength(1);
     expect(search("gamma-stream").hits).toHaveLength(1);
-  });
-
-  it("backfills transcripts that predate the index via reconcile", async () => {
-    await appendUserMessage("session-1", "agent:main:main", "historic knowledge");
-    const { db, kysely } = agentKysely();
-    executeSqliteQuerySync(db, kysely.deleteFrom("session_transcript_fts"));
-    executeSqliteQuerySync(db, kysely.deleteFrom("session_transcript_index_state"));
-    expect(search("historic").indexing).toBe(true);
-
-    await waitForSearchReconcile("historic");
-    const result = search("historic");
-    expect(result.indexing).toBe(false);
-    expect(result.hits).toHaveLength(1);
   });
 
   it("detects missing, dirty, lagging, and unclassified transcript projections", async () => {

@@ -376,9 +376,15 @@ vi.mock("openclaw/plugin-sdk/routing", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
-  resolveAgentDir: vi.fn(() => "/tmp/openclaw-agent"),
-}));
+vi.mock("openclaw/plugin-sdk/agent-scope-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/agent-scope-runtime")>(
+    "openclaw/plugin-sdk/agent-scope-runtime",
+  );
+  return {
+    ...actual,
+    resolveAgentDir: vi.fn(() => "/tmp/openclaw-agent"),
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/realtime-bootstrap-context", async () => {
   const actual = await vi.importActual<

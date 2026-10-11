@@ -18,6 +18,93 @@ const update = source.slice(
 const outer = "recovery-update-restart";
 
 it.skipIf(process.platform === "win32").each([
+  { fault: "future-tarball", phase: "prepare-restart-package", code: 124 },
+  { fault: "future-runtime-tarball", phase: "prepare-restart-runtime", code: 137 },
+  { fault: "none", phase: "", code: 0 },
+])("preserves restart fixture timeout diagnostics ($fault)", ({ fault, phase, code }) => {
+  const root = dirs.make("survivor-restart-fixture-");
+  const prepare = source.slice(
+    source.indexOf("prepare_restart_fixture() {"),
+    source.indexOf("repair_update_restart_auth() {"),
+  );
+  const result = spawnSync(
+    "/bin/bash",
+    [
+      "-c",
+      `set -euo pipefail
+exec 3>&1
+source scripts/lib/openclaw-e2e-instance.sh
+ARTIFACT_ROOT="$1"
+RUNTIME_ROOT="$1"
+FAULT="$2"
+FAULT_STATUS="$3"
+SCENARIO=base
+COMMAND_TIMEOUT=1500s
+candidate_tarball=candidate.tgz
+candidate_version=2026.10.2
+OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR=registry
+NPM_CONFIG_REGISTRY=registry
+CURRENT_PHASE=""
+FAILURE_PHASE=""
+FAILURE_MESSAGE=""
+FAILURE_SIGNAL=""
+last_update_observation_root=""
+SUMMARY_JSON="$1/summary.json"
+run_completed=0
+json_event() { :; }
+cleanup() { :; }
+write_summary() { :; }
+prepare_candidate_tarball() { :; }
+openclaw_prepublish_plugin_registry_start() { :; }
+timeout() {
+  [ "$1" != --kill-after=1s ] || return 0
+  shift
+  printf 'budget\\t%s\\t%s\\n' "$1" "$4" >&3
+  shift
+  [ "$3" != "$FAULT" ] || return "$FAULT_STATUS"
+  "$@"
+}
+node() {
+  case "$1" in
+    scripts/e2e/lib/update-first-hop-package-fixtures.mjs)
+      printf '{"targetVersion":"2026.10.3"}\\n' ;;
+    -p) printf '2026.10.3' ;;
+    -) cat >/dev/null; printf 'runtime.tgz' ;;
+    scripts/e2e/lib/upgrade-survivor/diagnostics.mjs)
+      printf 'capture\\t%s\\t%s\\n' "$4" "$5" >&3 ;;
+    *) return 91 ;;
+  esac
+}
+${lifecycle}
+${prepare}
+phase prepare-restart-fixture prepare_restart_fixture || exit "$?"
+run_completed=1
+`,
+      "fixture",
+      root,
+      fault,
+      String(code),
+    ],
+    { env: { PATH: process.env.PATH, HOME: root }, encoding: "utf8", timeout: 5_000 },
+  );
+  expect(result.status, result.stderr).toBe(code);
+  const lines = result.stdout.split("\n");
+  expect(lines.filter((line) => line.startsWith("budget\t"))).toEqual([
+    "budget\t1500s\tfuture-tarball",
+    ...(fault === "future-tarball" ? [] : ["budget\t1500s\tfuture-runtime-tarball"]),
+  ]);
+  if (code !== 0) {
+    expect(lines).toContain(`capture\t${phase}\t${code}`);
+  } else {
+    for (const file of ["restart-fixture.json", "restart-runtime-fixture.json"]) {
+      expect(JSON.parse(readFileSync(join(root, file), "utf8"))).toEqual({
+        targetVersion: "2026.10.3",
+      });
+    }
+  }
+});
+
+it.skipIf(process.platform === "win32").each([
   { fault: "none", code: 0 },
   { fault: "stop", code: 17 },
   { fault: "still-active", code: 1 },

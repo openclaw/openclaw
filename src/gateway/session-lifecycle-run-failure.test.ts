@@ -9,16 +9,23 @@ import {
 import { prepareCliHistoryBoundary } from "../agents/cli-runner/history-boundary.js";
 import { loadCliSessionPromptContext } from "../agents/cli-runner/session-history.js";
 import type { PreparedCliRunContext } from "../agents/cli-runner/types.js";
+import { resolveEmbeddedRunTerminal } from "../agents/embedded-agent-runner/run/terminal-resolution.js";
+import { makeTerminalInput } from "../agents/embedded-agent-runner/run/terminal-resolution.test-support.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
+import { buildEmbeddedRunnerAssistant } from "../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import {
+  createAgentLifecycleTerminalBackstop,
+  resolveAgentLifecycleTerminalMetadata,
+} from "../auto-reply/reply/agent-lifecycle-terminal.js";
 import { runWithCliHistoryWriter } from "../config/sessions/cli-history-boundary.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
   patchSessionEntryCore,
   resolveSessionTranscriptRuntimeTarget,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import {
   runWithoutOwnedSessionTranscriptWrites,
   SessionTranscriptWriterClaimReboundError,
@@ -36,6 +43,7 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { abortChatRunById, registerChatAbortController, type ChatAbortOps } from "./chat-abort.js";
 import { createChatRunState } from "./server-chat-state.js";
+import { createAgentEventTestHarness } from "./server-chat.agent-events.test-harness.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import { createSessionLifecyclePersistenceOwner } from "./session-lifecycle-persistence-owner.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
@@ -54,7 +62,10 @@ const event = {
   data: { phase: "error", startedAt: 1_000, endedAt: 2_000, error },
 };
 
-async function seed(assistantBranch?: "active" | "inactive" | "other-run") {
+async function seed(
+  assistantBranch?: "active" | "inactive" | "other-run" | "commentary" | "success",
+) {
+  const hasPriorOutput = assistantBranch === "commentary" || assistantBranch === "success";
   await upsertSessionEntryCore(target, {
     sessionId: target.sessionId,
     updatedAt: 1_000,
@@ -89,9 +100,25 @@ async function seed(assistantBranch?: "active" | "inactive" | "other-run") {
             parentId: "user-turn",
             message: {
               role: "assistant",
-              content: [],
-              stopReason: "error",
-              errorMessage: "Provider failed",
+              content: hasPriorOutput
+                ? [
+                    {
+                      type: "text",
+                      text: "Running it now.",
+                      ...(assistantBranch === "commentary"
+                        ? {
+                            textSignature: JSON.stringify({
+                              v: 1,
+                              id: "commentary",
+                              phase: "commentary",
+                            }),
+                          }
+                        : {}),
+                    },
+                  ]
+                : [],
+              stopReason: hasPriorOutput ? "stop" : "error",
+              errorMessage: hasPriorOutput ? undefined : "Provider failed",
               __openclaw: { runId: assistantBranch === "other-run" ? "previous-run" : runId },
             },
           },
@@ -117,6 +144,94 @@ async function reports() {
 }
 
 describe("durable pre-reply run failure", () => {
+  it("publishes and persists one incomplete-turn notice after the model stops without an answer", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await seed();
+      const assistant = buildEmbeddedRunnerAssistant({
+        content: [{ type: "thinking", thinking: "Still deciding." }],
+      });
+      await replaceTranscriptEvents(target, [
+        ...(await loadTranscriptEvents(target)),
+        {
+          type: "message",
+          id: "reasoning-only-assistant",
+          parentId: "user-turn",
+          message: { ...assistant, __openclaw: { runId } },
+        },
+      ]);
+      const resolved = await resolveEmbeddedRunTerminal(
+        makeTerminalInput({
+          runParams: { ...target, runId },
+          attemptAssistant: assistant,
+          retryState: { reasoningOnlyAttempts: 2 },
+        }),
+      );
+      assert(resolved.action === "complete");
+      const result = resolved.result;
+      const notice = "⚠️ Agent couldn't generate a response. Please try again.";
+      let persistence: Promise<void> | undefined;
+      const h = createAgentEventTestHarness({
+        lifecycleErrorRetryGraceMs: 0,
+        persistGatewaySessionLifecycleEventForEvent: (params) =>
+          persistGatewaySessionLifecycleEvent({ ...params, ...target }),
+        trackTrackedRunTerminalPersistence: (params) => {
+          persistence = params.persistence;
+        },
+      });
+      onTestFinished(() => h.handler.dispose());
+      h.register(runId, target.sessionKey, runId, {
+        agentId: target.agentId,
+      });
+      const deliveries: Promise<void>[] = [];
+      const terminal = createAgentLifecycleTerminalBackstop({
+        runId,
+        sessionKey: target.sessionKey,
+        startedAt: 1_000,
+        getLifecycleGeneration: () => "incomplete-turn-generation",
+        resolveTerminationFields: () => ({}),
+        onTerminalEvent: (terminalEvent) => {
+          deliveries.push(
+            Promise.resolve(
+              h.emit(runId, terminalEvent.stream, terminalEvent.data, {
+                ...target,
+                seq: 2,
+                ts: 2_000,
+              }),
+            ),
+          );
+        },
+      });
+      terminal.note({
+        stream: "lifecycle",
+        data: { phase: "finishing", stopReason: "stop", aborted: false },
+      });
+      terminal.emit(
+        "error",
+        new Error(result.meta.error?.message),
+        resolveAgentLifecycleTerminalMetadata(result.meta),
+      );
+      terminal.emit("error", new Error("Duplicate terminal"));
+      await Promise.all(deliveries);
+      await persistence;
+
+      expect(h.chat().map(([, payload]) => payload)).toEqual([
+        expect.objectContaining({ runId, state: "error", errorMessage: notice }),
+      ]);
+      expect(await reports()).toMatchObject([
+        {
+          content: `Your request couldn't be completed: ${notice}`,
+          display: true,
+          details: { runId, error: notice },
+        },
+      ]);
+      expect(loadSessionEntry(target)).toMatchObject({
+        status: "failed",
+        abortedLastRun: false,
+        lastRunId: runId,
+      });
+    });
+  });
+
   it.each(["timeout", "rpc", "auth-revoked", undefined])(
     "preserves the active turn when a queued follow-up ends with %s",
     async (stopReason) => {
@@ -293,7 +408,7 @@ describe("durable pre-reply run failure", () => {
     });
   });
 
-  it.each(["active", "inactive", "other-run"] as const)(
+  it.each(["active", "inactive", "other-run", "commentary", "success"] as const)(
     "checks assistant output on the %s branch for this run",
     async (branch) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {

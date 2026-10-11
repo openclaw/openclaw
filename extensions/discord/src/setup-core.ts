@@ -54,32 +54,28 @@ type DiscordSetupAllowlistResolution = {
   channelKey?: string;
 };
 
-function mapDiscordSetupAllowlistEntries(resolved: unknown): DiscordGuildChannelAllowlistEntry[] {
-  if (!Array.isArray(resolved)) {
-    return [];
-  }
-  return resolved.flatMap((entry): DiscordGuildChannelAllowlistEntry[] => {
-    if (!entry || typeof entry !== "object") {
-      return [];
-    }
-    const row = entry as DiscordSetupAllowlistResolution;
-    if (row.resolved === false) {
-      return [];
-    }
-    const guildKey = normalizeOptionalString(row.guildId ?? row.guildKey);
-    if (!guildKey) {
-      return [];
-    }
-    const channelKey = normalizeOptionalString(row.channelId ?? row.channelKey);
-    return channelKey ? [{ guildKey, channelKey }] : [{ guildKey }];
-  });
-}
-
 function setDiscordGuildChannelAllowlist(
   cfg: OpenClawConfig,
   accountId: string,
-  entries: DiscordGuildChannelAllowlistEntry[],
+  resolved: unknown,
 ): OpenClawConfig {
+  const entries = Array.isArray(resolved)
+    ? resolved.flatMap((entry): DiscordGuildChannelAllowlistEntry[] => {
+        if (!entry || typeof entry !== "object") {
+          return [];
+        }
+        const row = entry as DiscordSetupAllowlistResolution;
+        if (row.resolved === false) {
+          return [];
+        }
+        const guildKey = normalizeOptionalString(row.guildId ?? row.guildKey);
+        if (!guildKey) {
+          return [];
+        }
+        const channelKey = normalizeOptionalString(row.channelId ?? row.channelKey);
+        return channelKey ? [{ guildKey, channelKey }] : [{ guildKey }];
+      })
+    : [];
   const baseGuilds =
     accountId === DEFAULT_ACCOUNT_ID
       ? (cfg.channels?.discord?.guilds ?? {})
@@ -194,7 +190,7 @@ export function createDiscordSetupWizardBase(handlers: {
       resolveAllowlist: handlers.resolveGroupAllowlist,
       fallbackResolved: (entries) => entries.map((input) => ({ input, resolved: false })),
       applyAllowlist: ({ cfg, accountId, resolved }) =>
-        setDiscordGuildChannelAllowlist(cfg, accountId, mapDiscordSetupAllowlistEntries(resolved)),
+        setDiscordGuildChannelAllowlist(cfg, accountId, resolved),
     }),
     allowFrom: createAccountScopedAllowFromSection({
       channel,
