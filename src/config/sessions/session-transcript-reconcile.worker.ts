@@ -1,25 +1,16 @@
 /** Worker entrypoint for transcript parsing and active-branch resolution only. */
 import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { serveWorkerTasks } from "../../infra/worker-task-server.js";
 import {
   claimOpenClawAgentDatabaseLease,
   releaseOpenClawAgentDatabaseLease,
 } from "../../state/openclaw-agent-db-lease.js";
-import {
-  hasOpenClawAgentReadOnlySchema,
-  openOpenClawAgentDatabaseReadOnly,
-} from "../../state/openclaw-agent-db-readonly-open.js";
-import { borrowOpenClawStateDatabaseForAsyncRead } from "../../state/openclaw-state-db-cache.js";
-import { assertExistingOpenClawStateRuntimeSchema } from "../../state/openclaw-state-db-existing-schema.js";
+import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import { closeOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import {
-  runSqliteReconciliationLifecyclePhase,
-  type SqliteMutationWorkerCoordination,
-} from "./session-accessor.sqlite-worker-coordination.js";
+import type { SqliteMutationWorkerCoordination } from "./session-accessor.sqlite-worker-coordination.js";
 import type { TranscriptIndexEntry } from "./session-transcript-projection-append.js";
 import {
   prepareSessionTranscriptProjection,
@@ -313,13 +304,6 @@ async function run(
   coordination?: SqliteMutationWorkerCoordination,
   sourceIdentity?: string,
 ): Promise<void> {
-  let unsettled = false;
-  const phase = <T>(name: "open" | "close", operation: () => T): Promise<T> =>
-    coordination
-      ? runSqliteReconciliationLifecyclePhase(coordination, name, operation, () => {
-          unsettled = true;
-        })
-      : Promise.resolve(operation());
   const assertSource = () => {
     if (input.mode === "disk") {
       if (!sourceIdentity) {
@@ -329,19 +313,17 @@ async function run(
     }
   };
   if (input.mode === "release") {
-    await phase("close", () => releaseLease(input, port));
+    releaseLease(input, port);
     return;
   }
   const reconcileInput = input;
   let closeDatabase: (() => void) | undefined;
-  let sharedBorrow: ReturnType<typeof borrowOpenClawStateDatabaseForAsyncRead>;
-  let assertAdmittedSchemas: (() => void) | undefined;
   let terminalMessage: Extract<
     SessionTranscriptReconcileWorkerMessage,
     { type: "done" | "failed" }
   >;
   try {
-    const database = await phase("open", () => {
+    const database = (() => {
       if (reconcileInput.mode === "memory") {
         return undefined;
       }
@@ -351,6 +333,12 @@ async function run(
         env: resolveLeaseEnvironment(reconcileInput),
       };
       assertSource();
+      if (coordination?.reconciliation) {
+        assertExistingDatabaseIdentity(
+          coordination.databasePath,
+          coordination.reconciliation.identity,
+        );
+      }
       // The parent knows this identity before admission, even if native exit prevents a reply.
       claimOpenClawAgentDatabaseLease(options, reconcileInput.leaseId);
       const opened = openOpenClawAgentDatabaseReadOnly(options);
@@ -359,36 +347,8 @@ async function run(
       }
       closeDatabase = opened.database.close;
       assertSource();
-      if (coordination?.reconciliation) {
-        sharedBorrow = borrowOpenClawStateDatabaseForAsyncRead(coordination.databasePath);
-        if (!sharedBorrow) {
-          throw new Error("Transcript worker lost its admitted shared-state handle");
-        }
-        const shared = sharedBorrow.database;
-        const sharedSchema = getAdmittedSqliteSchemaFacts(shared.db)?.admissionId;
-        const agentSchema = getAdmittedSqliteSchemaFacts(opened.database.db)?.admissionId;
-        if (!sharedSchema || !agentSchema) {
-          throw new Error("Transcript worker cannot retain its admitted schema identities");
-        }
-        // Reentry is a new native phase, never adoption of a schema changed while yielding.
-        assertAdmittedSchemas = () => {
-          sharedBorrow?.assertCurrent();
-          if (
-            !shared.db.isOpen ||
-            getAdmittedSqliteSchemaFacts(shared.db)?.admissionId !== sharedSchema ||
-            getAdmittedSqliteSchemaFacts(opened.database.db)?.admissionId !== agentSchema
-          ) {
-            throw new Error("Transcript worker schema changed between lifecycle phases");
-          }
-          // Version/ownership publication can change without DDL or a different inode.
-          assertExistingOpenClawStateRuntimeSchema(shared.db, shared.path);
-          if (!hasOpenClawAgentReadOnlySchema(opened.database)) {
-            throw new Error("Transcript worker lost its admitted agent schema");
-          }
-        };
-      }
       return opened.database;
-    });
+    })();
     const sessionIds = reconcileInput.sessionIds;
     let yielded = false;
     for (const [index, sessionId] of sessionIds.entries()) {
@@ -407,9 +367,6 @@ async function run(
     }
     terminalMessage = { type: "done", yielded };
   } catch (error) {
-    if (unsettled) {
-      throw error;
-    }
     terminalMessage = {
       type: "failed",
       error: error instanceof Error ? error.message : String(error),
@@ -433,17 +390,11 @@ async function run(
           resolve();
         });
       });
-      // Reentry obtains a fresh host grant before touching the retained native handles.
-      await phase("close", () => {
-        assertSource();
-        assertAdmittedSchemas?.();
-        if (coordination?.reconciliation) {
-          closeDatabase?.();
-          sharedBorrow?.release();
-          sharedBorrow = undefined;
-        }
-        releaseLease(reconcileInput, port, closeDatabase !== undefined);
-      });
+      // Cleanup uses the handles and lease opened by this task, even after retirement.
+      if (coordination?.reconciliation) {
+        closeDatabase?.();
+      }
+      releaseLease(reconcileInput, port, closeDatabase !== undefined);
     }
   } finally {
     if (reconcileInput.mode === "memory") {

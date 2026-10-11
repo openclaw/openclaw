@@ -1,10 +1,7 @@
 // Gateway-first agent CLI implementation with explicit --local embedded execution.
 import fs from "node:fs/promises";
 import { TextDecoder } from "node:util";
-import {
-  parseStrictNonNegativeInteger,
-  resolveTimerTimeoutMs,
-} from "@openclaw/normalization-core/number-coercion";
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { GatewayProtocolRequestError } from "../../packages/gateway-client/src/protocol-request.js";
@@ -88,7 +85,6 @@ type GatewayAgentResponse = {
   deliveryStatus?: unknown;
 };
 
-const NO_GATEWAY_TIMEOUT_MS = 2_147_000_000;
 const GATEWAY_TRANSIENT_CONNECT_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 15_000] as const;
 
 type AgentCliOpts = {
@@ -380,13 +376,6 @@ function parseTimeoutSeconds(opts: { cfg: OpenClawConfig; timeout?: string }) {
     );
   }
   return raw;
-}
-
-function resolveGatewayAgentTimeoutMs(timeoutSeconds: number): number {
-  if (timeoutSeconds === 0) {
-    return NO_GATEWAY_TIMEOUT_MS;
-  }
-  return resolveTimerTimeoutMs((timeoutSeconds + 30) * 1000, 10_000, 10_000);
 }
 
 async function formatPayloadForLog(payload: {
@@ -825,7 +814,6 @@ async function agentViaGatewayCommand(
     }
   }
   const timeoutSeconds = parseTimeoutSeconds({ cfg, timeout: opts.timeout });
-  const gatewayTimeoutMs = resolveGatewayAgentTimeoutMs(timeoutSeconds);
   const channel = normalizeMessageChannel(opts.channel);
   const deferExplicitRecipientSession = Boolean(
     !explicitSessionKey &&
@@ -927,7 +915,9 @@ async function agentViaGatewayCommand(
             idempotencyKey,
           },
           expectFinal: true,
-          timeoutMs: gatewayTimeoutMs,
+          // The Gateway owns per-attempt deadlines and bounded cleanup across fallbacks.
+          // Keep connection startup bounded, then wait for its final outcome or cancellation.
+          timeoutMs: null,
           config: activeCfg,
           signal: signalBridge.signal,
           onAccepted: (payload) => {
