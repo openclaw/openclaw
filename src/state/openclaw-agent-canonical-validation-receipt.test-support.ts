@@ -27,6 +27,7 @@ await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
   }
   const reader = opened.database;
   const prototype = requireNodeSqlite().StatementSync.prototype;
+  // oxlint-disable-next-line typescript/unbound-method -- The proxy forwards the native receiver with Reflect.apply.
   const original = { get: prototype.get, all: prototype.all, iterate: prototype.iterate };
   let receiptReads = 0;
   const observe = <

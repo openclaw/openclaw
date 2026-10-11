@@ -28,7 +28,7 @@ it("reads warm maintenance without a transaction and observes newly committed ca
     write(0);
     const plan = {
       kind: "maintenance-plan",
-      databaseOptions: options,
+      databaseOptions: { ...options, path: database.path },
       expectedIdentity: readDatabasePathIdentitySync(database.path),
       input: {
         archiveDirectory: path.join(path.dirname(database.path), "archives"),
