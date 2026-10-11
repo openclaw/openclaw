@@ -1498,6 +1498,7 @@ src/plugins/runtime-state-key.ts
 src/plugins/runtime-state.ts
 src/plugins/runtime-workspace-state.ts
 src/plugins/runtime.ts
+src/plugins/sdk-deprecation.ts
 src/plugins/runtime/execution-frame.ts
 src/plugins/runtime/gateway-context-binding-owner.ts
 src/plugins/runtime/gateway-context-binding.ts
