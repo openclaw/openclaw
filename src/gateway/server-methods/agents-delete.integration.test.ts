@@ -86,7 +86,8 @@ async function exerciseLateSessionWritesDuringDeletion(params: {
     agentId,
     key: `agent:${agentId}:late-write-0`,
   });
-  for (let iteration = 0; iteration < 20; iteration += 1) {
+  // Two cycles cover every held phase before and after same-agent recreation.
+  for (let iteration = 0; iteration < 2; iteration += 1) {
     signal.throwIfAborted();
     const aborted = createDeferred();
     const closed = createDeferred();

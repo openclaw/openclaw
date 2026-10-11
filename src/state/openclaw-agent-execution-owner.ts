@@ -72,7 +72,8 @@ export function createAgentDatabaseExecution(
   const { agentId, pathname, identity, initialIdentity, expectedCreationIdentity } = prepared;
   const context = captureOpenClawStateWorkerContext({ env: options.env });
   const executionOptions = { agentId, path: pathname, env: context.environment };
-  const cleanupOwner = getAgentDeletionDatabaseCleanup(executionOptions);
+  const deletionCleanup = getAgentDeletionDatabaseCleanup(executionOptions);
+  const cleanupOwner = deletionCleanup?.ownsDatabase ? deletionCleanup : undefined;
   const creationClaim = creationClaims.captureAgentCreationClaim(options);
   const aliases = new Map<string, () => void>();
   const assertAgentAdmitted = captureAgentDatabaseAdmission(agentId, { env: context.environment });

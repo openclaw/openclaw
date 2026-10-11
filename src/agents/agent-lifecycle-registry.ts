@@ -445,6 +445,7 @@ export function withAgentDeletion<T>(
                   },
                 ),
               runDatabaseCleanup: createAgentDeletionDatabaseCleanup({
+                agentId: id,
                 statePath,
                 workerAuthority: authority,
                 assertCurrent: assertNativeCurrent,

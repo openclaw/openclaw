@@ -45,12 +45,12 @@ export const captureOpenClawAgentDatabaseExecution = createAgentDatabaseExecutio
   captureFileAgentDatabaseExecution,
 );
 
-/** Cleanup receives a fresh owner after ordinary operations settle on their original one. */
+/** Only the deleted agent's store needs a fresh, exclusive cleanup owner. */
 export async function captureAgentDeletionDatabaseExecution(
   options: OpenClawAgentDatabaseOptions,
 ): Promise<OpenClawAgentDatabaseExecution> {
   const cleanup = getAgentDeletionDatabaseCleanup(options);
-  if (cleanup?.worker) {
+  if (cleanup?.worker && cleanup.ownsDatabase) {
     cleanup.assertCurrentHost();
     const pathname = resolveOpenClawAgentSqlitePath(options);
     const previous =

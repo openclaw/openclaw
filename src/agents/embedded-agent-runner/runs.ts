@@ -1208,7 +1208,6 @@ export function getActiveEmbeddedRunSnapshot(
   return ACTIVE_EMBEDDED_RUN_SNAPSHOTS.get(sessionId);
 }
 
-
 export async function abortAndDrainEmbeddedAgentRun(params: {
   sessionId: string;
   sessionKey?: string;
