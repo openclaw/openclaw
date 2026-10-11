@@ -1,4 +1,5 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildCliSessionDriftNote, buildCliSessionUnseenTurnsContext } from "../cli-session.js";
 import { createCliCurrentPromptRenderer, prepareCliTurnPromptContext } from "./prompt-context.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -46,4 +47,37 @@ it("keeps a transient session notice at the top of the native user prompt", () =
   expect(createCliCurrentPromptRenderer({}, session)("Read the latest token.")).toBe(
     "Read the latest token.",
   );
+});
+
+const unseenTurns = [{ prompt: "Child result: CHILD_RESULT", reply: "Relayed." }];
+const cliSessionBinding = { sessionId: "native-bound", unseenTurns };
+
+describe("CLI resume user context", () => {
+  it("puts the drift note before exchanges the resumed session missed", () => {
+    const render = createCliCurrentPromptRenderer(
+      { currentInboundContext: { text: "Conversation info" }, cliSessionBinding },
+      { mode: "reuse-with-drift", sessionId: "native-bound", drift: { reasons: ["prompt-tools"] } },
+    );
+
+    expect(render("ask")).toBe(
+      [
+        buildCliSessionDriftNote(["prompt-tools"]),
+        buildCliSessionUnseenTurnsContext(unseenTurns),
+        "Conversation info",
+        "ask",
+      ].join("\n\n"),
+    );
+  });
+
+  it.each([
+    { name: "a fresh session", session: { mode: "invalidate", invalidatedReason: "mcp" } },
+    { name: "another native session", session: { mode: "reuse", sessionId: "native-other" } },
+  ] as const)("leaves $name to recover from saved history", ({ session }) => {
+    expect(
+      createCliCurrentPromptRenderer(
+        { currentInboundContext: { text: "Conversation info" }, cliSessionBinding },
+        session,
+      )("ask"),
+    ).toBe("Conversation info\n\nask");
+  });
 });

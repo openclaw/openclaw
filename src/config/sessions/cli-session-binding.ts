@@ -1,10 +1,30 @@
 // CLI session binding lookup shared by session lifecycle and agent runtime code.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { CliSessionBinding, CliSessionReseedReceipt, SessionEntry } from "./types.js";
+import type {
+  CliSessionBinding,
+  CliSessionReseedReceipt,
+  CliSessionUnseenTurn,
+  SessionEntry,
+} from "./types.js";
 
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
+// Newest exchanges win; older ones remain in the session's own history.
+const MAX_CLI_SESSION_UNSEEN_TURNS = 8;
 type CliSessionBindingEntry = Pick<SessionEntry, "cliSessionBindings" | "cliSessionIds">;
+
+export function normalizeCliSessionUnseenTurns(
+  value: readonly CliSessionUnseenTurn[] | undefined,
+): CliSessionUnseenTurn[] | undefined {
+  const turns = (Array.isArray(value) ? value : [])
+    .filter(
+      (turn): turn is CliSessionUnseenTurn =>
+        typeof turn?.prompt === "string" && typeof turn.reply === "string",
+    )
+    .slice(-MAX_CLI_SESSION_UNSEEN_TURNS)
+    .map(({ prompt, reply }) => ({ prompt, reply }));
+  return turns.length > 0 ? turns : undefined;
+}
 
 export function normalizeCliSessionReseedReceipt(
   value: CliSessionReseedReceipt | undefined,
@@ -88,6 +108,7 @@ export function getCliSessionBinding(
       mcpConfigHash: normalizeOptionalString(fromBindings?.mcpConfigHash),
       mcpResumeHash: normalizeOptionalString(fromBindings?.mcpResumeHash),
       reseedReceipt: normalizeCliSessionReseedReceipt(fromBindings?.reseedReceipt),
+      unseenTurns: normalizeCliSessionUnseenTurns(fromBindings?.unseenTurns),
     };
   }
   const fromMap = entry.cliSessionIds?.[normalized];

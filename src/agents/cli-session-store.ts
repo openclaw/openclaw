@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CliSessionBinding, InternalSessionEntry, SessionEntry } from "../config/sessions.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -246,6 +247,68 @@ export async function persistCliSessionBindingResult(
             params.abortSignal,
           ),
       ),
+    });
+  });
+}
+
+/**
+ * A preserved turn keeps the requester's native binding. When it ran in another
+ * native session, the bound one keeps its exchange for the next resume; when it
+ * resumed the bound session, the exchanges carried into that turn are now seen.
+ */
+export async function settlePreservedCliSessionTurn(
+  params: CliSessionStoreTarget & {
+    result: EmbeddedAgentRunResult;
+    expectedSession?: InternalSessionEntry;
+    boundCliSessionId?: string;
+    assertSettlementCurrent: () => void;
+    abortSignal?: AbortSignal;
+  },
+): Promise<EmbeddedAgentRunResult> {
+  const { boundCliSessionId, expectedSession } = params;
+  const ran = params.result.meta.agentMeta?.cliSessionBinding;
+  const unseenTurn = params.result.meta.agentMeta?.cliUnseenTurn;
+  const resumedBound = ran?.sessionId === boundCliSessionId;
+  if (!expectedSession || !boundCliSessionId || !ran || (!resumedBound && !unseenTurn)) {
+    return params.result;
+  }
+  return await settleCliSessionResult(params.result, async () => {
+    await patchCliSessionBindingInStore({
+      ...params,
+      expectedSession,
+      preserveActivity: true,
+      skipMaintenance: true,
+      update: (entry) => {
+        const bound = getCliSessionBinding(entry, params.provider);
+        if (bound?.sessionId !== boundCliSessionId) {
+          return false;
+        }
+        if (resumedBound) {
+          if (!bound.unseenTurns) {
+            return false;
+          }
+          setCliSessionBinding(entry, params.provider, { ...bound, unseenTurns: undefined });
+          return true;
+        }
+        // An exchange from another auth identity must not enter this native session.
+        if (
+          !unseenTurn ||
+          bound.authProfileId !== normalizeOptionalString(ran.authProfileId) ||
+          bound.authEpoch !== normalizeOptionalString(ran.authEpoch) ||
+          bound.authEpochVersion !== ran.authEpochVersion
+        ) {
+          return false;
+        }
+        setCliSessionBinding(entry, params.provider, {
+          ...bound,
+          unseenTurns: [...(bound.unseenTurns ?? []), unseenTurn],
+        });
+        return true;
+      },
+      assertCommitAllowed: () => {
+        params.assertSettlementCurrent();
+        params.abortSignal?.throwIfAborted();
+      },
     });
   });
 }
