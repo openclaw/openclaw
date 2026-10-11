@@ -37,7 +37,6 @@ const ChannelIdentities = defineSolidBridge<ProfileChannelIdentityInputs>(
     const unsubscribe = application.gateway.subscribe((snapshot) =>
       controller.update(readInputs(), snapshot),
     );
-    controller.update(readInputs(), application.gateway.snapshot);
     createEffect(readInputs, (inputs) => controller.update(inputs, application.gateway.snapshot));
     onCleanup(() => {
       unsubscribe();
@@ -79,7 +78,7 @@ const ChannelIdentities = defineSolidBridge<ProfileChannelIdentityInputs>(
       <Show when={state().canManageChannelIdentities}>
         <form
           id="settings-profile-channel-identities"
-          aria-busy={String(state().busy)}
+          aria-busy={state().busy ? "true" : "false"}
           onSubmit={(event) => {
             event.preventDefault();
             void controller.linkIdentity();
@@ -121,12 +120,12 @@ const ChannelIdentities = defineSolidBridge<ProfileChannelIdentityInputs>(
             <Show when={state().status}>
               {(status) => <SettingsRow title={status()} role="status" />}
             </Show>
-            <Show when={state().links !== null}>
-              {() =>
-                state().links!.length === 0 ? (
+            <Show when={state().links}>
+              {(links) =>
+                links().length === 0 ? (
                   <SettingsEmpty message={t("profilePage.channelIdentities.empty")} />
                 ) : (
-                  <For each={state().links ?? []}>
+                  <For each={links()}>
                     {(link) => (
                       <SettingsRow
                         title={<code>{link.identity.channelId}</code>}
