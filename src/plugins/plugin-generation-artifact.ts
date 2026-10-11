@@ -13,7 +13,6 @@ import {
   createPluginGenerationCapture,
   createPluginGenerationSourceLookup,
   createPluginSourceFacts,
-  assertPluginSourceRootCurrent,
   type PluginSourceCustodyFork,
   createPluginGenerationModuleLookup,
 } from "./plugin-generation-source-lookup.js";
@@ -46,7 +45,6 @@ import {
   resolvePluginPackageMapTarget,
   visitPluginSourceReferences,
 } from "./plugin-source-references.js";
-import { verifyPluginSourceInputs } from "./plugin-source-verification.js";
 
 /** Capture selective entries and whole dependencies without replacing earlier file bytes. */
 export const capturePluginGenerationArtifact = createPluginGenerationCapture(
@@ -89,20 +87,9 @@ function createPluginGenerationArtifact(
     resolveSource: nativeAdmission.resolvePreparedSource,
   });
   const sourceAliases: Record<string, string> = {};
-  const sourceFacts = createPluginSourceFacts(
-    rootDir,
-    entryFiles,
-    dependencyLookupBoundary,
-    captureForCustody,
-  );
+  const sourceFacts = createPluginSourceFacts(dependencyLookupBoundary, captureForCustody);
   const receipt = createPluginGenerationReceipt(nativeAdmission.prepared);
-  const {
-    inputs,
-    pendingInputs,
-    additions,
-    capture: acquireSources,
-    assertModuleAvailable,
-  } = sourceCapture;
+  const { additions, capture: acquireSources, assertModuleAvailable } = sourceCapture;
   const captureAdmitted = <T>(run: () => T) => {
     const acquired = execute ? execute(() => acquireSources(run)) : acquireSources(run);
     nativeAdmission.finish(receipt.finish());
@@ -243,7 +230,6 @@ function createPluginGenerationArtifact(
       boundary,
       copy,
       hasSource: (source) => capturedPaths.has(source),
-      recordMissingMetadata: sourceFacts.recordMissingFile,
     });
     const references = new Map<string, Set<string>>();
     const getNativeScope = createPluginNativeDependencyScopes(
@@ -276,7 +262,6 @@ function createPluginGenerationArtifact(
           return;
         }
         if (fs.statSync(real).isDirectory()) {
-          sourceFacts.recordDirectory(source);
           if (scannedDirectories.has(real)) {
             throw new Error("Standalone plugin input contains a directory cycle");
           }
@@ -466,9 +451,6 @@ function createPluginGenerationArtifact(
           }
           return input;
         }
-        if (!module) {
-          sourceFacts.recordMissingFile(local);
-        }
         return undefined;
       };
       const observed = new Map<string, string | null | undefined>();
@@ -481,14 +463,6 @@ function createPluginGenerationArtifact(
         // Uninspected external references are distinct from observed absent local inputs.
         if (!observed.has(key) || (conditions && execute && observed.get(key) === null)) {
           observed.set(key, captureReference(reference, kind, conditions));
-          if (kind !== "asset" && observed.get(key) !== null) {
-            sourceFacts.recordModuleLookup(
-              source,
-              reference,
-              resolution,
-              conditions ?? ["node", "module-sync", kind],
-            );
-          }
         }
         return observed.get(key) ?? undefined;
       };
@@ -611,7 +585,6 @@ function createPluginGenerationArtifact(
         copy,
         nativeAdmission.isRetainedReference,
         nativeAdmission.resolvePreparedSource,
-        sourceFacts.recordFileProbe,
       );
       metadataCapture.setManifest(path.join(destination, "package.json"), manifest ?? null);
     } else {
@@ -644,15 +617,8 @@ function createPluginGenerationArtifact(
       );
       capturedPaths.set(alias, capturedPaths.get(entry)!);
     }
-    const assertSourceCurrent = () => {
-      assertPluginSourceRootCurrent({ rootDir, sourceRoot, entryFiles, entries });
-      nativeAdmission.reconcileSourceInputs(inputs);
-      verifyPluginSourceInputs(inputs, inputs.keys());
-    };
     const initialReceipt = receipt.finish();
-    assertSourceCurrent();
     nativeAdmission.finish(initialReceipt);
-    pendingInputs.clear();
     additions.clear();
     const captures = [moduleCaptures, hardlinkedSources, metadataCapture, packages, resolution];
     const clearCaptures = () => captures.forEach((capture) => capture.clear());
@@ -672,25 +638,12 @@ function createPluginGenerationArtifact(
       sourceAliases,
       linkHost: (hostRoot: string) => {
         sourceCapture.linkHost(hostRoot);
-        for (const [source, identity] of nativeAdmission.linkHost(hostRoot)) {
-          const input = inputs.get(source);
-          if (input?.native) {
-            input.identity = identity;
-          }
-        }
-        nativeAdmission.reconcileSourceInputs(inputs);
+        nativeAdmission.linkHost(hostRoot);
       },
-      // The receipt attests the initial snapshot; first-demand inputs extend only its identity ledger.
+      // The receipt attests the initial snapshot; lazy imports retain their own copied bytes.
       sourceDigest: initialReceipt.sourceDigest,
       ...sourceLookup,
-      retainSourceCustody: () =>
-        sourceFacts.captureCustody({
-          sourceRoot,
-          entries,
-          sourceDigest: initialReceipt.sourceDigest,
-          capture: sourceLookup.captureRecoverySource,
-        }),
-      assertSourceCurrent,
+      retainSourceCustody: () => sourceFacts.captureCustody(sourceLookup.captureRecoverySource),
       ...createPluginGenerationModuleLookup({
         capturedPaths,
         originalSources,

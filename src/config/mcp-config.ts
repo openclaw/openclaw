@@ -188,7 +188,7 @@ async function commitConfiguredMcpServers(params: {
     });
   }
   if (params.independentlyOwnedName) {
-    markClawMcpServerIndependentlyOwned(params.independentlyOwnedName);
+    await markClawMcpServerIndependentlyOwned(params.independentlyOwnedName);
   }
   return {
     ok: true,
