@@ -1,6 +1,7 @@
 // Shared harness and fixtures for manager sync-ops startup catch-up tests.
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import {
   resolveStateDir,
   type OpenClawConfig,
@@ -8,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   MEMORY_CHUNKING_VERSION,
+  ensureMemoryIndexSchema,
   type MemorySource,
   type MemorySyncParams,
   type MemorySyncProgressUpdate,
@@ -59,28 +61,17 @@ export const startupHarnessDatabases = new Set<MemoryIndexDatabase>();
 
 type SourceStateRow = { path: string; hash: string; mtime: number; size: number };
 
-function createStartupHarnessDatabase(sourceRows: SourceStateRow[]): MemoryIndexDatabase {
-  const database = MemoryIndexDatabase.openShadow(
+async function createStartupHarnessDatabase(
+  sourceRows: SourceStateRow[],
+): Promise<MemoryIndexDatabase> {
+  const database = await MemoryIndexDatabase.openShadow(
     path.join(resolveStateDir(), `startup-index-${randomUUID()}.sqlite`),
     false,
   );
   startupHarnessDatabases.add(database);
-  const db = database.db;
+  using db = new DatabaseSync(database.db.location()!);
+  ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
   db.exec(`
-    CREATE TABLE memory_index_sources (
-      path TEXT NOT NULL,
-      source TEXT NOT NULL,
-      hash TEXT NOT NULL,
-      mtime REAL NOT NULL,
-      size INTEGER NOT NULL,
-      UNIQUE(path, source)
-    );
-    CREATE TABLE memory_index_chunks (
-      id TEXT PRIMARY KEY,
-      path TEXT NOT NULL,
-      source TEXT NOT NULL,
-      model TEXT NOT NULL
-    );
     CREATE TABLE memory_index_source_update_audit (path TEXT NOT NULL);
     CREATE TRIGGER memory_index_source_update_audit_trigger
     AFTER UPDATE ON memory_index_sources
@@ -104,9 +95,6 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
   protected readonly createProvider = (): never => {
     throw new Error("Startup catch-up harness does not acquire embedding providers");
   };
-  protected releaseProvider(): never {
-    throw new Error("Startup catch-up harness does not own embedding providers");
-  }
   protected readonly cfg = {} as OpenClawConfig;
   protected readonly agentId = "main";
   protected readonly workspaceDir = "/tmp/openclaw-test-workspace";
@@ -161,25 +149,37 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
   private corpusListWork: Promise<void> = Promise.resolve();
   private pendingSyncWork: Promise<void> = Promise.resolve();
 
-  constructor(
-    sourceRows: SourceStateRow[],
+  private constructor(
+    database: MemoryIndexDatabase,
     private readonly indexSessionUpdates = false,
     private readonly subscribeToRealEvents = false,
     private readonly deferSessionIndex = false,
-    database?: MemoryIndexDatabase,
   ) {
     super();
     this.sources.add("sessions");
-    this.publishedDatabase = database ?? createStartupHarnessDatabase(sourceRows);
+    this.publishedDatabase = database;
+  }
+
+  static async create(
+    sourceRows: SourceStateRow[],
+    indexSessionUpdates = false,
+    subscribeToRealEvents = false,
+    deferSessionIndex = false,
+  ): Promise<SessionStartupCatchupHarness> {
+    return new SessionStartupCatchupHarness(
+      await createStartupHarnessDatabase(sourceRows),
+      indexSessionUpdates,
+      subscribeToRealEvents,
+      deferSessionIndex,
+    );
   }
 
   restartForStartup(): SessionStartupCatchupHarness {
     return new SessionStartupCatchupHarness(
-      [],
+      this.publishedDatabase,
       this.indexSessionUpdates,
       false,
       this.deferSessionIndex,
-      this.publishedDatabase,
     );
   }
 
@@ -382,7 +382,8 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
     // This harness tests corpus selection. File-owned publication,
     // workspace locking and conditional deletion have separate integration tests.
     this.deletedSources.push({ path: pathname, source, expectedHash });
-    this.db
+    using writer = new DatabaseSync(this.db.location()!);
+    writer
       .prepare("DELETE FROM memory_index_sources WHERE path = ? AND source = ? AND hash = ?")
       .run(pathname, source, expectedHash ?? null);
   }

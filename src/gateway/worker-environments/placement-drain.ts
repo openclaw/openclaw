@@ -8,7 +8,13 @@ import {
   type WorkerSessionPlacementRecord,
   type WorkerSessionTurnClaim,
 } from "./placement-record.js";
-import { getRequired, query, transitionValues, turnClaimValues } from "./placement-row-codec.js";
+import {
+  fromRow,
+  getRequired,
+  query,
+  transitionValues,
+  turnClaimValues,
+} from "./placement-row-codec.js";
 import { publishPlacementTurnClaimState } from "./placement-turn-authority.js";
 import { clearWorkerWorkspaceReconciliation } from "./placement-workspace-journal.js";
 import { hasWorkerWorkspacePendingResult } from "./placement-workspace-result.js";
@@ -75,16 +81,18 @@ export function drainWorkerSessionPlacement(
       .where("state", "=", "active")
       .where("transition_generation", "=", current.generation)
       .where("environment_id", "=", environmentId)
-      .where("active_owner_epoch", "=", ownerEpoch),
+      .where("active_owner_epoch", "=", ownerEpoch)
+      .returningAll(),
   );
-  if (result.numAffectedRows !== 1n) {
+  const row = result.rows[0];
+  if (!row) {
     throw new Error(`Worker session placement ${sessionId} changed during drain`);
   }
   if (input.workspaceBaseManifestRef !== undefined) {
     clearWorkerWorkspaceReconciliation(db, sessionId, input.workspaceBaseManifestRef);
     sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey }, db);
   }
-  const record = getRequired(db, sessionId);
+  const record = fromRow(row);
   publishPlacementTurnClaimState(db, record);
   return record;
 }

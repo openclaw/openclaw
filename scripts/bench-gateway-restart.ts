@@ -13,6 +13,7 @@ import {
   readProcessRssMb,
   readProcessTreeCpuMs,
   requestProbeStatus,
+  startGatewayRssSampling,
 } from "./lib/gateway-bench-probes.ts";
 import {
   BASE_GATEWAY_BENCH_CONFIG,
@@ -731,7 +732,6 @@ async function runGatewaySample(
   let initialGatewayReadyLogMs: number | null = null;
   let initialHttpListenLogLine: string | null = null;
   let initialHttpListenLogMs: number | null = null;
-  let maxRssMb: number | null = null;
   let childExited = false;
 
   const child = spawn(command.command, command.args, {
@@ -746,15 +746,7 @@ async function runGatewaySample(
     throw error;
   }
   events.push({ ms: performance.now() - sampleStartAt, type: "process.spawned" });
-  const sampleRss = () => {
-    const rssMb = readProcessRssMb(child.pid);
-    if (rssMb != null) {
-      maxRssMb = maxRssMb == null ? rssMb : Math.max(maxRssMb, rssMb);
-    }
-  };
-  sampleRss();
-  const rssTimer = setInterval(sampleRss, 100);
-  rssTimer.unref?.();
+  const rssSampler = startGatewayRssSampling(child);
   child.once("exit", () => {
     childExited = true;
     events.push({ ms: performance.now() - sampleStartAt, type: "process.exit" });
@@ -945,8 +937,8 @@ async function runGatewaySample(
   currentIteration = null;
   flushOutputLineBuffers(outputBuffers, onLine, performance.now() - sampleStartAt);
   const exit = await stopChild(child);
-  clearInterval(rssTimer);
-  sampleRss();
+  rssSampler.stop();
+  const maxRssMb = rssSampler.sample();
   flushOutputLineBuffers(outputBuffers, onLine, performance.now() - sampleStartAt, {
     flushPartial: true,
   });
@@ -992,15 +984,7 @@ async function runCase(
   const samples: GatewayRestartSample[] = [];
   const total = options.runs + options.warmup;
   for (let index = 0; index < total; index += 1) {
-    const sample = await runGatewaySample({
-      benchCase: options.benchCase,
-      entry: options.entry,
-      gatewayRuntime: options.gatewayRuntime,
-      gatewayCpus: options.gatewayCpus,
-      postReadyDelayMs: options.postReadyDelayMs,
-      restarts: options.restarts,
-      timeoutMs: options.timeoutMs,
-    });
+    const sample = await runGatewaySample(options);
     if (index >= options.warmup) {
       samples.push(sample);
       console.error(
@@ -1148,19 +1132,7 @@ async function main() {
   ensureSupportedRestartPlatform();
   const results: CaseResult[] = [];
   for (const benchCase of options.cases) {
-    results.push(
-      await runCase({
-        benchCase,
-        entry: options.entry,
-        gatewayRuntime: options.gatewayRuntime,
-        gatewayCpus: options.gatewayCpus,
-        postReadyDelayMs: options.postReadyDelayMs,
-        restarts: options.restarts,
-        runs: options.runs,
-        timeoutMs: options.timeoutMs,
-        warmup: options.warmup,
-      }),
-    );
+    results.push(await runCase({ ...options, benchCase }));
   }
 
   const payload = {

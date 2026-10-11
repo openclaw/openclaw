@@ -85,7 +85,7 @@ const authProfileStoreMock = vi.hoisted(() => {
     version: 1;
     profiles: Record<string, { type: "api_key"; provider: string; key: string }>;
   };
-  const ensureAuthProfileStore = vi.fn(() => store);
+  const ensureAuthProfileStoreAsync = vi.fn(() => store);
   const prepareAuthProfileProvider = vi.fn(async (): Promise<{ provider: string | undefined }> => ({
     provider: undefined,
   }));
@@ -96,11 +96,11 @@ const authProfileStoreMock = vi.hoisted(() => {
     set store(next) {
       store = next;
     },
-    ensureAuthProfileStore,
+    ensureAuthProfileStoreAsync,
     prepareAuthProfileProvider,
     reset() {
       store = { version: 1, profiles: {} };
-      ensureAuthProfileStore.mockClear();
+      ensureAuthProfileStoreAsync.mockClear();
       prepareAuthProfileProvider.mockReset().mockResolvedValue({ provider: undefined });
     },
   };
@@ -108,7 +108,7 @@ const authProfileStoreMock = vi.hoisted(() => {
 
 vi.mock("../../agents/auth-profiles.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/auth-profiles.runtime.js")>()),
-  ensureAuthProfileStore: authProfileStoreMock.ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync: authProfileStoreMock.ensureAuthProfileStoreAsync,
   prepareAuthProfileProvider: authProfileStoreMock.prepareAuthProfileProvider,
 }));
 

@@ -2,6 +2,7 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import {
   asPositiveSafeInteger,
   normalizeLowercaseStringOrEmpty,
@@ -20,11 +21,9 @@ type SignalPersistedReplyContext =
   | { ambiguous: true; author?: never; body?: never };
 
 const { memoryReplyContexts } = signalReplyAuthorState;
+const replyContextWrites = new KeyedAsyncQueue();
 
 function openSignalReplyAuthorStore() {
-  if (signalReplyAuthorState.persistentStoreDisabled) {
-    return undefined;
-  }
   const runtime = getOptionalSignalRuntime();
   try {
     return runtime?.state.openKeyedStoreV2<SignalReplyContextRecord>({
@@ -33,7 +32,6 @@ function openSignalReplyAuthorStore() {
       defaultTtlMs: DEFAULT_REPLY_AUTHOR_TTL_MS,
     });
   } catch (error) {
-    signalReplyAuthorState.persistentStoreDisabled = true;
     runtime?.logging
       .getChildLogger({ plugin: "signal", feature: "reply-author-state" })
       .warn("Signal persistent reply author state unavailable", { error: String(error) });
@@ -146,69 +144,26 @@ export async function registerSignalReplyContext(params: {
     registeredAt,
   };
   const expiresAt = registeredAt + DEFAULT_REPLY_AUTHOR_TTL_MS;
-  if (!store) {
-    const next = mergeReplyContext(memoryReplyContexts.get(key), record);
+  await replyContextWrites.enqueue(key, async () => {
+    const cached = memoryReplyContexts.get(key);
+    let next = mergeReplyContext(
+      cached && cached.expiresAt > registeredAt ? cached : undefined,
+      record,
+    );
+    try {
+      if (store) {
+        next = mergeReplyContext(await store.lookup(key), next);
+        await store.register(key, next);
+      }
+    } catch (error) {
+      getOptionalSignalRuntime()
+        ?.logging.getChildLogger({ plugin: "signal", feature: "reply-author-state" })
+        .warn("Signal persistent reply author state failed", { error: String(error) });
+    }
+    // The plugin serializes its own writes; foreign writes during this read/write are best effort.
     memoryReplyContexts.set(key, { ...next, expiresAt });
     pruneMemoryReplyContexts(registeredAt);
-    return;
-  }
-  const cachedBeforeUpdate = memoryReplyContexts.get(key);
-  const cacheReplyContext = (next: SignalReplyContextRecord | undefined) => {
-    const current = memoryReplyContexts.get(key);
-    const changedDuringUpdate = current !== cachedBeforeUpdate;
-    if (!next) {
-      if (!changedDuringUpdate) {
-        memoryReplyContexts.delete(key);
-      }
-      return;
-    }
-    // Async adapters may settle committed comparisons out of order. Reconcile only
-    // concurrent live publications, never an untouched or expired cached record.
-    const concurrent =
-      changedDuringUpdate && current && current.expiresAt > registeredAt ? current : undefined;
-    memoryReplyContexts.set(key, {
-      ...(concurrent ? mergeReplyContext(concurrent, next) : next),
-      expiresAt: Math.max(expiresAt, concurrent?.expiresAt ?? expiresAt),
-    });
-  };
-  let updateEvaluated = false;
-  let nextRecord: SignalReplyContextRecord | undefined;
-  try {
-    let updated = false;
-    let observation = await store.observe(key);
-    for (;;) {
-      updateEvaluated = true;
-      nextRecord = mergeReplyContext(observation.value, record);
-      const result = await store.compareAndApply(key, observation.comparison, {
-        operation: "update",
-        // Retained values still refresh the row's age and TTL.
-        action: "set",
-        value: nextRecord,
-      });
-      if (result.status !== "conflict") {
-        updated = result.status === "applied";
-        break;
-      }
-      observation = result.current;
-    }
-    cacheReplyContext(updated ? nextRecord : undefined);
-    pruneMemoryReplyContexts(registeredAt);
-  } catch (error) {
-    if (!updateEvaluated) {
-      try {
-        nextRecord = mergeReplyContext(await store.lookup(key), record);
-      } catch {
-        nextRecord = undefined;
-      }
-    }
-    if (nextRecord || updateEvaluated) {
-      cacheReplyContext(nextRecord);
-    }
-    pruneMemoryReplyContexts(registeredAt);
-    getOptionalSignalRuntime()
-      ?.logging.getChildLogger({ plugin: "signal", feature: "reply-author-state" })
-      .warn("Signal persistent reply author state failed", { error: String(error) });
-  }
+  });
 }
 
 export async function resolveSignalReplyContextWithPersistence(params: {

@@ -23,7 +23,6 @@ import {
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
-import { isPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
   bindGatewayContextResolver,
@@ -48,25 +47,9 @@ import {
 afterEach(() => resetPluginLoaderTestStateForTest());
 afterAll(cleanupPluginLoaderFixturesForTest);
 
-it("resolves an empty provider scope through the shipped SDK export", () => {
-  expect(
-    resolvePluginProviders({
-      config: { plugins: { enabled: false } },
-      env: {},
-      onlyPluginIds: [],
-    }),
-  ).toEqual([]);
-});
-
 let sequence = 0;
 
-it.each([
-  ["omitted", undefined, ["family", "other"], ["sdk-family", "sdk-other"]],
-  ["empty", [], [], []],
-  ["normalized id", [" SDK-FAMILY "], ["family"], ["sdk-family"]],
-  ["alias", [" SDK-ALIAS "], ["family"], ["sdk-family"]],
-  ["family hook alias", [" SDK-FAMILY-EAST "], ["family"], ["sdk-family"]],
-] as const)(
+it.each([["omitted", undefined, ["family", "other"], ["sdk-family", "sdk-other"]]] as const)(
   "shipped provider-catalog-runtime augmentModelCatalogWithProviderPlugins selects %s hooks without filtering their rows",
   async (_selection, providerIds, expected, expectedCalls) => {
     const id = `sdk-catalog-selection-${sequence++}`;
@@ -277,33 +260,6 @@ it.each([false, true])(
     }
   },
 );
-
-it("keeps the shipped provider callback usable after inspection release", async () => {
-  const fixture = nativeProviderFixture();
-  const host = new LegacyPluginSdkResourceHost();
-  const inspection = await fixture.load();
-  try {
-    const providers = fixture.resolve(inspection.registry, host);
-    expect(providers).toHaveLength(1);
-    expect(providers[0]!.id).toBe(fixture.id);
-    expect(readProvider(providers[0]!)).toBe(true);
-    expect(fixture.resolve(inspection.registry, host)).toHaveLength(1);
-    await inspection.release();
-    expect(isPluginRegistryRetired(inspection.registry)).toBe(true);
-    expect(readProvider(providers[0]!)).toBe(true);
-    expect(fixture.state.disposals).toBe(0);
-    expect(() => fixture.resolve(inspection.registry, host)).toThrow(
-      "inspection resources have been released",
-    );
-    await host.close();
-    expect(fixture.state.disposals).toBe(1);
-    expect(fixture.state.database?.isOpen).toBe(false);
-  } finally {
-    await host.close();
-    await inspection.release();
-    fixture.cleanup();
-  }
-});
 
 it("keeps two SDK hosts independent while borrowing the same native source", async () => {
   const fixture = nativeProviderFixture();

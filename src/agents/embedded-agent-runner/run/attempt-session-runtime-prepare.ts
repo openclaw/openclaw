@@ -6,7 +6,7 @@ import { bindCodeModeSessionStore } from "../../code-mode-session-store.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { getOpenClawSystemUpdateKind } from "../../internal-runtime-context.js";
 import type { AgentSession } from "../../sessions/index.js";
-import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
+import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
 import { getProviderPromptState } from "../provider-prompt-state.js";
 import {
   retainEmbeddedSessionPromptState,
@@ -32,6 +32,7 @@ import type { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.j
 import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import { prepareEmbeddedAttemptTrajectory } from "./attempt-trajectory.js";
 import type { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
+import { measureEmbeddedAgentPreparation } from "./preparation-timing.js";
 import type {
   EmbeddedAttemptExternalAbortController,
   EmbeddedRunAttemptParams,
@@ -106,15 +107,20 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     effectiveWorkspace,
     sessionAgentId,
   };
-  const preparedSessionManager = await prepareEmbeddedAttemptSessionManager({
-    ...sessionPreparation,
-    onSessionManagerCreated: (manager) => {
-      resources.sessionManager = manager;
-    },
-    replayAllowedToolNames: toolSearchRunPlan.replayAllowedToolNames,
-    resolveActiveContextEnginePluginId: input.resolveActiveContextEnginePluginId,
-    withOwnedTranscriptWrite: sessionLock.withOwnedTranscriptWrite,
-  });
+  const preparedSessionManager = await measureEmbeddedAgentPreparation(
+    "attempt.history",
+    () =>
+      prepareEmbeddedAttemptSessionManager({
+        ...sessionPreparation,
+        onSessionManagerCreated: (manager) => {
+          resources.sessionManager = manager;
+        },
+        replayAllowedToolNames: toolSearchRunPlan.replayAllowedToolNames,
+        resolveActiveContextEnginePluginId: input.resolveActiveContextEnginePluginId,
+        withOwnedTranscriptWrite: sessionLock.withOwnedTranscriptWrite,
+      }),
+    { config: attempt.config },
+  );
   const { isOpenAIResponsesApi, preparedUserTurnMessage, sessionManager, transcriptPolicy } =
     preparedSessionManager;
   if (codeModeControlsEnabledForRun && toolSearchCatalogRef) {
@@ -141,7 +147,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   // Retire old overrides before new carriers without checkpointing unadmitted notices.
   const retireSystemPromptUpdates = () =>
     sessionLock.withOwnedTranscriptWrite(() =>
-      withSessionManagerWrite(sessionManager, async () => {
+      withSessionManagerAppend(sessionManager, async () => {
         runAbortSignal.throwIfAborted();
         await retireSessionSystemPrompt(sessionPromptState, promptRouteKey, (customType, data) =>
           sessionManager.appendCustomEntryAsync(customType, data),
@@ -197,59 +203,69 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   const preparedAgentSession = await withOwnedSessionTranscriptWrites(
     sessionLock.ownedTranscriptWriteContext,
     async () =>
-      prepareEmbeddedAttemptAgentSession({
-        ...sessionPreparation,
-        ...(input.activeContextEngine
-          ? { activeContextEngineInfo: input.activeContextEngine.info }
-          : {}),
-        agentCoreThinkingLevel,
-        clientToolPreparation: {
-          catalogToolHookContext,
-          clientTools,
-          codeModeControlsEnabledForRun,
-          deferredDirectoryToolsCallable,
-          effectiveTools,
-          replaySafetyOptions,
-          sandboxSessionKey,
-          sessionAgentId,
-          toolSearchCatalogRef,
-          toolSearchRuntimeConfig,
-          uncompactedEffectiveTools,
-          getToolAbortSignal: () => toolBase.toolAbortSignal,
-        },
-        getCurrentAttemptPluginMetadataSnapshot,
-        initialSystemPrompt: state.systemPromptText,
-        prepareSystemPromptUpdate,
-        markStage: (stage) => prepStages.mark(stage),
-        onSessionCreated: (session) => {
-          resources.session = session;
-        },
-        onSystemPromptChanged: (nextSystemPrompt) => {
-          state.systemPromptText = nextSystemPrompt;
-        },
-        runAbortSignal,
-        transcriptLifecycle: sessionLock.transcriptLifecycle,
-        sessionManager,
-        prepareInitialUserTurnReplay: preparedSessionManager.prepareInitialUserTurnReplay,
-      }),
+      measureEmbeddedAgentPreparation(
+        "attempt.actor",
+        () =>
+          prepareEmbeddedAttemptAgentSession({
+            ...sessionPreparation,
+            ...(input.activeContextEngine
+              ? { activeContextEngineInfo: input.activeContextEngine.info }
+              : {}),
+            agentCoreThinkingLevel,
+            clientToolPreparation: {
+              catalogToolHookContext,
+              clientTools,
+              codeModeControlsEnabledForRun,
+              deferredDirectoryToolsCallable,
+              effectiveTools,
+              replaySafetyOptions,
+              sandboxSessionKey,
+              sessionAgentId,
+              toolSearchCatalogRef,
+              toolSearchRuntimeConfig,
+              uncompactedEffectiveTools,
+              getToolAbortSignal: () => toolBase.toolAbortSignal,
+            },
+            getCurrentAttemptPluginMetadataSnapshot,
+            initialSystemPrompt: state.systemPromptText,
+            prepareSystemPromptUpdate,
+            markStage: (stage) => prepStages.mark(stage),
+            onSessionCreated: (session) => {
+              resources.session = session;
+            },
+            onSystemPromptChanged: (nextSystemPrompt) => {
+              state.systemPromptText = nextSystemPrompt;
+            },
+            runAbortSignal,
+            transcriptLifecycle: sessionLock.transcriptLifecycle,
+            sessionManager,
+            prepareInitialUserTurnReplay: preparedSessionManager.prepareInitialUserTurnReplay,
+          }),
+        { config: attempt.config },
+      ),
   );
   const { activeSession, setActiveSessionSystemPrompt, settingsManager } = preparedAgentSession;
   const recordCurrentTurnImageFailure = (count: number) => {
     state.currentTurnImageFailureCount = Math.max(state.currentTurnImageFailureCount, count);
   };
   await attempt.userTurnTranscriptRecorder?.waitForRuntimePersistence();
-  const boundary = await sessionLock.withOwnedTranscriptWrite(() =>
-    prepareEmbeddedAttemptSessionBoundary({
-      abortSignal: runAbortSignal,
-      activeSession,
-      appendOnlyRuntimeContext: transcriptPolicy.appendOnlyRuntimeContext,
-      inHistorySystemUpdates: transcriptPolicy.inHistorySystemUpdates,
-      attempt,
-      ...preparedSessionManager.userMessageBoundary,
-      isRawModelRun: input.isRawModelRun,
-      sessionManager,
-      setActiveSessionSystemPrompt,
-    }),
+  const boundary = await measureEmbeddedAgentPreparation(
+    "attempt.history-boundary",
+    () =>
+      sessionLock.withOwnedTranscriptWrite(() =>
+        prepareEmbeddedAttemptSessionBoundary({
+          abortSignal: runAbortSignal,
+          activeSession,
+          appendOnlyRuntimeContext: transcriptPolicy.appendOnlyRuntimeContext,
+          inHistorySystemUpdates: transcriptPolicy.inHistorySystemUpdates,
+          attempt,
+          ...preparedSessionManager.userMessageBoundary,
+          isRawModelRun: input.isRawModelRun,
+          sessionManager,
+          setActiveSessionSystemPrompt,
+        }),
+      ),
+    { config: attempt.config },
   );
   state.prePromptMessageCount = activeSession.messages.length;
 

@@ -721,8 +721,9 @@ its connections.
 
 Workboard instances invalidate cached card lists and board revisions using the
 physical database's in-process writer receipts, including commits through sibling
-instances. Card-list reuse and publication are bracketed by that receipt; an
-unsettled receipt leaves the read uncached. Change notifications use owner publications;
+instances. Card-list reuse checks that receipt; an unsettled receipt leaves the
+read uncached. A read overlapping a mutation can return its older snapshot; the
+next request observes the writer receipt and reloads it. Change notifications use owner publications;
 there is no timer polling SQLite for writes from other processes. If a worker
 reply fails after a possible commit, the owner discards cached facts and rereads
 them on the next use without replaying the mutation.

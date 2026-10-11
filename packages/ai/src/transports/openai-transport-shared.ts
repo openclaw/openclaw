@@ -299,10 +299,8 @@ export type OpenAIModeModel = Omit<Model, "compat"> & {
   compat?: OpenAIModeCompatInput | null;
 };
 
-type MutableToolCall = ToolCall & { partialJson?: string };
-
 export type MutableAssistantOutput = Omit<AssistantMessage, "content" | "usage"> & {
-  content: Array<TextContent | ThinkingContent | MutableToolCall>;
+  content: Array<TextContent | ThinkingContent | ToolCall>;
   usage: Usage & {
     reasoningTokens?: number;
   };

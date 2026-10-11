@@ -1,12 +1,12 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, expect, it, vi } from "vitest";
+import type { SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import type { DashboardPreviewProps } from "./dashboard-preview.tsx";
 import "./dashboard-preview.ts";
 
-type DashboardPreviewElement = HTMLElement & {
-  error: string | null;
-  updateComplete: Promise<boolean>;
-};
+type DashboardPreviewElement = SolidBridgeElement<DashboardPreviewProps>;
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -24,16 +24,19 @@ it("resumes near-viewport rendering after being detached and reattached", async 
   element.error = "Preview unavailable";
 
   document.body.append(element);
-  frames.shift()?.(0);
   await element.updateComplete;
+  frames.shift()?.(0);
+  flush();
   expect(element.textContent).toContain("Preview unavailable");
 
   element.remove();
-  await element.updateComplete;
+  await Promise.resolve();
+  flush();
   expect(element.textContent).not.toContain("Preview unavailable");
 
   document.body.append(element);
-  frames.shift()?.(0);
   await element.updateComplete;
+  frames.shift()?.(0);
+  flush();
   expect(element.textContent).toContain("Preview unavailable");
 });

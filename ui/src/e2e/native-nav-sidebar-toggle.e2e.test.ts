@@ -98,7 +98,7 @@ suite.define(() => {
         swipeRequest.source,
       ),
     ).toBe(false);
-    const collapse = page.locator(".sidebar-brand__collapse");
+    const collapse = page.locator('[data-navigation-view][aria-pressed="true"]');
     await expect.poll(() => collapse.isVisible()).toBe(true);
     await collapse.click();
     const expand = page.locator(".shell-chrome-controls__nav-toggle");
@@ -115,8 +115,8 @@ suite.define(() => {
 
   it("keeps restored sidebar focus from opening its tooltip", async () => {
     const page = await openPage({ hasTouch: true, nativeNav: false });
-    const toggle = page.locator(".sidebar-brand__collapse");
-    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Collapse sidebar");
+    const toggle = page.locator('[data-navigation-view][aria-pressed="true"]');
+    await expect.poll(() => toggle.isVisible()).toBe(true);
 
     // Safari does not focus buttons on tap. Reproduce that ordering so the
     // shell's post-collapse focus, rather than the pointer itself, owns focus.
@@ -136,7 +136,7 @@ suite.define(() => {
     await expect.poll(() => tooltip.getAttribute("open")).toBeNull();
 
     await page.keyboard.press("Enter");
-    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Collapse sidebar");
+    await expect.poll(() => toggle.isVisible()).toBe(true);
     expect(await page.locator("openclaw-tooltip[open]").count()).toBe(0);
 
     await page.evaluate(() => {
@@ -153,7 +153,7 @@ suite.define(() => {
     await page.keyboard.press("Shift+Tab");
     await expect.poll(() => tooltip.getAttribute("open")).toBe("");
     await page.keyboard.press("Enter");
-    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Collapse sidebar");
+    await expect.poll(() => toggle.isVisible()).toBe(true);
     expect(await page.locator("openclaw-tooltip[open]").count()).toBe(0);
   });
 
@@ -189,7 +189,6 @@ suite.define(() => {
     // Expanded native-nav hosts keep sidebar search (no native search control
     // exists while the rail is open) but hide the duplicate web nav toggle.
     await expect.poll(() => page.locator(".sidebar-brand__search").isVisible()).toBe(true);
-    await expect.poll(() => page.locator(".sidebar-brand__collapse").isVisible()).toBe(false);
 
     // Collapse through the native titlebar path; the whole web chrome cluster
     // hides (native titlebar provides search and new-thread while collapsed).
@@ -244,8 +243,8 @@ suite.define(() => {
     const toolbar = page.locator(".macos-titlebar-controls");
     await expect.poll(() => toolbar.isVisible()).toBe(true);
     await expect.poll(() => page.locator(".shell-chrome-controls").isVisible()).toBe(false);
-    const sidebarBrand = page.locator(".sidebar-brand");
-    const sidebarNewThread = sidebarBrand.locator(".sidebar-brand__new-thread");
+    const sidebarToolbar = page.locator(".sidebar-session-toolbar");
+    const sidebarNewThread = sidebarToolbar.locator(".sidebar-new-session");
     await expect.poll(() => sidebarNewThread.isVisible()).toBe(true);
     await expect
       .poll(() =>
@@ -263,24 +262,12 @@ suite.define(() => {
           const style = getComputedStyle(element);
           return {
             focusVisible: element.matches(":focus-visible"),
-            boxShadow: style.boxShadow,
+            outlineStyle: style.outlineStyle,
+            outlineWidth: style.outlineWidth,
           };
         }),
       )
-      .toEqual({ focusVisible: true, boxShadow: expect.not.stringMatching(/^none$/) });
-    await expect
-      .poll(async () => {
-        const [brandBox, newThreadBox] = await Promise.all([
-          sidebarBrand.boundingBox(),
-          sidebarNewThread.boundingBox(),
-        ]);
-        if (!brandBox || !newThreadBox) {
-          return null;
-        }
-        return Math.round(brandBox.x + brandBox.width - (newThreadBox.x + newThreadBox.width));
-      })
-      .toBe(2);
-
+      .toEqual({ focusVisible: true, outlineStyle: "solid", outlineWidth: "2px" });
     const back = toolbar.getByRole("button", { name: "Back" });
     const forward = toolbar.getByRole("button", { name: "Forward" });
     const search = toolbar.getByRole("button", { name: "Open command palette" });
@@ -578,11 +565,6 @@ suite.define(() => {
     ).toBe(false);
 
     await navigation.locator('[data-navigation-view="sessions"]').click();
-    // These shared ownerless fixtures are deliberately outside the human Mine scope.
-    await navigation
-      .locator(".sidebar-navigation-scope")
-      .getByRole("button", { name: "All", exact: true })
-      .click();
     const row = navigation.locator(".sidebar-recent-session").first();
     await row.hover();
     await row.click({ button: "right" });

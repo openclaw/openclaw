@@ -428,23 +428,32 @@ system-message model; release CI selects `claude-sonnet-5`. The fixture activate
 the root plugin registry, exercises real prepend/append prompt hooks, and updates
 the Skills, Temporal Context, and Runtime instructions. Before the fourth turn,
 it clears the in-memory prompt projection so the runner must rehydrate it from
-the persisted session. Before every turn it also closes the provider transport,
-forcing a full-history request with the same session cache key. The assertions
-require every warm turn to reuse at least 80% of the previous prompt's tokens,
-preserve the serialized prefix and cache identity, and report no tracked
-cache-input change. This covers the embedded agent pipeline with cold transport;
-it does not cover retained HTTP continuation requests or a Gateway process
-restart.
+the persisted session and closes the provider transport. Anthropic also closes
+the transport before the other turns. OpenAI retains it and calls a synthetic
+tool twice per turn, exercising stored-response continuations with the same
+session cache key. Its 2,048-section starting prefix and large tool results
+exercise long conversations. The assertions require every warm request to reuse
+at least 80% of the preceding prompt's tokens, preserve the effective prefix and
+cache identity, and report no tracked cache-input change. OpenAI's effective
+prefix includes inherited response output; its comparison ignores JSON object
+key order, optional provider item IDs/status on assistant messages and function
+calls, and response-only log-probability fields. Call IDs and tool-output
+envelopes remain exact, and outgoing request bodies remain unchanged. Each request reports input tokens, cached
+tokens, cache ratio, and request gap. This covers retained HTTP continuation and
+cold-transport replay through the embedded agent pipeline; it does not restart
+a Gateway process.
 
 Requests run consecutively without intentional delays or retries; the scenarios
 require gaps below 30 seconds. Each of the three checks has an eight-minute
 outer deadline within the thirty-minute job. The transport fixture starts near
 8,000–10,000 input tokens and caps output at 512 tokens per request. Its two
 Anthropic routes plus OpenAI make 12 requests; optional OpenRouter adds four.
-Use planning estimates of approximately $0.50 for the transport scenario and
-$0.50 for the eight live agent requests. These are fixture-based estimates,
-not measured run costs or spending caps. Actual billing depends on model
-selection, cache reuse, and current provider prices. The stored-baseline check
+Use a planning estimate of approximately $0.50 for the transport scenario. The
+agent scenario makes sixteen requests: twelve OpenAI tool-loop requests and
+four Anthropic requests. Its larger OpenAI prefix costs more than the transport
+fixture; use the reported token counts and current model prices when budgeting
+or recording a run. Actual billing depends on model selection and cache reuse.
+These are fixture descriptions, not spending caps. The stored-baseline check
 has its own cost.
 
 The transport check uses a synthetic conversation; the live agent scenario adds
@@ -529,13 +538,15 @@ These are "real pipeline" regressions without real providers:
 - Gateway agent admission (real Gateway with a mock OpenAI provider): `src/gateway/gateway.test.ts` (case: "accepts a gateway agent request over ws and returns a run id"; checks acceptance, a run ID, and an abort response).
 - Gateway wizard (WS `wizard.start`/`wizard.next`, writes config + auth enforced): `src/gateway/gateway.test.ts` (case: "runs wizard over ws and writes auth token config")
 - Prompt/KV-cache request prefixes: `src/agents/embedded-agent-runner.prompt-cache.test.ts` drives admitted agent turns against capturing mock providers for Anthropic Messages, Claude in-history system messages, OpenAI Chat Completions, and OpenAI Responses.
+- User replay and failed-attempt persistence: `src/agents/embedded-agent-runner/run/attempt-prompt-submit.projections.test.ts`, `src/agents/session-tool-result-guard.transcript-events.test.ts`, and `src/agents/sessions/agent-session-responses-eof.test.ts` exercise recorded user content, append-only errors, and retry/reopen prefixes at their owning boundaries.
 - Gateway chat, completion, and restart prefixes: `src/gateway/gateway.prompt-cache.test.ts` uses authenticated `chat.send`, a real `sessions_spawn` child and its completion, an in-process Gateway server stop/start, and another `chat.send` in the same session. It compares the parent conversation's requests and nonempty cache keys separately from the child's requests.
 
 The prompt-cache fixture drives ten turns through the real embedded agent
 pipeline, transcript store, and provider serializers. It activates the root
 plugin registry and advertises its tools directly with tool search disabled.
-It also compares retained user-envelope digests before provider serialization,
-covering timestamps, idempotency keys, and metadata that wire serializers omit.
+It also compares retained user-envelope digests, including runtime carriers,
+before provider serialization, covering timestamps, idempotency keys, and
+metadata that wire serializers omit.
 Five tool results are individually truncated to about 16,000 characters each;
 together they exceed the 65,536-character aggregate budget. The intended
 invariant is that already-sent result bytes remain frozen under that pressure,
@@ -549,10 +560,10 @@ captures a turn while its reconnect is blocked, steers the sixth turn, and
 reopens durable runner state before the seventh. Turn eight assembles and replays
 a synthetic typed subagent completion event; it does not spawn a subagent or
 prove announcement delivery or authorization. The channel-derived history limit
-crosses on turn nine. Captures include system, tools, history, and cache identity.
-Prefix comparisons permit only the declared first-image cleanup on turn five
-and the exact history-prefix removal on turn nine. Cleanup replaces only image
-blocks with the documented marker; adjacent text remains exact. At the pruning
+crosses on turn nine. The Responses route also exercises a partial assistant
+error followed by a new turn. Captures include system, tools, history, and cache
+identity. Prefix comparisons permit only the exact history-prefix removal on
+turn nine; previously sent image blocks remain unchanged. At the pruning
 boundary, legacy Chat Completions relocates the same runtime facts from the
 retired first user to the retained first user. Legacy Messages can refresh its
 identified transient runtime context, including date facts and announcements.
@@ -561,6 +572,14 @@ any breakpoint that includes transient runtime context, including during steerin
 The other three routes compare their complete retained history. Every other retained byte must
 remain identical. Failures identify the first differing segment and JSON field
 with digests and lengths, without printing content.
+
+The Responses fixture retains its transport and models the provider's stored
+response context. It verifies that the first tool continuation sends the
+five new tool outputs, references the completed response, and retains its cache
+key. Prefix comparisons include that response's inherited input and output,
+so a smaller continuation body cannot hide a changed conversation prefix.
+Implicit output omits provider item IDs and function-call status to match full
+replay; call IDs, content, and raw incoming request bodies remain exact.
 
 The admitted-agent matrix reopens the session database and clears in-memory
 prompt state without booting a Gateway socket server. The Gateway companion

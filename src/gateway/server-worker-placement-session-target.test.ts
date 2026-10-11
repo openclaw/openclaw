@@ -229,7 +229,6 @@ test.each([
         resolveProvider: (id) => (id === provider.id ? provider : undefined),
         prepareInstallation: unexpected,
         bootstrapWorker: unexpected,
-        executeInference: unexpected,
         placementStore: createWorkerSessionPlacementGate(placements),
       });
       try {

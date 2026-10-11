@@ -7,7 +7,6 @@ import { prepareWorktreeRunEndClose } from "../agents/worktrees/run-end-lifecycl
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { listLoadedChannelPluginsForRegistry } from "../channels/plugins/registry-loaded.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { beginCronReceiptAuthorityClose } from "../cron/store/receipt-authority-owner.js";
 import { markGatewaySuspendExiting } from "../infra/gateway-suspend-coordinator.js";
 import { commitPresence, upsertPresence } from "../infra/system-presence.js";
 import { stopGatewayDiagnosticHeartbeat } from "../logging/diagnostic.js";
@@ -120,8 +119,6 @@ export async function prepareGatewayLifecycle(params: {
     onRunnerStateChanged: (nodeId, change) => {
       if (change.availabilityChanged) {
         workerPlacementRuntime?.runnerAvailability.markChanged(nodeId);
-      }
-      if (change.inventoryChanged || change.availabilityChanged) {
         void workerPlacementRuntime?.scheduleNodeWorkspaceRetention(nodeId);
       }
     },
@@ -390,9 +387,6 @@ export async function prepareGatewayLifecycle(params: {
     worktreeRunEnd.beginClose();
     sandboxRegistry.beginClose();
     talkClose.beginClose();
-    if (prelude) {
-      beginCronReceiptAuthorityClose();
-    }
     void stopModelAccountsForClose();
     void closeAuthProfileUsage(params.sdkResourceHost);
     runtime.scheduler.beginClose();

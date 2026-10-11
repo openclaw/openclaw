@@ -310,7 +310,9 @@ suite.define(() => {
             document.dispatchEvent(new Event("visibilitychange"));
           });
         } else {
-          await page.locator("openclaw-app-sidebar .sidebar-brand__new-thread").click();
+          await page
+            .locator("openclaw-app-sidebar .sidebar-session-toolbar .sidebar-new-session")
+            .click();
           await page.waitForURL((url) => url.pathname === "/new");
           await page.locator("openclaw-new-session-page").waitFor();
           await expect
@@ -415,14 +417,6 @@ suite.define(() => {
       const gateway = await installStartupGateway(page);
       await openPendingChat(page, gateway);
       await expectBulkReadsHeld(gateway);
-      const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.getByRole("button", { name: "All", exact: true }).click();
-      await gateway.waitForRequest("sessions.list", { match: { agentId: "research" } });
-      await sidebar.getByRole("button", { name: "Mine", exact: true }).click();
-      await gateway.waitForRequest("sessions.list", {
-        match: { agentId: "research", ownerId: "reader" },
-      });
-      expect(await page.getByText(historyText, { exact: true }).count()).toBe(0);
       await gateway.setSessionsListResponse({
         ts: 2,
         path: "",
@@ -445,6 +439,7 @@ suite.define(() => {
       await gateway.waitForRequest("sessions.list", {
         match: { agentId: "research", archived: true },
       });
+      expect(await gateway.getRequests("sessions.list")).toHaveLength(1);
       await gateway.resolveDeferred("sessions.list");
       await page
         .locator("openclaw-app-sidebar")
@@ -479,7 +474,9 @@ suite.define(() => {
             await gateway.waitForRequest(method);
           }
         } else {
-          await page.locator("openclaw-app-sidebar .sidebar-brand__new-thread").click();
+          await page
+            .locator("openclaw-app-sidebar .sidebar-session-toolbar .sidebar-new-session")
+            .click();
           await page.waitForURL((url) => url.pathname === "/new");
           await page.locator("openclaw-new-session-page").waitFor();
         }

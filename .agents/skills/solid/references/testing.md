@@ -15,6 +15,7 @@ Follow [writing tests](../../../../docs/help/testing/writing-tests.md), [test-au
 - `.test.tsx` files are discovered by the UI Vitest config and `test/vitest/vitest.ui-paths.mjs`. Confirm a new test file actually appears in the run; a silently skipped file is worse than a failing one.
 - The shared non-isolated runner keeps **one Solid module graph per worker**. It skips re-evaluating `solid-js`/`@solidjs/*` between files, because re-evaluation splits the scheduler and context graph. Don't reintroduce `vi.resetModules()` there; the runner's own reset already covers it.
 - Pre-optimize the Solid runtime packages that browser tests use in `ui/vitest.config.ts`'s `optimizeDeps.include`. When Vite discovers a dependency mid-run, it re-optimizes and reloads, which shows up as lost suite context or "duplicate custom element" errors in WebKit. Add the package there instead of chasing the symptom.
+- Non-UI Vitest projects (Gateway, core, extensions) compile UI `.tsx` through the shared, **scoped** Solid transform in `ui/config/control-ui-solid.ts` (include globs `ui/**/*.tsx`, `extensions/*/browser/**/*.tsx`; `environment: "node"` pinned). Never add the Solid plugin unscoped: it silently switches the test environment to `jsdom`.
 - Bun-only `WeakRef` retention flakes come from JSC's conservative GC; those suites run on Node.
 
 ## E2E

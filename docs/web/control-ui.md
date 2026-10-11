@@ -92,6 +92,8 @@ Provider authentication status is shared across views and refreshes after accoun
 
 The sidebar loads automation status once per connection and refreshes after automation or configuration changes. Failed reads retry once per minute while the tab is visible and stop retrying after success. Sidebar health and Automations page refreshes pause during announced restarts or suspension and catch up when the Gateway is available again. Overdue warnings advance on a local deadline without polling the Gateway. Hidden tabs catch up when visible; returning to an unchanged tab does not poll automations. Command palette searches reuse their automation inventory on the same connection until one of those changes or a reconnect.
 
+In a session’s menu, open **View → Speech bubbles** to switch that conversation—including the main session—to two-sided bubbles. Your messages stay on the right and agent replies stream into bubbles on the left. The choice is saved per session in this browser; other sessions keep their own mode. Turn it off to restore the flat reply layout. In bubble mode, activity appears as a compact **…** preview. Click it to see the full tool or status details. Agent reactions appear beneath the prompt they acknowledge, independently of the selected layout.
+
 Automation inputs appear as compact, collapsed activity rows instead of message bubbles. Expand a row to read the full prompt and access its message actions. Each automation input stays separate, even when several jobs run in the same conversation. The expanded **From** link opens that automation's History tab and highlights the originating run; open the run's transcript from History when needed.
 
 Thinking, speed, and context-window changes stay synchronized across panes showing the same session. While a change is pending, the latest selection remains visible. A rejected change restores the latest confirmed value. Delayed events from a replaced session leave the current transcript and unsent draft intact.
@@ -321,6 +323,9 @@ Agent names and avatars follow agent and identity updates. While a configured av
 the avatar keeps its tinted background with no face or text. The image appears when ready;
 an emoji or generated face appears only when no image is configured or the image fails to load.
 Repeated views reuse prepared avatar thumbnails; updating the avatar refreshes its thumbnail.
+Profiles without an advertised avatar use initials without probing an image route. Authenticated
+misses for current profile revisions, agent avatars, and resolved workspace icons can remain in
+the browser cache for up to one minute. New profile and agent image revisions use a new URL.
 This behavior is shared by the roster, agent switcher, identity chips, settings, and chat.
 
 Activity and previews on the page and sidebar roster refresh on session events

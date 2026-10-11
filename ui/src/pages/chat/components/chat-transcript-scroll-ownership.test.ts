@@ -430,7 +430,7 @@ describe("chat transcript scroll ownership", () => {
       expect(policy.chatFollowLocked).toBe(true);
       // A partial sizer commit lets TanStack retry the clamped adjustment as an absolute write.
       maxScrollTop += 16;
-      transcript.hostUpdated();
+      renderRows(rows);
       expect(container.scrollTop).toBe(maxScrollTop);
       // The dock can keep shrinking the scroll range before the native read-back arrives.
       maxScrollTop -= 8;

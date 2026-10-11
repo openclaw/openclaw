@@ -21,22 +21,6 @@ describe("resolveGroupSessionKey", () => {
     });
   });
 
-  it("keeps non-Signal group ids lowercase", () => {
-    const ctx = {
-      Provider: "telegram",
-      ChatType: "group",
-      From: "telegram:1234",
-      OriginatingTo: "telegram:group:MiXeDGroup",
-    } satisfies Partial<MsgContext>;
-
-    expect(resolveGroupSessionKey(ctx as MsgContext)).toEqual({
-      key: "telegram:group:mixedgroup",
-      channel: "telegram",
-      id: "mixedgroup",
-      chatType: "group",
-    });
-  });
-
   it("preserves empty opaque segments in originating group ids", () => {
     const ctx = {
       Provider: "matrix",

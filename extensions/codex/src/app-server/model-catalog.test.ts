@@ -19,11 +19,13 @@ vi.mock("./native-auth.js", () => ({ probeCodexNativeAuth: vi.fn() }));
 const profiles = vi.hoisted((): { store: AuthProfileStore } => ({
   store: { version: 1, profiles: {} },
 }));
+// mock-isolation: Exercise real profile selection against the catalog fixture, without host credential storage.
 vi.mock("./auth-profile.js", async () => {
   const { resolveAuthProfileOrder } = await import("openclaw/plugin-sdk/provider-auth");
   const { createCodexAuthProfileSelection } = await import("./auth-profile-selection.js");
   return createCodexAuthProfileSelection({
     ensureAuthProfileStore: () => profiles.store,
+    ensureAuthProfileStoreAsync: async () => profiles.store,
     resolveAuthProfileOrder,
   });
 });
@@ -489,18 +491,26 @@ describe("Codex app-server model catalog", () => {
   it("cannot publish superseded or disposed asynchronous observations", async () => {
     listModelsMock.mockResolvedValue(opaqueCatalog());
     const pending = createDeferred<unknown>();
-    rpc.request.mockReturnValueOnce(pending.promise);
+    const pendingStarted = createDeferred<void>();
+    rpc.request.mockImplementationOnce(() => {
+      pendingStarted.resolve();
+      return pending.promise;
+    });
     const older = owner.load(catalogParams, undefined);
-    await vi.waitFor(() => expect(rpc.request).toHaveBeenCalledOnce());
+    await pendingStarted.promise;
     expect(read()).toBeUndefined();
     await owner.load(catalogParams, undefined);
     pending.resolve({ account: { type: "chatgpt" }, requiresOpenaiAuth: true });
     expect(await older).toEqual({ entries: [] });
     expect(read()).toEqual({ accountType: "apiKey", authMode: "api_key" });
     const disposed = createDeferred<unknown>();
-    rpc.request.mockReturnValueOnce(disposed.promise);
+    const disposedStarted = createDeferred<void>();
+    rpc.request.mockImplementationOnce(() => {
+      disposedStarted.resolve();
+      return disposed.promise;
+    });
     const late = owner.load(catalogParams, undefined);
-    await vi.waitFor(() => expect(rpc.request).toHaveBeenCalledTimes(3));
+    await disposedStarted.promise;
     owner.dispose();
     disposed.resolve({ account: { type: "apiKey" }, requiresOpenaiAuth: true });
     expect(await late).toEqual({ entries: [] });

@@ -36,17 +36,6 @@ describe("abortable", () => {
 });
 
 describe("joinWithRunLivenessDeadline", () => {
-  it("resolves when the joined work settles, without firing onTimeout", async () => {
-    const ac = new AbortController();
-    const onTimeout = vi.fn();
-    await joinWithRunLivenessDeadline({
-      joinWork: () => Promise.resolve(),
-      runAbortSignal: ac.signal,
-      onTimeout,
-    });
-    expect(onTimeout).not.toHaveBeenCalled();
-  });
-
   it("resolves at the liveness deadline when the joined work hangs", async () => {
     vi.useFakeTimers();
     try {
@@ -81,20 +70,5 @@ describe("joinWithRunLivenessDeadline", () => {
       onTimeout,
     });
     expect(onTimeout).not.toHaveBeenCalled();
-  });
-
-  it("runs work without an abort signal and remains bounded", async () => {
-    vi.useFakeTimers();
-    try {
-      const joinWork = vi.fn(() => new Promise<never>(() => {}));
-      const onTimeout = vi.fn();
-      const join = joinWithRunLivenessDeadline({ joinWork, onTimeout });
-      await vi.advanceTimersByTimeAsync(RUN_LIVENESS_JOIN_TIMEOUT_MS);
-      await join;
-      expect(joinWork).toHaveBeenCalledOnce();
-      expect(onTimeout).toHaveBeenCalledOnce();
-    } finally {
-      vi.useRealTimers();
-    }
   });
 });

@@ -5,7 +5,7 @@ import { routePageSpec } from "../../app-route-paths.ts";
 export const page = definePage({
   ...routePageSpec("device"),
   component: () =>
-    import("./device-page.ts").then(() => ({
+    import("./device-page.tsx").then(() => ({
       header: true,
       render: () => html`<openclaw-device-page></openclaw-device-page>`,
     })),
@@ -14,7 +14,7 @@ export const page = definePage({
 export const permissionsPage = definePage({
   ...routePageSpec("device-permissions"),
   component: () =>
-    import("./permissions-page.ts").then(() => ({
+    import("./permissions-page.tsx").then(() => ({
       header: true,
       render: () => html`<openclaw-device-permissions-page></openclaw-device-permissions-page>`,
     })),

@@ -10,7 +10,7 @@ import {
   createCompactionRequestBudget,
   type CompactionRequestBudget,
 } from "../../sessions/compaction/request-budget.js";
-import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
+import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
 import { releasePendingAgentSteeringItems } from "../../subagents/registry/subagent-registry.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { log } from "../logger.js";
@@ -57,14 +57,7 @@ export async function runEmbeddedAttemptPromptPhase(
   input: EmbeddedAttemptExecutionPhaseInput & { preparedStreamRuntime: PreparedStreamRuntime },
   promptState: EmbeddedAttemptPromptState,
 ): Promise<{ promptStartedAt: number; transcriptLeafId: string | null }> {
-  const {
-    attempt,
-    activeContextEngine,
-    isRawModelRun,
-    prepared,
-    preparedStreamRuntime,
-    runAbortController,
-  } = input;
+  const { attempt, isRawModelRun, prepared, preparedStreamRuntime, runAbortController } = input;
   const { sessionRuntime, promptToolPolicy } = prepared;
   const {
     agentSession: { activeSession, hookRunner, setActiveSessionSystemPrompt, settingsManager },
@@ -92,17 +85,13 @@ export async function runEmbeddedAttemptPromptPhase(
   } = sessionRuntime;
   const { effectiveFsWorkspaceOnly, effectiveWorkspace, sandbox, sessionAgentId } = input.setup;
   const {
-    history: {
-      contextEngineAssemblySucceeded,
-      contextEnginePromptAuthority,
-      unwindowedContextEngineMessagesForPrecheck,
-    },
+    history: { contextEnginePromptAuthority, unwindowedContextEngineMessagesForPrecheck },
     promptActiveSession,
     stream: { stopAcceptingSteerMessages },
   } = preparedStreamRuntime;
   const { withOwnedTranscriptWrite } = input.sessionLock;
   const withTranscriptWrite = <T>(write: () => Promise<T>) =>
-    withOwnedTranscriptWrite(() => withSessionManagerWrite(sessionManager, write));
+    withOwnedTranscriptWrite(() => withSessionManagerAppend(sessionManager, write));
   const observeForegroundRequests = (
     onRequest: NonNullable<PreparedStreamRuntime["cache"]["onModelRequest"]>,
   ) => {
@@ -375,7 +364,6 @@ export async function runEmbeddedAttemptPromptPhase(
     state = await prepareEmbeddedAttemptPromptPreflight({
       appendOnlyRuntimeContext,
       compactionReplayEnabled,
-      contextEngineAssemblySucceeded,
       contextEnginePromptAuthority,
       includeBoundaryTimestamp,
       ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
@@ -383,7 +371,6 @@ export async function runEmbeddedAttemptPromptPhase(
         ? { unwindowedContextEngineMessagesForPrecheck }
         : {}),
       attempt,
-      ...(activeContextEngine ? { activeContextEngine } : {}),
       contextTokenBudget: promptContext.contextTokenBudget,
       hookMessagesForCurrentPrompt: promptContext.hookMessagesForCurrentPrompt,
       promptForPrecheck: promptContext.llmBoundaryPromptForPrecheck,
@@ -489,6 +476,7 @@ export async function runEmbeddedAttemptPromptPhase(
           ? { runtimeContextMessage: promptContext.runtimeContextMessageForCurrentTurn }
           : {}),
         runtimeOnly: promptContext.promptSubmission.runtimeOnly === true,
+        setNextUserMessagePersistence: sessionManager.setNextUserMessagePersistence,
         systemPrompt: promptContext.systemPromptForHook,
         toolResultAggregateMaxChars: promptContext.promptToolResultAggregateMaxChars,
         toolResultMaxChars: promptContext.promptToolResultMaxChars,
