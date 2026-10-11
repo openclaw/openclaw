@@ -4,6 +4,7 @@ import {
   appendChatMessageToCache,
   cacheChatSessionSnapshot,
   clearChatMessagesFromCache,
+  createChatWidgetLayout,
   readChatMessagesFromCache,
   readChatSessionSnapshot,
   type ChatMessageCache,
@@ -211,8 +212,10 @@ describe("session message cache", () => {
       messages: [{ content: "old", __openclaw: { seq: 1 } }],
       pagination: { hasMore: false, totalMessages: 1 },
       sessionId: "session-1",
+      widgetHeights: { "canvas:preview": 700 },
     });
     const replacement = [{ content: "new", __openclaw: { seq: 1 } }];
+    const layout = createChatWidgetLayout(cache, host, { sessionKey: "home" });
 
     cacheHomeSnapshot(cache, host, {
       messages: replacement,
@@ -223,6 +226,35 @@ describe("session message cache", () => {
     expect(readChatSessionSnapshot(cache, host, { sessionKey: "home" })?.messages).toEqual(
       replacement,
     );
+    layout.write("canvas:preview", 800);
+    expect(layout.read("canvas:preview")).toBeUndefined();
+    expect(
+      readChatSessionSnapshot(cache, host, { sessionKey: "home" })?.widgetHeights,
+    ).toBeUndefined();
+  });
+
+  it("retains bounded widget sizes through history refreshes within their session", () => {
+    const { host, cache } = createCacheContext();
+    const snapshot = {
+      messages: ["widget"],
+      pagination: { hasMore: false as const },
+      sessionId: "session-1",
+    };
+    cacheHomeSnapshot(cache, host, snapshot);
+    const layout = createChatWidgetLayout(cache, host, { sessionKey: "home" });
+    layout.write("canvas:preview", 700);
+    cacheHomeSnapshot(cache, host, { ...snapshot, messages: ["refreshed widget"] });
+    expect(layout.read("canvas:preview")).toBe(700);
+    layout.write("canvas:preview", Number.NaN);
+    expect(layout.read("canvas:preview")).toBe(700);
+    for (let index = 0; index < 100; index++) {
+      layout.write(`canvas:${index}`, 480);
+    }
+    expect(layout.read("canvas:preview")).toBeUndefined();
+    expect(layout.read("canvas:99")).toBe(480);
+    clearChatMessagesFromCache(cache, host, { sessionKey: "home" });
+    layout.write("canvas:99", 600);
+    expect(layout.read("canvas:99")).toBeUndefined();
   });
 
   it("reuses retained message weights when snapshot metadata changes", () => {

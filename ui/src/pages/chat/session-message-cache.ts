@@ -69,6 +69,7 @@ export function projectChatTranscriptMetadata(row: GatewaySessionRow): ChatTrans
 }
 
 export type ChatSessionSnapshot = {
+  widgetHeights?: Record<string, number>;
   transcriptMetadata?: ChatTranscriptMetadata;
   progressCard?: ProgressCard | null;
   deltaCursor?: string;
@@ -77,6 +78,46 @@ export type ChatSessionSnapshot = {
   pagination: ChatHistoryPagination;
   sessionId: string | null;
 };
+
+export type ChatWidgetLayout = {
+  read: (key: string) => number | undefined;
+  write: (key: string, height: number) => void;
+};
+
+export function createChatWidgetLayout(
+  cache: ChatMessageCache,
+  host: ChatMessageCacheHost,
+  target: ChatMessageCacheTarget,
+): ChatWidgetLayout {
+  const cacheKey = resolveChatSnapshotKey(host, target);
+  const sessionId = cache.get(cacheKey)?.snapshot.sessionId;
+  const current = () => {
+    const snapshot = cache.get(cacheKey)?.snapshot;
+    return resolveChatSnapshotKey(host, target) === cacheKey && snapshot?.sessionId === sessionId
+      ? snapshot
+      : undefined;
+  };
+  return {
+    read: (key) => current()?.widgetHeights?.[key],
+    write: (key, height) => {
+      const snapshot = current();
+      if (!snapshot || !Number.isFinite(height) || height < 48 || height > 8000) {
+        return;
+      }
+      if (snapshot.widgetHeights?.[key] === height) {
+        return;
+      }
+      const widgetHeights = { ...snapshot.widgetHeights };
+      delete widgetHeights[key];
+      widgetHeights[key] = height;
+      const keys = Object.keys(widgetHeights);
+      if (keys.length > 100) {
+        delete widgetHeights[keys[0]!];
+      }
+      cacheChatSessionSnapshot(cache, host, target, { ...snapshot, widgetHeights });
+    },
+  };
+}
 
 type CachedChatSessionSnapshot = {
   snapshot: ChatSessionSnapshot;
@@ -249,12 +290,16 @@ export function cacheChatSessionSnapshot(
   const cacheKey = resolveChatSnapshotKey(host, target);
   const existing = getSessionCacheValue(cache, cacheKey);
   // History prefetch owns transcript facts, not the independently refreshed card.
-  const snapshot =
+  const withProgress =
     incoming.progressCard === undefined &&
     existing?.snapshot.progressCard !== undefined &&
     existing.snapshot.sessionId === incoming.sessionId
       ? { ...incoming, progressCard: existing.snapshot.progressCard }
       : incoming;
+  const snapshot =
+    withProgress.widgetHeights === undefined && existing?.snapshot.sessionId === incoming.sessionId
+      ? { ...withProgress, widgetHeights: existing.snapshot.widgetHeights }
+      : withProgress;
   if (
     existing?.snapshot.messages === snapshot.messages &&
     existing.snapshot.deltaCursor === snapshot.deltaCursor &&
@@ -262,6 +307,7 @@ export function cacheChatSessionSnapshot(
     existing.snapshot.displayedLeafEntryId === snapshot.displayedLeafEntryId &&
     existing.snapshot.transcriptMetadata === snapshot.transcriptMetadata &&
     existing.snapshot.progressCard === snapshot.progressCard &&
+    existing.snapshot.widgetHeights === snapshot.widgetHeights &&
     samePagination(existing.snapshot.pagination, snapshot.pagination)
   ) {
     return;

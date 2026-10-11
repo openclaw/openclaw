@@ -4,9 +4,10 @@ import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
+import type { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -37,8 +38,161 @@ const legacyTrailer = `<!doctype html><html><head><style>
     setTimeout(report,50);setTimeout(report,500);
   })();</script>${trailer}</body></html>`;
 
+type WidgetReloadFrame = {
+  scrollTop: number;
+  endGap: number;
+  previewHeight: number;
+  anchorTop: number;
+};
+
+declare global {
+  interface Window {
+    widgetReloadFrames?: WidgetReloadFrame[];
+    widgetReloadRecording?: boolean;
+  }
+}
+
 suite.define(() => {
   const canvasView = useCanvasSandboxFixture();
+  it("reserves a learned widget height from the first reload frame through delayed content", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const sessionKey = "agent:main:dashboard:widget-reload";
+      const html = buildWidgetDocument(
+        "Synthetic dashboard preview",
+        `<main style="height:700px;box-sizing:border-box;padding:24px;display:grid;grid-template-rows:repeat(7,1fr);background:#e8f0f7;color:#243b53">${Array.from(
+          { length: 7 },
+          (_, index) =>
+            `<div style="display:flex;align-items:center;border-bottom:1px solid #bcccdc">Synthetic dashboard row ${index + 1}${index === 6 ? ": All data in this preview is synthetic." : ""}</div>`,
+        ).join("")}</main>`,
+      );
+      const gateway = await installMockGateway(page, {
+        sessionKey,
+        authMethod: "trusted-proxy",
+        authMode: "trusted-proxy",
+        heldMethods: ["canvas.document.view"],
+        methodResponses: { "canvas.document.view": canvasView(html) },
+        historyMessages: [
+          ...Array.from({ length: 12 }, (_, index) => ({
+            role: index % 2 ? "assistant" : "user",
+            content: `Synthetic context ${index}: ${"Dashboard detail. ".repeat(20)}`,
+            timestamp: 1_800_000_000_000 + index * 1000,
+            __openclaw: { id: `widget-context-${index}`, seq: index + 1 },
+          })),
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "text",
+                text: `[embed ref="${documentId}" title="Synthetic dashboard preview" /]`,
+              },
+            ],
+            timestamp: 1_800_000_012_000,
+            __openclaw: { id: "widget-preview", seq: 13 },
+          },
+          {
+            role: "user",
+            content: "Keep this reply in place while the preview loads.",
+            timestamp: 1_800_000_013_000,
+            __openclaw: { id: "widget-reload-anchor", seq: 14 },
+          },
+        ],
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await gateway.waitForRequest("canvas.document.view");
+      await gateway.resolveDeferred("canvas.document.view");
+      const frame = page.locator(".chat-tool-card__preview-frame");
+      await frame
+        .contentFrame()
+        .frameLocator("iframe")
+        .getByText("All data in this preview is synthetic.", { exact: false })
+        .waitFor();
+      await page.waitForFunction(
+        () =>
+          document.querySelector(".chat-tool-card__preview-frame")?.getBoundingClientRect()
+            .height === 700,
+        undefined,
+        { polling: "raf" },
+      );
+      const preview = page.locator('.chat-tool-card__preview[data-content-kind="canvas-html"]');
+      const learnedHeight = (await preview.boundingBox())!.height;
+      await page.locator(".chat-pane-cache__pane--active").evaluate(async (element) => {
+        const pane = element as HTMLElement & { sessionSnapshotStore?: SessionSnapshotStore };
+        if (!pane.sessionSnapshotStore) {
+          throw new Error("Missing transcript snapshot owner");
+        }
+        await pane.sessionSnapshotStore.flush();
+      });
+      await page.addInitScript(() => {
+        window.widgetReloadFrames = [];
+        window.widgetReloadRecording = true;
+        const sample = () => {
+          if (!window.widgetReloadRecording) {
+            return;
+          }
+          const pane = document.querySelector(".chat-pane-cache__pane--active");
+          const thread = pane?.querySelector<HTMLElement>(".chat-thread");
+          const preview = thread?.querySelector(
+            '.chat-tool-card__preview[data-content-kind="canvas-html"]',
+          );
+          const anchor = thread?.querySelector('[data-entry-id="widget-reload-anchor"]');
+          if (thread?.clientHeight && preview && anchor) {
+            window.widgetReloadFrames!.push({
+              scrollTop: thread.scrollTop,
+              endGap: thread.scrollHeight - thread.clientHeight - thread.scrollTop,
+              previewHeight: preview.getBoundingClientRect().height,
+              anchorTop: anchor.getBoundingClientRect().top,
+            });
+          }
+          requestAnimationFrame(sample);
+        };
+        requestAnimationFrame(sample);
+      });
+      await page.reload();
+      await gateway.waitForRequest("canvas.document.view");
+      await page.waitForFunction(() => (window.widgetReloadFrames?.length ?? 0) >= 20, undefined, {
+        polling: "raf",
+      });
+      const artifacts = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR
+        ? createControlUiE2eArtifactDir("widget-reload")
+        : undefined;
+      const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+      const anchor = thread.locator('[data-entry-id="widget-reload-anchor"]');
+      if (artifacts) {
+        const capture = await takeControlUiScreenshotFrame(page, thread, [anchor], {
+          animations: "disabled",
+        });
+        writeFileSync(path.join(artifacts, "waiting.png"), capture.png);
+      }
+      await gateway.resolveDeferred("canvas.document.view");
+      await frame
+        .contentFrame()
+        .frameLocator("iframe")
+        .getByText("All data in this preview is synthetic.", { exact: false })
+        .waitFor();
+      const samples = await page.evaluate(async () => {
+        for (let index = 0; index < 20; index += 1) {
+          await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        }
+        window.widgetReloadRecording = false;
+        return window.widgetReloadFrames ?? [];
+      });
+      if (artifacts) {
+        const capture = await takeControlUiScreenshotFrame(page, thread, [anchor], {
+          animations: "disabled",
+        });
+        writeFileSync(path.join(artifacts, "loaded.png"), capture.png);
+        writeFileSync(path.join(artifacts, "frames.json"), JSON.stringify(samples));
+      }
+      expect(samples.length).toBeGreaterThanOrEqual(40);
+      expect(samples[0]!.scrollTop).toBeGreaterThan(0);
+      for (const sample of samples) {
+        expect(Math.abs(sample.previewHeight - learnedHeight)).toBeLessThanOrEqual(1);
+        expect(Math.abs(sample.endGap)).toBeLessThanOrEqual(1);
+        expect(Math.abs(sample.scrollTop - samples[0]!.scrollTop)).toBeLessThanOrEqual(1);
+        expect(Math.abs(sample.anchorTop - samples[0]!.anchorTop)).toBeLessThanOrEqual(1);
+      }
+    });
+  });
   it("fits trailer captions and enables fullscreen for new and saved widget documents", async () => {
     await suite.withPage(
       { viewport: { width: 1280, height: 800 }, colorScheme: "dark" },

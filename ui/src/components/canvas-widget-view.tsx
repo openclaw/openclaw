@@ -88,6 +88,7 @@ export type CanvasWidgetViewProps = {
   messageTimestamp?: number;
   title: string;
   preferredHeight?: number;
+  onHeightChange?: (height: number) => void;
   connectionGeneration: number;
   presentationActive: boolean;
   allowScripts: boolean;
@@ -498,6 +499,7 @@ class CanvasWidgetController {
       data.height > 0
     ) {
       this.contentHeight = Math.min(8000, Math.max(48, Math.trunc(data.height)));
+      this.props.onHeightChange?.(this.contentHeight);
       this.notify();
     }
     if (data?.type === "openclaw:widget-bridge-ready") {
@@ -618,7 +620,7 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps>(
         return { error: formatUiError(error) };
       }
     });
-    const height = () => read().contentHeight ?? props.preferredHeight;
+    const height = () => read().contentHeight ?? props.preferredHeight ?? 420;
     return (
       <Show
         when={!read().error}
@@ -641,14 +643,14 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps>(
                   class="skeleton"
                   role="status"
                   aria-label={t("common.loading")}
-                  style={{ "min-height": `${props.preferredHeight ?? 420}px` }}
+                  style={{ "min-height": `${height()}px` }}
                 />
               }
             >
               <div
                 class="board-widget__notice"
                 role="status"
-                style={{ "min-height": `${props.preferredHeight ?? 420}px` }}
+                style={{ "min-height": `${height()}px` }}
               >
                 {t("board.widget.waitingForConnection")}
               </div>
@@ -704,6 +706,7 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps>(
       messageTimestamp: { default: undefined, type: Number },
       title: { default: "" },
       preferredHeight: { default: undefined, type: Number },
+      onHeightChange: { default: undefined, attribute: false },
       connectionGeneration: { default: 0 },
       presentationActive: { default: true },
       allowScripts: { default: true },
