@@ -127,9 +127,9 @@ describe("worker environment store", () => {
         );
       }
       using queries = vi.spyOn(sqliteQueries, "executeSqliteQuerySync");
-      expect(findWorkerEnvironment(database.db, "worker-endpoint-change")?.sshEndpoint).toStrictEqual(
-        expected,
-      );
+      expect(
+        findWorkerEnvironment(database.db, "worker-endpoint-change")?.sshEndpoint,
+      ).toStrictEqual(expected);
       expect(queries).toHaveBeenCalledTimes(1);
       queries.mockClear();
       expect(
