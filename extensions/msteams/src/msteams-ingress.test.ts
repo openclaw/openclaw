@@ -271,13 +271,37 @@ describe("Microsoft Teams durable ingress", () => {
     });
   });
 
-  it("journals only message turns and adaptive-card agent turns", async () => {
+  it("journals agent turns and bot removals while excluding non-removal lifecycle events", async () => {
     await withQueue(async (queue) => {
       const ingress = makeIngress(queue, vi.fn());
       await ingress.accept(activity({ id: "message", type: "message" }));
       await ingress.accept(
         activity({ id: "adaptive", type: "invoke", name: "adaptiveCard/action" }),
       );
+      await ingress.accept({
+        ...activity({ id: "uninstall", type: "installationUpdate" }),
+        action: "remove",
+      });
+      await ingress.accept({
+        ...activity({ id: "manifest-removal", type: "installationUpdate" }),
+        action: "remove-upgrade",
+      });
+      await ingress.accept({
+        ...activity({ id: "bot-removal", type: "conversationUpdate" }),
+        membersRemoved: [{ id: "bot-1" }],
+      });
+      await ingress.accept({
+        ...activity({ id: "member-removal", type: "conversationUpdate" }),
+        membersRemoved: [{ id: "other-member" }],
+      });
+      await ingress.accept({
+        ...activity({ id: "install", type: "installationUpdate" }),
+        action: "add",
+      });
+      await ingress.accept({
+        ...activity({ id: "upgrade", type: "installationUpdate" }),
+        action: "add-upgrade",
+      });
       await ingress.accept(activity({ id: "edit", type: "messageUpdate" }));
       await ingress.accept(activity({ id: "reaction", type: "messageReaction" }));
       await ingress.accept(
@@ -289,8 +313,60 @@ describe("Microsoft Teams durable ingress", () => {
 
       expect(
         (await queue.listPending({ limit: "all" })).map((entry) => entry.id).toSorted(),
-      ).toEqual(["adaptive", "message"]);
+      ).toEqual(["adaptive", "bot-removal", "manifest-removal", "message", "uninstall"]);
       await ingress.stop();
+    });
+  });
+
+  it("replays a persisted removal after restart and deduplicates its redelivery", async () => {
+    await withQueue(async (queue) => {
+      const incoming = {
+        ...activity({ id: "persisted-removal", type: "installationUpdate" }),
+        action: "remove",
+      };
+      const interrupted = makeIngress(queue, vi.fn());
+      const { app } = createOutboundCapture();
+      await interrupted.accept(
+        incoming,
+        createMSTeamsReplayContext(incoming, app, { cloud: "Public" }),
+      );
+      expect(await queue.listPending()).toEqual([
+        expect.objectContaining({ id: "persisted-removal", laneKey: "conversation-1" }),
+      ]);
+      await interrupted.stop();
+
+      // Removal cleanup returns without a reply lane; ingress completes that
+      // successful return itself, so replay must not depend on explicit adoption.
+      const dispatch = vi.fn<IngressDispatch>(async (_activity, _lifecycle, liveContext) => {
+        expect(liveContext).toBeUndefined();
+      });
+      const factory = vi.spyOn(channelOutbound, "createChannelIngressMonitor");
+      let recovered: ReturnType<typeof makeIngress>;
+      let monitor: ReturnType<typeof channelOutbound.createChannelIngressMonitor>;
+      try {
+        recovered = makeIngress(queue, dispatch);
+        const created = factory.mock.results[0];
+        if (created?.type !== "return") {
+          throw new Error("expected recovered Teams ingress monitor");
+        }
+        monitor = created.value;
+      } finally {
+        factory.mockRestore();
+      }
+      try {
+        recovered.start();
+        await monitor.waitForIdle();
+        expect(dispatch).toHaveBeenCalledOnce();
+        expect(dispatch.mock.calls[0]?.[0]).toEqual(incoming);
+        await recovered.accept(incoming);
+        await monitor.waitForIdle();
+        expect(dispatch).toHaveBeenCalledOnce();
+        expect((await queue.enqueue("persisted-removal", {} as IngressPayload)).kind).toBe(
+          "completed",
+        );
+      } finally {
+        await recovered.stop();
+      }
     });
   });
 
