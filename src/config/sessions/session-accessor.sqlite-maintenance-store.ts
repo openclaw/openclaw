@@ -107,6 +107,27 @@ function canSkipSessionEntryMaintenanceInDatabase(
   );
 }
 
+/** A current age hint needs only the count statement to decide whether planning is needed. */
+export function readSessionMaintenanceFastPath(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  params: Pick<SessionEntryMaintenanceInput, "maintenance" | "forceMaintenance">,
+): "no-op" | "write" | undefined {
+  if (params.maintenance.mode === "warn") {
+    return "no-op";
+  }
+  const ageFact = readSessionEntryMaintenanceAgeFact(database.db, params.maintenance);
+  if (params.forceMaintenance || !ageFact || Date.now() >= ageFact.next.at) {
+    return undefined;
+  }
+  return shouldRunSessionEntryMaintenance({
+    entryCount: readSessionEntryCount(database, { includeArchived: false }),
+    maxEntries: params.maintenance.maxEntries,
+    force: false,
+  })
+    ? "write"
+    : "no-op";
+}
+
 /** Inline callers already hold their transaction; workers prepare before the write transaction. */
 export function applySessionEntryMaintenanceInDatabase(
   database: OpenClawAgentDatabase,
@@ -229,6 +250,8 @@ export function prepareSessionEntryMaintenanceInDatabase(
       },
     };
   }
+  // Selected victims have not changed yet; their future age hint is not committed.
+  invalidateSessionEntryMaintenanceAgeFact(reader.db);
   const readInputs = (database: Pick<OpenClawAgentDatabase, "db">) => {
     const db = getSessionKysely(database.db);
     const rows = executeSqliteQuerySync(

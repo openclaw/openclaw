@@ -69,6 +69,9 @@ export const SecretsStoreListResultSchema = closedObject({
 
 /** Create or replace one team secret-store entry. */
 export const SecretsStoreSetParamsSchema = closedObject({
+  expectedOwnerId: Type.Optional(withSince("2026.9", Type.String({ minLength: 1 }))),
+  inheritExistingKind: Type.Optional(withSince("2026.9", Type.Boolean())),
+  valueSource: Type.Optional(withSince("2026.9", Type.Literal("argv"))),
   name: SecretStoreMutationNameSchema,
   value: Type.String({ maxLength: 64 * 1024 }),
   kind: Type.Union([Type.Literal("secret"), Type.Literal("env")]),
@@ -77,13 +80,36 @@ export const SecretsStoreSetParamsSchema = closedObject({
 
 /** Soft-delete one team secret-store entry. */
 export const SecretsStoreDeleteParamsSchema = closedObject({
+  expectedOwnerId: Type.Optional(withSince("2026.9", Type.String({ minLength: 1 }))),
   name: SecretStoreMutationNameSchema,
+});
+
+export const SecretsStoreImportParamsSchema = closedObject({
+  expectedOwnerId: NonEmptyString,
+  inheritExistingKind: Type.Boolean(),
+  entries: Type.Array(
+    closedObject({
+      name: SecretStoreNameSchema,
+      value: Type.String({ maxLength: 64 * 1024 }),
+      kind: Type.Union([Type.Literal("secret"), Type.Literal("env")]),
+    }),
+    { minItems: 1 },
+  ),
+});
+
+export const SecretsStoreAllowedHostsParamsSchema = closedObject({
+  expectedOwnerId: NonEmptyString,
+  name: SecretStoreNameSchema,
+  allowedHosts: SecretStoreAllowedHostsSchema,
 });
 
 /** Mutation acknowledgement including whether the active runtime was refreshed. */
 export const SecretsStoreMutationResultSchema = closedObject({
   ok: Type.Literal(true),
   reloaded: Type.Boolean(),
+  kind: Type.Optional(
+    withSince("2026.9", Type.Union([Type.Literal("secret"), Type.Literal("env")])),
+  ),
   warningCount: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 

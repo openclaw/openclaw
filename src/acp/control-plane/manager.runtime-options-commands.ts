@@ -1,3 +1,4 @@
+import type { AcpRuntimeConfigOptionResult } from "@openclaw/acp-core/runtime/types";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { AcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
@@ -53,8 +54,10 @@ async function resolveRuntimeOptionSessionMeta(params: RuntimeOptionCommandConte
   return requireReadySessionMeta(resolution);
 }
 
-export async function runSetManagerSessionRuntimeMode(
-  params: RuntimeOptionCommandContext & { runtimeMode: string },
+export async function runSetManagerSessionRuntimeOption(
+  params: RuntimeOptionCommandContext & {
+    update: { runtimeMode: string } | { key: string; value: string };
+  },
 ): Promise<AcpSessionRuntimeOptions> {
   const resolvedMeta = await resolveRuntimeOptionSessionMeta(params);
   const { runtime, handle, meta } = await params.ensureRuntimeHandle({
@@ -66,101 +69,67 @@ export async function runSetManagerSessionRuntimeMode(
     isCurrentActor: params.isCurrentActor,
   });
   params.assertActive?.();
-  const capabilities = await resolveManagerRuntimeCapabilities({ runtime, handle });
-  assertCurrentAcpActor(params.isCurrentActor(), params.sessionKey);
-  if (!capabilities.controls.includes("session/set_mode") || !runtime.setMode) {
-    throw createUnsupportedControlError({
-      backend: handle.backend || meta.backend,
-      control: "session/set_mode",
-    });
-  }
-
-  await withAcpRuntimeErrorBoundary({
-    run: async () => {
-      assertCurrentAcpActor(params.isCurrentActor(), params.sessionKey);
-      params.assertActive?.();
-      await runtime.setMode!({
-        handle,
-        mode: params.runtimeMode,
-      });
-    },
-    fallbackCode: "ACP_TURN_FAILED",
-    fallbackMessage: "Could not update ACP runtime mode.",
-  });
-  assertCurrentAcpActor(params.isCurrentActor(), params.sessionKey);
-
-  const nextOptions = mergeRuntimeOptions({
-    current: resolveRuntimeOptionsFromMeta(meta),
-    patch: { runtimeMode: params.runtimeMode },
-  });
-  await persistManagerRuntimeOptions({
-    ...params,
-    options: nextOptions,
-  });
-  return nextOptions;
-}
-
-export async function runSetManagerSessionConfigOption(
-  params: RuntimeOptionCommandContext & { key: string; value: string },
-): Promise<AcpSessionRuntimeOptions> {
-  const resolvedMeta = await resolveRuntimeOptionSessionMeta(params);
-  const { runtime, handle, meta } = await params.ensureRuntimeHandle({
-    assertActive: params.assertActive,
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    meta: resolvedMeta,
-    isCurrentActor: params.isCurrentActor,
-  });
-  params.assertActive?.();
-  const inferredPatch = inferRuntimeOptionPatchFromConfigOption(params.key, params.value);
+  const update = params.update;
+  const patch =
+    "runtimeMode" in update
+      ? update
+      : inferRuntimeOptionPatchFromConfigOption(update.key, update.value);
   const capabilities = await resolveManagerRuntimeCapabilities({
     runtime,
     handle,
-    includeStatusConfigOptionKeys: true,
+    ...("key" in update ? { includeStatusConfigOptionKeys: true } : {}),
   });
   assertCurrentAcpActor(params.isCurrentActor(), params.sessionKey);
-  if (!capabilities.controls.includes("session/set_config_option") || !runtime.setConfigOption) {
-    throw createUnsupportedControlError({
-      backend: handle.backend || meta.backend,
-      control: "session/set_config_option",
+  let result: AcpRuntimeConfigOptionResult | void = undefined;
+  if ("runtimeMode" in update) {
+    if (!capabilities.controls.includes("session/set_mode") || !runtime.setMode) {
+      throw createUnsupportedControlError({
+        backend: handle.backend || meta.backend,
+        control: "session/set_mode",
+      });
+    }
+    await withAcpRuntimeErrorBoundary({
+      run: async () => {
+        assertCurrentAcpActor(params.isCurrentActor(), params.sessionKey);
+        params.assertActive?.();
+        await runtime.setMode!({ handle, mode: update.runtimeMode });
+      },
+      fallbackCode: "ACP_TURN_FAILED",
+      fallbackMessage: "Could not update ACP runtime mode.",
+    });
+  } else {
+    if (!capabilities.controls.includes("session/set_config_option") || !runtime.setConfigOption) {
+      throw createUnsupportedControlError({
+        backend: handle.backend || meta.backend,
+        control: "session/set_config_option",
+      });
+    }
+    const advertisedKeys = new Set(
+      (capabilities.configOptionKeys ?? [])
+        .map((entry) => normalizeLowercaseStringOrEmpty(entry))
+        .filter(Boolean),
+    );
+    const wireKey = resolveRuntimeConfigOptionKey(update.key, capabilities.configOptionKeys);
+    if (advertisedKeys.size > 0 && !advertisedKeys.has(normalizeLowercaseStringOrEmpty(wireKey))) {
+      throw new AcpRuntimeError(
+        "ACP_BACKEND_UNSUPPORTED_CONTROL",
+        `ACP backend "${handle.backend || meta.backend}" does not accept config key "${wireKey}".`,
+      );
+    }
+    params.assertActive?.();
+    result = await withAcpRuntimeErrorBoundary({
+      run: async () =>
+        await runtime.setConfigOption!({ handle, key: wireKey, value: update.value }),
+      fallbackCode: "ACP_TURN_FAILED",
+      fallbackMessage: "Could not update ACP runtime config option.",
     });
   }
-
-  const advertisedKeys = new Set(
-    (capabilities.configOptionKeys ?? [])
-      .map((entry) => normalizeLowercaseStringOrEmpty(entry))
-      .filter(Boolean),
-  );
-  const wireKey = resolveRuntimeConfigOptionKey(params.key, capabilities.configOptionKeys);
-  if (advertisedKeys.size > 0 && !advertisedKeys.has(normalizeLowercaseStringOrEmpty(wireKey))) {
-    throw new AcpRuntimeError(
-      "ACP_BACKEND_UNSUPPORTED_CONTROL",
-      `ACP backend "${handle.backend || meta.backend}" does not accept config key "${wireKey}".`,
-    );
-  }
-
-  params.assertActive?.();
-  const result = await withAcpRuntimeErrorBoundary({
-    run: async () =>
-      await runtime.setConfigOption!({
-        handle,
-        key: wireKey,
-        value: params.value,
-      }),
-    fallbackCode: "ACP_TURN_FAILED",
-    fallbackMessage: "Could not update ACP runtime config option.",
-  });
   assertCurrentAcpActor(params.isCurrentActor(), params.sessionKey);
-
   const nextOptions = reconcileAcceptedRuntimeOptions(
-    mergeRuntimeOptions({ current: resolveRuntimeOptionsFromMeta(meta), patch: inferredPatch }),
+    mergeRuntimeOptions({ current: resolveRuntimeOptionsFromMeta(meta), patch }),
     result,
   );
-  await persistManagerRuntimeOptions({
-    ...params,
-    options: nextOptions,
-  });
+  await persistManagerRuntimeOptions({ ...params, options: nextOptions });
   return nextOptions;
 }
 

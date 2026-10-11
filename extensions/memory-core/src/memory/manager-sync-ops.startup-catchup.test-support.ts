@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   MEMORY_CHUNKING_VERSION,
+  ensureMemoryIndexSchema,
   type MemorySource,
   type MemorySyncParams,
   type MemorySyncProgressUpdate,
@@ -18,6 +19,7 @@ import {
   resolveConfiguredScopeHash,
   type MemoryIndexMeta,
 } from "./manager-reindex-state.js";
+import { hasTargetedSessionSyncParams } from "./manager-sync-control.js";
 import { MemorySyncTestHarness } from "./manager-sync-ops.test-support.js";
 
 type MemoryIndexEntry = {
@@ -65,21 +67,8 @@ function createStartupHarnessDatabase(sourceRows: SourceStateRow[]): MemoryIndex
   );
   startupHarnessDatabases.add(database);
   const db = database.db;
+  ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
   db.exec(`
-    CREATE TABLE memory_index_sources (
-      path TEXT NOT NULL,
-      source TEXT NOT NULL,
-      hash TEXT NOT NULL,
-      mtime REAL NOT NULL,
-      size INTEGER NOT NULL,
-      UNIQUE(path, source)
-    );
-    CREATE TABLE memory_index_chunks (
-      id TEXT PRIMARY KEY,
-      path TEXT NOT NULL,
-      source TEXT NOT NULL,
-      model TEXT NOT NULL
-    );
     CREATE TABLE memory_index_source_update_audit (path TEXT NOT NULL);
     CREATE TRIGGER memory_index_source_update_audit_trigger
     AFTER UPDATE ON memory_index_sources
@@ -103,9 +92,6 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
   protected readonly createProvider = (): never => {
     throw new Error("Startup catch-up harness does not acquire embedding providers");
   };
-  protected releaseProvider(): never {
-    throw new Error("Startup catch-up harness does not own embedding providers");
-  }
   protected readonly cfg = {} as OpenClawConfig;
   protected readonly agentId = "main";
   protected readonly workspaceDir = "/tmp/openclaw-test-workspace";
@@ -322,10 +308,12 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
   protected async sync(params?: MemorySyncParams): Promise<void> {
     this.syncCalls.push(params ?? {});
     this.pendingSyncWork = this.indexSessionUpdates
-      ? this.syncArchiveFiles({
-          needsFullReindex: false,
-          deferIndex: this.deferSessionIndex,
-        }).then(() => undefined)
+      ? hasTargetedSessionSyncParams(params)
+        ? this.runSync(params).then(() => undefined)
+        : this.syncArchiveFiles({
+            needsFullReindex: false,
+            deferIndex: this.deferSessionIndex,
+          }).then(() => undefined)
       : Promise.resolve();
     await this.pendingSyncWork;
   }
@@ -342,8 +330,10 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
     return 1;
   }
 
-  protected override listSessionCorpusEntries() {
-    const work = super.listSessionCorpusEntries().then(async (entries) => {
+  protected override listSessionCorpusEntries(
+    targets?: Pick<MemorySyncParams, "sessions" | "archiveFiles">,
+  ) {
+    const work = super.listSessionCorpusEntries(targets).then(async (entries) => {
       this.corpusListCalls += 1;
       const callback = this.afterNextCorpusList;
       this.afterNextCorpusList = null;

@@ -5,25 +5,77 @@ import {
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+  tableExists,
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 import { loadMemorySourceFileState } from "./manager-source-state.js";
-import {
-  memoryTableExists,
-  resolvePersistedMemoryVectorIndexState,
-} from "./manager-vector-rebuild-state.js";
+import { resolvePersistedMemoryVectorIndexState } from "./manager-vector-rebuild-state.js";
 
 export const MEMORY_INDEX_META_KEY = "memory_index_meta_v1";
 
-export function readMemoryIndexMetadata(db: DatabaseSync) {
+export type MemoryDatabaseFacts = {
+  meta: MemoryIndexMeta | null;
+  serialized: string | null;
+  revision: number;
+  hasIndexedChunks: boolean;
+  hasSemanticChunks: boolean;
+};
+
+/** One bounded snapshot; retained text and embeddings never cross this boundary. */
+export function readMemoryDatabaseFacts(db: DatabaseSync): MemoryDatabaseFacts {
+  const query = getNodeSqliteKysely<{
+    memory_index_meta: { key: string; value: string };
+    memory_index_state: { id: number; revision: number };
+    memory_index_chunks: { model: string };
+  }>(db);
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    query
+      .selectFrom("memory_index_state")
+      .select((eb) => [
+        "revision",
+        eb
+          .selectFrom("memory_index_meta")
+          .select("value")
+          .where("key", "=", MEMORY_INDEX_META_KEY)
+          .as("serialized"),
+        eb.exists(eb.selectFrom("memory_index_chunks").select("model")).as("hasIndexedChunks"),
+        eb
+          .exists(
+            eb.selectFrom("memory_index_chunks").select("model").where("model", "!=", "fts-only"),
+          )
+          .as("hasSemanticChunks"),
+      ])
+      .where("id", "=", 1),
+  );
+  if (!row || !Number.isSafeInteger(row.revision)) {
+    throw new Error("Memory index revision is missing or invalid");
+  }
+  return {
+    ...parseMemoryIndexMetadata(row.serialized),
+    revision: row.revision,
+    hasIndexedChunks: Boolean(row.hasIndexedChunks),
+    hasSemanticChunks: Boolean(row.hasSemanticChunks),
+  };
+}
+
+function readMemoryIndexMetadata(db: DatabaseSync) {
   const row = db
     .prepare("SELECT value FROM memory_index_meta WHERE key = ?")
     .get(MEMORY_INDEX_META_KEY);
-  if (typeof row?.value !== "string" || !row.value) {
+  return parseMemoryIndexMetadata(row?.value);
+}
+
+function parseMemoryIndexMetadata(value: unknown) {
+  if (typeof value !== "string" || !value) {
     return { meta: null, serialized: null };
   }
   try {
     // SAFETY: The memory index writer serializes MemoryIndexMeta under this key.
-    return { meta: JSON.parse(row.value) as MemoryIndexMeta, serialized: row.value };
+    return { meta: JSON.parse(value) as MemoryIndexMeta, serialized: value };
   } catch {
     return { meta: null, serialized: null };
   }
@@ -37,7 +89,7 @@ export function readMemoryRetrievalIndexState(db: DatabaseSync) {
     db.prepare("SELECT 1 FROM memory_index_chunks LIMIT 1").get() !== undefined;
   const hasFtsContent =
     !hasIndexedChunks &&
-    memoryTableExists(db, MEMORY_INDEX_FTS_TABLE) &&
+    tableExists(db, MEMORY_INDEX_FTS_TABLE) &&
     db.prepare(`SELECT 1 FROM ${MEMORY_INDEX_FTS_TABLE} LIMIT 1`).get() !== undefined;
   const vectorState =
     meta && meta.provider !== "none"

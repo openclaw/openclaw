@@ -14,6 +14,7 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { WORKER_BUNDLE_ARTIFACT_PATHS } from "../../shared/worker-bundle-hash.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { bootstrapWorker as bootstrapWorkerCore } from "./bootstrap.js";
+import { registerBootstrapRuntimeProbeTests } from "./bootstrap.runtime-probe.test-support.js";
 import { fakeRunner, result } from "./bootstrap.test-support.js";
 import { createWorkerBundleProducer, type WorkerInstallationArtifact } from "./bundle.js";
 
@@ -248,7 +249,7 @@ describe("bootstrapWorker", () => {
     expect(runner.calls[2]?.options.input).toContain('ln -s "$lock_identity" "$lock"');
     expect(runner.calls[2]?.options.input).toContain("worker bundle archive digest mismatch");
     expect(runner.calls[2]?.options.input).toContain(
-      'const artifactPaths = ["code-mode-node.worker.mjs","openclaw-state-read.worker.mjs","worker-native-lifecycle.worker.mjs","file-tool-planning.worker.mjs","github-exec-launcher.mjs","image-processor.worker.mjs","service-child-group-anchor.mjs","service-child-relay.mjs","sqlite-store.worker.mjs","worker.mjs","workspace-rsync-receiver.mjs"]',
+      'const artifactPaths = ["code-mode-node.worker.mjs","openclaw-state-read.worker.mjs","worker-native-lifecycle.worker.mjs","file-tool-planning.worker.mjs","file-tool-read.worker.mjs","github-exec-launcher.mjs","image-processor.worker.mjs","service-child-group-anchor.mjs","service-child-relay.mjs","sqlite-source-revision.worker.mjs","sqlite-store.worker.mjs","worker.mjs","workspace-rsync-receiver.mjs"]',
     );
     expect(runner.calls[2]?.options.input).not.toContain('npm install --prefix "$staging"');
     expect(runner.calls[2]?.options.input).toContain("worker install content does not match");
@@ -443,6 +444,14 @@ describe("bootstrapWorker", () => {
       `const nodeSafe = ${PROCESS_NODE_VERSION_CHECK};`,
     );
     expect(runner.calls[0]?.options.input).toContain("SELECT sqlite_version() AS version");
+  });
+
+  registerBootstrapRuntimeProbeTests({
+    bootstrapWorker,
+    resolveIdentity,
+    ssh: SSH,
+    artifact: BUNDLE,
+    currentReceipt: tagged("current", RECEIPT_JSON),
   });
 
   it("embeds a shell-safe Node release check matching the canonical contract", () => {

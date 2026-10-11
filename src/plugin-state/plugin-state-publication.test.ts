@@ -1,13 +1,21 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SqliteCommittedFact } from "../infra/sqlite-commit-receipt.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
+import {
+  settleSqliteWorkerOperationContext,
+  type SqliteWorkerOperationContext,
+} from "../infra/sqlite-worker-operation-settlement.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { pluginStatePublication } from "./plugin-state-publication.js";
+import {
+  capturePluginStateReadDependencies,
+  pluginStatePublication,
+} from "./plugin-state-publication.js";
 import {
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
@@ -15,7 +23,10 @@ import {
   resetPluginStateStoreForTests,
 } from "./plugin-state-store.js";
 import type { PluginStateRow } from "./plugin-state-store.kernel.js";
-import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
+import {
+  clearPluginStateStoreForTests,
+  seedPluginStateEntriesForTests,
+} from "./plugin-state-store.test-helpers.js";
 import { sweepExpiredPluginStateEntriesInWorker } from "./plugin-state-worker-client.js";
 import { executePluginStateCommand } from "./plugin-state.worker.js";
 
@@ -44,6 +55,121 @@ function observe() {
 }
 
 describe("plugin state committed facts", () => {
+  it("serves warm keyed reads from committed receipts across worker and native writes", async () => {
+    await withOpenClawTestState({ label: "plugin-state-keyed-read-receipts" }, async ({ env }) => {
+      const options = { namespace: "receipts", maxEntries: 10, env };
+      const store = createPluginStateKeyedStore<{ count: number }>("receipt-test", options);
+      const native = createPluginStateSyncKeyedStore<{ count: number }>("receipt-test", options);
+      await store.register("key", { count: 1 });
+      const dispatch = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
+      const read = async (expected: { count: number } | undefined) => {
+        dispatch.mockClear();
+        expect(await store.lookup("key")).toEqual(expected);
+        expect(await store.lookupMany(["key", "key"])).toEqual([
+          { ok: true, value: expected },
+          { ok: true, value: expected },
+        ]);
+        expect(dispatch).not.toHaveBeenCalled();
+      };
+      await read({ count: 1 });
+      const first = await store.lookup("key");
+      first!.count = 99;
+      await read({ count: 1 });
+      native.register("key", { count: 2 });
+      await read({ count: 2 });
+      await store.register("key", { count: 3 });
+      await read({ count: 3 });
+      await store.delete("key");
+      await read(undefined);
+      native.register("key", { count: 4 });
+      await read({ count: 4 });
+      await store.clear();
+      await read(undefined);
+    });
+  });
+
+  it("publishes fixture cleanup to warm observations and ownership reads", async () => {
+    await withOpenClawTestState({ label: "plugin-state-clear-publication" }, async ({ env }) => {
+      const store = createPluginStateKeyedStore("receipt-test", {
+        namespace: "bindings",
+        maxEntries: 10,
+        env,
+      });
+      await store.register("session", { model: "first" });
+      const captured = await capturePluginStateReadDependencies(() => store.observe("session"));
+      try {
+        clearPluginStateStoreForTests();
+        expect(captured.isCurrent()).toBe(false);
+        expect((await store.observe("session")).value).toBeUndefined();
+      } finally {
+        captured.release();
+      }
+    });
+  });
+
+  it.each(["lookup", "observe"] as const)(
+    "keeps a prepared %s current only until its exact dependency commits",
+    async (method) => {
+      await withOpenClawTestState({ label: "plugin-state-read-dependencies" }, async ({ env }) => {
+        const options = { namespace: "bindings", maxEntries: 10, env };
+        const worker = createPluginStateKeyedStore("receipt-test", options);
+        const native = createPluginStateSyncKeyedStore("receipt-test", options);
+        const unrelated = createPluginStateSyncKeyedStore("receipt-test", {
+          namespace: "unrelated",
+          maxEntries: 10,
+          env,
+        });
+        await worker.register("session", { model: "first" });
+        const read = () =>
+          method === "observe"
+            ? worker.observe("session").then(({ value }) => value)
+            : worker.lookup("session");
+        const captured = await capturePluginStateReadDependencies(read);
+        try {
+          expect(captured.value).toEqual({ model: "first" });
+          unrelated.register("session", { model: "unrelated" });
+          native.register("another-session", { model: "another" });
+          expect(captured.isCurrent()).toBe(true);
+
+          native.register("session", { model: "replacement" });
+          expect(captured.isCurrent()).toBe(false);
+          expect(() => captured.assertCurrent()).toThrow("Plugin state changed");
+        } finally {
+          captured.release();
+        }
+        const replacement = await capturePluginStateReadDependencies(read);
+        expect(replacement.value).toEqual({ model: "replacement" });
+        expect(replacement.isCurrent()).toBe(true);
+        replacement.release();
+        expect(() => replacement.assertCurrent()).toThrow("Plugin state changed");
+      });
+    },
+  );
+
+  it("invalidates a captured legacy absence when its database is first created", async () => {
+    await withOpenClawTestState(
+      { label: "plugin-state-missing-read-dependency" },
+      async ({ env }) => {
+        const native = createPluginStateSyncKeyedStore("receipt-test", {
+          namespace: "bindings",
+          maxEntries: 10,
+          env,
+        });
+        const captured = await capturePluginStateReadDependencies(async () =>
+          native.lookup("session"),
+        );
+        try {
+          expect(captured.value).toBeUndefined();
+          expect(captured.isCurrent()).toBe(true);
+          native.register("session", { model: "created" });
+          expect(captured.isCurrent()).toBe(false);
+        } finally {
+          captured.release();
+        }
+      },
+    );
+  });
+
   it("delivers empty sweep receipts at settlement and changed sweeps immediately", async () => {
     await withOpenClawTestState({ label: "plugin-state-empty-sweep-delivery" }, async ({ env }) => {
       const database = openOpenClawStateDatabase({ env });
@@ -62,7 +188,7 @@ describe("plugin state committed facts", () => {
         const transport = admission.createSqliteWorkerOperationAdmission((_request, grant) =>
           grant(),
         );
-        const owner: admission.SqliteWorkerOperationContext = { port: transport.port };
+        const owner: SqliteWorkerOperationContext = { port: transport.port };
         const published = vi.fn();
         admission.observeSqliteWorkerCommittedFacts(transport, published);
         const postMessage = transport.port.postMessage.bind(transport.port);
@@ -100,7 +226,7 @@ describe("plugin state committed facts", () => {
           if (!changed) {
             expect(transport.committed).toBeUndefined();
           }
-          admission.settleSqliteWorkerOperationContext(owner, "completed");
+          settleSqliteWorkerOperationContext(owner, "completed");
           expect(transport.waitForSettlement(performance.now())).toMatchObject({
             kind: "completed",
             committed: { facts: { domain: "plugin-state", facts: expect.any(Map) } },

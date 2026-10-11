@@ -22,7 +22,6 @@ import type { SessionMutationAuthorization } from "./server-methods/types.js";
 import { isSessionCreatorProfile } from "./session-creator.js";
 import {
   isAgentRunStartMethod,
-  isSessionArchiveMutation,
   isRequiredSessionTargetMethod,
   isSessionProfileDependentMethod,
   mayCreateSessionTarget,
@@ -35,6 +34,7 @@ import {
   assertSessionMutationProjectionCurrent,
   createSessionSharingLookupCaches,
   prepareAuthorizedSessionMutationFacts,
+  prepareSessionMutationAuthorizationRequest,
   resolveOwnSessionProfileAuthorization,
   sessionMutationTargetChanged,
   VISIBILITY_AUTHORIZED_METHODS,
@@ -69,7 +69,6 @@ import {
 } from "./session-sharing-source.js";
 import {
   readSessionSharingStringParam,
-  resolveChatSendAuthorizationParams,
   resolveChatSendAuthorizationTarget,
   resolveDirectIncognitoTargets,
   resolveDirectSessionTargets,
@@ -117,28 +116,25 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
   authorization?: SessionMutationAuthorization;
   error: ErrorShape | null;
 } {
-  let params = { ...request };
-  params.preparedProfiles?.readCurrent();
-  if (params.method === "chat.send") {
-    const normalized = resolveChatSendAuthorizationParams(
-      params.context.getRuntimeConfig(),
-      params.requestParams,
-    );
-    if (!normalized.ok) {
-      return { error: normalized.error };
-    }
-    params = { ...params, requestParams: normalized.value };
+  const requestPreparation = prepareSessionMutationAuthorizationRequest(request);
+  if (!requestPreparation.ok) {
+    return { error: requestPreparation.error };
   }
+  const { params, requiresCommunicationAuthority, targetOwnership } = requestPreparation;
   const authorizesAgentRun = isAgentRunStartMethod(params.method, params.requestParams);
   const authorizesRead =
     resolveSessionMethodScope(params.method, params.requestParams) === "operator.sessions.read";
-  const requiresArchiveOwnership = isSessionArchiveMutation(params.method, params.requestParams);
   // Progress belongs to the current conversation, not merely its stable session ID.
   // Capture this boundary for admins too so delayed writes cannot revive a reset card.
   const bindsProgressLifecycle =
     params.method === "progressCard.put" || params.method === "progressCard.refresh";
   const adminBypass = isGatewayAdmin(params.client) && !authorizesAgentRun;
-  if (adminBypass && !bindsProgressLifecycle && !params.expectedTarget) {
+  if (
+    adminBypass &&
+    !requiresCommunicationAuthority &&
+    !bindsProgressLifecycle &&
+    !params.expectedTarget
+  ) {
     return { error: null };
   }
   if (
@@ -186,7 +182,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
         : null
       : consuming.sharing
         ? authorizeSessionSharingTarget(
-            { cfg, client: params.client, target, requireOwner: requiresArchiveOwnership },
+            { cfg, client: params.client, target, ...targetOwnership },
             {
               value: preparedPolicy(cfg)!.sessionCap,
               role: preparedPolicy(cfg)!.roleForTarget(target),
@@ -196,7 +192,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
             cfg,
             client: params.client,
             target,
-            requireOwner: requiresArchiveOwnership,
+            ...targetOwnership,
             isMember: resolveSessionSharingMembership(target, identity?.id, members, projection),
           });
   };

@@ -46,7 +46,6 @@ function createUsageDetailRequest<T>(
   let value: { target: UsageDetailTarget; data?: T } | null = null;
   let status = createPanelRefreshStatus();
   let pending: Promise<void> | null = null;
-  let generation = 0;
   const task = createUsageRequest(host, {
     task: async (
       [client, target]: readonly [GatewayBrowserClient, UsageDetailTarget],
@@ -94,7 +93,6 @@ function createUsageDetailRequest<T>(
       status = failPanelRefresh(status, undefined, gateway.snapshot);
     }
     pending = null;
-    generation += 1;
     task.cancel();
   };
   const reset = (target?: UsageDetailTarget) => {
@@ -113,12 +111,11 @@ function createUsageDetailRequest<T>(
       return pending !== null;
     },
     async recover(sessionKey: string, loadInitial = false): Promise<void> {
-      const current = generation;
       const target = resolveTarget(sessionKey);
       await pending;
       if (
-        current === generation &&
-        sameUsageTarget(target, resolveTarget(sessionKey)) &&
+        !pending &&
+        (!value || sameUsageTarget(value.target, target)) &&
         gateway.snapshot &&
         isGatewayAvailable(gateway.snapshot) &&
         (status.awaitingGateway || status.error !== null || (loadInitial && !status.hasLoaded))
@@ -146,7 +143,6 @@ function createUsageDetailRequest<T>(
         return pending ?? Promise.resolve();
       }
       status = beginPanelRefresh(status);
-      generation += 1;
       return (pending = task.run([client, target]));
     },
     cancel,

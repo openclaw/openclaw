@@ -30,13 +30,13 @@ export type SystemsInventoryRow = {
   sessions: SystemsSessionRelation[];
 };
 
-/** The route owns connection epochs, refresh scheduling and publication of this snapshot. */
+/** The route owns refresh scheduling and publication of this snapshot. */
 export async function loadSystemsInventory(
   gateway: ApplicationGateway,
-  options: { isCurrent: () => boolean; signal?: AbortSignal; fresh?: boolean },
+  options: { signal?: AbortSignal; fresh?: boolean },
 ): Promise<SystemsInventory | undefined> {
   const client = gateway.snapshot.client;
-  if (!client || !options.isCurrent() || options.signal?.aborted) {
+  if (!client) {
     return undefined;
   }
   const requestOptions = { signal: options.signal };
@@ -49,16 +49,6 @@ export async function loadSystemsInventory(
     client.request<{ nodes: NodeListNode[] }>("node.list", {}, requestOptions),
     readSystemInfo(gateway, options.signal, { fresh: options.fresh }),
   ]);
-  if (!options.isCurrent() || options.signal?.aborted) {
-    return undefined;
-  }
-  if (
-    systemInfo.status === "rejected" &&
-    systemInfo.reason instanceof DOMException &&
-    systemInfo.reason.name === "AbortError"
-  ) {
-    return undefined;
-  }
   // Never rebuild inventory from auxiliary node reads: that would resurrect cloud-owned
   // pairings deliberately suppressed by environments.list and hide inventory failures.
   if (inventory.status === "rejected") {

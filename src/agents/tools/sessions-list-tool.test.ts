@@ -336,6 +336,7 @@ describe("sessions-list-tool", () => {
           archived: state,
           archivedAt: state ? 20 : undefined,
           pinned: false,
+          sidebarRoot: true,
         })),
       });
       const tool = createSessionsListTool({ config: VALID_CONFIG });
@@ -353,6 +354,7 @@ describe("sessions-list-tool", () => {
       expect(rows?.map(({ archived: state, pinned }) => ({ archived: state, pinned }))).toEqual(
         states.map((state) => ({ archived: state, pinned: false })),
       );
+      expect(rows?.every((row) => row.sidebarRoot === true)).toBe(true);
       expect(rows?.every((row) => !Object.hasOwn(row, "archivedAt"))).toBe(true);
     },
   );

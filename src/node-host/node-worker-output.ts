@@ -49,20 +49,19 @@ export function sanitizeNodeWorkerDiagnostic(
   return truncateUtf8Suffix(oneLine || fallback, NODE_WORKER_STDERR_MAX_BYTES);
 }
 
-export function parseNodeWorkerOutputJson(
+export function parseNodeWorkerOutput(
   raw: string,
   scrubCredential: (text: string) => string,
-): string {
+): unknown {
   const redacted = redactLaunchText(raw, scrubCredential);
   let parsed: unknown;
   try {
-    parsed = JSON.parse(redacted) as unknown;
+    parsed = JSON.parse(redacted);
   } catch (error) {
     throw new Error("worker returned invalid JSON output", { cause: error });
   }
-  const result = JSON.stringify(parsed);
-  if (Buffer.byteLength(result, "utf8") > NODE_WORKER_STDOUT_MAX_BYTES) {
+  if (Buffer.byteLength(JSON.stringify(parsed), "utf8") > NODE_WORKER_STDOUT_MAX_BYTES) {
     throw new Error(`worker result exceeded ${NODE_WORKER_STDOUT_MAX_BYTES} bytes`);
   }
-  return result;
+  return parsed;
 }

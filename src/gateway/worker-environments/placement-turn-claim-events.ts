@@ -194,7 +194,6 @@ export async function bindWorkerTurnOwner(
         throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
       }
     };
-    assertPreparedCurrent();
     assertRunActive();
     operatorAuthority?.assertCurrent();
     assertPreparedCurrent();
@@ -229,15 +228,8 @@ export async function bindWorkerTurnOwner(
     delegatedSource.assertBinding();
   };
   const assertActive = composeSessionSourceAssertion(
-    [
-      delegatedSource.assertCurrent,
-      assertRunActive,
-      operatorAuthority?.assertCurrent,
-      delegatedSource.assertCurrent,
-    ],
+    [delegatedSource.assertCurrent, assertRunActive, operatorAuthority?.assertCurrent],
     (assertSources) => {
-      // A closed claim must not consult its retired source. Callbacks can also revoke it.
-      assertOwnerCurrent();
       assertSources();
       assertOwnerCurrent();
     },
@@ -353,7 +345,6 @@ export function captureWorkerTurnClaimCurrentness(
     owners?.get(claim.sessionId) === bound &&
     bound.runtime.claimAuthority.isCurrent();
   return () =>
-    isBoundCurrent() &&
     validateAgentRunDelegatedAuthority(delegatedAuthority, bound.runtime.delegatedAuthority) &&
     isBoundCurrent();
 }

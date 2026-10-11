@@ -1,5 +1,11 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { getTranscriptMessageRole } from "../agents/embedded-agent-runner/message-visibility.js";
-import { readAgentAssistantSource } from "../infra/agent-events.js";
+import {
+  emitAgentEventForOwner,
+  emitAgentEventForRunContext,
+  readAgentAssistantSource,
+  type AgentEventRuntimePayload,
+} from "../infra/agent-events.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logError } from "../logger.js";
@@ -68,6 +74,57 @@ export function createChatTranscriptPublication(params: {
     drain: async () => {
       await Promise.allSettled(publications);
     },
+    observeAgentEvent: (
+      event: AgentEventRuntimePayload,
+      clientRunId: string,
+      isCurrent: () => boolean,
+    ) => {
+      // A detached worker may reuse its correlation id under a new claim.
+      // Retire its old occurrence capabilities with the old text buffer.
+      if (chatRunState.runs.get(clientRunId)?.bufferIsCurrent?.() === false) {
+        chatRunState.clearRun(clientRunId);
+        agentRunSeq.delete(event.runId);
+      }
+      const { itemId, text } = event.data;
+      if (event.stream !== "thinking" || typeof itemId !== "string" || typeof text !== "string") {
+        return;
+      }
+      const context = getAgentRunContext(event.runId);
+      if (!context) {
+        return;
+      }
+      const items = (chatRunState.getOrCreate(clientRunId).assistantItems ??= new Map());
+      const item = items.get(itemId) ?? {};
+      const { runId, contextClaimId, lifecycleGeneration } = event;
+      const { sessionKey, sessionId } = context;
+      // Capture first admission, never borrow a current claim when a delayed commit arrives.
+      item.publishThinkingReceipt ??= (
+        messageId: string,
+        targetSessionKey?: string,
+        targetSessionId?: string,
+      ) => {
+        if (
+          targetSessionKey !== sessionKey ||
+          (sessionId && targetSessionId !== sessionId) ||
+          !isCurrent() ||
+          getAgentRunContext(runId) !== context
+        ) {
+          return;
+        }
+        const receipt = {
+          runId,
+          lifecycleGeneration,
+          stream: "thinking",
+          data: { phase: "persisted", itemId, messageId, messageRunId: runId },
+        };
+        if (contextClaimId) {
+          emitAgentEventForOwner(receipt, contextClaimId);
+        } else {
+          emitAgentEventForRunContext(receipt, context);
+        }
+      };
+      items.set(itemId, item);
+    },
     retireTranscript: (event: InternalSessionTranscriptUpdate, publication?: Promise<void>) => {
       const sourceRunId = readSessionTranscriptRunId(event.message);
       if (!sourceRunId || getTranscriptMessageRole(event.message) !== "assistant") {
@@ -80,6 +137,22 @@ export function createChatTranscriptPublication(params: {
       const source = readAgentAssistantSource(event.message);
       const mirrorKey = readTranscriptMessageIdempotencyKey(event.message);
       const itemIds = [...(event.assistantItemIds ?? []), ...(mirrorKey ? [mirrorKey] : [])];
+      const content = asNullableRecord(event.message)?.content;
+      if (
+        event.messageId !== undefined &&
+        Array.isArray(content) &&
+        content.some((block) => asNullableRecord(block)?.type === "thinking")
+      ) {
+        // Claimed events retain the source run; shared events use its registered alias.
+        // Their captured authority and target, not unrelated alias buffers, own the receipt.
+        for (const itemId of source?.itemId ? [source.itemId] : (event.assistantItemIds ?? [])) {
+          const publish =
+            chatRunState.runs.get(sourceRunId)?.assistantItems?.get(itemId)
+              ?.publishThinkingReceipt ??
+            chatRunState.runs.get(clientRunId)?.assistantItems?.get(itemId)?.publishThinkingReceipt;
+          publish?.(event.messageId, event.sessionKey, event.sessionId);
+        }
+      }
       if (
         (!source && itemIds.length === 0) ||
         !sessionKey ||
@@ -136,9 +209,10 @@ export function createChatTranscriptPublication(params: {
         void settled.then(() => publications.delete(settled));
       }
       const run = chatRunState.getOrCreate(clientRunId);
+      if (run.bufferIsCurrent?.() === false || isChatAbortMarkerCurrent(run.abortMarker, link)) {
+        return;
+      }
       if (
-        run.bufferIsCurrent?.() === false ||
-        isChatAbortMarkerCurrent(run.abortMarker, link) ||
         !(source
           ? chatRunState.retireSource(clientRunId, source)
           : chatRunState.retireBuffer(clientRunId, itemIds))

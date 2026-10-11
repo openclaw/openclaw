@@ -12,6 +12,7 @@ import {
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { attachBrokerNativeResource } from "../process/spawn-broker/resource-client.js";
 import { BrokerNativeResourceCloseError } from "../process/spawn-broker/resource-protocol.js";
+import "./worker-ancestry.js";
 import { serveWorkerMemorySamples } from "./worker-memory.js";
 import { encodeNativeWorkerFailure } from "./worker-native-error.js";
 import type { NativeWorkerReply, NativeWorkerRequest } from "./worker-native-lifecycle.types.js";

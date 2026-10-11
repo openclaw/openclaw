@@ -19,19 +19,36 @@ import { getActivePluginRegistry } from "../plugins/runtime.js";
 const CHECK_ID = "core/doctor/node-hosting-preconditions";
 
 function usesIdentityHeadersWithoutMachineCredentials(cfg: OpenClawConfig): boolean {
-  const hasToken = hasConfiguredGatewayAuthSecretInput(cfg, "gateway.auth.token");
-  const hasPassword = hasConfiguredGatewayAuthSecretInput(cfg, "gateway.auth.password");
-  if (hasToken || hasPassword) {
-    return false;
-  }
-  if (cfg.gateway?.auth?.mode === "trusted-proxy") {
-    return true;
-  }
   return (
-    cfg.gateway?.tailscale?.mode === "serve" &&
-    cfg.gateway?.auth?.mode !== "password" &&
-    cfg.gateway?.auth?.mode !== "none" &&
-    cfg.gateway?.auth?.allowTailscale !== false
+    !hasConfiguredGatewayAuthSecretInput(cfg, "gateway.auth.token") &&
+    !hasConfiguredGatewayAuthSecretInput(cfg, "gateway.auth.password") &&
+    (cfg.gateway?.auth?.mode === "trusted-proxy" ||
+      (cfg.gateway?.tailscale?.mode === "serve" &&
+        cfg.gateway?.auth?.mode !== "password" &&
+        cfg.gateway?.auth?.mode !== "none" &&
+        cfg.gateway?.auth?.allowTailscale !== false))
+  );
+}
+
+function hasConfiguredNodeHosting(cfg: OpenClawConfig): boolean {
+  const nodes = cfg.gateway?.nodes;
+  const execConfigs = [
+    cfg.tools?.exec,
+    ...Object.values(cfg.agents?.entries ?? {}).map((agent) => agent.tools?.exec),
+  ];
+  // Bundled plugin availability and default/deny-only node policies are not hosting intent.
+  return Boolean(
+    cfg.plugins?.entries?.["device-pair"]?.enabled === true ||
+    resolveConfiguredPairingPublicUrl(cfg) ||
+    (nodes?.browser?.mode !== "off" && nodes?.browser?.node?.trim()) ||
+    nodes?.pairing?.autoApproveCidrs?.length ||
+    nodes?.pairing?.sshVerify ||
+    nodes?.commands?.allow?.length ||
+    execConfigs.some(
+      (exec) =>
+        exec?.host === "node" ||
+        ((exec?.host ?? cfg.tools?.exec?.host ?? "auto") === "auto" && exec?.node?.trim()),
+    ),
   );
 }
 
@@ -68,6 +85,9 @@ function lacksDeviceCapableRuntimeRoute(cfg: OpenClawConfig): boolean {
 export async function collectNodeHostingPreconditionFindings(
   cfg: OpenClawConfig,
 ): Promise<readonly HealthFinding[]> {
+  if (cfg.gateway?.mode === "remote" || !hasConfiguredNodeHosting(cfg)) {
+    return [];
+  }
   const findings: HealthFinding[] = [];
   const warn = (finding: Omit<HealthFinding, "checkId" | "severity">) =>
     findings.push({ checkId: CHECK_ID, severity: "warning", ...finding });
@@ -78,7 +98,7 @@ export async function collectNodeHostingPreconditionFindings(
       path: "plugins.entries.device-pair.enabled",
       requirement: "node-onboarding-plugin",
       fixHint:
-        "Set plugins.entries.device-pair.enabled: true, ensure device-pair is not denied or excluded by plugins.allow, then restart the Gateway.",
+        "Set plugins.entries.device-pair.enabled: true, check that device-pair is not denied or excluded by plugins.allow, then restart the Gateway.",
     });
   }
   if (lacksDeviceCapableRuntimeRoute(cfg)) {
@@ -88,7 +108,7 @@ export async function collectNodeHostingPreconditionFindings(
       path: "agents",
       requirement: "device-session-runtime",
       fixHint:
-        'Select an agent/model route whose runtime supports paired-device placement, then ensure its plugin is enabled and its required node commands are explicitly allowed. Runtime policy is model/provider-scoped; whole-agent runtime keys are ignored. For a multi-agent roster, set agents.ownership: "explicit".',
+        'Select an agent/model route whose runtime supports paired-device placement, then check that its plugin is enabled and its required node commands are explicitly allowed. Runtime policy is model/provider-scoped; whole-agent runtime keys are ignored. For a multi-agent roster, set agents.ownership: "explicit".',
     });
   }
   if (usesIdentityHeadersWithoutMachineCredentials(cfg)) {

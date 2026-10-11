@@ -9,6 +9,7 @@ import {
   registerSubagentCompletionToolHandoff,
 } from "../gateway/subagent-completion-tool-handoff.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import { resolvePluginHarnessToolPolicies } from "./harness/execution-environment.js";
 import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
 import { attachToolAllowlistIntersection } from "./tool-policy.js";
 import { resolveWebSearchToolPolicy } from "./web-search-tool-policy.js";
@@ -45,6 +46,79 @@ describe("resolveRequesterToolPolicies", () => {
       },
     };
   }
+
+  it("retains dashboard delegation and revocation fallback without an injected capability store", async () => {
+    const root = "agent:front:main";
+    const visible = "agent:worker:dashboard:coding";
+    const helper = "agent:worker:subagent:helper";
+    const cfg = config({
+      tools: { toolsBySender: { "*": {} } },
+      agents: {
+        entries: {
+          front: { subagents: { allowAgents: ["worker"], delegateToolsTo: ["worker"] } },
+          worker: {},
+        },
+      },
+    });
+    const visibleEntry: SessionEntry = {
+      sessionId: `${visible}-session`,
+      updatedAt: 1,
+      spawnDepth: 1,
+      spawnedBy: root,
+      inheritedToolPolicyVersion: 1,
+      inheritedToolDeny: ["exec"],
+      delegatedToolPolicy: {
+        requesterSessionKey: root,
+        targetAgentId: "worker",
+        deny: [],
+        requesterDeny: ["exec"],
+      },
+    };
+    await writeSession(visible, visibleEntry);
+    await writeSession(helper, {
+      spawnDepth: 2,
+      spawnedBy: visible,
+      inheritedToolPolicyVersion: 1,
+      inheritedToolDeny: ["exec"],
+      delegatedToolPolicy: {
+        requesterSessionKey: root,
+        targetAgentId: "worker",
+        deny: [],
+        requesterDeny: [],
+      },
+    });
+    const resolve = () =>
+      resolveRequesterToolPolicies({
+        config: cfg,
+        sessionKey: visible,
+        preparedSessionEntry: { sessionKey: visible, entry: visibleEntry },
+        ...completionHandoffFacts(helper, visible),
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: helper,
+          sourceTool: "subagent_announce",
+        },
+      });
+    expect(resolve().delegatedToolPolicy).toMatchObject({
+      requesterSessionKey: root,
+      targetAgentId: "worker",
+    });
+    expect(resolve().inheritedToolPolicy?.deny ?? []).not.toContain("exec");
+    expect(
+      resolvePluginHarnessToolPolicies(
+        {
+          config: cfg,
+          agentId: "worker",
+          sessionKey: visible,
+          provider: "fixture",
+          modelId: "fixture",
+        },
+        resolve().subagentPolicy?.deny,
+      ).toolPolicyRestricted,
+    ).toBe(true);
+    cfg.agents!.entries!.front!.subagents!.delegateToolsTo = [];
+    expect(resolve().inheritedToolPolicy?.deny).toContain("exec");
+  });
 
   function completionHandoffFacts(sourceSessionKey: string, targetSessionKey: string) {
     const targetSessionId = `${targetSessionKey}-session`;

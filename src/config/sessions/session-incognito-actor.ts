@@ -9,10 +9,12 @@ import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-work
 import { SqliteWorkerError } from "../../infra/sqlite-worker-store.js";
 import type { AgentDatabaseIncognitoIdentity } from "../../state/openclaw-agent-execution-contract.js";
 import type { TrajectoryRuntimeRetentionLease } from "../../trajectory/runtime-retention.contract.js";
+import type { SessionActorLifetime } from "./session-actor-state.types.js";
 import {
   authorizeSessionFacts,
   incognitoEntryPublication,
   isIncognitoEntryValidationGrant,
+  installIncognitoSessionFacts,
   readIncognitoGrantFacts,
   type IncognitoEntryOperations,
   type IncognitoSessionRunner,
@@ -71,14 +73,11 @@ import type {
 export type { IncognitoSessionClaim } from "./session-incognito-authority.js";
 
 /** Borrowed session operations; execution lifetime and ACP orchestration stay with their owner. */
-export type IncognitoSessionActor = {
+export type IncognitoSessionActor = SessionActorLifetime & {
   readonly agentId: string;
   readonly path: string;
   readonly identity: AgentDatabaseIncognitoIdentity;
   readonly sessions: ReturnType<ReturnType<typeof createIncognitoSessionFacts>["bind"]>;
-  assertCurrent(): void;
-  /** Refuse new disclosure even while accepted work retains the actor for settlement. */
-  assertReadable(): void;
 };
 
 /** Actor-local projection owned by its lifetime, never a roster or full-entry cache. */
@@ -87,6 +86,9 @@ export function createIncognitoSessionFacts(
   assertActorCurrent: () => void,
   withGrant: <T>(operation: () => T) => T,
   assertOutsideGrant: () => void,
+  invalidateActorSnapshots: (
+    targets: readonly Pick<IncognitoSessionFacts, "sessionKey" | "sharing">[] | undefined,
+  ) => void,
   assertAdmittedCurrent: () => void = assertActorCurrent,
 ) {
   const entries = new Map<string, IncognitoSessionFacts>();
@@ -108,29 +110,10 @@ export function createIncognitoSessionFacts(
   };
   const install = (facts: IncognitoSessionFacts) => {
     assertActorCurrent();
-    if (!isDeepStrictEqual(facts.identity, identity)) {
-      throw new Error("Incognito publication belongs to another actor");
-    }
-    const previous = entries.get(facts.sessionKey);
-    if (previous && previous.revision > facts.revision) {
-      throw new Error("Incognito publication is older than committed facts");
-    }
-    const next = structuredClone(facts);
-    snapshotRevision = Math.max(snapshotRevision, next.revision);
-    if (previous?.sharing?.entry?.sessionId === next.sharing?.entry?.sessionId && previous) {
-      next.expiresAt = previous.expiresAt;
-    }
-    if (
-      previous?.sharing?.entry?.sessionId !== next.sharing?.entry?.sessionId ||
-      previous?.sharing?.entry?.lifecycleRevision !== next.sharing?.entry?.lifecycleRevision
-    ) {
+    const { revision, topologyChanged } = installIncognitoSessionFacts(identity, entries, facts);
+    snapshotRevision = Math.max(snapshotRevision, revision);
+    if (topologyChanged) {
       topologyRevision += 1;
-    }
-    // Misses belong to their scoped claim, not an ever-growing negative cache.
-    if (next.sharing?.entry) {
-      entries.set(next.sessionKey, next);
-    } else {
-      entries.delete(next.sessionKey);
     }
     unavailable.delete(facts.sessionKey);
   };
@@ -147,7 +130,15 @@ export function createIncognitoSessionFacts(
     });
   return {
     captureRead,
+    invalidate(sessionKey: string) {
+      invalidateActorSnapshots([{ sessionKey, sharing: entries.get(sessionKey)?.sharing }]);
+      if (!unavailable.has(sessionKey)) {
+        unavailable.add(sessionKey);
+        snapshotRevision += 1;
+      }
+    },
     clear() {
+      invalidateActorSnapshots(undefined);
       entries.clear();
       pending.clear();
       unavailable.clear();
@@ -190,6 +181,14 @@ export function createIncognitoSessionFacts(
         const commandGrant = grants.command(captured.type, authority.entryCreation);
         let commitGranted = false;
         function unknownOutcome(message: string): never {
+          invalidateActorSnapshots(
+            targets.size
+              ? [...targets].map((sessionKey) => ({
+                  sessionKey,
+                  sharing: entries.get(sessionKey)?.sharing,
+                }))
+              : undefined,
+          );
           for (const key of targets) {
             unavailable.add(key);
           }
@@ -350,6 +349,9 @@ export function createIncognitoSessionFacts(
                     captured,
                     request.stage === "commit" ? targets : undefined,
                   );
+                  if (changing) {
+                    invalidateActorSnapshots(facts);
+                  }
                   commandGrant.capture(request.stage, facts);
                   for (const entry of facts) {
                     targets.add(entry.sessionKey);

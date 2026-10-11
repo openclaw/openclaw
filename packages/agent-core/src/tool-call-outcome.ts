@@ -103,6 +103,24 @@ async function applyToolOutcomeHook(
   }
 }
 
+export type ImmediateToolCallOutcome = {
+  kind: "immediate";
+  result: AgentToolResult<unknown>;
+  isError: boolean;
+  errorKind?: "argument-validation";
+};
+
+export function immediateToolCallError(message: string): ImmediateToolCallOutcome {
+  return { kind: "immediate", result: createErrorToolResult(message), isError: true };
+}
+
+export function createToolExecutionErrorResult(error: unknown): AgentToolResult<unknown> {
+  const result = createErrorToolResult(coerceErrorMessage(error));
+  return typeof error === "object" && error !== null
+    ? copyInternalToolResultState(error, result)
+    : result;
+}
+
 export function createErrorToolResult(
   message: string,
   details: unknown = {},

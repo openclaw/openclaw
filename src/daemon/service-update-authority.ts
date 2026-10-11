@@ -6,6 +6,10 @@ import {
 } from "../process/exec-result.js";
 import type { CommandOptions, SpawnResult } from "../process/exec.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
+import {
+  getServiceInspectionClock,
+  runServiceInspectionGuard,
+} from "./service-inspection-budget.js";
 
 export const GATEWAY_UPDATE_EXECUTOR_CONTRACT = "root-spawner-v1";
 
@@ -82,13 +86,15 @@ export async function withGatewayServiceUpdateAuthority<T>(
     try {
       // Caller assertions can borrow a native lock whose checks consult this scope.
       // Evaluate them in their original context, retaining every inherited updater fence.
-      owners.run(parent, () => {
-        parent?.assertCurrent();
-        options?.assertRecoveryCurrent?.();
-        if (!compensating || !options?.assertRecoveryCurrent) {
-          assertOwner?.();
-        }
-      });
+      runServiceInspectionGuard(() =>
+        owners.run(parent, () => {
+          parent?.assertCurrent();
+          options?.assertRecoveryCurrent?.();
+          if (!compensating || !options?.assertRecoveryCurrent) {
+            assertOwner?.();
+          }
+        }),
+      );
     } catch (error) {
       throw error instanceof GatewayServiceAuthorityError
         ? error
@@ -128,10 +134,11 @@ export async function withGatewayServiceUpdateAuthority<T>(
           baseEnv: { ...commandOptions.baseEnv },
           env: { ...commandOptions.env },
         };
+        const now = getServiceInspectionClock(() => Date.now());
         const deadline =
           selected.timeoutMs === undefined
             ? undefined
-            : Date.now() + resolveTimerTimeoutMs(selected.timeoutMs, 1);
+            : now() + resolveTimerTimeoutMs(selected.timeoutMs, 1);
         const expired = () =>
           Object.assign(new Error("Native command admission timed out."), { code: "ETIMEDOUT" });
         const previous = tail;
@@ -144,7 +151,7 @@ export async function withGatewayServiceUpdateAuthority<T>(
             assertCurrent();
             assertSubmittedScope();
             selected.signal?.throwIfAborted();
-            const remaining = deadline === undefined ? undefined : deadline - Date.now();
+            const remaining = deadline === undefined ? undefined : deadline - now();
             if (remaining !== undefined && remaining <= 0) {
               throw expired();
             }
@@ -165,7 +172,7 @@ export async function withGatewayServiceUpdateAuthority<T>(
         );
         // Admission expiry cannot release the preceding native child or let a
         // later submission pass it. The queued work remains tracked until joined.
-        const admitted = await awaitWithinDeadline(() => previous, deadline);
+        const admitted = await awaitWithinDeadline(() => previous, deadline, now);
         if (admitted === ABSOLUTE_DEADLINE_EXPIRED && !started) {
           throw expired();
         }

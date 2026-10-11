@@ -11,9 +11,9 @@ import {
   cronListResponse,
   operatorHello,
   waitForCronPage,
-} from "./cron-page.test-support.ts";
+} from "./cron-page.test-support.tsx";
 import { createCronViewJob, selectSegmented } from "./view.test-support.ts";
-import "./cron-page.ts";
+import "./cron-page.tsx";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -47,7 +47,7 @@ describe("CronPage header", () => {
     };
     const page = createPage(context, { render: true });
 
-    await page.updateComplete;
+    await page.settle();
 
     expect(page.querySelector(".page-title")?.textContent).toBe("Automations");
     expect(page.querySelector(".content-header--settings")).not.toBeNull();
@@ -87,15 +87,15 @@ describe("CronPage editor state sync", () => {
       // Exercise controller intent replacement; the ordinary clone button is busy-disabled.
       startCronClone(page.cron, job);
       page.cron.cronCreateOpen = true;
-      page.requestUpdate();
-      await page.updateComplete;
+      page.refreshView();
+      await page.settle();
       expect(page.querySelector<HTMLInputElement>("#cron-name")?.value).toBe(
         "Garden reminder copy",
       );
       const draft = page.cron.cronForm;
       saved.resolve({ ...job, name: "Earlier edit saved" });
       await waitForCronPage(() => expect(page.cron.cronBusy).toBe(false));
-      await page.updateComplete;
+      await page.settle();
       expect(page.cron.cronCreateOpen).toBe(true);
       expect(page.cron.cronEditingJob).toBeNull();
       expect(page.cron.cronForm).toBe(draft);
@@ -120,20 +120,20 @@ describe("CronPage editor state sync", () => {
       expect(page.querySelector('[data-test-id="cron-new-task"]')).not.toBeNull(),
     );
     (page.querySelector('[data-test-id="cron-new-task"]') as HTMLButtonElement).click();
-    await page.updateComplete;
+    await page.settle();
 
     const input = page.querySelector(selector) as HTMLInputElement | HTMLTextAreaElement;
     input.focus();
     input.value = "";
     input.dispatchEvent(new Event("input", { bubbles: true }));
-    await page.updateComplete;
+    await page.settle();
     expect(page.querySelector(selector)?.getAttribute("aria-invalid")).toBe("true");
     expect(document.activeElement?.matches(selector)).toBe(true);
 
     for (const character of text) {
       input.value += character;
       input.dispatchEvent(new Event("input", { bubbles: true }));
-      await page.updateComplete;
+      await page.settle();
       expect(document.activeElement?.matches(selector)).toBe(true);
     }
     expect((page.querySelector(selector) as HTMLInputElement).value).toBe(text);
@@ -160,12 +160,12 @@ describe("CronPage editor state sync", () => {
         page
           .querySelector<HTMLElement>("[data-test-id=cron-list-tab-activity]")!
           .dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true, detail: 1 }));
-        await page.updateComplete;
+        await page.settle();
       }
       page.routeSearch = "?session=agent%3Aops%3Anight-watch&agent=ops";
       await waitForCronPage(() => expect(page.cron.cronJobsTotal).toBe(count));
       await waitForCronPage(() => expect(page.cron.cronJobsSnapshotRevision).not.toBeNull());
-      await page.updateComplete;
+      await page.settle();
       expect(request).toHaveBeenCalledWith(
         "cron.list",
         expect.objectContaining({ sessionKey: "agent:ops:night-watch", sessionAgentId: "ops" }),
@@ -319,7 +319,7 @@ describe("CronPage editor state sync", () => {
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 0);
     });
-    await page.updateComplete;
+    await page.settle();
     expect(page.cron.cronEditingJob?.id ?? null).toBe(expectedJobId);
     expect(page.cron.cronError).toBeNull();
   });
@@ -376,7 +376,7 @@ describe("CronPage editor state sync", () => {
     );
 
     gateway.emitSnapshot({ hello: operatorHello(["operator.read"]) });
-    await page.updateComplete;
+    await page.settle();
     scratch.resolve({
       scratch: { content: "private checklist", revision: 1, updatedAtMs: 1 },
       currentRevision: 1,
@@ -385,7 +385,7 @@ describe("CronPage editor state sync", () => {
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 0);
     });
-    await page.updateComplete;
+    await page.settle();
 
     expect(page.cron.cronForm.payloadText).toBe("");
   });
@@ -449,8 +449,8 @@ describe("CronPage editor state sync", () => {
     await waitForCronPage(() => expect(page.cron.cronEditingJob?.id).toBe(staleJob.id));
 
     page.cron.cronJobsQuery = "missing from filtered results";
-    page.requestUpdate();
-    await page.updateComplete;
+    page.refreshView();
+    await page.settle();
     const name = page.querySelector("#cron-name") as HTMLInputElement;
     name.value = "My stale edit";
     name.dispatchEvent(new Event("input", { bubbles: true }));
@@ -624,7 +624,7 @@ describe("CronPage editor state sync", () => {
     const page = createPage(createContext(gateway, "writer"), { render: true });
 
     await waitForCronPage(() =>
-      expect(page.querySelector('[data-test-id="cron-new-task"]')).not.toBeNull(),
+      expect(page.querySelector('[data-suggestion="repoPulse"]')).not.toBeNull(),
     );
     (page.querySelector('[data-suggestion="repoPulse"]') as HTMLButtonElement).click();
     await waitForCronPage(() =>
@@ -635,7 +635,7 @@ describe("CronPage editor state sync", () => {
     const submittedState = page.cron;
     page.remove();
     const currentPage = createPage(createContext(gateway, "writer"));
-    await currentPage.updateComplete;
+    await currentPage.settle();
     added.resolve({ id: "job-fresh" });
 
     await waitForCronPage(() => {
@@ -729,7 +729,7 @@ describe("CronPage editor state sync", () => {
       (page.querySelector('[data-test-id="cron-detail-tab-history"]') as HTMLElement).dispatchEvent(
         new MouseEvent("click", { detail: 1, bubbles: true }),
       );
-      await page.updateComplete;
+      await page.settle();
       // A notification queued before the acknowledgement must not rescue the stale target.
       expect(page.querySelector(".cron-history")).not.toBeNull();
       gateway.emitRetiredEvent({
@@ -811,11 +811,13 @@ describe("CronPage editor state sync", () => {
     expect(page.cron.cronForm.enabled).toBe(true);
 
     await waitForCronPage(() =>
-      expect(page.querySelector('[data-test-id="cron-toggle-enabled"] wa-switch')).not.toBeNull(),
+      expect(
+        page.querySelector('[data-test-id="cron-toggle-enabled"] input.settings-toggle__input'),
+      ).not.toBeNull(),
     );
     const enabledToggle = page.querySelector(
-      '[data-test-id="cron-toggle-enabled"] wa-switch',
-    ) as HTMLElement & { checked: boolean };
+      '[data-test-id="cron-toggle-enabled"] input.settings-toggle__input',
+    ) as HTMLInputElement;
     enabledToggle.checked = false;
     enabledToggle.dispatchEvent(new Event("change", { bubbles: true }));
     await waitForCronPage(() => expect(page.cron.cronForm.enabled).toBe(false));
@@ -869,8 +871,8 @@ describe("CronPage editor state sync", () => {
 
     gateway.emitSnapshot({ hello: operatorHello(["operator.read"]) });
     staleRunButton.click();
-    page.requestUpdate();
-    await page.updateComplete;
+    page.refreshView();
+    await page.settle();
 
     expect(request.mock.calls.some(([method]) => method === "cron.run")).toBe(false);
     expect(page.textContent).toContain("Browsing only");
@@ -924,7 +926,7 @@ describe("CronPage pacing", () => {
 
     if (once) {
       selectSegmented(page.querySelector('[data-test-id="cron-schedule-kind-at"]') as HTMLElement);
-      await page.updateComplete;
+      await page.settle();
       const at = page.querySelector("#cron-schedule-at") as HTMLInputElement;
       at.value = "2099-01-01T12:00";
       at.dispatchEvent(new Event("input", { bubbles: true }));
@@ -986,14 +988,14 @@ describe("CronPage pacing", () => {
     const name = page.querySelector("#cron-name") as HTMLInputElement;
     name.value = saved.name;
     name.dispatchEvent(new Event("input", { bubbles: true }));
-    await page.updateComplete;
+    await page.settle();
     if (once) {
       selectSegmented(page.querySelector('[data-test-id="cron-schedule-kind-at"]') as HTMLElement);
-      await page.updateComplete;
+      await page.settle();
       const at = page.querySelector("#cron-schedule-at") as HTMLInputElement;
       at.value = "2099-01-01T12:00";
       at.dispatchEvent(new Event("input", { bubbles: true }));
-      await page.updateComplete;
+      await page.settle();
     }
     const submit = page.querySelector('[data-test-id="cron-submit"]') as HTMLButtonElement;
     expect(submit.disabled).toBe(false);

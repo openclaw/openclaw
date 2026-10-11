@@ -238,7 +238,7 @@ export function resolveExistingAgentSessionStoreTargetsReadOnlyResult(
       registeredDatabases: params.registeredDatabases,
       readCandidates: params.readCandidates,
     });
-    // Per-agent paths establish the namespace. Read one row to retain table-read failures.
+    // Per-agent paths establish the namespace; opening consumes the admitted schema facts.
     const snapshot = readSessionStoreTargetSnapshot(
       {
         databaseAgentId: normalizeAgentId(resolved.agentId ?? target.agentId),
@@ -246,7 +246,7 @@ export function resolveExistingAgentSessionStoreTargetsReadOnlyResult(
         sqlitePath: resolved.path,
         readCandidates: params.readCandidates,
       },
-      (database) => [...iterateSessionEntryKeys(database, { limit: 1 })],
+      () => undefined,
     );
     if (!snapshot.available) {
       // A missing configured store can have readable siblings during migration.

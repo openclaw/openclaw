@@ -56,12 +56,18 @@ import { withQualifiedGatewaySessionStoreTarget } from "./session-utils-store-re
 import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 import { loadCombinedSessionStoreForGatewayCore } from "./session-utils.js";
 
-vi.mock("./github-publication-availability.js", () => ({
-  prepareCurrentGitHubPublicationOptionsIdentity: vi.fn(async (agentId: string) => ({
-    source: "system",
-    account: { accountId: `account-${agentId}`, login: `synthetic-${agentId}` },
-  })),
-}));
+vi.mock("./github-publication-availability.js", async () => {
+  const actual = await vi.importActual<typeof import("./github-publication-availability.js")>(
+    "./github-publication-availability.js",
+  );
+  return {
+    ...actual,
+    prepareCurrentGitHubPublicationOptionsIdentity: vi.fn(async (agentId: string) => ({
+      source: "system",
+      account: { accountId: `account-${agentId}`, login: `synthetic-${agentId}` },
+    })),
+  };
+});
 
 async function withGlobalSessions(mainKey: string, run: (cfg: OpenClawConfig) => Promise<void>) {
   await withStateDirEnv("gateway-global-lookup-", async ({ stateDir }) => {
@@ -825,7 +831,7 @@ describe("exact session model projections", () => {
 
 it.each([
   { selection: "inherited", layout: "separate", model: "qwen3:14b", source: "inherited" },
-  { selection: "direct", layout: "separate", model: "llama3.1:8b", source: "user" },
+  { selection: "direct", layout: "separate", model: "qwen3:32b", source: "user" },
   { selection: "default", layout: "separate", model: "llama3.1:8b", source: null },
   { selection: "inherited", layout: "shared", model: "qwen3:14b", source: "inherited" },
   { selection: "inherited", layout: "cross-agent", model: "qwen3:8b", source: "inherited" },
@@ -851,7 +857,7 @@ it.each([
       if (storePath) {
         openOpenClawAgentDatabase({ agentId: "main", path: storePath });
       }
-      const catalog = ["llama3.1:8b", "qwen3:8b", "qwen3:14b"].map((id) => ({
+      const catalog = ["llama3.1:8b", "qwen3:8b", "qwen3:14b", "qwen3:32b"].map((id) => ({
         id,
         name: id,
         provider: "ollama",
@@ -943,7 +949,7 @@ it.each([
         await request(sessionMutationHandlers["sessions.patch"]!, "sessions.patch", {
           key: created.key,
           agentId: "work",
-          model: selection === "default" ? null : "ollama/llama3.1:8b",
+          model: selection === "default" ? null : "ollama/qwen3:32b",
         });
       }
       const combined = loadCombinedSessionStoreForGatewayCore(cfg);

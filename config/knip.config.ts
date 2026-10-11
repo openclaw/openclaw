@@ -218,6 +218,8 @@ const repositoryScriptEntries = [
   "scripts/openclaw-release-ready.mjs!",
   // Oxlint loads this JS plugin by path from config/oxlint/boundary-guards.json.
   "scripts/oxlint-boundary-guards.mjs!",
+  // Boundary lint loads this migration plugin by path; remove with that config entry.
+  "scripts/oxlint-solid-migration.mjs!",
   "scripts/plugin-prerelease-liveish-matrix.mts!",
   "scripts/pre-commit/guard-staged-content.mjs!",
   // Frozen-target contract admission is invoked as a standalone Node CLI.
@@ -409,6 +411,10 @@ const rootEntries = [
   "node-runtime-recovery.mjs!",
   "src/index.ts!",
   "src/entry.ts!",
+  // Inactive phase-owner API for the staged session caller cutover. Remove these
+  // audit roots once accept-input, transcript, and delivery callers activate it.
+  "src/config/sessions/session-actor-contract.ts!",
+  "src/config/sessions/session-actor-durable.ts!",
   // Startup metadata renders source help through a generated child module's file-URL import.
   "src/cli/program/root-help.ts!",
   // Packaged postinstall imports this private compiled entry before stage activation.
@@ -418,7 +424,9 @@ const rootEntries = [
   // Deployed in the worker archive and launched by path, without a static host import.
   "src/worker/worker-deploy-entry.ts!",
   "src/worker/worker-deploy-file-tool-planning.ts!",
+  "src/worker/worker-deploy-file-tool-read.ts!",
   "src/worker/worker-deploy-image-processor.ts!",
+  "src/worker/worker-deploy-sqlite-source-revision.ts!",
   "src/worker/worker-deploy-sqlite-store.ts!",
   "src/worker/worker-deploy-state-read.ts!",
   "src/worker/workspace-rsync-receiver.ts!",
@@ -644,7 +652,7 @@ function compileNativeProtocolConsumer(source: string, filePath: string): string
 function bundledPluginWorkspace(extraEntries: readonly string[] = []) {
   return {
     entry: [...bundledPluginEntries, ...extraEntries],
-    project: ["**/*.{js,mjs,ts}!"],
+    project: ["**/*.{js,jsx,mjs,ts,tsx}!"],
     ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
   } as const;
 }
@@ -724,12 +732,21 @@ const config = {
     // This worker-thread proof entry is loaded from its test with new URL(),
     // which Knip cannot discover as a static import.
     "src/worker/repro-worker-connection-closing-window.ts",
+    // Dormant host half of the durable cross-store source fence (#168018). Its real
+    // broker tests are the only importer until GitHub publication, session titles,
+    // or worktree finalization adopt it; drop this entry with that first caller.
+    "src/infra/sqlite-source-fence-admission.ts",
     "src/shared/text/assistant-visible-text.ts",
     bundledPluginFile("telegram", "src/draft-chunking.ts"),
   ],
   // Knip's `ignoreFiles` only suppresses unused-file findings. Test helpers
   // belong in `ignore` so they do not inflate unused-export/type findings.
-  ignore: ["dist/**", "packages/*/dist/**", "**/.boundary-stubs/**", ...ignoredTestSupportFiles],
+  ignore: [
+    "dist/**",
+    "packages/*/dist/**",
+    "**/.boundary-stubs/**",
+    ...ignoredTestSupportFiles.map((pattern) => pattern.replace(/\.ts$/u, ".{ts,tsx}")),
+  ],
   // Script exports are checked with every script as an entry and entry-export
   // reporting enabled. Suppress them only in this application-production scan.
   ignoreIssues: {
@@ -746,7 +763,7 @@ const config = {
     "src/agents/harness/registry.ts": ["exports"],
     // Focused outbox tests seed and recover rows through these kernels; production
     // reaches them only through the agent database worker's command dispatcher.
-    "src/agents/harness/context-engine-turn-outbox.ts": ["exports"],
+    "src/agents/harness/context-engine-turn-outbox.kernel.worker.ts": ["exports"],
     // Runtime reason values are exported now so protocol schemas can derive from one tuple later.
     "src/agents/failover/signal.ts": ["exports"],
     "src/context-engine/registry.ts": ["exports", "types"],
@@ -755,8 +772,8 @@ const config = {
     "src/plugins/session-discussion-registry.ts": ["exports"],
     // Focused Control UI tests consume these explicit state-machine seams;
     // production uses them through their owning module/controller.
-    "ui/src/pages/chat/chat-state-refresh.ts": ["exports"],
-    "ui/src/pages/chat/composer-persistence.ts": ["exports"],
+    "ui/src/pages/chat/chat-state-refresh.{ts,tsx}": ["exports"],
+    "ui/src/pages/chat/composer-persistence.{ts,tsx}": ["exports"],
     // Focused media tests consume these explicit seams; production uses the helpers in-module.
     "src/agents/embedded-agent-subscribe.handlers.lifecycle.ts": ["exports"],
     "src/gateway/server-methods/chat-webchat-media.ts": ["exports"],
@@ -772,6 +789,15 @@ const config = {
     // asserted by the focused Beam mirror tests; production wires only the service.
     "extensions/beam/src/mirror.ts": ["exports", "types"],
     "src/infra/heartbeat-wake.ts": ["exports"],
+    // Lazy loaders import these modules opaquely (media-understanding runner, config model
+    // validation), which Knip counts as using every export until a bare namespace reference
+    // disables that shortcut: plugin-test-runtime's isolated-completion fixture passes these
+    // namespaces to vi.spyOn. Plain unused exports stay reported here; the full-tree scan
+    // still audits every export against its test consumers.
+    "src/agents/model-auth.ts": ["nsExports"],
+    "src/agents/model-auth-runtime.ts": ["nsExports"],
+    "src/agents/model-auth-runtime-shared.ts": ["nsExports"],
+    "src/agents/prepared-model-runtime.ts": ["nsExports"],
   },
   workspaces: {
     ".": {
@@ -789,6 +815,9 @@ const config = {
         // Loaded via createRequire in src/agents/utils/syntax-highlight.ts because its
         // d.ts force-includes lib.dom; knip cannot see the dynamic require.
         "highlight.js",
+        // Solid plugin builds createRequire the compiler from the plugin author's package.json;
+        // the host never resolves or ships it (docs/plugins/feature-plugins.md).
+        "@solidjs/compiler",
         "playwright-core",
         "partial-json",
         // The native Canvas bundle falls back without optional Markdown support.
@@ -842,10 +871,23 @@ const config = {
         // The standalone proof-video skill imports this developer API by path.
         "src/test-helpers/proof-video.ts!",
         "index.html!",
-        "src/main.ts!",
-        "src/lib/browser-redact.ts!",
+        "src/main.{ts,tsx}!",
+        "src/lib/browser-redact.{ts,tsx}!",
         "vite.config.ts!",
         "vitest*.ts!",
+        // Dormant Solid 2 foundation (#168305 smoke fixture, #168405 state-owner projections):
+        // only their tests import them until Control UI views adopt Solid; drop these entries
+        // with the first production importer.
+        "src/lib/reactive/*.ts!",
+        "!src/lib/reactive/*.test.ts!",
+        "src/solid-smoke/solid-smoke.tsx!",
+        // Solid presentation primitives (#168576) and the chat render lifecycle (#168657) land
+        // before their page and chat consumers; drop each entry with its first production importer.
+        "src/components/solid/*.tsx!",
+        "!src/components/solid/*.test.tsx!",
+        "src/components/icon-data*.ts!",
+        "src/app/shell-layout-traits-solid.tsx!",
+        "src/pages/chat/solid-render-lifecycle.ts!",
       ],
       // Workboard lazy-loads Three.js at runtime; Knip's dependency pass misses it.
       ignoreDependencies: ["three"],
@@ -940,8 +982,8 @@ const config = {
       "scripts/pnpm-runner.mjs!",
       // Rolldown consumes this config and its browser bootstrap entry.
       "src/host/a2ui-app/rolldown.config.mjs!",
-      "src/host/a2ui-app/bootstrap.js!",
-      "src/host/a2ui-app/bootstrap-v0.9.js!",
+      "src/host/a2ui-app/bootstrap.jsx!",
+      "src/host/a2ui-app/bootstrap-v0.9.jsx!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/cloudflare-ai-gateway`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/chutes`]: bundledPluginWorkspace(),
@@ -1082,7 +1124,7 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/xai`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/llama-cpp`]: {
       entry: bundledPluginEntries,
-      project: ["**/*.{js,mjs,ts}!"],
+      project: ["**/*.{js,mjs,ts,tsx}!"],
       ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
     },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/lmstudio`]: bundledPluginWorkspace(),
@@ -1092,14 +1134,14 @@ const config = {
       // public surface, so its exports are intentional even where the channel
       // consumes only a subset.
       entry: [...bundledPluginEntries, "protocol/index.ts!"],
-      project: ["**/*.{js,mjs,ts}!"],
+      project: ["**/*.{js,mjs,ts,tsx}!"],
       ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
     },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/*`]: {
       // Bundled plugins often load their public surface via string specifiers in
       // `index.ts` contracts, so Knip needs these convention-based entry files.
       entry: bundledPluginEntries,
-      project: ["**/*.{js,mjs,ts}!"],
+      project: ["**/*.{js,mjs,ts,tsx}!"],
       ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
     },
   },

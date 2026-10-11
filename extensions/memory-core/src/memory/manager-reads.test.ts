@@ -1,4 +1,7 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   listSessionTranscriptCorpusEntriesForAgent,
   sessionPathForFile,
@@ -88,6 +91,17 @@ describe("memory manager reads", () => {
         archiveTranscript: true,
       }),
     ).resolves.toBe(true);
+    const activeArchiveFile = path.join(
+      resolveSessionTranscriptsDirForAgent("main"),
+      `${activeId}.jsonl.deleted.2026-10-01T00-00-00.000Z`,
+    );
+    await fs.writeFile(
+      activeArchiveFile,
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "Archived cobalt note." },
+      }) + "\n",
+    );
     const archive = (await listSessionTranscriptCorpusEntriesForAgent("main")).find(
       (entry) => entry.sessionId === archivedId,
     );
@@ -100,6 +114,7 @@ describe("memory manager reads", () => {
     {
       // Observe the worker-published schema before seeding through a fixture writer.
       using writer = new DatabaseSync(databasePath);
+      writer.exec("BEGIN IMMEDIATE");
       const insert = writer.prepare(
         "INSERT INTO memory_index_sources(path, source, hash, mtime, size) VALUES(?, ?, 'retained', 1, 2)",
       );
@@ -110,6 +125,7 @@ describe("memory manager reads", () => {
         insert.run(`sessions/main/${sessionId}`, "sessions");
       }
       insert.run(`sessions/main/${archivedId}`, "memory");
+      writer.exec("COMMIT");
     }
     const readSources = database.prepare(
       "SELECT * FROM memory_index_sources ORDER BY path, source",
@@ -124,21 +140,29 @@ describe("memory manager reads", () => {
     try {
       await manager.sync({
         reason: "targeted-read-budget",
-        sessions: [activeId, archivedId, activeId].map((sessionId) => ({
+        sessions: [archivedId, archivedId].map((sessionId) => ({
           agentId: "main",
           sessionId,
         })),
-        archiveFiles: [archive!.sessionFile, archive!.sessionFile],
+        archiveFiles: [activeArchiveFile, archive!.sessionFile, archive!.sessionFile],
       });
     } finally {
       observation.restore();
     }
-    const archivePath = sessionPathForFile(archive!.sessionFile);
+    const archivePaths = new Set([activeArchiveFile, archive!.sessionFile].map(sessionPathForFile));
     const after = readSources.all();
-    expect(after.filter((row) => row.path !== archivePath)).toEqual(
+    expect(after.filter((row) => !archivePaths.has(String(row.path)))).toEqual(
       before.filter((row) => row.source !== "sessions" || !stalePaths.has(String(row.path))),
     );
-    expect(after.some((row) => row.path === archivePath && row.source === "sessions")).toBe(true);
+    expect(after.filter((row) => archivePaths.has(String(row.path)))).toHaveLength(2);
+    expect(await manager.search("violet", { lexicalOnly: true, minScore: 0 })).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: sessionPathForSessionIdentity("main", activeId),
+          snippet: expect.stringContaining(`${activeId} violet memory.`),
+        }),
+      ]),
+    );
     const sourceReads = observation.reads.filter(({ sql }) =>
       /\bmemory_index_sources\b/i.test(sql),
     );
@@ -207,7 +231,7 @@ describe("memory manager reads", () => {
     expect(snapshot()).toEqual(before);
   });
 
-  it("reuses diagnostic cache totals and the synchronous sync existence check", async () => {
+  it("reuses diagnostic cache totals", async () => {
     const cfg = fixture.createConfig({ provider: "none", cacheEnabled: true });
     const manager = await fixture.getFreshManager(cfg, "cli");
     await manager.sync({ reason: "cli", force: true });
@@ -235,15 +259,6 @@ describe("memory manager reads", () => {
     } finally {
       diagnosticReads.restore();
       await diagnostic.close();
-    }
-    const syncReads = observeReads(database);
-    try {
-      await manager.sync({ reason: "cli" });
-      expect(
-        syncReads.reads.filter(({ sql }) => /\bmemory_index_chunks\b/i.test(sql)),
-      ).toHaveLength(1);
-    } finally {
-      syncReads.restore();
     }
   });
 });

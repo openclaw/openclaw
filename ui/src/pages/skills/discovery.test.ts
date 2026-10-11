@@ -112,7 +112,9 @@ describe("unified skill discovery", () => {
     expect(inputs).toHaveLength(1);
     expect(container.querySelectorAll(".plugin-catalog-card")).toHaveLength(2);
     expect(
-      container.querySelectorAll("wa-switch, .skills-group, .plugin-catalog-chips"),
+      container.querySelectorAll(
+        "input.settings-toggle__input, .skills-group, .plugin-catalog-chips",
+      ),
     ).toHaveLength(0);
     const local = container.querySelector('[data-skill-id="local:repo-skill"]')!;
     expect(local.querySelector('[role="img"]')?.getAttribute("title")).toContain("Ready");

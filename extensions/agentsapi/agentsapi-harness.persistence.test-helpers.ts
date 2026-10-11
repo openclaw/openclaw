@@ -16,11 +16,14 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  closeOpenClawStateDatabaseAsync,
+  withNativeSessionMutationForTest,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { vi } from "vitest";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
 import { AgentsApiClient } from "./agentsapi-client.js";
-import { createModel } from "./agentsapi.test-support.js";
+import { createModel, createHostedSession } from "./agentsapi.test-support.js";
 import plugin from "./index.js";
 
 export function registerHarness(
@@ -153,11 +156,18 @@ export function requireExecutorHarness(runtime: PluginRuntime) {
       "The Agents API harness requires run, reset, deletion, context reset, and disposal",
     );
   }
+  const mutationHook =
+    (hook: "withSessionDeletion" | "withSessionContextReset") =>
+    (
+      target: Parameters<typeof withNativeSessionMutationForTest>[0]["target"],
+      run: Parameters<typeof withNativeSessionMutationForTest>[0]["run"],
+    ) =>
+      withNativeSessionMutationForTest({ pluginId: "agentsapi", harness, hook, target, run });
   return {
     runAttempt: harness.runAttempt.bind(harness),
     reset: harness.reset.bind(harness),
-    withSessionDeletion: harness.withSessionDeletion,
-    withSessionContextReset: harness.withSessionContextReset,
+    withSessionDeletion: mutationHook("withSessionDeletion"),
+    withSessionContextReset: mutationHook("withSessionContextReset"),
     dispose: harness.dispose.bind(harness),
   };
 }
@@ -167,6 +177,13 @@ function createBindingRuntime(env: NodeJS.ProcessEnv, current: () => OpenClawCon
   const runtime = createPluginRuntimeMock({ config: { current } });
   runtime.state.openKeyedStore = <T>(options: Parameters<typeof runtime.state.openKeyedStore>[0]) =>
     createPluginStateKeyedStoreForTests<T>("agentsapi", { ...options, env });
+  runtime.state.openKeyedStoreV2 = <T>(
+    options: Parameters<typeof runtime.state.openKeyedStoreV2>[0],
+    authority?: Parameters<typeof runtime.state.openKeyedStoreV2>[1],
+  ) => {
+    const store = createPluginStateKeyedStoreForTests<T>("agentsapi", { ...options, env });
+    return authority ? store.withCurrent(authority) : store;
+  };
   runtime.state.openSyncKeyedStore = <T>(
     options: Parameters<typeof runtime.state.openSyncKeyedStore>[0],
   ) => createPluginStateSyncKeyedStoreForTests<T>("agentsapi", { ...options, env });
@@ -231,4 +248,15 @@ export async function createAttempt(stateDir: string) {
       waitForApproval: async () => undefined,
     },
   } satisfies AgentHarnessAttemptParamsV2;
+}
+
+export function mockClient(sessionId: string) {
+  const session = vi
+    .spyOn(AgentsApiClient.prototype, "session")
+    .mockResolvedValue(createHostedSession("idle"));
+  const create = vi.spyOn(AgentsApiClient.prototype, "create").mockResolvedValue(sessionId);
+  const update = vi.spyOn(AgentsApiClient.prototype, "setReasoningEffort").mockResolvedValue();
+  const message = vi.spyOn(AgentsApiClient.prototype, "message").mockResolvedValue();
+  vi.spyOn(AgentsApiClient.prototype, "items").mockResolvedValue([]);
+  return { create, update, message, session };
 }

@@ -93,7 +93,7 @@ function renderTranscriptShell(
     ? renderLoadingState()
     : projection.showLoadingSkeleton || projection.isEmpty
       ? html`
-          <div class="chat-thread-inner" ${ref(transcript.scrollElementRef)}>
+          <div class="chat-thread-inner">
             ${historySentinel}
             ${
               projection.isEmpty && !projection.showLoadingSkeleton && historyHeader

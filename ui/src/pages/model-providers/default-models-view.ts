@@ -123,7 +123,17 @@ function renderHelpTitle(params: {
   `;
 }
 
-function renderBehaviorSetting(field: "thinking" | "fastMode", control: TemplateResult) {
+function renderBehaviorSetting<Value extends string>(
+  field: "thinking" | "fastMode",
+  props: DefaultModelsViewProps,
+  control: {
+    value: Value | "";
+    options: { value: Value; label: string }[];
+    overridden: boolean;
+    onChange: (value: Value) => void;
+    onReset: () => void;
+  },
+) {
   return renderSettingsRow({
     title: renderHelpTitle({
       title: t(`quickSettings.model.${field}`),
@@ -134,7 +144,18 @@ function renderBehaviorSetting(field: "thinking" | "fastMode", control: Template
         t(`modelProviders.defaults.${field}DefaultHelp`),
       ],
     }),
-    control,
+    control: html`${renderSettingsSegmented<Value | "">({
+      value: control.value,
+      ariaLabel: t(`quickSettings.model.${field}`),
+      options: [{ value: "", label: t("quickSettings.model.default") }, ...control.options],
+      disabled: Boolean(props.busy.defaults) || !props.canMutate,
+      onChange: (value) => (value === "" ? control.onReset() : control.onChange(value)),
+      onReselect: (value) => {
+        if (value === "" && control.overridden) {
+          control.onReset();
+        }
+      },
+    })}`,
   });
 }
 
@@ -172,7 +193,6 @@ function renderCatalogProgress(props: DefaultModelsViewProps): TemplateResult {
 
 export function renderDefaultModels(props: DefaultModelsViewProps) {
   const modelControlsDisabled = !props.canMutate || props.models.length === 0;
-  const behaviorControlsDisabled = !props.canMutate;
   const saving = Boolean(props.busy.defaults);
   const title = props.mutationBlockedReason ?? "";
   const thinkingLevels =
@@ -309,66 +329,33 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
           onChange: (value) => props.onFallbackChange(value || null),
         }),
       })}
-      ${renderBehaviorSetting(
-        "thinking",
-        html`
-          ${renderSettingsSegmented({
-            value: props.thinkingLevel ?? "",
-            ariaLabel: t("quickSettings.model.thinking"),
-            options: [
-              {
-                value: "",
-                label: t("quickSettings.model.default"),
-              },
-              ...thinkingLevels.map((level) => ({
-                value: level,
-                label: THINKING_LEVEL_SET.has(level)
-                  ? t(`quickSettings.model.thinkingLevels.${level}`)
-                  : formatThinkingOverrideLabel(level),
-              })),
-            ],
-            disabled: saving || behaviorControlsDisabled,
-            onChange: (value) =>
-              value === "" ? props.onThinkingReset() : props.onThinkingChange(value),
-            onReselect: (value) => {
-              if (value === "" && props.thinkingOverridden) {
-                props.onThinkingReset();
-              }
-            },
-          })}
-        `,
-      )}
-      ${renderBehaviorSetting(
-        "fastMode",
-        html`
-          ${renderSettingsSegmented<"" | ReturnType<typeof formatFastModeValue>>({
-            value: fastMode,
-            ariaLabel: t("quickSettings.model.fastMode"),
-            options: [
-              {
-                value: "",
-                label: t("quickSettings.model.default"),
-              },
-              { value: "auto", label: t("quickSettings.model.fastModes.auto") },
-              { value: "on", label: t("quickSettings.model.fastModes.on") },
-              { value: "off", label: t("quickSettings.model.fastModes.off") },
-            ],
-            disabled: saving || behaviorControlsDisabled,
-            onChange: (value) => {
-              if (value === "") {
-                props.onFastModeReset();
-              } else if (value !== fastMode) {
-                props.onFastModeChange(fastModeOptionValue(value));
-              }
-            },
-            onReselect: (value) => {
-              if (value === "" && props.fastModeOverridden) {
-                props.onFastModeReset();
-              }
-            },
-          })}
-        `,
-      )}
+      ${renderBehaviorSetting("thinking", props, {
+        value: props.thinkingLevel ?? "",
+        options: thinkingLevels.map((level) => ({
+          value: level,
+          label: THINKING_LEVEL_SET.has(level)
+            ? t(`quickSettings.model.thinkingLevels.${level}`)
+            : formatThinkingOverrideLabel(level),
+        })),
+        overridden: props.thinkingOverridden,
+        onChange: props.onThinkingChange,
+        onReset: props.onThinkingReset,
+      })}
+      ${renderBehaviorSetting<ReturnType<typeof formatFastModeValue>>("fastMode", props, {
+        value: fastMode,
+        options: [
+          { value: "auto", label: t("quickSettings.model.fastModes.auto") },
+          { value: "on", label: t("quickSettings.model.fastModes.on") },
+          { value: "off", label: t("quickSettings.model.fastModes.off") },
+        ],
+        overridden: props.fastModeOverridden,
+        onChange: (value) => {
+          if (value !== fastMode) {
+            props.onFastModeChange(fastModeOptionValue(value));
+          }
+        },
+        onReset: props.onFastModeReset,
+      })}
       ${renderCatalogProgress(props)}
       ${props.canMutate ? renderMutationMessage(props.message) : nothing}
     </div>

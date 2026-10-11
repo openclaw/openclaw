@@ -23,6 +23,11 @@ import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { VERSION } from "../../version.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 import {
+  registerGatewayRunCleanupReceiptTests,
+  type GatewayLoopStart,
+  type GatewayLoopParams,
+} from "./run-cleanup-receipt.test-support.js";
+import {
   failedGatewayRunConfigSnapshot,
   gatewayRunReadFailures,
   type RuntimeDotEnvLoadResult,
@@ -55,18 +60,6 @@ const isTerminalInteractive = vi.fn(() => true);
 const offerInvalidConfigRecovery = vi.fn(async () => ({ status: "declined" as const }));
 const parkCurrentLaunchAgentForMaintenance = vi.fn(async () => false);
 const ensureDevGatewayConfig = vi.fn(async (_opts?: unknown) => {});
-type GatewayLoopStart = (params?: { startupStartedAt?: number }) => Promise<unknown>;
-type GatewayLoopParams = {
-  start: GatewayLoopStart;
-  beginBoot?: (startedAtMs: number) => Promise<void> | void;
-  completeBoot?: (completion: unknown) => void;
-  onRestartStartupFailure?: (
-    error: unknown,
-    signal: AbortSignal,
-  ) => Promise<"completed" | "failed" | void>;
-  ownsProcessLifecycle?: boolean;
-  runtime?: unknown;
-};
 const runGatewayLoop = vi.fn(async ({ start }: GatewayLoopParams) => {
   await start();
 });
@@ -474,6 +467,8 @@ describe("gateway run option collisions", () => {
     return callArg(startGatewayServer, index, 1) as GatewayServerOptions;
   }
 
+  registerGatewayRunCleanupReceiptTests({ runGatewayCli, runGatewayLoop });
+
   it("rejects invalid gateway ports before startup", async () => {
     await expect(
       runGatewayCli(["gateway", "--port", "0", "--token", "test-token"]),
@@ -576,45 +571,6 @@ describe("gateway run option collisions", () => {
       expect(finalConfigReadOrder).toBeGreaterThan(shellEnvOrder);
       expect(refreshOrder).toBeGreaterThan(shellEnvOrder);
       expect(startOrder).toBeGreaterThan(refreshOrder);
-    });
-  });
-
-  it("removes shell fallback values when the final accepted config disables fallback", async () => {
-    await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: undefined }, async () => {
-      const enabledConfig = {
-        env: { shellEnv: { enabled: true } },
-        gateway: { auth: { mode: "none" }, mode: "local" },
-      };
-      const disabledConfig = {
-        gateway: { auth: { mode: "none" }, mode: "local" },
-      };
-      const snapshot = (config: Record<string, unknown>) =>
-        configSnapshot(config, { parsed: config });
-      readConfigFileSnapshotWithPluginMetadata
-        .mockResolvedValueOnce({ snapshot: snapshot(enabledConfig) })
-        .mockImplementationOnce(async (options) => {
-          expect(options?.lowerPrecedenceEnv).toEqual({
-            OPENCLAW_GATEWAY_TOKEN: "shell-token",
-          });
-          expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBe("shell-token");
-          return { snapshot: snapshot(disabledConfig) };
-        })
-        .mockImplementationOnce(async (options) => {
-          expect(options?.lowerPrecedenceEnv).toBeUndefined();
-          expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
-          return { snapshot: snapshot(disabledConfig) };
-        });
-      loadShellEnvFallback.mockImplementationOnce((opts?: unknown) => {
-        (opts as { env: NodeJS.ProcessEnv }).env.OPENCLAW_GATEWAY_TOKEN = "shell-token";
-      });
-
-      await runGatewayCli(["gateway"]);
-
-      expect(readConfigFileSnapshotWithPluginMetadata).toHaveBeenCalledTimes(3);
-      expect(loadShellEnvFallback).toHaveBeenCalledOnce();
-      expect(clearShellEnvAppliedKeys).toHaveBeenCalledWith(["OPENCLAW_GATEWAY_TOKEN"]);
-      expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
-      expect(startGatewayServer).toHaveBeenCalledOnce();
     });
   });
 

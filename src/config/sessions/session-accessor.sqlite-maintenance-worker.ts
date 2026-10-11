@@ -132,7 +132,6 @@ export function runSessionMaintenanceMetadataInWorker(params: {
                         input: {
                           id: preparationId,
                           input: plan.input,
-                          ageOwner: plan.ageOwner,
                           ageChanges: plan.ageChanges,
                         },
                       },

@@ -214,6 +214,11 @@ function createMismatchedWrapperTemplate({
       "scripts/lib/plain-gh.sh",
       "scripts/lib/plain-gh.mjs",
       "scripts/lib/direct-run.mjs",
+      "scripts/lib/managed-child-process.mts",
+      "scripts/lib/managed-cleanup-handoff.mts",
+      "scripts/windows-cmd-helpers.mjs",
+      "scripts/lib/vitest-resource-ownership.mts",
+      "scripts/lib/windows-taskkill.mjs",
     ];
     mkdirSync(join(canonical, "scripts/lib"), { recursive: true });
     for (const component of ["scripts/pr", "scripts/pr-lib", ...components]) {
@@ -435,6 +440,19 @@ describe("scripts/pr wrappers", () => {
         "--replacement-head",
         "b".repeat(40),
       ],
+      ...[
+        [],
+        ["HEAD"],
+        ["B".repeat(40)],
+        ["b".repeat(40), "--merged-head", "c".repeat(40)],
+        ["b".repeat(40), "--cancel-auto"],
+        ["b".repeat(40), "--auto-merge"],
+        ["b".repeat(40), "--replacement-head", "c".repeat(40)],
+        ["b".repeat(40), "--body-file", "message.md"],
+        ["b".repeat(40), "--admin-evidence", "proof.json", "--confirmed-operator-admin"],
+      ].map((suffix) =>
+        ["123", "a".repeat(40), "--confirmed-operator-recovery", "--merged-head"].concat(suffix),
+      ),
     ]) {
       const result = spawnSync(
         join(fixture.canonical, "scripts", "pr"),
@@ -444,6 +462,44 @@ describe("scripts/pr wrappers", () => {
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(2);
       expect(result.stdout).toContain("Usage:");
       expect(result.stderr).not.toContain("only support PRs targeting main");
+    }
+  });
+
+  itPosix("accepts scoped GC in either flag order and rejects ambiguous scope", () => {
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
+    writeFileSync(
+      join(fixture.canonical, "scripts/pr-lib/worktree.sh"),
+      'gc_pr_worktrees() { printf "<%s>\\n" "$@"; }\n',
+    );
+    for (const [args, expected] of [
+      [["--pr", "123"], "<false>\n<123>\n"],
+      [[], "<false>\n<>\n"],
+      [["--dry-run"], "<true>\n<>\n"],
+      [["--pr", "123", "--dry-run"], "<true>\n<123>\n"],
+      [["--dry-run", "--pr", "123"], "<true>\n<123>\n"],
+    ] as const) {
+      const result = spawnSync(join(fixture.canonical, "scripts/pr"), ["gc", ...args], {
+        cwd: fixture.canonical,
+        encoding: "utf8",
+        env: fixture.env,
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).toBe(expected);
+    }
+    for (const args of [
+      ["--pr"],
+      ["--pr", "0123"],
+      ["--pr", "../123"],
+      ["--pr", "123", "--pr", "456"],
+      ["--dry-run", "--dry-run"],
+      ["123"],
+    ]) {
+      const result = spawnSync(join(fixture.canonical, "scripts/pr"), ["gc", ...args], {
+        cwd: fixture.canonical,
+        encoding: "utf8",
+        env: fixture.env,
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(2);
     }
   });
 
@@ -462,7 +518,32 @@ describe("scripts/pr wrappers", () => {
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toBe(
-      `<123>\n<false>\n<>\n<>\n<${join(caller, "operator body.md")}>\n<>\n<false>\n<>\n<>\n<false>\n`,
+      `<123>\n<false>\n<>\n<>\n<${join(caller, "operator body.md")}>\n<>\n<false>\n<>\n<>\n<false>\n<>\n`,
+    );
+  });
+
+  itPosix("passes an explicitly selected merged head to merge recovery", () => {
+    const fixture = makeMismatchedWrapperRepo();
+    writeFileSync(join(fixture.bin, "gh"), baseBranchGhStub("main"));
+    writeFileSync(
+      join(fixture.canonical, "scripts/pr-lib/merge.sh"),
+      `merge_run() { printf '<%s>\\n' "$@"; }\n`,
+    );
+    const result = spawnSync(
+      join(fixture.canonical, "scripts/pr"),
+      [
+        "merge-recover",
+        "123",
+        "a".repeat(40),
+        "--confirmed-operator-recovery",
+        "--merged-head",
+        "b".repeat(40),
+      ],
+      { cwd: fixture.canonical, encoding: "utf8", env: fixture.env },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toBe(
+      `<123>\n<false>\n<${"a".repeat(40)}>\n<>\n<>\n<>\n<false>\n<>\n<>\n<false>\n<${"b".repeat(40)}>\n`,
     );
   });
 
@@ -496,7 +577,7 @@ describe("scripts/pr wrappers", () => {
       );
       expect(result.status, result.stdout + result.stderr).toBe(0);
       expect(result.stdout).toBe(
-        `<123>\n<false>\n<${outcome}>\n<${replacement}>\n<>\n<>\n<false>\n<>\n<${join(caller, "admin proof.json")}>\n<true>\n`,
+        `<123>\n<false>\n<${outcome}>\n<${replacement}>\n<>\n<>\n<false>\n<>\n<${join(caller, "admin proof.json")}>\n<true>\n<>\n`,
       );
     }
   });
@@ -613,7 +694,7 @@ describe("scripts/pr wrappers", () => {
       );
       expect(result.status, result.stdout + result.stderr).toBe(0);
       expect(result.stdout).toBe(
-        `<123>\n<false>\n<${"a".repeat(40)}>\n<${"b".repeat(40)}>\n<>\n<${flag === "legacy-refusal" ? join(caller, "proof") : ""}>\n<false>\n<${flag === "pre-dispatch-refusal" ? join(caller, "proof") : ""}>\n<>\n<false>\n`,
+        `<123>\n<false>\n<${"a".repeat(40)}>\n<${"b".repeat(40)}>\n<>\n<${flag === "legacy-refusal" ? join(caller, "proof") : ""}>\n<false>\n<${flag === "pre-dispatch-refusal" ? join(caller, "proof") : ""}>\n<>\n<false>\n<>\n`,
       );
     },
   );

@@ -3,10 +3,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { createSystemdCommandQuery } from "../daemon/systemd-command-query.js";
-import * as integrity from "../infra/sqlite-integrity.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { readUpdateRunDriver } from "../infra/update-run-driver.js";
 import { createUpdateRun, recordUpdateRunRepairContinuation } from "../infra/update-run-ledger.js";
+import * as ledger from "../infra/update-run-ledger.js";
 import { recordOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
@@ -28,7 +28,7 @@ function maintenanceScope(admission: () => void) {
   });
 }
 
-it("admits fast systemd inspection after slow continuation integrity validation", async () => {
+it("admits fast systemd inspection after a slow continuation write", async () => {
   const { env, assertIsolation } = fixture();
   const run = createUpdateRun(
     { trigger: "cli", origin: { driver: readUpdateRunDriver() } },
@@ -36,9 +36,9 @@ it("admits fast systemd inspection after slow continuation integrity validation"
   );
   let elapsed = 0;
   vi.spyOn(performance, "now").mockImplementation(() => elapsed);
-  const validate = integrity.assertSqliteIntegrity;
-  vi.spyOn(integrity, "assertSqliteIntegrity").mockImplementation((...args) => {
-    const result = validate(...args);
+  const recordContinuation = ledger.recordUpdateRunRepairContinuation;
+  vi.spyOn(ledger, "recordUpdateRunRepairContinuation").mockImplementation((...args) => {
+    const result = recordContinuation(...args);
     elapsed += 6_000;
     return result;
   });

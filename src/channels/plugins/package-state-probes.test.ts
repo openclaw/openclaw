@@ -8,6 +8,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import {
   collectBundledChannelPackageStateLoadFailures,
   hasBundledChannelPackageState,
+  hasBundledChannelPackageStateAsync,
   listBundledChannelIdsForPackageState,
 } from "./package-state-probes.js";
 
@@ -73,6 +74,46 @@ afterEach(() => {
 });
 
 describe("channel package-state probes", () => {
+  it("awaits the selected async checker and never retries a refusal through the sync checker", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-state-async-"));
+    tempDirs.push(root);
+    fs.writeFileSync(
+      path.join(root, "auth-presence.js"),
+      [
+        "module.exports.hasState = () => { throw new Error('sync checker must not run'); };",
+        "module.exports.hasStateAsync = async ({ env }) => {",
+        "  if (env.REFUSE) throw new Error('owner refused');",
+        "  return env.HAS_STATE === 'yes';",
+        "};",
+      ].join("\n"),
+    );
+    listChannelCatalogEntriesMock.mockReturnValue([
+      {
+        pluginId: "fixture",
+        origin: "bundled",
+        rootDir: root,
+        channel: {
+          id: "fixture",
+          persistedAuthState: {
+            specifier: "./auth-presence",
+            exportName: "hasState",
+            exportNameAsync: "hasStateAsync",
+          },
+        },
+      } satisfies PluginChannelCatalogEntry,
+    ]);
+    const probe = (env: NodeJS.ProcessEnv) =>
+      hasBundledChannelPackageStateAsync({
+        metadataKey: "persistedAuthState",
+        channelId: "fixture",
+        cfg: {},
+        env,
+      });
+    await expect(probe({ HAS_STATE: "yes" })).resolves.toBe(true);
+    await expect(probe({ HAS_STATE: "no" })).resolves.toBe(false);
+    await expect(probe({ REFUSE: "yes" })).rejects.toThrow("owner refused");
+  });
+
   it.each(["plugin-state", undefined, "future-store"])(
     "preserves checker loading and newly created state for backing store %s",
     (backingStore) => {

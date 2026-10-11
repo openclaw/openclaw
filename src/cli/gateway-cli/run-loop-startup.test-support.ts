@@ -1,4 +1,4 @@
-import { expect, it, vi, type Mock } from "vitest";
+import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withTestTimeout } from "../../../test/helpers/promise.js";
 import { GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON } from "../../infra/startup-maintenance-required.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
@@ -12,6 +12,7 @@ import {
   setPlatform,
   waitForLoopCondition,
   withIsolatedSignals,
+  type UpdateRespawnFixtures,
 } from "./run-loop.test-support.js";
 
 function isolateSupervisorEnv() {
@@ -24,8 +25,16 @@ function isolateSupervisorEnv() {
 
 export function registerGatewayStartupFailureTests(
   gatewayLog: ReturnType<typeof import("./run-loop.test-support.js").createGatewayLogger>,
-  acquireGatewayLock: Mock,
+  fixtures: Pick<
+    UpdateRespawnFixtures,
+    "acquireGatewayLock" | "hasManagedProviderLocalServices" | "stopManagedProviderLocalServices"
+  >,
 ): void {
+  const {
+    acquireGatewayLock,
+    hasManagedProviderLocalServices,
+    stopManagedProviderLocalServices,
+  } = fixtures;
   const createStartupOperations = async () => {
     const { createGatewayStartupOperations } = await import("./run-loop-startup.js");
     return createGatewayStartupOperations();
@@ -145,7 +154,6 @@ export function registerGatewayStartupFailureTests(
               return createGatewayServer(close);
             });
           });
-        const { runtime, exited } = createRuntimeWithExitSignal();
         const recoveryWaitStarted = createDeferredCore();
         const recoveryAbortObserved = createDeferredCore();
         const recoveryWaitCleanup = createDeferredCore();
@@ -198,7 +206,7 @@ export function registerGatewayStartupFailureTests(
             recoverySettled.resolve();
           }
         });
-        const loop = runGatewayLoop({ start, runtime, onRestartStartupFailure });
+        const loop = runGatewayLoop({ start, onRestartStartupFailure });
         let loopSettled = false;
         void loop.then(
           () => {
@@ -228,18 +236,18 @@ export function registerGatewayStartupFailureTests(
           shutdownRequested = true;
           await awaitGateBeforeSettlement(
             recoveryAbortObserved.promise,
-            exited,
+            loop,
             "Gateway exited before cancelling the real Tailscale prerequisite waiter",
           );
-          expect(runtime.exit).not.toHaveBeenCalled();
+          expect(loopSettled).toBe(false);
           expect(releaseLock).not.toHaveBeenCalled();
           recoveryWaitCleanup.resolve();
           await awaitGateBeforeSettlement(
             recoverySettled.promise,
-            exited,
+            loop,
             "Gateway exited before joining the cancelled tracked prerequisite waiter",
           );
-          const stopExitCode = await exited;
+          const stopExitCode = await loop;
           expect(
             stopExitCode,
             stopExitCode === 1
@@ -256,10 +264,10 @@ export function registerGatewayStartupFailureTests(
             recoveryWaitCleanup.resolve();
             if (recoveryEntered && !shutdownRequested) {
               captureSignal("SIGTERM")();
-              await exited;
-            } else if (!loopSettled && runtime.exit.mock.calls.length === 0) {
+              await loop;
+            } else if (!loopSettled) {
               captureSignal("SIGTERM")();
-              await exited;
+              await loop;
             }
           } finally {
             statusExec.mockRestore();
@@ -313,7 +321,6 @@ export function registerGatewayStartupFailureTests(
           .mockImplementationOnce(async () =>
             createGatewayServer(secondClose, secondStartup.promise),
           );
-        const { runtime, exited } = createRuntimeWithExitSignal();
         const completeBoot = vi.fn();
         const onRestartStartupFailure = vi.fn(async (error: unknown, signal: AbortSignal) => {
           expect(error).toBe(startupError);
@@ -323,7 +330,7 @@ export function registerGatewayStartupFailureTests(
           await allowRecovery.promise;
           return "completed" as const;
         });
-        const loop = runGatewayLoop({ start, runtime, completeBoot, onRestartStartupFailure });
+        const loop = runGatewayLoop({ start, completeBoot, onRestartStartupFailure });
         let loopFinished = false;
         void loop.then(
           () => {
@@ -351,7 +358,7 @@ export function registerGatewayStartupFailureTests(
               reason: expect.stringContaining("NeedsLogin"),
             }),
           );
-          expect(runtime.exit).not.toHaveBeenCalled();
+          expect(loopFinished).toBe(false);
 
           allowRecovery.resolve();
           await waitForLoopCondition(
@@ -378,7 +385,7 @@ export function registerGatewayStartupFailureTests(
           );
           const stop = captureSignal("SIGTERM");
           stop();
-          await expect(exited).resolves.toBe(0);
+          await expect(loop).resolves.toBe(0);
           expect(releaseLock).toHaveBeenCalledOnce();
           expect(releaseRestartLock).toHaveBeenCalledOnce();
           expect(start).toHaveBeenCalledTimes(2);
@@ -386,9 +393,9 @@ export function registerGatewayStartupFailureTests(
         } finally {
           allowRecovery.resolve();
           secondStartup.resolve();
-          if (runtime.exit.mock.calls.length === 0 && !loopFinished) {
+          if (!loopFinished) {
             captureSignal("SIGTERM")();
-            await exited;
+            await loop;
           }
         }
       });
@@ -421,7 +428,6 @@ export function registerGatewayStartupFailureTests(
         const close = vi.fn(async () => {
           throw new Error("Tailscale route cleanup failed");
         });
-        const { runtime } = createRuntimeWithExitSignal();
         const completeBoot = vi.fn();
         const onRestartStartupFailure = vi.fn();
         const start = vi
@@ -431,7 +437,7 @@ export function registerGatewayStartupFailureTests(
           );
 
         await expect(
-          runGatewayLoop({ start, runtime, completeBoot, onRestartStartupFailure }),
+          runGatewayLoop({ start, completeBoot, onRestartStartupFailure }),
         ).rejects.toBeInstanceOf(GatewayStartupCleanupError);
         expect(close).toHaveBeenCalledOnce();
         expect(onRestartStartupFailure).not.toHaveBeenCalled();
@@ -480,13 +486,12 @@ export function registerGatewayStartupFailureTests(
           .mockImplementationOnce(async () =>
             createGatewayServer(firstClose, Promise.reject(startupError)),
           );
-        const { runtime, exited } = createRuntimeWithExitSignal();
         const recoveryStarted = createDeferredCore();
         const onRestartStartupFailure = vi.fn(async () => {
           recoveryStarted.resolve();
           return "completed" as const;
         });
-        const loop = runGatewayLoop({ start, runtime, onRestartStartupFailure });
+        const loop = runGatewayLoop({ start, onRestartStartupFailure });
 
         await awaitGateBeforeSettlement(
           recoveryStarted.promise,
@@ -495,7 +500,7 @@ export function registerGatewayStartupFailureTests(
         );
         expect(acquireGatewayLock).toHaveBeenCalledOnce();
         expect(releaseLock).not.toHaveBeenCalled();
-        await expect(exited).resolves.toBe(1);
+        await expect(loop).resolves.toBe(1);
         expect(start).toHaveBeenCalledOnce();
         expect(acquireGatewayLock).toHaveBeenCalledTimes(2);
         expect(releaseLock).toHaveBeenCalledOnce();
@@ -525,19 +530,15 @@ export function registerGatewayStartupFailureTests(
           },
         );
         const close = createCloseMock();
-        const { runtime } = createRuntimeWithExitSignal();
         const onRestartStartupFailure = vi.fn();
         const start = vi
           .fn<Parameters<typeof runGatewayLoop>[0]["start"]>()
           .mockImplementationOnce(async () =>
             createGatewayServer(close, Promise.reject(startupError)),
           );
-        await expect(runGatewayLoop({ start, runtime, onRestartStartupFailure })).rejects.toBe(
-          startupError,
-        );
+        await expect(runGatewayLoop({ start, onRestartStartupFailure })).rejects.toBe(startupError);
         expect(close).toHaveBeenCalledExactlyOnceWith({ reason: "gateway startup failed" });
         expect(onRestartStartupFailure).not.toHaveBeenCalled();
-        expect(runtime.exit).not.toHaveBeenCalled();
       });
     } finally {
       env.restore();
@@ -546,6 +547,127 @@ export function registerGatewayStartupFailureTests(
       }
     }
   });
+  // Runtime module resets must not replace the mock instances retained by the registered factories.
+  // Consume the collection-time fixture instead of re-importing its registry inside a test.
+  it.each(["begin-boot", "start", "deferred-startup", "maintenance"] as const)(
+    "joins the real process snapshot owner after a clean %s failure before reporting drained",
+    async (phase) => {
+      const { retainSnapshotWork } =
+        await import("../../infra/sqlite-readonly-location-cleanup.js");
+      const { SessionStoreMigrationRequiredError } =
+        await import("../../config/sessions/migration-required.js");
+      const { runGatewayLoop } = await import("./run-loop.js");
+      const failure =
+        phase === "maintenance"
+          ? new SessionStoreMigrationRequiredError("fixture maintenance required")
+          : new Error("fixture initial startup refused");
+      const snapshotStopped = createDeferredCore();
+      const snapshotReleased = createDeferredCore();
+      const receipt = vi.fn();
+      const close = createCloseMock();
+      let snapshotWork: Promise<void> | undefined;
+      const retainSnapshot = () => {
+        snapshotWork = retainSnapshotWork(snapshotReleased.promise, () =>
+          snapshotStopped.resolve(),
+        );
+      };
+      hasManagedProviderLocalServices.mockReturnValue(true);
+      const start = vi.fn<Parameters<typeof runGatewayLoop>[0]["start"]>(async (options) => {
+        retainSnapshot();
+        if (phase === "deferred-startup") {
+          return createGatewayServer(close, Promise.reject(failure));
+        }
+        // The operation retains the original refusal; drain still has to join descendants.
+        return await options!.startupOperation!(async () => {
+          throw failure;
+        });
+      });
+      await withIsolatedSignals(async () => {
+        const loop = runGatewayLoop({
+          start,
+          beginBoot:
+            phase === "begin-boot"
+              ? async () => {
+                  retainSnapshot();
+                  throw failure;
+                }
+              : undefined,
+          onProcessResourcesSettled: receipt,
+        });
+        const outcome = loop.then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        try {
+          await awaitGateBeforeSettlement(
+            snapshotStopped.promise,
+            outcome,
+            "startup failure returned before draining its process snapshot owner",
+          );
+          expect(stopManagedProviderLocalServices).toHaveBeenCalledOnce();
+          expect(close).toHaveBeenCalledTimes(phase === "deferred-startup" ? 1 : 0);
+          expect(start).toHaveBeenCalledTimes(phase === "begin-boot" ? 0 : 1);
+          expect(receipt).not.toHaveBeenCalled();
+          snapshotReleased.resolve();
+          await expect(loop).rejects.toBe(failure);
+          expect(receipt).toHaveBeenCalledExactlyOnceWith("drained");
+        } finally {
+          snapshotReleased.resolve();
+          await outcome;
+          await snapshotWork;
+        }
+      });
+    },
+  );
+
+  it.each(["acquisition-cleanup", "wrapped-acquisition-cleanup", "returned-handle-close"] as const)(
+    "retains %s failure without sweeping the process snapshot owner",
+    async (phase) => {
+      const { GatewayStartupCleanupError } = await import("../../gateway/server-shutdown.js");
+      const { retainSnapshotWork } =
+        await import("../../infra/sqlite-readonly-location-cleanup.js");
+      const { runGatewayLoop } = await import("./run-loop.js");
+      const failure = new Error("fixture startup failed");
+      const cleanupFailure = new Error("native cleanup unconfirmed");
+      const retained = new GatewayStartupCleanupError(failure, cleanupFailure);
+      const wrapped = new Error("wrapped startup failure", { cause: retained });
+      const snapshotReleased = createDeferredCore();
+      const stopSnapshot = vi.fn();
+      let snapshotWork: Promise<void> | undefined;
+      const receipt = vi.fn();
+      hasManagedProviderLocalServices.mockReturnValue(true);
+      await withIsolatedSignals(async () => {
+        try {
+          const loop = runGatewayLoop({
+            start: async () => {
+              snapshotWork = retainSnapshotWork(snapshotReleased.promise, stopSnapshot);
+              if (phase !== "returned-handle-close") {
+                throw phase === "wrapped-acquisition-cleanup" ? wrapped : retained;
+              }
+              return createGatewayServer(async () => {
+                throw cleanupFailure;
+              }, Promise.reject(failure));
+            },
+            onProcessResourcesSettled: receipt,
+          });
+          if (phase === "wrapped-acquisition-cleanup") {
+            await expect(loop).rejects.toBe(wrapped);
+          } else {
+            await expect(loop).rejects.toMatchObject({
+              name: "GatewayStartupCleanupError",
+              errors: [failure, cleanupFailure],
+            });
+          }
+          expect(stopManagedProviderLocalServices).not.toHaveBeenCalled();
+          expect(stopSnapshot).not.toHaveBeenCalled();
+          expect(receipt).toHaveBeenCalledExactlyOnceWith("retained");
+        } finally {
+          snapshotReleased.resolve();
+          await snapshotWork;
+        }
+      });
+    },
+  );
 
   it.each([
     { cleanup: "clean", supervised: false, platform: "linux" },
@@ -569,7 +691,7 @@ export function registerGatewayStartupFailureTests(
         );
       }
       await withIsolatedSignals(async ({ captureSignal }) => {
-        const { runGatewayLoop } = await import("./run-loop.js");
+        const { runGatewayLoop } = await import("./run-loop.test-support.js");
         const firstStartup = createDeferredCore();
         const firstStarted = createDeferredCore();
         const triageStarted = createDeferredCore();
@@ -740,7 +862,7 @@ export function registerGatewayStartupFailureTests(
       const failure = `${"a".repeat(499)}😀tail`;
       const { runtime } = createRuntimeWithExitSignal();
       const completeBoot = vi.fn();
-      const { runGatewayLoop } = await import("./run-loop.js");
+      const { runGatewayLoop } = await import("./run-loop.test-support.js");
       await expect(
         runGatewayLoop({
           start: vi.fn(async () => {
@@ -757,4 +879,40 @@ export function registerGatewayStartupFailureTests(
       expect(Buffer.from(reason).toString()).toBe(reason);
     });
   });
+
+  it.each(["stopped daemon", "message-only error", "failed cleanup"] as const)(
+    "retains the startup failure classification for %s",
+    async (kind) => {
+      await withIsolatedSignals(async () => {
+        const { TailscaleBackendStoppedError } =
+          await import("../../infra/tailscale-backend-stopped-error.js");
+        const { GatewayStartupCleanupError } = await import("../../gateway/server-shutdown.js");
+        const stopped = new TailscaleBackendStoppedError();
+        const failure =
+          kind === "stopped daemon"
+            ? stopped
+            : kind === "message-only error"
+              ? new Error(stopped.message)
+              : new GatewayStartupCleanupError(stopped, new Error("cleanup failed"));
+        const completeBoot = vi.fn();
+        const { runGatewayLoop } = await import("./run-loop.js");
+        await expect(
+          runGatewayLoop({
+            start: vi.fn(async () => {
+              throw failure;
+            }),
+            completeBoot,
+          }),
+        ).rejects.toBe(failure);
+        expect(completeBoot).toHaveBeenCalledWith({
+          outcome: "startup_failed",
+          reason:
+            kind === "failed cleanup" ? expect.stringContaining("cleanup failed") : stopped.message,
+          ...(kind === "stopped daemon"
+            ? { startupReason: "gateway.tailscale_backend_stopped" }
+            : {}),
+        });
+      });
+    },
+  );
 }

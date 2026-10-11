@@ -14,6 +14,7 @@ import {
   waitForTailscaleBackendReady,
   waitForTailscaleBackendRunning,
 } from "./tailscale-backend-ready.js";
+import { TailscaleBackendStoppedError } from "./tailscale-backend-stopped-error.js";
 import * as tailscale from "./tailscale.js";
 
 const {
@@ -334,7 +335,9 @@ describe("tailscale helpers", () => {
           exec,
         }).catch((value: unknown) => value);
         expect(isTailscaleServeAuthenticationRequiredError(error)).toBe(false);
-        if (BackendState !== "NeedsLogin") {
+        if (BackendState === "Stopped") {
+          expect(error).toBeInstanceOf(TailscaleBackendStoppedError);
+        } else if (BackendState !== "NeedsLogin") {
           expect(error).toBeUndefined();
         } else {
           expect(error).toBeInstanceOf(TailscaleBackendAuthenticationRequiredError);

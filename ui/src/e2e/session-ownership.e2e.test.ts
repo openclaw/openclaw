@@ -180,6 +180,11 @@ suite.define(() => {
     });
 
     await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
+    // This scenario intentionally compares sessions beyond the current human's Mine scope.
+    await currentPage
+      .locator(".sidebar-navigation-scope")
+      .getByRole("button", { name: "All", exact: true })
+      .click();
     await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
     await currentPage.locator('[data-session-key="agent:main:ada"] a').click();
@@ -309,6 +314,9 @@ suite.define(() => {
       presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],
       historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
       methodResponses: {
+        "config.get": { config: {}, hash: "owner-filter-fixture" },
+        "users.prefs.get": { status: "ok", entries: { "ui.navigationScope": "mine" } },
+        "users.prefs.set": { status: "ok" },
         "sessions.list": {
           cases: [
             {
@@ -328,7 +336,18 @@ suite.define(() => {
     });
 
     await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
+    // This scenario intentionally compares sessions beyond the current human's Mine scope.
+    await currentPage
+      .locator(".sidebar-navigation-scope")
+      .getByRole("button", { name: "All", exact: true })
+      .click();
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
+    const scopeWrite = await gateway.waitForRequest("users.prefs.set");
+    expect(scopeWrite.params).toMatchObject({ entries: { "ui.navigationScope": "all" } });
+    await gateway.setMethodResponse("users.prefs.get", {
+      status: "ok",
+      entries: { "ui.navigationScope": "all" },
+    });
     await chooseSidebarOwner(currentPage, "involving-me");
     await closeSidebarMenu(currentPage);
     await expect
@@ -412,6 +431,9 @@ suite.define(() => {
     });
     await currentPage.clock.install();
     await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
+    // All preserves attribution; Mine intentionally omits the redundant self avatar.
+    await chooseSidebarOwner(currentPage, "all");
+    await closeSidebarMenu(currentPage);
     const row = currentPage.locator('[data-session-key="agent:main:ada"]');
     await expectBrowser(row).toBeVisible();
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
@@ -525,6 +547,11 @@ suite.define(() => {
     });
 
     await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
+    // This scenario intentionally compares sessions beyond the current human's Mine scope.
+    await currentPage
+      .locator(".sidebar-navigation-scope")
+      .getByRole("button", { name: "All", exact: true })
+      .click();
     const ownDraft = currentPage.locator('[data-session-key="agent:main:ada"]');
     const otherDraft = currentPage.locator('[data-session-key="agent:main:bob"]');
     await ownDraft.waitFor();

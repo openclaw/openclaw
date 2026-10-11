@@ -211,6 +211,10 @@ export class ConfigFormCollectionDraft extends OpenClawLightDomElement {
       valueType === "string" || valueType === "number" || valueType === "integer";
     const errorId = `${this.id}-error`;
     const valueLabel = `${t("configForm.add")}: ${props.label}`;
+    const onValueInput = (event: Event) => {
+      this.draftValue = (event.currentTarget as HTMLInputElement | HTMLTextAreaElement).value;
+      this.clearError();
+    };
     const valueControl = usesTextInput
       ? html`
           <input
@@ -222,10 +226,7 @@ export class ConfigFormCollectionDraft extends OpenClawLightDomElement {
             aria-invalid=${this.invalidTarget === "value" ? "true" : "false"}
             .value=${this.draftValue}
             ?disabled=${this.draftIsNull}
-            @input=${(event: Event) => {
-              this.draftValue = (event.currentTarget as HTMLInputElement).value;
-              this.clearError();
-            }}
+            @input=${onValueInput}
           />
         `
       : html`
@@ -239,10 +240,7 @@ export class ConfigFormCollectionDraft extends OpenClawLightDomElement {
             rows="2"
             .value=${this.draftValue}
             ?disabled=${this.draftIsNull}
-            @input=${(event: Event) => {
-              this.draftValue = (event.currentTarget as HTMLTextAreaElement).value;
-              this.clearError();
-            }}
+            @input=${onValueInput}
           ></textarea>
         `;
 

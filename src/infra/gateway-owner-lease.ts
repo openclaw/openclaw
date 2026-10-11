@@ -80,20 +80,21 @@ function resolveStoppedGatewayOwnerLease(previous: GatewayOwnerLeaseIdentity | u
   );
 }
 
-/** Physical custody alone must not bypass a fresh, unverifiable lease during maintenance. */
+/** Physical custody alone must not bypass a fresh, unverifiable lease. */
 export async function assertGatewayOwnerLeaseStopped(
   env: NodeJS.ProcessEnv,
-  maintenanceOwner?: StateDatabaseSchemaLease,
+  owner?: StateDatabaseSchemaLease,
+  schemaMaintenance = false,
 ): Promise<void> {
-  if (maintenanceOwner) {
+  if (owner) {
     const pathname = resolveOpenClawStateSqlitePath(env);
-    maintenanceOwner.assertDatabaseAccess(pathname);
+    owner.assertDatabaseAccess(pathname);
     if (existingPathOrUndefined(pathname) === undefined) {
       return;
     }
     const context = captureOpenClawStateReadWorkerContext({ env, path: pathname });
     const source = captureOpenClawStateReadSource();
-    const transport = source.createTransport({ type: "doctor.gatewayOwnerLease.read" });
+    const transport = source.createTransport({ type: "gatewayOwnerLease.read", schemaMaintenance });
     const controller = new AbortController();
     const callerSignal = getAsyncWorkSignal();
     const signal = callerSignal
@@ -105,7 +106,7 @@ export async function assertGatewayOwnerLeaseStopped(
         signal.throwIfAborted();
         context.maintenanceScope?.assertReadAdmission();
         context.admission.assertCurrent();
-        maintenanceOwner.assertDatabaseAccess(pathname);
+        owner.assertDatabaseAccess(pathname);
       },
     };
     let prepared: PreparedSqliteReadOnlyLocation | undefined;
@@ -145,16 +146,18 @@ export async function assertGatewayOwnerLeaseStopped(
     let outcome: OpenClawStateReadOutcome | undefined;
     try {
       authority.assertCurrent();
-      prepared = prepareSqliteReadOnlyLocationSync(pathname);
-      releaseSnapshot = retainSnapshotTempDirectory(
-        prepared.cleanupRoot ?? path.dirname(prepared.location),
-      );
+      if (schemaMaintenance) {
+        prepared = prepareSqliteReadOnlyLocationSync(pathname);
+        releaseSnapshot = retainSnapshotTempDirectory(
+          prepared.cleanupRoot ?? path.dirname(prepared.location),
+        );
+      }
       read = transport.startRead(
         {
           context,
-          location: prepared.location,
-          snapshotRoot: prepared.cleanupRoot,
-          // Physical maintenance custody admits this private copy before quarantine repair.
+          // Offline custody permits a direct worker read; only repair needs a private snapshot.
+          location: prepared?.location ?? pathname,
+          snapshotRoot: prepared?.cleanupRoot,
           checkFreshAdmission: false,
         },
         authority,
@@ -177,7 +180,7 @@ export async function assertGatewayOwnerLeaseStopped(
       authority.assertCurrent();
       if (outcome && "value" in outcome) {
         const reply = outcome.value;
-        if (reply.type !== "doctor.gatewayOwnerLease.read") {
+        if (reply.type !== "gatewayOwnerLease.read") {
           throw new Error("Unexpected Gateway owner lease inspection result");
         }
         resolveStoppedGatewayOwnerLease(

@@ -13,10 +13,6 @@ import {
 } from "../cron/store/dispatch.worker.js";
 import { readPendingRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication.kernel.js";
 import { mutateSessionGroupCatalogInDatabase } from "../gateway/session-group-catalog.kernel.js";
-import {
-  readStableSqliteFileGeneration,
-  sameSqliteFileGeneration,
-} from "../infra/sqlite-file-generation.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { persistInterruptedUpdateObservation } from "../infra/update-run-interruption-store.js";
@@ -28,6 +24,7 @@ import {
   writeSecretStoreEntriesInDatabase,
   rollbackSecretStoreEntryWriteInDatabase,
   deleteSecretStoreEntryInDatabase,
+  updateSecretStoreAllowedHostsInDatabase,
 } from "../secrets/store/secret-store-write.js";
 import { executeSessionStateCommand } from "../sessions/session-state-events.worker.js";
 import { listWatchedSessionUpstreamLinksInDatabase } from "../sessions/session-upstream-links.kernel.js";
@@ -54,7 +51,10 @@ import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "./openclaw-state-db-readonly.js";
-import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
+import {
+  isOpenClawStateDatabaseOpen,
+  runOpenClawStateWriteTransaction,
+} from "./openclaw-state-db.js";
 import type {
   OpenClawStateWorkerBackend,
   OpenClawStateWorkerRuntimeCommand,
@@ -84,12 +84,19 @@ export function executeSharedStateCommand(
   if (stateWorkerRegistry.has(command)) {
     return stateWorkerRegistry.execute(command, { open, write, writeAdmitted, stateOptions });
   }
-  if (command.type === "updateRuns.recordStep" || command.type === "updateRuns.recordPhase") {
+  if (
+    command.type === "updateRuns.recordStep" ||
+    command.type === "updateRuns.recordPhase" ||
+    command.type === "updateRuns.create" ||
+    command.type === "updateRuns.finish" ||
+    command.type === "updateRuns.recordVerification" ||
+    command.type === "updateRuns.recordDiagnostics"
+  ) {
     return recordUpdateRunMutationInWorker(
       command,
       stateOptions(),
       (stage) => requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
-      updateRunWriter(),
+      updateRunWriter,
     );
   }
   if (command.type === "updateRuns.reconcile") {
@@ -111,13 +118,6 @@ export function executeSharedStateCommand(
       return readClawInstallSchemaVersionRows(db);
     }, stateOptions());
   }
-  if (command.type === "database.generationMatches") {
-    // Unavailable inspection retains the known failure; only a stable mismatch expires it.
-    return sameSqliteFileGeneration(
-      command.input.generation,
-      readStableSqliteFileGeneration(context.databasePath),
-    );
-  }
   if (command.type === "userPreferences.read" || command.type === "userPreferences.write") {
     return executeUserPreferenceCommand(command, {
       database: open(),
@@ -126,6 +126,20 @@ export function executeSharedStateCommand(
   }
   if (command.type === "tui.lastSession.clear") {
     return clearRetiredTuiPointers(new Set(command.input.retiredSessionKeys), stateOptions(), open);
+  }
+  if (command.type === "backup.recordOutcome") {
+    // A best-effort ledger must not initialize or change a refused backup source.
+    // An already-admitted writer carries ownership; cold admission stays read-only.
+    if (!isOpenClawStateDatabaseOpen(context.databasePath)) {
+      const existing = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => {
+        assertOpenClawStateDatabaseOwner(db, { pathname: context.databasePath });
+        return true;
+      }, stateOptions());
+      if (!existing) {
+        return undefined;
+      }
+    }
+    return write(({ db }) => recordBackupRunInDatabase(db, command.input));
   }
   const database = open();
   if (command.type === "githubPublication.prepareSessionReceiptDeletion") {
@@ -220,6 +234,12 @@ export function executeSharedStateCommand(
       ? rollbackSecretStoreEntryWriteInDatabase({ ...command.input, database: writeOptions }, admit)
       : deleteSecretStoreEntryInDatabase({ ...command.input, database: writeOptions }, admit);
   }
+  if (command.type === "secrets.allowedHosts") {
+    return updateSecretStoreAllowedHostsInDatabase(
+      { ...command.input, database: writeOptions },
+      (stage) => requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+    );
+  }
   if (command.type === "secrets.purge") {
     return purgeExpiredSecretStoreEntriesInDatabase(command.input, writeOptions);
   }
@@ -265,12 +285,6 @@ export function executeSharedStateCommand(
   }
   if (command.type === "subagents.persistChanges") {
     return persistSubagentRunChangesInWorker(command.input, writeOptions);
-  }
-  if (command.type === "backup.recordOutcome") {
-    return runOpenClawStateWriteTransaction(
-      ({ db }) => recordBackupRunInDatabase(db, command.input),
-      writeOptions,
-    );
   }
   if (command.type === "config.health.patch") {
     const { configPath, patch, expected, updatedAtMs } = command.input;

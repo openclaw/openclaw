@@ -9,7 +9,7 @@ title: "macOS dev setup"
 
 Build and run the OpenClaw macOS application from source.
 
-The packaged app requires macOS 15.0 or later. The build host must also meet
+The packaged app requires macOS 26.2 or later. The build host must also meet
 the Xcode requirements below.
 
 ## Prerequisites
@@ -17,6 +17,10 @@ the Xcode requirements below.
 - **Xcode 26.4+** (Swift 6.3 toolchain), on the latest macOS available in
   Software Update.
 - **Node.js 24.16+ or 26.1+ & pnpm** for the gateway, CLI, and packaging scripts.
+  SwiftPM and Xcode generate the Gateway protocol models with the first
+  supported Node on `PATH`, then `/opt/homebrew/bin/node` or
+  `/usr/local/bin/node`. Version-manager shims such as mise, asdf, or Volta
+  resolve to the Node binary they launch.
 
 macOS shell tooling uses the system `/bin/bash` (3.2); Homebrew Bash is not
 required. Run scripts directly or with `/bin/bash`. Bash 5.3+ can stall on a
@@ -38,12 +42,16 @@ pnpm install
 ./scripts/package-mac-app.sh
 ```
 
-Outputs `dist/OpenClaw.app`. Packaging requires a real signing identity by
-default and fails if none is available. Ad-hoc signing is an explicit opt-in;
-it does not preserve TCC permissions. See [macOS signing](/platforms/mac/signing).
+Outputs `dist/OpenClaw.app`. By default this is a debug-configuration build
+with the development bundle identifier `ai.openclaw.mac.debug`, meant to run
+beside an installed release. To replace a release install, see
+[Replace an installed release app](#replace-an-installed-release-app).
+Packaging requires a real signing identity by default and fails if none is
+available. Ad-hoc signing is an explicit opt-in; it does not preserve TCC
+permissions. See [macOS signing](/platforms/mac/signing).
 
 Packaging builds the JavaScript runtime and Control UI, then stages the full
-canonical package with production dependencies under
+standard package with production dependencies under
 `Contents/Resources/runtime/lib/node_modules/openclaw`. It retains the published
 package's `files` filter, including its CLI, Gateway, Control UI, npm, and
 optional `sqlite-vec`; on-demand plugins excluded from that package remain
@@ -129,6 +137,48 @@ ad-hoc signing; TCC permissions do not stick with `--no-sign`).
 Ad-hoc signed apps may trigger security prompts. If the app crashes
 immediately with "Abort trap 6", see [Troubleshooting](#troubleshooting).
 </Note>
+
+### Replace an installed release app
+
+`scripts/package-mac-app.sh` defaults to `BUILD_CONFIG=debug` and
+`BUNDLE_ID=ai.openclaw.mac.debug`. Copied over `/Applications/OpenClaw.app`,
+that build is still a different app to macOS and to OpenClaw:
+
+- The debug bundle ID has its own TCC grants and, for the default profile, its
+  own `ai.openclaw.mac.debug` defaults domain. Packaging clears its Sparkle
+  feed, so it never updates.
+- Keychain items the release app created, such as `ai.openclaw.tls-pinning`,
+  trust only the release app's code signature. Reading them raises
+  login-keychain password prompts.
+- The debug Swift configuration reads saved Gateway profiles from the separate
+  `ai.openclaw.gateway-profiles.debug` Keychain service, so the release app's
+  saved Gateways are missing.
+
+To replace a release install, package the release identity from a clean
+checkout:
+
+```bash
+BUILD_CONFIG=release BUNDLE_ID=ai.openclaw.mac ./scripts/package-mac-app.sh
+```
+
+Release configuration runs `scripts/apple-release-source-check.sh`, which fails
+unless the checkout is clean at the commit being built, and it requires the MLX
+voice helper. It builds a universal app unless you set `BUILD_ARCHS` (for
+example `BUILD_ARCHS=arm64`). Before installing, check the designated
+requirement:
+
+```bash
+codesign -dr - dist/OpenClaw.app
+```
+
+The output must include `identifier "ai.openclaw.mac"`. Keychain and TCC access
+follow the whole requirement, not just the identifier: sign with a Developer ID
+Application identity from the same team as the installed app, or macOS still
+treats the build as a different app. Sparkle stays enabled in this build, so a
+newer published release can replace it.
+
+Keep the default debug identity for development builds that run beside an
+installed release.
 
 ### Shared Bun pin and repin gate
 
@@ -325,7 +375,7 @@ If versions don't match, update macOS/Xcode and re-run the build.
 
 On a beta-only Xcode toolchain (for example Xcode 27 with the macOS 27 SDK),
 only the `openclaw-mlx-tts` helper may fail while the main app builds fine. The
-mlx-swift Metal compilation errors non-deterministically (a different `.metal`
+mlx-swift Metal compilation fails unpredictably (a different `.metal`
 file each run, `Could not read serialized diagnostics file` then a nonzero
 `metal` exit), because the beta `metal` compiler and its separately downloaded
 Metal Toolchain are still unstable. This is an upstream toolchain issue, not an

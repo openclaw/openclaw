@@ -25,6 +25,7 @@ import {
   type OpenClawAgentReadOnlyDatabaseHandle,
 } from "./openclaw-agent-db-readonly-open.js";
 import { registerOpenClawAgentDatabaseSyncResource } from "./openclaw-agent-db-resources.js";
+import { assertAgentDatabaseTerminalOpenAllowed } from "./openclaw-agent-db-terminal.js";
 import {
   adoptOpenClawAgentDatabaseValidation,
   type OpenClawAgentDatabaseReadValidation,
@@ -177,6 +178,9 @@ export class OpenClawAgentDatabaseReadOnlyScope {
     };
     if (this.database && !isOpenClawAgentDatabasePathCurrent(this.database)) {
       this.discardConnection();
+    }
+    if (this.database) {
+      assertAgentDatabaseTerminalOpenAllowed(this.database.path);
     }
     const retained = this.database !== undefined;
     if (!this.database) {

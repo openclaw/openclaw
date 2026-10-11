@@ -1,14 +1,12 @@
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
-  type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import {
@@ -49,13 +47,6 @@ import { deleteSessionDeliveryArtifacts } from "./session-accessor.sqlite-node-a
 import { commitPreparedSessionEntryLifecycleMutationInDatabase } from "./session-accessor.sqlite-projection-state.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 
-type SessionBoardCleanupDatabase = Pick<
-  OpenClawAgentKyselyDatabase,
-  "board_tabs" | "board_widgets"
-> & {
-  sqlite_schema: { name: string | null; type: string };
-};
-
 const reclamationQueue = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteSessionReclamationQueue"),
   () => new KeyedAsyncQueue(),
@@ -79,35 +70,6 @@ export function resolveSessionReclamationDatabaseOptions(
     },
     path: resolveOpenClawAgentSqlitePath(options),
   };
-}
-
-function deleteSessionBoardRows(
-  database: OpenClawAgentDatabase,
-  sessionKeys: readonly string[],
-): void {
-  const keys = [...new Set(sessionKeys)];
-  if (keys.length === 0) {
-    return;
-  }
-  const db = getNodeSqliteKysely<SessionBoardCleanupDatabase>(database.db);
-  const tables = new Set(
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .selectFrom("sqlite_schema")
-        .select("name")
-        .where("type", "=", "table")
-        .where("name", "in", ["board_tabs", "board_widgets"]),
-    ).rows.map((row) => row.name),
-  );
-  if (!tables.has("board_tabs") || !tables.has("board_widgets")) {
-    return;
-  }
-  executeSqliteQuerySync(
-    database.db,
-    db.deleteFrom("board_widgets").where("session_key", "in", keys),
-  );
-  executeSqliteQuerySync(database.db, db.deleteFrom("board_tabs").where("session_key", "in", keys));
 }
 
 export function* prepareHistoricalGenerationDeletions(params: {
@@ -281,7 +243,6 @@ function reclaimSqliteRowsInTransaction(
             sessionKeys,
           );
         }
-        deleteSessionBoardRows(transactionDb, sessionKeys);
         callbacks.onCommit?.(transactionDb);
         return {
           archivedTranscripts,

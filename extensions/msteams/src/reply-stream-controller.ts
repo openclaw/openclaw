@@ -6,6 +6,7 @@ import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MarkdownTableMode, MSTeamsConfig, ReplyPayload } from "../runtime-api.js";
 import { formatMSTeamsMarkdown } from "./format.js";
+import { flattenInformativeStatus } from "./informative-status.js";
 import { extractMessageId } from "./media-helpers.js";
 import { buildMSTeamsMessageActivity } from "./message-activity.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
@@ -226,7 +227,7 @@ export function createTeamsReplyStreamController(params: {
         return false;
       }
       try {
-        stream.update(text.replace(/^• /gmu, "- "));
+        stream.update(flattenInformativeStatus(text));
         return true;
       } catch (err) {
         if (isStreamCancelledError(err)) {

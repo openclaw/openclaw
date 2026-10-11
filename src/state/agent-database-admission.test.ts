@@ -74,19 +74,22 @@ describe("agent database admission", () => {
     const database = new (requireNodeSqlite().DatabaseSync)(newerPath);
     database.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`);
     database.close();
-    await withAgentDatabaseStartupAdmission(async () => {
-      const failure = await assertOpenClawDatabasesReady({
-        env,
-        operation: "gateway-startup",
-        config,
-      }).catch((error: unknown) => error);
-      expect(findStartupMaintenanceRequiredError(failure), String(failure)).toMatchObject({
-        kind: "newer-schema",
-      });
-      expect(failure).toBeInstanceOf(AggregateError);
-      expect(String(failure)).toContain(unavailablePath);
-      expect(String(failure)).toContain(newerPath);
-    });
+    await withAgentDatabaseStartupAdmission(
+      async () => {
+        const failure = await assertOpenClawDatabasesReady({
+          env,
+          operation: "gateway-startup",
+          config,
+        }).catch((error: unknown) => error);
+        expect(findStartupMaintenanceRequiredError(failure), String(failure)).toMatchObject({
+          kind: "newer-schema",
+        });
+        expect(failure).toBeInstanceOf(AggregateError);
+        expect(String(failure)).toContain(unavailablePath);
+        expect(String(failure)).toContain(newerPath);
+      },
+      { deferInspections: false },
+    );
   });
 
   it("keeps a secondary with malformed ownership isolated while required agents start", async () => {

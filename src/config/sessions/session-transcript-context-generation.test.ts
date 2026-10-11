@@ -5,7 +5,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { loadTranscriptEventsSync } from "./session-accessor.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
-import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 
 it.each(["transcript", "lifecycle"] as const)(
   "does not revive an awaiting context consumer after %s revocation and restoration",

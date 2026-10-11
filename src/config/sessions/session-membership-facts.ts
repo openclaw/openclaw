@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
@@ -41,7 +41,7 @@ export function readSessionMembershipRowsInDatabase(
     return [];
   }
   return withSqlitePostCommitPublications(database.db, () =>
-    runSqliteDeferredTransactionSync(database.db, () => {
+    runSqliteReadSnapshotSync(database.db, () => {
       assertCanonicalSqliteSessionKeysCurrent(database);
       let entries = selectSessionEntryRows(database, "list")
         .select("updated_at")

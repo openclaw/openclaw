@@ -119,6 +119,13 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
     restrictions.disabled = false;
     restrictions.blockedAgents.clear();
   };
+  const settlePreparedConfig = () => {
+    preparedConfig = null;
+    clearRestrictions(commitRestrictions);
+    if (appliedConfigWhileRestartPending) {
+      accumulateRestrictions(appliedConfigWhileRestartPending, commitRestrictions);
+    }
+  };
   const isEnabled = () =>
     isTerminalConfigEnabled(committedTerminalConfig()) &&
     !restartRestrictions.disabled &&
@@ -174,18 +181,12 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
           activeConfig = preparedConfig;
         }
       }
-      preparedConfig = null;
-      clearRestrictions(commitRestrictions);
-      if (hasPendingRestart && appliedConfigWhileRestartPending) {
-        accumulateRestrictions(appliedConfigWhileRestartPending, commitRestrictions);
-      }
+      settlePreparedConfig();
     },
     acceptConfig: (options) => {
       // Baseline acceptance retires an un-published candidate, including config
       // intentionally skipped by reload policy. Only committed publication stages
       // runtime truth for promotion after a rejected restart.
-      preparedConfig = null;
-      clearRestrictions(commitRestrictions);
       if (options.retireRejectedRestart) {
         hasPendingRestart = false;
         clearRestrictions(restartRestrictions);
@@ -193,11 +194,8 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
           activeConfig = appliedConfigWhileRestartPending;
         }
         appliedConfigWhileRestartPending = null;
-        return;
       }
-      if (appliedConfigWhileRestartPending) {
-        accumulateRestrictions(appliedConfigWhileRestartPending, commitRestrictions);
-      }
+      settlePreparedConfig();
     },
   };
 }

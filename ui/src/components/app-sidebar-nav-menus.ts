@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import {
@@ -13,11 +13,12 @@ import {
   sidebarMoreRoutes,
   titleForRoute,
 } from "../app-navigation.ts";
-import { pathForRoute, pluginTabLocation } from "../app-route-paths.ts";
+import { pathForRoute } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
 import { icons, type IconName } from "./icons.ts";
+import { renderMenuTrigger } from "./menu-surface.ts";
 import { consumeDropdownKeyboardDismissal, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
 
 type SidebarMenuPosition = { x: number; y: number };
@@ -38,21 +39,6 @@ export function renderSidebarMenuAction(
     <span class="sidebar-customize-menu__text">${label}</span>
     ${options.details ?? nothing}
   </wa-dropdown-item>`;
-}
-
-export function renderSidebarMenuTrigger(
-  position: SidebarMenuPosition,
-  label: string,
-  edge: "top" | "bottom" = "top",
-) {
-  return html`<button
-    slot="trigger"
-    type="button"
-    tabindex="-1"
-    aria-hidden="true"
-    aria-label=${label}
-    style="position: fixed; left: ${position.x}px; ${edge}: ${position.y}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
-  ></button>`;
 }
 
 export function renderSidebarDropdown(params: {
@@ -77,7 +63,7 @@ export function renderSidebarDropdown(params: {
     @keydown=${(event: KeyboardEvent) => trackDropdownKeyboardDismissal(event, params.onTabAway)}
     @wa-after-hide=${(event: Event) => params.onClose(consumeDropdownKeyboardDismissal(event))}
   >
-    ${renderSidebarMenuTrigger(params.position, params.label)} ${params.content}
+    ${renderMenuTrigger(params.position, params.label)} ${params.content}
   </wa-dropdown>`;
 }
 
@@ -110,29 +96,33 @@ export function sidebarPluginTabs(
   );
 }
 
-type SidebarNavRouteParams = {
-  routeId: NavigationRouteId;
+export function renderSidebarNavLink(params: {
   href: string;
   active: boolean;
+  icon: TemplateResult;
+  label: string;
   onNavigate: () => void;
-  onPreload: (event: Event, immediate?: boolean) => void;
-  onCancelPreload: (event: Event) => void;
-};
-
-export function renderSidebarNavRoute(params: SidebarNavRouteParams) {
+  onPreload?: (event: Event, immediate?: boolean) => void;
+  onCancelPreload?: (event: Event) => void;
+}) {
+  const onPreload = params.onPreload;
   return html`
     <a
       href=${params.href}
       class="nav-item ${params.active ? "nav-item--active" : ""}"
       aria-current=${params.active ? "page" : nothing}
-      @focus=${(event: Event) => params.onPreload(event)}
-      @blur=${params.onCancelPreload}
-      @pointerenter=${(event: Event) => params.onPreload(event)}
-      @pointerleave=${params.onCancelPreload}
-      @touchstart=${{
-        handleEvent: (event: TouchEvent) => params.onPreload(event, true),
-        passive: true,
-      }}
+      @focus=${onPreload ? (event: Event) => onPreload(event) : nothing}
+      @blur=${params.onCancelPreload ?? nothing}
+      @pointerenter=${onPreload ? (event: Event) => onPreload(event) : nothing}
+      @pointerleave=${params.onCancelPreload ?? nothing}
+      @touchstart=${
+        onPreload
+          ? {
+              handleEvent: (event: TouchEvent) => onPreload(event, true),
+              passive: true,
+            }
+          : nothing
+      }
       @click=${(event: MouseEvent) => {
         if (!shouldHandleNavigationClick(event)) {
           return;
@@ -141,37 +131,8 @@ export function renderSidebarNavRoute(params: SidebarNavRouteParams) {
         params.onNavigate();
       }}
     >
-      <span class="nav-item__icon" aria-hidden="true"
-        >${icons[navigationIconForRoute(params.routeId)]}</span
-      >
-      <span class="nav-item__text">${titleForRoute(params.routeId)}</span>
-    </a>
-  `;
-}
-
-export function renderSidebarPluginTab(params: {
-  tab: GatewayControlUiPluginTab;
-  basePath: string;
-  active: boolean;
-  onNavigate: (location: ReturnType<typeof pluginTabLocation>) => void;
-}) {
-  const location = pluginTabLocation(params.tab, params.basePath);
-  const iconName = Object.hasOwn(icons, params.tab.icon!) ? (params.tab.icon as IconName) : "plug";
-  return html`
-    <a
-      href=${`${location.pathname}${location.search}`}
-      class="nav-item ${params.active ? "nav-item--active" : ""}"
-      aria-current=${params.active ? "page" : nothing}
-      @click=${(event: MouseEvent) => {
-        if (!shouldHandleNavigationClick(event)) {
-          return;
-        }
-        event.preventDefault();
-        params.onNavigate(location);
-      }}
-    >
-      <span class="nav-item__icon" aria-hidden="true">${icons[iconName]}</span>
-      <span class="nav-item__text">${params.tab.label}</span>
+      <span class="nav-item__icon" aria-hidden="true">${params.icon}</span>
+      <span class="nav-item__text">${params.label}</span>
     </a>
   `;
 }
@@ -273,17 +234,15 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
       icon: navigationIconForRoute(routeId),
       label: titleForRoute(routeId),
     })),
-    ...params.pluginNavigation
-      .filter((entry) => entry.value.defaultVisible === false)
-      .map((entry) => ({
-        value: `plugin:${entry.key}`,
-        entry: `plugin:${entry.key}`,
-        icon:
-          entry.value.icon && Object.hasOwn(icons, entry.value.icon)
-            ? (entry.value.icon as IconName) // SAFETY: the own-key check admits only registered icon names.
-            : ("plug" as const),
-        label: entry.value.label,
-      })),
+    ...params.pluginNavigation.map((entry) => ({
+      value: `plugin:${entry.key}`,
+      entry: `plugin:${entry.key}`,
+      icon:
+        entry.value.icon && Object.hasOwn(icons, entry.value.icon)
+          ? (entry.value.icon as IconName) // SAFETY: the own-key check admits only registered icon names.
+          : ("plug" as const),
+      label: entry.value.label,
+    })),
   ];
   return renderSidebarDropdown({
     ...params,

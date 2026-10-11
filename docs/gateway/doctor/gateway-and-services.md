@@ -60,6 +60,8 @@ restoration failure; slow startup does not undo a completed repair.
 
     This distinguishes first-time pairing from pending role/scope upgrades and from stale token/device-identity drift, closing the common "already paired but still getting pairing required" hole.
 
+    Node-hosting preconditions are checked only when config requests node execution or a browser node target, allows node commands, opts into remote pairing through CIDRs or SSH verification, or explicitly enables/configures the device-pair plugin. The plugin's bundled default, empty node settings, and deny-only policies do not request hosting. A local-only loopback Gateway therefore receives no node-hosting warning; remote-client profiles leave these checks to the server. Explicit pairing and join-code requests still report an unreachable origin. This diagnostic-only change does not rewrite config or alter update repairs.
+
   </Accordion>
   <Accordion title="9. Security warnings">
     Doctor emits a Security note only when it finds a warning, such as a provider open to DMs without an allowlist or a dangerously configured policy. Use `openclaw security audit` for the full security inventory.
@@ -259,6 +261,8 @@ restoration failure; slow startup does not undo a completed repair.
     Doctor inspects the service runtime (PID, last exit status) and warns when the service is installed but not actually running. It also checks for port collisions on the gateway port (default `18789`) and reports likely causes (gateway already running, SSH tunnel).
   </Accordion>
   <Accordion title="17. Gateway runtime best practices">
+    When the selected daemon uses a different Node executable that passes the runtime checks, Doctor omits warnings about the unused system Node. Any remaining system Node SQLite capability warning names the executable it checked.
+
     Doctor accepts Bun 1.4+ runtimes that provide WAL-reset-safe `node:sqlite` and warns when the gateway service runs on an older or unsafe Bun or a version-managed Node path (`nvm`, `fnm`, `volta`, `asdf`, etc.). Supported Bun services, whether recorded or pinned, are retained. A pinned runtime is never migrated. Only an unpinned, unsupported Bun is offered migration to a supported system Node, with interactive approval. Update-driven Doctor runs never migrate the runtime. If no supported Node is available, the service stays on Bun and Doctor warns. Version-manager paths can break after upgrades because the service does not load your shell init. Doctor can offer to migrate an unpinned version-managed Node to a supported system Node install (Homebrew/apt/choco).
 
     When reinstalling an existing but unloaded service without a wrapper or runtime

@@ -14,6 +14,7 @@ struct SettingsHubScreen: View {
     var body: some View {
         NavigationStack(path: self.$navigationPath) {
             self.root
+                .background(SidebarNavigationMarginAnchor())
                 .navigationDestination(for: SettingsRoute.self) { route in
                     self.nativeScreen(route: route)
                 }

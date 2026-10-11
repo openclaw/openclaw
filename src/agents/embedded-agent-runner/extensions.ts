@@ -20,7 +20,7 @@ import { recordEmbeddedToolReceipt } from "./tool-send-receipts.js";
 export function buildEmbeddedExtensionFactories(params: {
   cfg: OpenClawConfig | undefined;
   sessionManager: SessionManager;
-  workspaceDir?: string;
+  workspaceDir: string;
   model: ProviderRuntimeModel | undefined;
   agentId?: string;
   sessionId?: string;

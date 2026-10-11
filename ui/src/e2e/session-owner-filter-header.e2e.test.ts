@@ -84,6 +84,11 @@ suite.define(() => {
         { id: "profile-bob", background: "#985b42", label: "B" },
       ]);
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
+      // The toolbar filters refine All; Mine intentionally excludes both foreign owners.
+      await page
+        .locator(".sidebar-navigation-scope")
+        .getByRole("button", { name: "All", exact: true })
+        .click();
       const menu = await openSidebarSortMenu(page);
       await chooseSidebarMenuOption(menu.page(), "Group by", "Person");
       await closeSidebarMenu(page);

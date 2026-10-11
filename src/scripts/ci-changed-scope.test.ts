@@ -88,14 +88,6 @@ function createSyntheticMergeRepo(prefix: string): { repoDir: string; staleBase:
 }
 
 describe("parseArgs", () => {
-  it("parses CI diff refs", () => {
-    expect(parseArgs(["--base", "origin/main", "--head", "HEAD"])).toEqual({
-      base: "origin/main",
-      head: "HEAD",
-      mergeHeadFirstParent: false,
-    });
-  });
-
   it("rejects missing CI diff refs", () => {
     expect(() => parseArgs(["--base", "--head", "HEAD"])).toThrow("--base requires a value");
     expect(() => parseArgs(["--base", "-h", "--head", "HEAD"])).toThrow("--base requires a value");

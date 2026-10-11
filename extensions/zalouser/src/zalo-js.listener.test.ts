@@ -5,7 +5,7 @@ import type { Socket } from "node:net";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -55,8 +55,8 @@ async function seedSession() {
 beforeEach(() => {
   resetPluginStateStoreForTests();
   const runtime = createPluginRuntimeMock();
-  runtime.state.openKeyedStore = (options) =>
-    createPluginStateKeyedStoreForTests("zalouser", options);
+  runtime.state.openKeyedStoreV2 = (options, authority = { assertCurrent: () => {} }) =>
+    createPluginStateKeyedStoreV2ForTests("zalouser", options, authority);
   setZalouserRuntime(runtime);
   createZaloMock.mockReset();
 });

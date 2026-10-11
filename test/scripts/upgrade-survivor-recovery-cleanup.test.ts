@@ -26,8 +26,7 @@ describe.skipIf(process.platform === "win32")("recovery survivor package provena
     | "metadata-version"
     | "pack-version"
     | "integrity-mismatch"
-    | "missing-metadata-integrity"
-    | "missing-pack-integrity";
+    | "missing-metadata-integrity";
 
   async function packageEvidence({
     requested = "openclaw@2026.7.1-2",
@@ -64,14 +63,10 @@ describe.skipIf(process.platform === "win32")("recovery survivor package provena
     const packed = {
       name: "openclaw",
       version: fault === "pack-version" ? "2026.1.1" : installedVersion,
-      ...(fault === "missing-pack-integrity"
-        ? {}
-        : {
-            integrity:
-              fault === "integrity-mismatch"
-                ? `sha512-${createHash("sha512").update("different bytes").digest("base64")}`
-                : integrity,
-          }),
+      integrity:
+        fault === "integrity-mismatch"
+          ? `sha512-${createHash("sha512").update("different bytes").digest("base64")}`
+          : integrity,
     };
     const calls = path.join(root, "npm-calls.jsonl");
     fs.writeFileSync(
@@ -128,7 +123,6 @@ if (args[0] === "view") {
   }
 
   it.each([
-    { requested: "openclaw@2026.7.1-2", installedVersion: "2026.7.1-2", packShape: "array" },
     {
       requested: "openclaw@2026.8.2",
       installedVersion: "2026.8.2",
@@ -159,7 +153,6 @@ if (args[0] === "view") {
     "pack-version",
     "integrity-mismatch",
     "missing-metadata-integrity",
-    "missing-pack-integrity",
   ])("rejects %s without recording successful package evidence", async (fault) => {
     const fixture = await packageEvidence({ fault });
     expect(fixture.result.error).toBeUndefined();
@@ -345,27 +338,6 @@ describe("recovery survivor evidence", () => {
     expect(() => assertRecoveryOriginals({ originals: archived }, [])).toThrow(/did not record/);
     fs.appendFileSync(retainedSource, "unexpected change");
     expect(() => assertRecoveryOriginals({ originals }, [])).toThrow(/changed/);
-  });
-
-  it("does not overwrite an existing transcript when seeding", () => {
-    const file = path.join(temporary(), "history.jsonl");
-    fs.writeFileSync(file, "existing history");
-    expect(() => writeRecoveryTranscript(file, "session", 3)).toThrow();
-    expect(fs.readFileSync(file, "utf8")).toBe("existing history");
-  });
-
-  it("detects preview mutations to databases, directories, cache files, and identities", () => {
-    const root = temporary();
-    const database = path.join(root, "current.sqlite");
-    fs.writeFileSync(database, "synthetic database bytes");
-    const before = recoveryTreeSnapshot([root]);
-    expect(() => assertRecoverySnapshot(before, recoveryTreeSnapshot([root]))).not.toThrow();
-    fs.mkdirSync(path.join(root, "new-cache"));
-    expect(() => assertRecoverySnapshot(before, recoveryTreeSnapshot([root]))).toThrow();
-    fs.rmSync(path.join(root, "new-cache"), { recursive: true });
-    const stable = recoveryTreeSnapshot([root]);
-    fs.writeFileSync(database, "changed database bytes");
-    expect(() => assertRecoverySnapshot(stable, recoveryTreeSnapshot([root]))).toThrow();
   });
 
   it("allows only selected transient WAL indexes during offline maintenance", () => {

@@ -17,6 +17,7 @@ import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import * as stateRead from "../../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
@@ -32,6 +33,7 @@ import {
   assertPreparedSkillLibrarySelection,
   changeSkillLibrarySelection,
   prepareSkillLibrarySelection,
+  prepareSkillLibrarySession,
   readSelectedSkillLibraryFiles,
   seedSkillLibrarySelection,
 } from "./selection.js";
@@ -48,6 +50,45 @@ import { projectSkillLibraryList, type SkillLibraryAuthority } from "./store.js"
 const { fixture, tempDirs } = useSkillLibraryFixture();
 
 describe("skill library worker reads and prepared selection authority", () => {
+  it("reuses library facts until a library or profile writer changes their inputs", async () => {
+    const { options, alice, admin } = fixture();
+    const saved = await saveSkillLibrary(alice, draft(), options);
+    const reads = vi.spyOn(stateRead, "executeExistingOpenClawStateRead");
+    try {
+      const first = await seedSkillLibrarySelection(alice, options);
+      expect(first).toHaveLength(1);
+      const count = reads.mock.calls.length;
+      first[0]!.name = "caller mutation";
+      expect(await seedSkillLibrarySelection(alice, options)).toEqual([
+        {
+          skillId: saved.entry.skillId,
+          revision: saved.entry.revision,
+          name: saved.entry.name,
+          ownerProfileId: saved.entry.ownerProfileId,
+        },
+      ]);
+      expect(reads.mock.calls).toHaveLength(count);
+
+      await mutateSkillLibrary(
+        alice,
+        { action: "disable", skillId: saved.entry.skillId, expectedRevision: saved.entry.revision },
+        options,
+      );
+      expect(await seedSkillLibrarySelection(alice, options)).toEqual([]);
+      expect(await resolveSkillLibraryPresentation(admin, options)).toMatchObject({
+        multipleProfiles: false,
+        defaultTarget: "workspace",
+      });
+      ensureProfileForEmail("new-person@example.test", options);
+      expect(await resolveSkillLibraryPresentation(admin, options)).toMatchObject({
+        multipleProfiles: true,
+        defaultTarget: "personal",
+      });
+    } finally {
+      reads.mockRestore();
+    }
+  });
+
   it("projects shared-owner catalogs with bounded SQL and skips disabled seed rows", async () => {
     const { options, alice } = fixture();
     const saved = await saveSkillLibrary(alice, draft(), options);
@@ -68,12 +109,19 @@ describe("skill library worker reads and prepared selection authority", () => {
       revision.run(id, saved.entry.skillId);
     }
     db.exec("COMMIT");
-    const measure = (kind: "list" | "seed") => {
+    const measure = (kind: "list" | "seed" | "session") => {
       const reader = openNodeSqliteDatabase(options.path, { readOnly: true });
       enableNodeSqliteKyselyStatementCache(reader);
       admitSqliteSchema(reader);
-      const sql = trackSqliteStatementExecutions(reader, ["entries", "other"], (query) =>
-        /from "skill_library_entries"/i.test(query) ? "entries" : "other",
+      const sql = trackSqliteStatementExecutions(
+        reader,
+        ["entries", "profiles", "other"],
+        (query) =>
+          /from "skill_library_entries"/i.test(query)
+            ? "entries"
+            : /from "user_profiles"/i.test(query)
+              ? "profiles"
+              : "other",
       );
       try {
         const result = skillLibraryReadOperations["skillLibrary.read"](
@@ -85,9 +133,10 @@ describe("skill library worker reads and prepared selection authority", () => {
         );
         return {
           result,
-          calls: sql.counts.entries + sql.counts.other,
+          calls: sql.counts.entries + sql.counts.profiles + sql.counts.other,
+          counts: sql.counts,
           entryRows: sql.rowCounts.entries,
-          blobs: sql.blobBytes.entries + sql.blobBytes.other,
+          blobs: sql.blobBytes.entries + sql.blobBytes.profiles + sql.blobBytes.other,
         };
       } finally {
         sql.restore();
@@ -100,8 +149,24 @@ describe("skill library worker reads and prepared selection authority", () => {
       throw new Error("Expected catalog");
     }
     expect(listed.result.value.entries).toHaveLength(100);
-    expect.soft(listed.calls).toBe(5);
+    expect.soft(listed.calls).toBe(4);
+    expect(listed.counts).toEqual({ entries: 1, profiles: 3, other: 0 });
     expect.soft(listed.blobs).toBe(0);
+    const session = measure("session");
+    expect(session.result).toMatchObject({
+      kind: "session",
+      value: {
+        selections: expect.any(Array),
+        presentation: { profileId: alice.profileId, defaultTarget: "personal" },
+      },
+    });
+    if (session.result.kind !== "session") {
+      throw new Error("Expected session snapshot");
+    }
+    expect(session.result.value.selections).toHaveLength(64);
+    expect(session.calls).toBe(4);
+    expect(session.counts).toEqual({ entries: 1, profiles: 3, other: 0 });
+    expect(session.blobs).toBe(0);
     const insertOwner =
       db.prepare(`INSERT INTO user_profiles (id, display_name, created_at, updated_at)
       VALUES (?, ?, 0, 0)`);
@@ -127,7 +192,8 @@ describe("skill library worker reads and prepared selection authority", () => {
       UPDATE skill_library_entries SET owner_profile_id = 'missing-owner' WHERE skill_id = 'catalog-5'`);
     db.exec("COMMIT");
     const cohorts = measure("list");
-    expect(cohorts.calls).toBe(7);
+    expect(cohorts.calls).toBe(6);
+    expect(cohorts.counts).toEqual({ entries: 1, profiles: 5, other: 0 });
     expect(cohorts.blobs).toBe(0);
     if (cohorts.result.kind !== "list") {
       throw new Error("Expected catalog");
@@ -157,7 +223,8 @@ describe("skill library worker reads and prepared selection authority", () => {
     expect.soft(seeded.entryRows).toBe(0);
     expect.soft(seeded.blobs).toBe(0);
     expect(measure("list").entryRows).toBe(501);
-    expect(seeded.calls).toBe(3);
+    expect(seeded.calls).toBe(2);
+    expect(seeded.counts).toEqual({ entries: 1, profiles: 1, other: 0 });
   });
 
   it("keeps solo defaults, counts aliases once, and never creates library tables on discovery", async () => {
@@ -193,6 +260,38 @@ describe("skill library worker reads and prepared selection authority", () => {
     expect(pins).toEqual([]);
     expect(() => assertPreparedSkillLibrarySelection(pins)).not.toThrow();
     expect(fs.existsSync(options.path)).toBe(false);
+  });
+
+  it("skips SQL for an admitted empty seed and invalidates its snapshot after publication", async () => {
+    const { options, alice } = fixture();
+    const { db } = openOpenClawStateDatabase(options);
+    const sql = observeHostDataSql();
+    try {
+      expect(
+        skillLibraryReadOperations["skillLibrary.read"](
+          {
+            kind: "seed",
+            params: undefined,
+            authority: { profileId: alice.profileId, scopes: alice.scopes, config: {} },
+          },
+          db,
+        ),
+      ).toMatchObject({ kind: "seed", value: [] });
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
+    }
+    const before = await prepareSkillLibrarySession(alice, options);
+    expect(before.selections).toEqual([]);
+    const saved = await saveSkillLibrary(alice, draft(), options);
+    expect(() => before.assertCurrent()).toThrow(SkillLibraryError);
+    expect(() => assertPreparedSkillLibrarySelection(before.selections)).toThrow(SkillLibraryError);
+    const after = await prepareSkillLibrarySession(alice, options);
+    expect(after.selections).toEqual([expect.objectContaining({ skillId: saved.entry.skillId })]);
+    expect(after.presentation).toMatchObject({
+      profileId: alice.profileId,
+      defaultTarget: "personal",
+    });
   });
 
   it("reads library metadata, selections and manifests without caller-thread SQL", async () => {
@@ -336,7 +435,8 @@ describe("skill library worker reads and prepared selection authority", () => {
         { action: "share", skillId: saved.entry.skillId, expectedRevision: saved.entry.revision },
         options,
       );
-      const freshSeed = await seedSkillLibrarySelection(bob, options);
+      const prepared = await prepareSkillLibrarySession(bob, options);
+      const freshSeed = prepared.selections;
       expect(freshSeed).toHaveLength(1);
       const durablePins = structuredClone(freshSeed);
       if (change === "role") {
@@ -353,6 +453,7 @@ describe("skill library worker reads and prepared selection authority", () => {
       const sql = observeHostDataSql();
       try {
         expect(() => assertPreparedSkillLibrarySelection(freshSeed)).toThrow(SkillLibraryError);
+        expect(() => prepared.assertCurrent()).toThrow(SkillLibraryError);
         expect(() => assertPreparedSkillLibrarySelection(durablePins)).not.toThrow();
         expect(sql.queries).toEqual([]);
       } finally {

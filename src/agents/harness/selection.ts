@@ -637,6 +637,10 @@ function preparePluginHarnessParams(
       : undefined,
     harness.conversationToolPolicyNativeTools,
   );
+  if (policies.requiresLiveToolAuthority) {
+    // Native-runtime consent does not waive a separate revocable delegation grant.
+    assertPluginHarnessConversationToolPolicySupport(harness, true);
+  }
   const policyParams = {
     ...preparedParams,
     pluginHarnessToolPolicySafeDeniedTools:

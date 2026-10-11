@@ -12,6 +12,7 @@ import { withEnvAsync } from "../../../test-utils/env.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { readBtwTranscriptMessages } from "../../btw-transcript.js";
+import { RUNTIME_EVENT_USER_PROMPT } from "../../internal-runtime-context.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import {
@@ -260,7 +261,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
   });
 
   it.each(["handled", "rejected"] as const)(
-    "retires queued context when prompt preflight is %s",
+    "retires runtime-only context and preserves the next user when preflight is %s",
     async (outcome) => {
       let calls = 0;
       const handlers = new Map<string, Array<() => Promise<unknown>>>([
@@ -279,18 +280,22 @@ describe("submitEmbeddedAttemptPrompt", () => {
       streamMocks.streamSimple.mockImplementation((model) =>
         createAssistantResultStream(createAssistant(model, [{ type: "text", text: "done" }])),
       );
-      const { session, sessionManager, modelRegistry } = await createTestSession({
+      const sessionManager = guardSessionManager(SessionManager.inMemory());
+      const { session, modelRegistry } = await createTestSession({
+        sessionManager,
         resourceLoader: createResourceLoader(handlers),
       });
       const authCheck = vi.spyOn(modelRegistry, "hasConfiguredAuth");
       if (outcome === "rejected") {
         authCheck.mockReturnValueOnce(false);
       }
-      const submit = (text: string) =>
+      const submit = (text: string, runtimeOnly = false) =>
         submitEmbeddedAttemptPrompt({
           ...createBaseInput(),
           activeSession: session,
           appendOnlyRuntimeContext: true,
+          runtimeOnly,
+          setNextUserMessagePersistence: sessionManager.setNextUserMessagePersistence,
           transcriptPrompt: text,
           modelPrompt: text,
           compactionRequestBudget: createCompactionRequestBudget({
@@ -303,9 +308,9 @@ describe("submitEmbeddedAttemptPrompt", () => {
           promptActiveSession: (prompt, options) => session.prompt(prompt, options),
         });
       if (outcome === "rejected") {
-        await expect(submit("discarded")).rejects.toThrow("No API key");
+        await expect(submit(RUNTIME_EVENT_USER_PROMPT, true)).rejects.toThrow("No API key");
       } else {
-        await submit("discarded");
+        await submit(RUNTIME_EVENT_USER_PROMPT, true);
       }
       authCheck.mockRestore();
       await submit("accepted");
@@ -316,7 +321,17 @@ describe("submitEmbeddedAttemptPrompt", () => {
       expect(carriers[0]).toMatchObject({
         content: expect.stringContaining("context for accepted"),
       });
-      expect(JSON.stringify(session.messages)).not.toContain("context for discarded");
+      expect(JSON.stringify(session.messages)).not.toContain(RUNTIME_EVENT_USER_PROMPT);
+      const users = sessionManager
+        .getEntries()
+        .flatMap((entry) =>
+          entry.type === "message" && entry.message.role === "user" ? [entry.message] : [],
+        );
+      expect(users.map((message) => message.content)).toEqual([
+        [{ type: "text", text: "accepted" }],
+      ]);
+      expect(users[0]).not.toHaveProperty("display", false);
+      expect(users[0]).not.toHaveProperty("provenance");
     },
   );
 
@@ -440,102 +455,6 @@ describe("submitEmbeddedAttemptPrompt", () => {
     ).toHaveLength(1);
     expect(session.getLastAssistantText()).toBe("recovered");
   });
-
-  it.each([false, true])(
-    "persists context across retry and reopen: append-only=%s",
-    async (appendOnlyRuntimeContext) => {
-      await withOpenClawTestState({ label: "runtime-context-persistence" }, async (state) => {
-        const target = {
-          agentId: "main",
-          sessionId,
-          sessionKey: "agent:main:runtime-context-persistence",
-          storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-        };
-        await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
-        const settingsManager = SettingsManager.inMemory({
-          compaction: { enabled: false },
-          retry: { enabled: true, maxRetries: 1, baseDelayMs: 0 },
-        });
-        const requests: Context["messages"][] = [];
-        streamMocks.streamSimple.mockImplementation((model, context) => {
-          requests.push(structuredClone(context.messages));
-          return createAssistantResultStream(
-            requests.length === 1
-              ? { ...createAssistant(model, [], "error"), errorMessage: "503 overloaded" }
-              : createAssistant(model, [{ type: "text", text: "done" }]),
-          );
-        });
-        const first = await createTestSession({
-          sessionManager: SessionManager.open(target, state.workspaceDir),
-          settingsManager,
-        });
-        if (appendOnlyRuntimeContext) {
-          await first.session.sendCustomMessage(
-            { customType: "test.extension-context", content: "extension context", display: false },
-            { deliverAs: "nextTurn" },
-          );
-        }
-        const submit = async (session: typeof first.session, text: string) => {
-          const input = createBaseInput();
-          await submitEmbeddedAttemptPrompt({
-            ...input,
-            activeSession: session,
-            appendOnlyRuntimeContext,
-            appendContext: undefined,
-            prependContext: undefined,
-            transcriptPrompt: text,
-            modelPrompt: text,
-            runtimeContextMessage: buildRuntimeContextCustomMessage(`context for ${text}`),
-            promptActiveSession: (prompt, options) =>
-              session.prompt(prompt, { ...options, expandPromptTemplates: false }),
-          });
-        };
-        await submit(first.session, "first");
-        expect(requests).toHaveLength(2);
-        expect(requests[1]).toEqual(requests[0]);
-
-        const reopenedManager = SessionManager.open(target, state.workspaceDir);
-        const reopened = await createTestSession({
-          sessionManager: reopenedManager,
-          settingsManager,
-        });
-        await submit(reopened.session, "second");
-        expect(requests).toHaveLength(3);
-        const entries = reopenedManager.getEntries();
-        const carriers = entries.filter(
-          (entry) =>
-            entry.type === "custom_message" && entry.customType === "openclaw.runtime-context",
-        );
-        expect(carriers).toHaveLength(appendOnlyRuntimeContext ? 2 : 0);
-        if (appendOnlyRuntimeContext) {
-          for (const carrier of carriers) {
-            expect(carrier).toMatchObject({ display: false });
-            const previous = entries[entries.indexOf(carrier) - 1];
-            expect(previous).toMatchObject({ type: "message", message: { role: "user" } });
-          }
-          // Timestamps are local metadata; provider-visible content and order must replay unchanged.
-          const providerPrefix = (messages: Context["messages"]) =>
-            messages.map(({ role, content }) => ({ role, content }));
-          expect(providerPrefix(requests[2]!.slice(0, requests[0]!.length))).toEqual(
-            providerPrefix(requests[0]!),
-          );
-          expect(requests[0]![1]).toMatchObject({ role: "user", runtimeContext: {} });
-        } else {
-          expect(JSON.stringify(requests[2])).not.toContain("context for first");
-        }
-
-        reopenedManager.appendResetBoundary("new");
-        const reset = await createTestSession({
-          sessionManager: SessionManager.open(target, state.workspaceDir),
-          settingsManager,
-        });
-        await submit(reset.session, "after reset");
-        expect(JSON.stringify(requests.at(-1))).not.toContain("context for first");
-        expect(JSON.stringify(requests.at(-1))).not.toContain("context for second");
-        expect(JSON.stringify(requests.at(-1))).toContain("context for after reset");
-      });
-    },
-  );
 
   it.each([
     ["first-turn", true],

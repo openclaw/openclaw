@@ -8,7 +8,6 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { appendChatCanvasBlocksToMessage } from "../chat-display-projection.canvas.js";
 import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachments.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
-import { formatForLog } from "../ws-log.js";
 import {
   extractAssistantDisplayText,
   hasAssistantDisplayMediaContent,
@@ -238,14 +237,7 @@ async function finalizeChatSendAgentReplyPayloads(
         inputs: params.inputs,
         abortSignal: params.abortSignal,
         includeSensitiveMedia: false,
-        onLocalAudioAccessDenied: (err) => {
-          context.logGateway.warn(
-            `webchat audio embedding denied local path: ${formatForLog(err)}`,
-          );
-        },
-        onManagedMediaPrepareError: (message) => {
-          context.logGateway.warn(`webchat media embedding skipped attachment: ${message}`);
-        },
+        logGateway: context.logGateway,
       },
       async ({ payloads: normalizedPayloads, inputsByIndex, buildContent }) => {
         const contentStates: SourceReplyContentState[] = [];
@@ -256,15 +248,9 @@ async function finalizeChatSendAgentReplyPayloads(
             continue;
           }
           const {
-            assistantContent: replyAssistantContent,
             persistedAssistantContent: persistedContent,
-            mediaMessage: replyMediaMessage,
+            broadcastContent: replyBroadcastContent,
           } = await buildContent(inputsByIndex[replyIndex] ?? []);
-          const replyBroadcastContent = hasAssistantDisplayMediaContent(replyAssistantContent)
-            ? replyAssistantContent
-            : hasAssistantDisplayMediaContent(replyMediaMessage?.content)
-              ? replyMediaMessage?.content
-              : replyAssistantContent;
           const state: SourceReplyContentState = {
             broadcastContent: replyBroadcastContent ? [...replyBroadcastContent] : [],
             persistedContent: persistedContent ? [...persistedContent] : [],

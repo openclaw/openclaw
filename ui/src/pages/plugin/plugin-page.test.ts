@@ -116,6 +116,7 @@ function externalPluginConfig(
     terminalEnabled: false,
     uploadsEnabled: true,
     pluginAssetsRequireAuth: true,
+    pluginControlUiModules: [],
     pluginFrameGrants,
   };
 }

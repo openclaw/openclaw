@@ -121,26 +121,19 @@ enum GatewayLaunchAgentManager {
 
     static func setLaunchAgentWriteDisabled(_ disabled: Bool) -> String? {
         let marker = self.disableLaunchAgentMarkerURL
-        if disabled {
-            do {
+        do {
+            if disabled {
                 try FileManager().createDirectory(
                     at: marker.deletingLastPathComponent(),
                     withIntermediateDirectories: true)
                 if !FileManager().fileExists(atPath: marker.path) {
                     FileManager().createFile(atPath: marker.path, contents: nil)
                 }
-            } catch {
-                return error.localizedDescription
-            }
-            return nil
-        }
-
-        if FileManager().fileExists(atPath: marker.path) {
-            do {
+            } else if FileManager().fileExists(atPath: marker.path) {
                 try FileManager().removeItem(at: marker)
-            } catch {
-                return error.localizedDescription
             }
+        } catch {
+            return error.localizedDescription
         }
         return nil
     }
@@ -825,21 +818,18 @@ extension GatewayLaunchAgentManager {
             prefix: prefix,
             environment: self.daemonEnvironment(
                 runtime: runtime,
-                installedCLI: installedCLI,
-                environment: ProcessInfo.processInfo.environment,
-                profile: .current,
-                searchPaths: CommandResolver.preferredPaths()),
+                installedCLI: installedCLI),
             // Only an explicitly selected bundled CLI carries this interop contract.
             supportsExpectedRuntimePin: runtime != nil &&
                 (installedCLI == nil || installedCLI?.prefix == runtime?.cliCommand))
     }
 
     static func daemonEnvironment(
-        runtime: BundledRuntime?,
+        runtime: BundledRuntime? = nil,
         installedCLI: InstalledServiceCLI? = nil,
-        environment: [String: String],
-        profile: AppProfile,
-        searchPaths: [String]) -> [String: String]
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        profile: AppProfile = .current,
+        searchPaths: [String] = CommandResolver.preferredPaths()) -> [String: String]
     {
         var result = environment.merging(installedCLI?.environment ?? [:]) { _, installed in installed }
         let installedPaths = installedCLI?.environment["PATH"]?.split(separator: ":").map(String.init) ?? []

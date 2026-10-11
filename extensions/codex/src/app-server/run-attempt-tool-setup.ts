@@ -201,6 +201,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   let resolveCreatorAuthorityImpl: CreatorAuthorityResolver | undefined;
   const runtimeYieldCompletionClaim: { current?: () => boolean } = {};
   const commonToolParams = {
+    nativeExecutionPolicy: runtime.nativeExecutionPolicy,
     // Both catalogs describe one attempt; a later attempt discovers fresh connections.
     nodeExecAvailability: {},
     params: dynamicToolParams,
@@ -538,6 +539,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
             cwd: effectiveCwd ?? effectiveWorkspace,
           });
     const toolBridge = createCodexDynamicToolBridge({
+      assertCurrent: runtime.nativeExecutionPolicy.assertCurrent,
       tools: toolsWithScopedMcp,
       registeredTools: registeredWithScopedMcp,
       registeredFallbackTools,

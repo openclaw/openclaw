@@ -26,14 +26,6 @@ export async function readSessionTranscriptHydrationRequest(
     }
     return result.value;
   }
-  const { readOpenClawDatabaseQuarantineFailure } =
-    await import("../../state/openclaw-quarantine-store.js");
-  const quarantine = readOpenClawDatabaseQuarantineFailure("agent", request.database.path, {
-    env: request.target.env,
-  });
-  if (quarantine) {
-    throw quarantine;
-  }
   if (request.kind === "latest-active-message") {
     const { readLatestSessionTranscriptMessageEvent } =
       await import("./session-accessor.sqlite-active-events.js");
