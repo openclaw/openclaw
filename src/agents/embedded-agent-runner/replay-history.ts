@@ -340,11 +340,14 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
     ) {
       const completedToolCall = (isCompletedToolCall ??=
         createCompletedToolCallPredicate(messages));
-      const completed = normalized.content.filter(
-        (block) => block.type === "toolCall" && completedToolCall(block),
-      );
-      if (completed.length > 0) {
-        // Completed side effects replay as facts; the failed source remains intact for display.
+      if (
+        normalized.content.some((block) => block.type === "toolCall" && completedToolCall(block))
+      ) {
+        // Signed thinking belongs to the completed calls; the failed source stays intact for display.
+        const completed = normalized.content.filter(
+          (block) =>
+            block.type !== "text" && (block.type !== "toolCall" || completedToolCall(block)),
+        );
         normalized = {
           ...replaceCompactionReplayOwnerContent(normalized, completed),
           stopReason: "toolUse",

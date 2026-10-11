@@ -432,7 +432,8 @@ describe("provider prefix across admitted Gateway agent turns", () => {
                 if (requestsThisTurn > 4) {
                   throw new Error(`Unexpected provider retry in synthetic turn ${turn}`);
                 }
-                const failure = api === "openai-responses" && turn === 7 && requestsThisTurn === 1;
+                // Keep error replay within one retained window, after the deliberate pruning cut.
+                const failure = api === "openai-responses" && turn === 9 && requestsThisTurn === 1;
                 const result = responseFor(
                   api,
                   model,
@@ -596,7 +597,7 @@ describe("provider prefix across admitted Gateway agent turns", () => {
                     ),
                   })}`,
                 ).toBeGreaterThan(0);
-                if (!(api === "openai-responses" && turn === 7)) {
+                if (!(api === "openai-responses" && turn === 9)) {
                   expect(
                     result.payloads?.some((payload) => payload.text?.includes("answer")),
                     `turn ${turn} completed`,
@@ -608,8 +609,8 @@ describe("provider prefix across admitted Gateway agent turns", () => {
             }
             expect(requests.length).toBe(12);
             if (api === "openai-responses") {
-              expect(requests.filter((request) => request.turn === 7)).toHaveLength(1);
-              const afterFailure = requests.find((request) => request.turn === 8)!.prefix.history;
+              expect(requests.filter((request) => request.turn === 9)).toHaveLength(1);
+              const afterFailure = requests.find((request) => request.turn === 10)!.prefix.history;
               expect(
                 afterFailure.join(""),
                 "next turn retains the failed assistant identity without replaying unfinished text",

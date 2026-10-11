@@ -9,7 +9,7 @@ import {
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
-import type { Context } from "../../../llm/types.js";
+import type { Context, ImageContent } from "../../../llm/types.js";
 import { finalizeRuntimePromptImages } from "../../../media/runtime-prompt-image-provenance.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import {
@@ -232,7 +232,7 @@ describe("durable model prompt projection at provider dispatch", () => {
                   type: "image",
                   data: createSolidPngBuffer(1, 1, { r: 200, g: 100, b: 50 }).toString("base64"),
                   mimeType: "image/png",
-                },
+                } satisfies ImageContent,
                 factIndex: 0,
               },
             ]).images,
