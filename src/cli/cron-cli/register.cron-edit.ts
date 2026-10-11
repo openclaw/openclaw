@@ -23,6 +23,7 @@ import {
   validateStreamScheduleMetadata,
 } from "./schedule-options.js";
 import {
+  assertCronCliJobSpec,
   getCronChannelOptions,
   handleCronCliError,
   parseCronIntegerOption,
@@ -142,9 +143,7 @@ export function registerCronEditCommand(cron: Command) {
                   ? "agentTurn"
                   : undefined;
           if (sessionTarget && payloadKind) {
-            const { assertSupportedJobSpec } =
-              await import("../../cron/service/jobs-validation.js");
-            assertSupportedJobSpec({ sessionTarget, payload: { kind: payloadKind } });
+            await assertCronCliJobSpec({ sessionTarget, payload: { kind: payloadKind } });
           }
           const hasExplicitChatDelivery =
             parseCronThreadIdOption(opts.threadId) !== undefined ||

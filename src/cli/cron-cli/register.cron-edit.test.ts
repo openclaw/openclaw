@@ -117,13 +117,23 @@ describe("cron edit", () => {
     await reject(["edit", "job-1", ...args], message);
   });
 
-  it("rethrows contradictory options in JSON mode before RPC", async () => {
+  it.each([
+    [["--enable", "--disable"], "Choose --enable or --disable, not both"],
+    [
+      ["--session", "main", "--message", "resume"],
+      'cron sessionTarget "main" requires payload.kind="systemEvent" or "script"; agent turns use "isolated", "current", or "session:<key>"',
+    ],
+  ])("keeps edit guidance for %j in JSON mode before RPC", async (args, message) => {
     const argv = process.argv;
-    process.argv = ["node", "openclaw", "cron", "edit", "job-1", "--json"];
+    const commandArgs = ["edit", "job-1", ...args, "--json"];
+    process.argv = [...argv.slice(0, 2), "cron", ...commandArgs];
     try {
-      await expect(edit(["--enable", "--disable", "--json"])).rejects.toThrow(
-        "Choose --enable or --disable, not both",
-      );
+      const failure = await run(commandArgs).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(ExpectedCliError);
+      expect(formatCliJsonFailure(failure)).toEqual({
+        ok: false,
+        error: { type: "cli_error", message },
+      });
       expect(callGatewayFromCli).not.toHaveBeenCalled();
     } finally {
       process.argv = argv;

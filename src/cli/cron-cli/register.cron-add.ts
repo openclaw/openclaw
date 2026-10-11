@@ -15,6 +15,7 @@ import { createCronOutputCommand } from "./output-mode.js";
 import { registerCronMutationOptions } from "./register.cron-options.js";
 import { resolveCronCreateScheduleFromArgs } from "./schedule-options.js";
 import {
+  assertCronCliJobSpec,
   assertCronTimeoutSupported,
   coerceCronDeliveryPreviews,
   enrichCronJsonWithStatus,
@@ -262,9 +263,7 @@ export function registerCronAddCommand(cron: Command) {
               throw new CronCliError("Choose --delete-after-run or --keep-after-run, not both");
             }
 
-            const { assertSupportedJobSpec } =
-              await import("../../cron/service/jobs-validation.js");
-            assertSupportedJobSpec({ sessionTarget, payload: resolvedPayload });
+            await assertCronCliJobSpec({ sessionTarget, payload: resolvedPayload });
             const supportsChatDelivery = isIsolatedLikeSessionTarget && isDeliveryPayload;
             if ((opts.announce || typeof opts.deliver === "boolean") && !supportsChatDelivery) {
               throw new CronCliError(
