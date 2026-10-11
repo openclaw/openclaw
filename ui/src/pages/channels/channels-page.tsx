@@ -1,36 +1,33 @@
-import { consume } from "@lit/context";
-import { html } from "lit";
-import { state } from "lit/decorators.js";
+import { createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
 import type {
   ChannelsPairingListResult,
   ChannelsPairingRequest,
   NostrProfile,
 } from "../../api/types.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
-import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
-import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
-import { renderLearnMoreLink } from "../../components/settings-ui.ts";
-import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
-import { t } from "../../i18n/index.ts";
+import { LearnMoreLink, SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
+import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { resolveChannelPairingAuthSignature } from "../../lib/channels/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
-import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import {
-  GatewayPageController,
-  type GatewayPageChange,
-} from "../../lit/gateway-page-controller.ts";
-import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-import { PollController } from "../../lit/poll-controller.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+  createGatewayConnectionLifecycle,
+  type GatewayConnectionScope,
+} from "../../lib/gateway-connection-lifecycle.ts";
+import { projectGateway } from "../../lib/reactive/application.ts";
+import { useApplication } from "../../lib/reactive/context.ts";
+import { projectChannels, projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
+import { t } from "../../lib/reactive/i18n.ts";
+import { projectTheme } from "../../lib/reactive/theme.ts";
+import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { importNostrProfile, parseValidationErrors, putNostrProfile } from "./nostr-profile-ops.ts";
 import { ChannelPluginPresentationController } from "./plugin-presentation-controller.ts";
-import { createNostrProfileFormState } from "./view.nostr-profile-form.ts";
-import { renderChannels, resolveChannelOrder } from "./view.ts";
-import type { ChannelPairingPrompt } from "./view.types.ts";
+import { createNostrProfileFormState } from "./view.nostr-profile-form.tsx";
+import { ChannelsView, resolveChannelOrder } from "./view.tsx";
+import type { ChannelPairingPrompt, ChannelsProps } from "./view.types.ts";
 import { runWhatsAppLogoutConfirmation } from "./whatsapp-logout.ts";
 import { ChannelWizardHost } from "./wizard-host.ts";
 
@@ -53,35 +50,43 @@ function formatNostrProfileOperationError(error: unknown, prefix: string): strin
     : t("channels.nostr.notices.operationFailed", { prefix, error: formatUiError(error) });
 }
 
-class ChannelsPage extends OpenClawLightDomElement {
-  @consume({ context: applicationContext, subscribe: true })
-  private context!: ApplicationContext;
-
-  @state()
+/** Owns synchronous presentation state; Solid only observes its revision. */
+class ChannelsPageController {
   private nostrProfileFormState: NostrProfileFormState = null;
-
-  @state()
   private nostrProfileAccountId: string | null = null;
-
-  @state()
   private selectedChannel: string | null = null;
-
-  @state()
   private pairingChannelFilter: string | null = null;
-
-  @state()
   private pairingAccountFilter: string | null = null;
-
-  @state()
   private pairingPrompt: ChannelPairingPrompt | null = null;
-
-  @state()
   private pairingNotice: string | null = null;
+  private active = true;
+  private readonly cleanups: Array<() => void> = [];
+  private currentGateway?: ApplicationContext["gateway"];
+  private currentClient: ApplicationContext["gateway"]["snapshot"]["client"] = null;
+  private pairingTimer: ReturnType<typeof setInterval> | null = null;
+  private pairingScrollPending = false;
+
+  constructor(
+    private readonly getContext: () => ApplicationContext,
+    private readonly host: HTMLElement,
+    private readonly notify: () => void,
+  ) {
+    document.addEventListener("visibilitychange", this.handleVisibilityChange);
+  }
+
+  private get context() {
+    return this.getContext();
+  }
+  private requestUpdate() {
+    if (this.active) {
+      this.notify();
+    }
+  }
 
   private readonly pluginPresentation = new ChannelPluginPresentationController({
     getContext: () => this.context,
     getChannelIds: () => resolveChannelOrder(this.context.channels.state.channelsSnapshot),
-    isConnected: () => this.isConnected,
+    isConnected: () => this.active,
     requestUpdate: () => this.requestUpdate(),
   });
 
@@ -94,97 +99,89 @@ class ChannelsPage extends OpenClawLightDomElement {
   private schemaLoadStarted = false;
   private channelsSource?: ApplicationContext["channels"];
   private gatewayPairingAuthSignature: string | null = null;
-  private readonly gateway = new GatewayPageController(this, {
-    getGateway: () => this.context?.gateway,
-    onIdentityChange: () => this.clearNostrForm(),
-    onSnapshot: (change) => this.handleGatewaySnapshot(change),
-  });
-  private readonly pairingPolling = new PollController(
-    this,
-    CHANNEL_PAIRING_POLL_INTERVAL_MS,
-    () => {
-      const gateway = this.context?.gateway.snapshot;
-      if (gateway?.phase === "connected" && hasOperatorPairingAccess(gateway.hello?.auth ?? null)) {
-        void this.context.channels.refreshPairing();
+  private readonly gateway = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
+
+  bindContext(context: ApplicationContext) {
+    for (const cleanup of this.cleanups.splice(0)) {
+      cleanup();
+    }
+    const gateway = projectGateway(context.gateway);
+    const channels = projectChannels(context.channels);
+    const config = projectRuntimeConfig(context.runtimeConfig);
+    const applyGateway = () => this.handleGatewaySnapshot(context.gateway);
+    this.cleanups.push(gateway.subscribe(applyGateway), () => gateway.dispose());
+    applyGateway();
+    if (this.channelsSource && this.channelsSource !== context.channels) {
+      this.invalidateNostrForm();
+    }
+    this.channelsSource = context.channels;
+    const applyChannels = () => {
+      if (this.context.channels !== context.channels) {
+        return;
       }
-    },
-    false,
-    "visible",
-  );
+      this.reconcilePairingFilter(context.channels.state.pairingSnapshot);
+      this.pluginPresentation.ensure(this.context.gateway.snapshot.client);
+      this.requestUpdate();
+    };
+    this.cleanups.push(channels.subscribe(applyChannels), () => channels.dispose());
+    applyChannels();
+    this.schemaLoadStarted = false;
+    const applyConfig = () => {
+      if (this.context.runtimeConfig !== context.runtimeConfig) {
+        return;
+      }
+      this.requestUpdate();
+      this.ensureInitialData();
+    };
+    this.cleanups.push(config.subscribe(applyConfig), () => config.dispose());
+    applyConfig();
+    if (context.theme) {
+      const theme = projectTheme(context.theme);
+      this.cleanups.push(
+        theme.preferences.subscribe(() => this.requestUpdate()),
+        () => theme.dispose(),
+      );
+    }
+  }
 
-  private readonly subscriptions = new SubscriptionsController(this)
-    .effect(
-      () => this.context?.channels,
-      (channels) => {
-        const sourceChanged = this.channelsSource !== undefined && this.channelsSource !== channels;
-        this.channelsSource = channels;
-        if (sourceChanged) {
-          this.invalidateNostrForm();
-        }
-        const handleChange = () => {
-          if (this.channelsSource === channels) {
-            this.reconcilePairingFilter(channels.state.pairingSnapshot);
-            this.pluginPresentation.ensure(this.context.gateway.snapshot.client);
-            this.requestUpdate();
-          }
-        };
-        handleChange();
-        return channels.subscribe(handleChange);
-      },
-    )
-    .effect(
-      () => this.context?.runtimeConfig,
-      (runtimeConfig) => {
-        this.schemaLoadStarted = false;
-        const handleChange = () => {
-          if (this.context.runtimeConfig !== runtimeConfig) {
-            return;
-          }
-          this.requestUpdate();
-          this.ensureInitialData();
-        };
-        handleChange();
-        const unsubscribe = runtimeConfig.subscribe(handleChange);
-        return () => {
-          unsubscribe();
-          this.schemaLoadStarted = false;
-        };
-      },
-    )
-    // Republished theme settings keep channel forms in sync with the global advanced toggle.
-    .watchStore(() => this.context?.theme);
-
-  private handleGatewaySnapshot(change: GatewayPageChange) {
-    const snapshot = change.snapshot;
+  private handleGatewaySnapshot(source: ApplicationContext["gateway"]) {
+    if (this.context.gateway !== source) {
+      return;
+    }
+    const snapshot = source.snapshot;
+    const initial = this.currentGateway === undefined;
+    const identityChanged =
+      !initial && (this.currentGateway !== source || this.currentClient !== snapshot.client);
+    const transportChanged = this.gateway.transition(snapshot);
+    if (identityChanged && !transportChanged) {
+      this.gateway.invalidate();
+    }
+    this.currentGateway = source;
+    this.currentClient = snapshot.client;
     const pairingAccess = hasOperatorPairingAccess(snapshot.hello?.auth ?? null);
     const pairingAuthSignature = resolveChannelPairingAuthSignature(snapshot);
     const pairingAuthChanged =
-      !change.initial && this.gatewayPairingAuthSignature !== pairingAuthSignature;
-    if (change.identityChanged || snapshot.phase !== "connected") {
+      !initial && this.gatewayPairingAuthSignature !== pairingAuthSignature;
+    if (identityChanged || snapshot.phase !== "connected") {
       this.clearNostrForm();
     }
-    if (change.identityChanged || change.connectionChanged || snapshot.phase !== "connected") {
+    if (identityChanged || transportChanged || snapshot.phase !== "connected") {
       this.pluginPresentation.reset();
     }
-    if (
-      change.identityChanged ||
-      pairingAuthChanged ||
-      snapshot.phase !== "connected" ||
-      !pairingAccess
-    ) {
+    if (identityChanged || pairingAuthChanged || snapshot.phase !== "connected" || !pairingAccess) {
       this.pairingPrompt = null;
       this.setPairingFilter(null, null);
       this.pairingNotice = null;
     }
     this.gatewayPairingAuthSignature = pairingAuthSignature;
-    this.syncPairingPolling(snapshot);
+    this.syncPairingPolling();
     if (snapshot.phase === "connected" && snapshot.client) {
-      if (!change.initial) {
+      if (!initial) {
         this.ensureInitialData();
       }
       if (
-        !change.initial &&
-        (change.identityChanged || change.connectionChanged || pairingAuthChanged) &&
+        !initial &&
+        (identityChanged || transportChanged || pairingAuthChanged) &&
         pairingAccess
       ) {
         void this.context.channels.refreshPairing();
@@ -192,18 +189,7 @@ class ChannelsPage extends OpenClawLightDomElement {
     } else {
       this.schemaLoadStarted = false;
     }
-  }
-
-  private syncPairingPolling(snapshot: ApplicationContext["gateway"]["snapshot"]) {
-    if (
-      snapshot.phase === "connected" &&
-      snapshot.client &&
-      hasOperatorPairingAccess(snapshot.hello?.auth ?? null)
-    ) {
-      this.pairingPolling.start();
-      return;
-    }
-    this.pairingPolling.stop();
+    this.requestUpdate();
   }
 
   private ensureInitialData() {
@@ -237,20 +223,54 @@ class ChannelsPage extends OpenClawLightDomElement {
     }
   }
 
-  override disconnectedCallback() {
+  private readonly handleVisibilityChange = () => {
+    if (this.syncPairingPolling()) {
+      this.pollPairing();
+    }
+  };
+
+  private pollPairing() {
+    const snapshot = this.context.gateway.snapshot;
+    if (
+      this.active &&
+      document.visibilityState !== "hidden" &&
+      snapshot.phase === "connected" &&
+      hasOperatorPairingAccess(snapshot.hello?.auth ?? null)
+    ) {
+      void this.context.channels.refreshPairing();
+    }
+  }
+
+  private syncPairingPolling() {
+    const snapshot = this.context.gateway.snapshot;
+    const enabled =
+      this.active &&
+      snapshot.phase === "connected" &&
+      snapshot.client &&
+      hasOperatorPairingAccess(snapshot.hello?.auth ?? null) &&
+      document.visibilityState !== "hidden";
+    if (!enabled) {
+      if (this.pairingTimer !== null) {
+        clearInterval(this.pairingTimer);
+        this.pairingTimer = null;
+      }
+    } else if (this.pairingTimer === null) {
+      this.pairingTimer = setInterval(() => this.pollPairing(), CHANNEL_PAIRING_POLL_INTERVAL_MS);
+      return true;
+    }
+    return false;
+  }
+
+  dispose() {
+    this.active = false;
     this.wizardHost.cancelOnDisconnect();
-    this.selectedChannel = null;
-    this.channelsSource = undefined;
-    this.gatewayPairingAuthSignature = null;
-    this.pairingPrompt = null;
-    this.setPairingFilter(null, null);
-    this.pairingNotice = null;
-    this.pairingPolling.stop();
+    this.syncPairingPolling();
+    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     this.pluginPresentation.reset();
-    this.invalidateNostrForm();
-    this.subscriptions.clear();
-    this.schemaLoadStarted = false;
-    super.disconnectedCallback();
+    this.gateway.dispose();
+    for (const cleanup of this.cleanups.splice(0)) {
+      cleanup();
+    }
   }
 
   private setShowAdvancedSettings(enabled: boolean) {
@@ -259,9 +279,6 @@ class ChannelsPage extends OpenClawLightDomElement {
   }
 
   private async saveChannelConfig() {
-    if (!this.context) {
-      return;
-    }
     if (await this.context.runtimeConfig.save()) {
       await this.context.channels.refresh(true);
     }
@@ -269,9 +286,6 @@ class ChannelsPage extends OpenClawLightDomElement {
 
   private async reloadChannelConfig() {
     const context = this.context;
-    if (!context) {
-      return;
-    }
     await context.runtimeConfig.discardDraft({ reloadOnly: true });
     await context.channels.refresh(true);
   }
@@ -296,6 +310,7 @@ class ChannelsPage extends OpenClawLightDomElement {
   private clearNostrForm() {
     this.nostrProfileFormState = null;
     this.nostrProfileAccountId = null;
+    this.requestUpdate();
   }
 
   private invalidateNostrForm() {
@@ -304,7 +319,7 @@ class ChannelsPage extends OpenClawLightDomElement {
   }
 
   private beginNostrOperation(): NostrOperation | null {
-    const gateway = this.gateway.gateway;
+    const gateway = this.currentGateway;
     const channels = this.context.channels;
     let scope = this.gateway.capture();
     if (
@@ -354,6 +369,7 @@ class ChannelsPage extends OpenClawLightDomElement {
     this.gateway.invalidate();
     this.nostrProfileAccountId = accountId;
     this.nostrProfileFormState = createNostrProfileFormState(profile ?? undefined);
+    this.requestUpdate();
   }
 
   private editNostrForm(
@@ -362,6 +378,7 @@ class ChannelsPage extends OpenClawLightDomElement {
     const form = this.nostrProfileFormState;
     if (form) {
       this.nostrProfileFormState = update(form);
+      this.requestUpdate();
     }
   }
 
@@ -383,6 +400,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       ...(action === "save" ? { fieldErrors: {} } : {}),
     };
 
+    this.requestUpdate();
     try {
       const request = {
         accountId: operation.accountId,
@@ -456,6 +474,8 @@ class ChannelsPage extends OpenClawLightDomElement {
         ),
         success: null,
       };
+    } finally {
+      this.requestUpdate();
     }
   }
 
@@ -481,16 +501,23 @@ class ChannelsPage extends OpenClawLightDomElement {
   private setPairingFilter(channel: string | null, accountId: string | null) {
     this.pairingChannelFilter = channel;
     this.pairingAccountFilter = channel ? accountId : null;
+    this.requestUpdate();
   }
 
   private reviewPairingAccount(channel: string, accountId: string) {
     this.selectedChannel = null;
     this.setPairingFilter(channel, accountId);
-    void this.updateComplete.then(() => {
-      this.renderRoot.querySelector("#channels-pairing-requests")?.scrollIntoView({
-        behavior: resolveScrollBehavior(),
-        block: "start",
-      });
+    this.pairingScrollPending = true;
+  }
+
+  afterRender() {
+    if (!this.pairingScrollPending || !this.active) {
+      return;
+    }
+    this.pairingScrollPending = false;
+    this.host.querySelector("#channels-pairing-requests")?.scrollIntoView({
+      behavior: resolveScrollBehavior(),
+      block: "start",
     });
   }
 
@@ -505,6 +532,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       notify: false,
       bootstrapCommandOwner: false,
     };
+    this.requestUpdate();
   }
 
   private patchPairingPrompt(
@@ -514,6 +542,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       return;
     }
     this.pairingPrompt = { ...this.pairingPrompt, ...patch };
+    this.requestUpdate();
   }
 
   private async confirmPairingPrompt() {
@@ -531,6 +560,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       if (dismissed && this.pairingPrompt === prompt) {
         this.pairingPrompt = null;
         this.pairingNotice = t("channels.pairing.dismissedNotice");
+        this.requestUpdate();
       }
       return;
     }
@@ -555,90 +585,117 @@ class ChannelsPage extends OpenClawLightDomElement {
             ? "channels.pairing.approvedOwnerNotice"
             : "channels.pairing.approvedNotice",
     );
+    this.requestUpdate();
   }
 
-  override render() {
+  get viewProps(): ChannelsProps {
     const context = this.context;
     const channels = context.channels.state;
     const config = context.runtimeConfig.state;
     const auth = context.gateway.snapshot.hello?.auth ?? null;
     const canManagePairing = hasOperatorPairingAccess(auth);
     const canAdmin = hasOperatorAdminAccess(auth);
-    return html`
-      <section class="content-header" ${shellLayoutTraits({ toolbarHeader: true })}>
-        <div>
-          <div class="page-title">${titleForRoute("channels")}</div>
-          <div class="page-subtitle">
-            ${subtitleForRoute("channels")} ${renderLearnMoreLink(CHANNELS_DOCS_URL)}
-          </div>
-        </div>
-      </section>
-      ${renderSettingsWorkspace(
-        renderChannels({
-          channels,
-          config,
-          presentation: this.pluginPresentation,
-          wizardHost: this.wizardHost,
-          pairingChannelFilter: this.pairingChannelFilter,
-          pairingAccountFilter: this.pairingAccountFilter,
-          pairingPrompt: this.pairingPrompt,
-          pairingNotice: this.pairingNotice,
-          canManagePairing,
-          canAdmin,
-          showAdvancedSettings: loadSettings().showAdvancedSettings === true,
-          nostrProfileFormState: this.nostrProfileFormState,
-          nostrProfileAccountId: this.nostrProfileAccountId,
-          selectedChannel: this.selectedChannel,
-          onShowDetail: (channelId) => {
-            this.selectedChannel = channelId;
-          },
-          onCloseDetail: () => {
-            this.selectedChannel = null;
-          },
-          onStartSetup: (channelId) => {
-            if (canAdmin) {
-              this.wizardHost.startSetup(channelId);
-            }
-          },
-          onRefresh: (probe) => void context.channels.refresh(probe),
-          onPairingRefresh: () => void context.channels.refreshPairing(),
-          onPairingFilterChange: (channel, accountId) => this.setPairingFilter(channel, accountId),
-          onPairingReviewAccount: (channel, accountId) =>
-            this.reviewPairingAccount(channel, accountId),
-          onPairingApprove: (request) => this.openPairingPrompt("approve", request),
-          onPairingDismiss: (request) => this.openPairingPrompt("dismiss", request),
-          onPairingPromptChange: (patch) => this.patchPairingPrompt(patch),
-          onPairingPromptCancel: () => {
-            this.pairingPrompt = null;
-          },
-          onPairingPromptConfirm: () => void this.confirmPairingPrompt(),
-          onWhatsAppStart: (force) =>
-            void context.channels.startWhatsApp(force, this.wizardHost.whatsappAccountId),
-          onWhatsAppWait: () =>
-            void context.channels.waitWhatsApp(this.wizardHost.whatsappAccountId),
-          onWhatsAppLogout: () => void this.confirmWhatsAppLogout(),
-          onShowAdvancedSettings: (enabled) => this.setShowAdvancedSettings(enabled),
-          onConfigPatch: (path, value) => context.runtimeConfig.patchForm(path, value),
-          onConfigSave: () => void this.saveChannelConfig(),
-          onConfigReload: () => void this.reloadChannelConfig(),
-          onNostrProfileEdit: (accountId, profile) => this.editNostrProfile(accountId, profile),
-          onNostrProfileCancel: () => this.invalidateNostrForm(),
-          onNostrProfileFieldChange: (field, value) =>
-            this.editNostrForm((form) => ({
-              ...form,
-              values: { ...form.values, [field]: value },
-              fieldErrors: { ...form.fieldErrors, [field]: "" },
-            })),
-          onNostrProfileSave: () => void this.updateNostrProfile("save"),
-          onNostrProfileImport: () => void this.updateNostrProfile("import"),
-          onNostrProfileToggleAdvanced: () =>
-            this.editNostrForm((form) => ({ ...form, showAdvanced: !form.showAdvanced })),
-        }),
-      )}
-    `;
+    return {
+      channels,
+      config,
+      presentation: this.pluginPresentation,
+      wizardHost: this.wizardHost,
+      pairingChannelFilter: this.pairingChannelFilter,
+      pairingAccountFilter: this.pairingAccountFilter,
+      pairingPrompt: this.pairingPrompt,
+      pairingNotice: this.pairingNotice,
+      canManagePairing,
+      canAdmin,
+      showAdvancedSettings: loadSettings().showAdvancedSettings === true,
+      nostrProfileFormState: this.nostrProfileFormState,
+      nostrProfileAccountId: this.nostrProfileAccountId,
+      selectedChannel: this.selectedChannel,
+      onShowDetail: (channelId) => {
+        this.selectedChannel = channelId;
+        this.requestUpdate();
+      },
+      onCloseDetail: () => {
+        this.selectedChannel = null;
+        this.requestUpdate();
+      },
+      onStartSetup: (channelId) => {
+        if (canAdmin) {
+          this.wizardHost.startSetup(channelId);
+        }
+      },
+      onRefresh: (probe) => void context.channels.refresh(probe),
+      onPairingRefresh: () => void context.channels.refreshPairing(),
+      onPairingFilterChange: (channel, accountId) => this.setPairingFilter(channel, accountId),
+      onPairingReviewAccount: (channel, accountId) => this.reviewPairingAccount(channel, accountId),
+      onPairingApprove: (request) => this.openPairingPrompt("approve", request),
+      onPairingDismiss: (request) => this.openPairingPrompt("dismiss", request),
+      onPairingPromptChange: (patch) => this.patchPairingPrompt(patch),
+      onPairingPromptCancel: () => {
+        this.pairingPrompt = null;
+        this.requestUpdate();
+      },
+      onPairingPromptConfirm: () => void this.confirmPairingPrompt(),
+      onWhatsAppStart: (force) =>
+        void context.channels.startWhatsApp(force, this.wizardHost.whatsappAccountId),
+      onWhatsAppWait: () => void context.channels.waitWhatsApp(this.wizardHost.whatsappAccountId),
+      onWhatsAppLogout: () => void this.confirmWhatsAppLogout(),
+      onShowAdvancedSettings: (enabled) => this.setShowAdvancedSettings(enabled),
+      onConfigPatch: (path, value) => context.runtimeConfig.patchForm(path, value),
+      onConfigSave: () => void this.saveChannelConfig(),
+      onConfigReload: () => void this.reloadChannelConfig(),
+      onNostrProfileEdit: (accountId, profile) => this.editNostrProfile(accountId, profile),
+      onNostrProfileCancel: () => this.invalidateNostrForm(),
+      onNostrProfileFieldChange: (field, value) =>
+        this.editNostrForm((form) => ({
+          ...form,
+          values: { ...form.values, [field]: value },
+          fieldErrors: { ...form.fieldErrors, [field]: "" },
+        })),
+      onNostrProfileSave: () => void this.updateNostrProfile("save"),
+      onNostrProfileImport: () => void this.updateNostrProfile("import"),
+      onNostrProfileToggleAdvanced: () =>
+        this.editNostrForm((form) => ({ ...form, showAdvanced: !form.showAdvanced })),
+    };
   }
 }
 
+export function ChannelsPage(props: { host: HTMLElement; context?: ApplicationContext }) {
+  const application = untrack(() => props.context) ? undefined : useApplication();
+  const host = untrack(() => props.host);
+  const context = () => props.context ?? application!;
+  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
+  const controller = new ChannelsPageController(
+    () => untrack(context),
+    host,
+    () => setRevision((value) => value + 1),
+  );
+  createEffect(context, (value) => controller.bindContext(value));
+  onCleanup(() => controller.dispose());
+  createEffect(revision, () => controller.afterRender());
+  const viewProps = createMemo(() => {
+    revision();
+    return controller.viewProps;
+  });
+  return (
+    <>
+      <SettingsPageHeader
+        title={t("tabs.channels")}
+        subtitle={
+          <>
+            {t("subtitles.channels")} <LearnMoreLink url={CHANNELS_DOCS_URL} />
+          </>
+        }
+      />
+      <SettingsWorkspace>
+        <ChannelsView {...viewProps()} />
+      </SettingsWorkspace>
+    </>
+  );
+}
+
+// Module re-evaluation can retain the shared custom-element registry.
 if (!customElements.get("openclaw-channels-page")) {
-  customElements.define("openclaw-channels-page", ChannelsPage);
+  defineSolidBridge("openclaw-channels-page", (_props, host) => <ChannelsPage host={host} />, {
+    properties: {},
+  });
 }

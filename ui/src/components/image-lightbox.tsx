@@ -30,7 +30,7 @@ const SWIPE_THRESHOLD_PX = 56;
 const SWIPE_AXIS_THRESHOLD_PX = 8;
 const SLIDE_DURATION_MS = 180;
 
-export type ImageLightboxProps = {
+type ImageLightboxProps = {
   connectVideo?: ImageLightboxItem["connectVideo"];
   gallery?: ImageLightboxGallery;
   loadFullResolution?: ImageLightboxItem["loadFullResolution"];
@@ -42,7 +42,7 @@ export type ImageLightboxProps = {
   imageHeight?: number;
 };
 
-export type ImageLightboxElement = SolidBridgeElement<ImageLightboxProps>;
+type ImageLightboxElement = SolidBridgeElement<ImageLightboxProps>;
 
 function mimeTypeEssence(value: string): string {
   return value.split(";", 1)[0]?.trim().toLowerCase() ?? "";
@@ -53,7 +53,7 @@ function dataUrlMimeType(source: string): string | undefined {
   return mediaType === undefined ? undefined : mimeTypeEssence(mediaType);
 }
 
-export function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElement) {
+function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElement) {
   // The view lifecycle synchronously publishes controller and media-state changes.
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const controller = new ImageLightboxGalleryController(() => setRevision((value) => value + 1));
@@ -709,23 +709,19 @@ export function ImageLightboxContent(props: ImageLightboxProps, host: ImageLight
   );
 }
 
-export const ImageLightbox = defineSolidBridge<ImageLightboxProps>(
-  "openclaw-image-lightbox",
-  ImageLightboxContent,
-  {
-    properties: {
-      connectVideo: { default: undefined, attribute: false },
-      gallery: { default: undefined, attribute: false },
-      loadFullResolution: { default: undefined, attribute: false },
-      mediaKind: { default: "image" },
-      src: { default: "" },
-      originalSrc: { default: "" },
-      imageTitle: { default: "", attribute: false },
-      imageWidth: { default: undefined, attribute: false },
-      imageHeight: { default: undefined, attribute: false },
-    },
+defineSolidBridge<ImageLightboxProps>("openclaw-image-lightbox", ImageLightboxContent, {
+  properties: {
+    connectVideo: { default: undefined, attribute: false },
+    gallery: { default: undefined, attribute: false },
+    loadFullResolution: { default: undefined, attribute: false },
+    mediaKind: { default: "image" },
+    src: { default: "" },
+    originalSrc: { default: "" },
+    imageTitle: { default: "", attribute: false },
+    imageWidth: { default: undefined, attribute: false },
+    imageHeight: { default: undefined, attribute: false },
   },
-);
+});
 
 declare global {
   interface HTMLElementTagNameMap {

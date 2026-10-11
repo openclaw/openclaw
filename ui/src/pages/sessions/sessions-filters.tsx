@@ -1,8 +1,8 @@
 import { createMemo, For } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { syncPopoverExpanded, syncPopoverLabel } from "../../components/web-awesome-popover.ts";
-import "../../components/tooltip.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import "../../components/tooltip.ts";
 import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
 import {
   normalizeSessionsGroupBy,
@@ -11,6 +11,7 @@ import {
 } from "../../lib/sessions/grouping.ts";
 import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
 import { SESSIONS_PAGE_DEFAULT_LIMIT } from "../../lib/sessions/session-requests.ts";
+import type { JSX } from "../../types/solid-elements.js";
 
 export type SessionsAdvancedFiltersProps = {
   activeMinutes: string;
@@ -42,7 +43,7 @@ const SESSION_GROUP_MODE_LABELS = {
   date: "sessionsView.groupByDate",
 } as const satisfies Record<SessionsGroupBy, string>;
 
-export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps) {
+export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JSX.Element {
   // Archived timestamps are intentionally stale, so recency only applies to the active view.
   const filterInputs = [
     ["activeMinutes", "minutes", "sessionsView.active"],

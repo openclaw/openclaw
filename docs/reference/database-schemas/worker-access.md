@@ -1398,6 +1398,19 @@ the native fallback. Final session authority still uses the synchronous guard.
 
 ## Keep one store owner
 
+Closed-turn outbox reads and writes use the existing agent worker or the captured
+incognito actor. An incognito target without its actor is unavailable; it never
+opens a replacement database on the Gateway thread. The closed transcript range
+reader is a worker-only kernel shared by these two owners.
+
+Transcript suffix replacement prepares and applies its bounded change in one
+synchronous writer transaction. It checks the supplied source bytes and optional
+mutation timestamp once, then carries the prepared projection through the write.
+It does not reread the same source, projection health, or mutation timestamp
+between planning and replacement. The existing commit authority, cursor rotation,
+rollback, and idempotency ownership remain unchanged; no schema or update changes
+are required.
+
 Plugin-state compound operations use `store.createOperation` over host-owned
 asynchronous handles. One command invokes a captured plugin module inside the
 existing shared-state worker transaction. The synchronous transaction facade
@@ -3911,8 +3924,11 @@ callers use the worker APIs. Schemas, stored bytes, retention, and update behavi
 are unchanged.
 
 Per-turn restart admission, runtime selection, and initial placement routing read
-through the existing placement projection. Reads retain the original physical
-store; admission and initial routing also retain a revocable placement observation
+through the existing placement projection. Worker-inference selection also awaits
+that projection instead of opening a synchronous placement read during model
+fallback preparation; it retains current environment and execution-policy checks.
+Reads retain the original physical store; admission and initial routing also
+retain a revocable placement observation
 until their caller consumes the facts.
 If a placement publication overlaps read preparation, the owner joins its
 settlement and reads fresh facts from the same physical store. A preceding turn
@@ -5304,6 +5320,19 @@ dispatch ordering and request coalescing. Reporting failures preserve the origin
 operation outcomes. Placement
 writes, current-authority checks, and workspace retention retain their existing
 owners; these reporting snapshots grant no execution or deletion authority.
+
+Per-agent target discovery consumes the physical database's admitted schema
+without selecting a session row merely to prove availability. Fixed shared stores
+still read their logical agent namespaces. Recorded quarantine remains authoritative.
+Canonical validation receipts share that same physical admission; their certifying
+and offline repair writers publish committed replacements. Ordinary session writes
+do not expire the receipt, and rollback cannot publish an uncommitted one.
+
+Warm maintenance reads use the current age hint and one count statement without
+an explicit transaction. Capacity pressure still requests full planning, whose
+multiple reads retain their snapshot. Pending-input history likewise retains its
+transaction across count, bounded metadata, and selected payload reads.
+Schemas, stored bytes, retention, and update behavior are unchanged.
 
 Machine-catalog notifications coalesce pending profile changes and select their
 correlated placements through the same read worker. The Gateway publishes keyed
