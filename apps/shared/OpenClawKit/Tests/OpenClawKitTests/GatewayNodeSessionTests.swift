@@ -555,6 +555,7 @@ final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLSRouteMet
     private let challenge: (delayNanoseconds: UInt64, nonce: String)
     private let challengeCapabilities: [String]
     private let connectError: [String: Any]?
+    private let connectErrorsByAttempt: [Int: [String: Any]]
     let effectiveTLSFingerprintSHA256: String?
     private var tasks: [FakeGatewayWebSocketTask] = []
     private var requests: [URLRequest] = []
@@ -570,6 +571,7 @@ final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLSRouteMet
         challenge: (delayNanoseconds: UInt64, nonce: String) = (0, "nonce-1"),
         challengeCapabilities: [String] = [],
         connectError: [String: Any]? = nil,
+        connectErrorsByAttempt: [Int: [String: Any]] = [:],
         effectiveTLSFingerprintSHA256: String? = nil)
     {
         self.helloAuth = helloAuth
@@ -580,6 +582,7 @@ final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLSRouteMet
         self.challenge = challenge
         self.challengeCapabilities = challengeCapabilities
         self.connectError = connectError
+        self.connectErrorsByAttempt = connectErrorsByAttempt
         self.effectiveTLSFingerprintSHA256 = effectiveTLSFingerprintSHA256
     }
 
@@ -624,7 +627,7 @@ final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLSRouteMet
                 helloDelayNanoseconds: self.helloDelayNanoseconds,
                 challenge: self.challenge,
                 challengeCapabilities: self.challengeCapabilities,
-                connectError: self.connectError)
+                connectError: self.connectErrorsByAttempt[self.makeCount] ?? self.connectError)
             self.tasks.append(task)
             self.waiters.resumeSatisfied()
             return WebSocketTaskBox(task: task)
@@ -925,6 +928,75 @@ extension GatewayChannelActor {
 
 @Suite(.serialized)
 struct GatewayNodeSessionTests {
+    @Test(.stateDirectoryIsolated, arguments: ["node", "operator"])
+    func `suspension rejection permits retry without replacing paired credentials`(role: String) async throws {
+        let gatewayID = "suspension-retry-gateway"
+        let identity = DeviceIdentityStore.loadOrCreate()
+        let scopes = role == "operator" ? ["operator.read"] : []
+        let token = "paired-\(role)-token"
+        _ = DeviceAuthStore.storeToken(
+            deviceId: identity.deviceId,
+            role: role,
+            token: token,
+            scopes: scopes,
+            gatewayID: gatewayID)
+        let options = role == "node"
+            ? nodeConnectOptions(includeDeviceIdentity: true, deviceAuthGatewayID: gatewayID)
+            : operatorConnectOptions(includeDeviceIdentity: true, deviceAuthGatewayID: gatewayID)
+        let session = FakeGatewayWebSocketSession(connectErrorsByAttempt: [1: [
+            "code": "UNAVAILABLE",
+            "message": "connect unavailable during gateway suspension",
+            "retryable": true,
+            "retryAfterMs": 1000,
+            "details": ["method": "connect", "reason": "gateway-suspending", "phase": "preparing"],
+        ]])
+        let channel = try GatewayChannelActor(
+            url: testURL("wss://gateway.example.invalid"),
+            token: nil,
+            session: WebSocketSessionBox(session: session),
+            connectOptions: options)
+        let backoff = StringCapture()
+        await channel._test_setConnectFailureBackoffWaitHandler {
+            await backoff.set("waited")
+        }
+        do {
+            do {
+                try await channel.connect()
+                Issue.record("suspended gateway unexpectedly admitted the connection")
+            } catch let error as GatewayConnectAuthError {
+                #expect(error.detailCode == "UNAVAILABLE")
+                #expect(error.detailsReason == "gateway-suspending")
+                #expect(!error.isNonRecoverable)
+                let problem = try #require(GatewayConnectionProblemMapper.map(error: error))
+                #expect(problem.retryable)
+                #expect(!problem.pauseReconnect)
+                #expect(!problem.needsPairingApproval)
+            }
+            #expect(await channel.currentConnectionGeneration() == nil)
+            let firstAuth = try #require(session.latestTask()?.latestConnectAuth())
+            #expect(firstAuth["token"] as? String == token)
+            #expect(DeviceAuthStore.loadToken(
+                deviceId: identity.deviceId, role: role, gatewayID: gatewayID)?.token == token)
+
+            // Reuse the same channel and stored pairing once admission resumes.
+            try await channel.connect()
+            #expect(await backoff.get() == "waited")
+            #expect(await channel.currentConnectionGeneration() != nil)
+            #expect(session.snapshotMakeCount() == 2)
+            let resumedAuth = try #require(session.latestTask()?.latestConnectAuth())
+            #expect(resumedAuth["token"] as? String == token)
+            #expect(resumedAuth["bootstrapToken"] == nil)
+            let stored = try #require(DeviceAuthStore.loadToken(
+                deviceId: identity.deviceId, role: role, gatewayID: gatewayID))
+            #expect(stored.token == token)
+            #expect(stored.scopes == scopes)
+        } catch {
+            await channel.shutdown()
+            throw error
+        }
+        await channel.shutdown()
+    }
+
     @Test(arguments: [false, true])
     func `wire text is projected before bounded native delivery and loss retires the socket`(
         missingBaseline: Bool) async throws
