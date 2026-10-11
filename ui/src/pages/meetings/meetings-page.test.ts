@@ -56,7 +56,7 @@ describe("meeting transcript library", () => {
     );
     const filter = page.querySelector<HTMLInputElement>('input[name="query"]')!;
     filter.value = "unsubmitted filter";
-    filter.dispatchEvent(new Event("input"));
+    filter.dispatchEvent(new Event("input", { bubbles: true }));
     const selectedRow = page.querySelector(".transcripts-list__entry");
     hold = true;
     await vi.advanceTimersByTimeAsync(3_000);
@@ -303,7 +303,7 @@ describe("meeting transcript library", () => {
     for (const [key, value] of Object.entries(drafts)) {
       const input = page.querySelector<HTMLInputElement>(`input[name="${key}"]`)!;
       input.value = value;
-      input.dispatchEvent(new Event("input"));
+      input.dispatchEvent(new Event("input", { bubbles: true }));
     }
     pending.resolve({ sessions: [meetingEntry], nextCursor: null });
     await waitForSolid(() => expect(page.textContent).toContain("Design review"));
@@ -348,7 +348,7 @@ describe("meeting transcript library", () => {
     await waitForSolid(() => expect(page.textContent).toContain("Keep the reader quiet"));
     const input = page.querySelector<HTMLInputElement>('input[name="find"]')!;
     input.value = "draft search";
-    input.dispatchEvent(new Event("input"));
+    input.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
     expect(page.querySelector<HTMLInputElement>('input[name="find"]')!.value).toBe("draft search");
     more.resolve({ ...meetingPage, nextCursor: null });
