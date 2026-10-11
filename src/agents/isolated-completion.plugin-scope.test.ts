@@ -163,7 +163,7 @@ it.each(["cli", "harness"] as const)("reports the %s owner the run dispatches to
         agentHarnessRuntimeOverride: undefined,
       }
     : isolatedRequest();
-  const status = resolveIsolatedCompletionRuntime(request);
+  const status = await resolveIsolatedCompletionRuntime(request);
   const run = await runIsolatedCompletion(request);
   expect(run.owner).toEqual({ kind, id: cli ? "claude-cli" : "codex" });
   expect(status).toEqual({ id: run.owner.id, kind, ...(cli ? {} : { harnessLabel: "Codex" }) });

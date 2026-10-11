@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { raceWithTimeoutResult } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
+import { createAcpReplyProjector } from "./acp-projector.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
@@ -110,6 +111,32 @@ function createCoordinator(
     ...overrides,
   });
 }
+
+it("preserves explicit ACP chunk semantics through the delivery coordinator", async () => {
+  const accepted: Array<{ kind: string; text?: string; textMode?: "delta" }> = [];
+  const dispatcher = createReplyDispatcher({
+    deliver: async (payload, info) => {
+      accepted.push({ kind: info.kind, text: payload.text, textMode: payload.textMode });
+    },
+  });
+  const coordinator = createCoordinator({ dispatcher });
+  const projector = createAcpReplyProjector({
+    cfg: createAcpTestConfig({ acp: { enabled: true, stream: { deliveryMode: "live" } } }),
+    shouldSendToolSummaries: async () => false,
+    shouldSendFullToolDetails: async () => false,
+    deliver: coordinator.deliver,
+  });
+  await projector.onEvent({ type: "text_delta", text: "First sentence. ", stream: "output" });
+  await projector.onEvent({ type: "text_delta", text: "Second sentence.", stream: "output" });
+  await projector.flush();
+  await coordinator.deliver("final", { text: "Replacement final." }, { skipTts: true });
+  await dispatcher.waitForIdle();
+  expect(accepted).toEqual([
+    { kind: "block", text: "First sentence. ", textMode: "delta" },
+    { kind: "block", text: "Second sentence.", textMode: "delta" },
+    { kind: "final", text: "Replacement final.", textMode: undefined },
+  ]);
+});
 
 function createVisibleChatAcpCoordinator(
   cfg: OpenClawConfig,

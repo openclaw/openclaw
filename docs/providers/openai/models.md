@@ -163,7 +163,8 @@ Responses endpoint. Configure the existing model settings:
   [thinking level](/tools/thinking), for example with `/think high`, before
   the next user turn. OpenClaw preserves the original request-level effort
   and places a `configuration_update` at the new turn. This optimization
-  works across matching session history over SSE or cached WebSockets.
+  works across matching session history over SSE or cached WebSockets, including
+  concurrent SSE requests in the same session.
   Automatic steering continuations keep their inherited settings. If steering
   waits for a tool result or approval, the explicit continuation uses current
   request settings, including output limits and reasoning settings, without

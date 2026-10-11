@@ -193,7 +193,9 @@ export function completeInlineProviderModel(
       input: model.input,
     }),
     cost: model.cost ?? normalizeResolvedPricing({}),
-    contextWindow: model.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
+    contextWindow:
+      model.contextWindow ?? Math.max(model.contextTokens ?? 0, DEFAULT_CONTEXT_TOKENS),
+    ...(model.contextWindow === undefined ? { contextWindowSource: "synthetic" as const } : {}),
     contextTokens: model.contextTokens,
     maxTokens: model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
     ...(providerConfig.authHeader !== undefined ? { authHeader: providerConfig.authHeader } : {}),

@@ -10,7 +10,10 @@ import type {
   UsersUnlinkAuthProfileResult,
 } from "../../packages/gateway-protocol/src/schema/users.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
-import { ensureAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
+import {
+  ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
+} from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
@@ -108,7 +111,11 @@ async function resolveLinkableAuthProfileProvider(
   if (isUserModelAuthProfileId(authProfileId)) {
     return resolveOwnedAccountProvider(owner, authProfileId, context);
   }
-  return resolveSharedAuthProfileProvider(cfg, authProfileId);
+  const store = await ensureAuthProfileStoreWithoutExternalProfilesAsync(
+    resolveSharedMainAuthAgentDir(),
+    { readOnly: true },
+  );
+  return store.profiles[authProfileId]?.provider ?? cfg.auth?.profiles?.[authProfileId]?.provider;
 }
 
 function resolveSharedAuthProfileProvider(cfg: OpenClawConfig, authProfileId: string) {

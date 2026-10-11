@@ -1,5 +1,4 @@
 import { insert, render, spread } from "@solidjs/web";
-import { nothing, render as renderLit } from "lit";
 import {
   createComponent,
   createRenderEffect,
@@ -15,6 +14,7 @@ import { shellLayoutOwnerForHost } from "../app/shell-layout-owner.ts";
 import { ShellLayoutProvider } from "../app/shell-layout-traits-solid.tsx";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import type { JSX } from "../types/solid-elements.d.ts";
+import { mountLitContent } from "./solid-content.tsx";
 
 type Property<T> = {
   default: T;
@@ -254,7 +254,8 @@ export function defineSolidBridge<Props extends object, Methods extends object =
             },
           });
         }
-        const renderContent = () => content(props, this.#host);
+        // Provider child memos must not subscribe to component setup reads.
+        const renderContent = () => createComponent(() => content(props, this.#host), {});
         const contentView = () =>
           layout
             ? createComponent(ShellLayoutProvider, {
@@ -340,17 +341,14 @@ export function LitContent(props: {
   if (className) {
     host.className = className;
   }
-  let part: ReturnType<typeof renderLit> | undefined;
+  const mount = mountLitContent(undefined, host, { host });
   // Commit Lit descendants before post-render observers inspect the host.
   createRenderEffect(
     () => props.render(),
     (template) => {
-      part = renderLit(template, host, { host });
+      mount.update(template);
     },
   );
-  onCleanup(() => {
-    part?.setConnected(false);
-    renderLit(nothing, host);
-  });
+  onCleanup(mount.dispose);
   return host;
 }

@@ -268,7 +268,7 @@ async function resolveCodexAppServerClientStartContext(
     preparedAuth?.kind === "profile"
       ? preparedAuth.store
       : !usesNativeAuth && preparedAuth?.kind !== "api-key"
-        ? resolveCodexAppServerAuthProfileStore({
+        ? await resolveCodexAppServerAuthProfileStore({
             agentDir,
             authProfileId: requestedAuthProfileId,
             authProfileStore: options?.authProfileStore,
@@ -280,7 +280,7 @@ async function resolveCodexAppServerClientStartContext(
       ? preparedAuth.profileId
       : usesNativeAuth || preparedAuth?.kind === "api-key"
         ? undefined
-        : resolveCodexAppServerAuthProfileIdForAgent({
+        : await resolveCodexAppServerAuthProfileIdForAgent({
             authProfileId: requestedAuthProfileId,
             agentDir,
             config: options?.config,
@@ -967,13 +967,15 @@ async function startInitializedCodexAppServerClientOnce(
           client,
           startOptions,
           isCodexResponsesOAuth(prepared) && prepared?.kind === "profile"
-            ? createCodexResponsesOAuth({
-                profileId: prepared.profileId,
-                store: prepared.store,
-                fingerprint: prepared.snapshot.secretFreeCacheKey,
-                agentDir: params.agentDir,
-                config: params.config,
-              })
+            ? await waitForStartup(() =>
+                createCodexResponsesOAuth({
+                  profileId: prepared.profileId,
+                  store: prepared.store,
+                  fingerprint: prepared.snapshot.secretFreeCacheKey,
+                  agentDir: params.agentDir,
+                  config: params.config,
+                }),
+              )
             : undefined,
         );
       }

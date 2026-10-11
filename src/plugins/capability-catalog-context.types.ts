@@ -2,8 +2,12 @@ import type { PluginCapabilityCatalog } from "./capability-catalog.types.js";
 
 /** Host operations stay native; catalog construction must not start sessions or read stores. */
 export type PluginCapabilityCatalogContext = {
+  /** @deprecated Use isProviderApiKeyConfiguredAsync. Removed at the next Plugin SDK major. */
   isProviderApiKeyConfigured: typeof import("./provider-auth-availability.js").isProviderApiKeyConfigured;
+  isProviderApiKeyConfiguredAsync?: typeof import("./provider-auth-availability.js").isProviderApiKeyConfiguredAsync;
+  /** @deprecated Use isProviderAuthProfileConfiguredAsync. Removed at the next Plugin SDK major. */
   isProviderAuthProfileConfigured: typeof import("./provider-auth-availability.js").isProviderAuthProfileConfigured;
+  isProviderAuthProfileConfiguredAsync?: typeof import("./provider-auth-availability.js").isProviderAuthProfileConfiguredAsync;
   resolveAgentDir: typeof import("../agents/agent-scope-config.js").resolveAgentDir;
   createRealtimeTranscriptionWebSocketSession: typeof import("../realtime-transcription/websocket-session.js").createRealtimeTranscriptionWebSocketSession;
   resolveProviderRequestHeaders: typeof import("../agents/provider-request-config.js").resolveProviderRequestHeaders;
@@ -28,6 +32,8 @@ export type PluginCapabilityCatalogEntry =
 
 /** Native hosts supply asynchronous capture while preserving the legacy plugin context. */
 export type PluginCapabilityCatalogHostContext = PluginCapabilityCatalogContext & {
+  isProviderApiKeyConfiguredAsync: typeof import("./provider-auth-availability.js").isProviderApiKeyConfiguredAsync;
+  isProviderAuthProfileConfiguredAsync: typeof import("./provider-auth-availability.js").isProviderAuthProfileConfiguredAsync;
   captureWsEventAsync: typeof import("../proxy-capture/runtime.js").captureWsEventAsync;
 };
 

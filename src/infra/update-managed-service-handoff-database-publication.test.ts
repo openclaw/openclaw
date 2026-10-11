@@ -131,7 +131,8 @@ describe("managed handoff database publication", () => {
 
   it("publishes a complete private single-link database", () => {
     const withDatabase = createManagedHandoffLeaseDatabase(databasePath);
-    const umask = process.umask(0o777);
+    // Windows privacy comes from the DACL; masking owner-write makes the stage read-only.
+    const umask = process.umask(process.platform === "win32" ? 0o077 : 0o777);
     try {
       withDatabase(true, (db) => insertRow(db, root, "first"));
     } finally {

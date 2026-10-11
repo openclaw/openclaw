@@ -81,8 +81,6 @@ import {
 } from "./chat-view.test-helpers.ts";
 import { renderChat } from "./chat-view.ts";
 import * as chatMessageConfirmation from "./components/chat-message-confirmation.ts";
-import * as chatMessage from "./components/chat-message-group.ts";
-import * as chatMessageStream from "./components/chat-message-stream.ts";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
 import { renderChatModelControls } from "./components/chat-model-controls.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
@@ -218,22 +216,6 @@ const buildChatItemsMock = vi.fn(
     return items as ReturnType<typeof chatThread.buildCachedChatItems>;
   },
 );
-const renderMessageGroupMock = vi.fn<typeof chatMessage.renderMessageGroup>((group) => {
-  const text = group.messages
-    .map(({ message }) => {
-      if (typeof message === "object" && message !== null && "content" in message) {
-        const content = (message as { content?: unknown }).content;
-        if (typeof content === "string") {
-          return content;
-        }
-        return content == null ? "" : JSON.stringify(content);
-      }
-      return String(message);
-    })
-    .join("\n");
-  return html`<div class="chat-group">${text}</div>`;
-});
-
 type ChatHeaderTestState = {
   basePath?: string;
   chatLoading: boolean;
@@ -296,15 +278,6 @@ function requireFirstAttachmentsChange(
   return attachments as ChatAttachment[];
 }
 
-const renderStreamGroupMock: typeof chatMessageStream.renderStreamGroup = (parts) =>
-  html`<div class="chat-stream-run">
-    ${parts.map((part) =>
-      part.kind === "reading-indicator"
-        ? html`<div class="chat-reading-indicator"></div>`
-        : html`<div class="chat-stream">${part.kind === "stream" ? part.text : ""}</div>`,
-    )}
-  </div>`;
-
 beforeEach(() => {
   onTestFinished(installChatComposerPickerDismissal(document));
   installTranscriptDomMocks();
@@ -312,11 +285,6 @@ beforeEach(() => {
   vi.spyOn(chatThread, "getExpandedToolCards").mockReturnValue(new Map<string, boolean>());
   vi.spyOn(chatThread, "getExpandedUserMessages").mockReturnValue(new Map<string, boolean>());
   vi.spyOn(chatThread, "syncToolCardExpansionState").mockImplementation(() => undefined);
-  vi.spyOn(chatMessage, "renderMessageGroup").mockImplementation(renderMessageGroupMock);
-  vi.spyOn(chatMessageStream, "renderStreamGroup").mockImplementation(renderStreamGroupMock);
-  vi.spyOn(chatMessageStream, "renderWorkGroupSummary").mockReturnValue(
-    html`<div class="chat-work-group"></div>`,
-  );
 });
 
 function createSessionsResultFromRows(sessions: GatewaySessionRow[]): SessionsListResult {
@@ -614,7 +582,6 @@ describe("chat typing status", () => {
 describe("chat run error", () => {
   it("keeps Check delivery reachable when exact history deduplicates the retained bubble", () => {
     vi.mocked(chatThread.buildCachedChatItems).mockRestore();
-    vi.mocked(chatMessage.renderMessageGroup).mockRestore();
     const onRetrySessionPlacementStartup = vi.fn();
     const container = renderChatView({
       canSend: false,
@@ -657,7 +624,6 @@ describe("chat run error", () => {
     "keeps the retained initial turn's %s action usable while ordinary sending is held",
     (action) => {
       vi.mocked(chatThread.buildCachedChatItems).mockRestore();
-      vi.mocked(chatMessage.renderMessageGroup).mockRestore();
       const onRetrySessionPlacementStartup = vi.fn();
       const onQueueRetry = vi.fn();
       const container = renderChatView({
@@ -1267,48 +1233,31 @@ describe("chat transcript rendering", () => {
       },
     ] as ReturnType<typeof chatThread.buildCachedChatItems>;
     buildChatItemsMock.mockReturnValue(stableChatItems);
-    renderMessageGroupMock.mockImplementation(
-      (
-        ...[_group, opts]: Parameters<typeof chatMessage.renderMessageGroup>
-      ): ReturnType<typeof chatMessage.renderMessageGroup> => html`
-        <button
-          aria-label="Reply to message"
-          @click=${() =>
-            opts.onReply?.({
-              messageId: "assistant-message",
-              senderLabel: "Val",
-              text: "Reply target",
-            })}
-        >
-          Reply
-        </button>
-      `,
-    );
     const container = createComposerContainer();
     const renderWithReply = (onSetReply: typeof firstReply) => {
-      render(
-        renderChat(
-          createChatProps({
-            paneId: "reply-callback-cache",
-            transcript,
-            messages,
-            onSetReply,
-          }),
-        ),
-        container,
-      );
+      renderChatInto(container, {
+        paneId: "reply-callback-cache",
+        transcript,
+        messages,
+        onSetReply,
+      });
     };
 
     renderWithReply(firstReply);
-    renderWithReply(currentReply);
-    expect(renderMessageGroupMock).toHaveBeenCalledOnce();
-    requireElement(
+    const button = requireElement(
       container,
       '[aria-label="Reply to message"]',
       "inline reply button",
-    ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    );
+    renderWithReply(currentReply);
+    expect(container.querySelector('[aria-label="Reply to message"]')).toBe(button);
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(firstReply).not.toHaveBeenCalled();
-    expect(currentReply).toHaveBeenCalledOnce();
+    expect(currentReply).toHaveBeenCalledExactlyOnceWith({
+      messageId: "message:reply-callback-cache",
+      senderLabel: "Val",
+      text: "Reply target",
+    });
   });
 
   it("does not announce appended assistant rows in an inactive pane", () => {
@@ -1662,7 +1611,6 @@ afterEach(() => {
   vi.useRealTimers();
   // Restore defaults even when a case fails with an override installed.
   buildChatItemsMock.mockReset();
-  renderMessageGroupMock.mockReset();
   resetChatViewState();
   replaceSlashCommands(buildFallbackSlashCommands());
   resetTranscriptTestDom();
@@ -1910,9 +1858,14 @@ describe("chat loading skeleton", () => {
       readingIndicator,
     ] as ReturnType<typeof chatThread.buildCachedChatItems>);
     renderChatInto(container, props);
-    expect(renderMessageGroupMock.mock.calls.at(-1)?.[1].activeContinuation).toBeDefined();
+    const bubble = requireElement(
+      container,
+      '[data-message-id="message:assistant:reply"]',
+      "retained assistant reply",
+    );
+    const reply = expectDefined(bubble.closest(".chat-group"), "assistant group");
+    expect(reply.querySelector(".chat-working-indicator--continuation")).not.toBeNull();
 
-    renderMessageGroupMock.mockClear();
     vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([
       replyGroup,
       toolGroup,
@@ -1920,11 +1873,9 @@ describe("chat loading skeleton", () => {
     ] as ReturnType<typeof chatThread.buildCachedChatItems>);
     renderChatInto(container, props);
 
-    const replyCall = renderMessageGroupMock.mock.calls.find(
-      ([group]) => group.key === replyGroup.key,
-    );
-    expect(replyCall).toBeDefined();
-    expect(replyCall?.[1].activeContinuation).toBeUndefined();
+    expect(container.querySelector('[data-message-id="message:assistant:reply"]')).toBe(bubble);
+    expect(reply.querySelector(".chat-working-indicator")).toBeNull();
+    expect(container.querySelectorAll(".chat-working-indicator")).toHaveLength(1);
   });
 
   it("shows prompt-bar progress beside context usage while the current session send is awaiting acknowledgement", () => {
@@ -2130,7 +2081,7 @@ describe("chat loading skeleton", () => {
       messages: [{ role: "assistant", content: "Interim answer", timestamp: 1 }],
     });
 
-    expect(renderMessageGroupMock.mock.calls[0]?.[1].turnRecap).toBeUndefined();
+    expect(container.querySelector(".chat-group.assistant .chat-turn-recap")).toBeNull();
     expect(container.querySelector(".chat-turn-recap")?.textContent).toContain("Done in");
   });
 });
@@ -2840,7 +2791,9 @@ describe("chat slash menu accessibility", () => {
       if (kind === "skill") {
         expect(container.querySelector(selector)?.textContent).toContain("Loading skills");
         expect(container.querySelectorAll(".skill-menu [role='option']")).toHaveLength(0);
-        keydownComposer(container, "Escape");
+        getComposerTextarea(container).focus();
+        const escape = keydownComposer(container, "Escape");
+        expect(escape.defaultPrevented).toBe(true);
       } else {
         inputDraft(container, "plain first message");
       }
@@ -4846,7 +4799,6 @@ describe("right-click Reply", () => {
 
   it("keeps Reply and composer focus available when the pane rerenders with its menu open", () => {
     vi.mocked(chatThread.buildCachedChatItems).mockRestore();
-    vi.mocked(chatMessage.renderMessageGroup).mockRestore();
     const onSetReply = vi.fn();
     const transcript = createTestTranscript();
     const messages = [
@@ -5206,75 +5158,82 @@ describe("right-click Reply", () => {
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
 describe("chat transcript rendering cache", () => {
-  it("shares assistant media context across history, streams, and continuations", () => {
-    const mediaContext = {
-      sessionKey: "agent:media:main",
-      resourceBasePath: "/resources",
-      assistantAttachmentAuthToken: "attachment-token",
-      resolveArtifactDownload: vi.fn(),
-      canvasPluginSurfaceUrl: "https://example.com/canvas",
-      embedSandboxMode: "strict" as const,
-      allowExternalEmbedUrls: true,
-      onAssistantAttachmentLoaded: vi.fn(),
-      onRequestUpdate: vi.fn(),
-      onRequestOpenImage: vi.fn(() => 7),
-      onOpenWorkspaceFile: vi.fn(),
-    };
-    const mediaProps = {
-      ...mediaContext,
-      currentAgentId: "current",
-      fullMessageAgentId: "media",
-      basePath: "/control",
-      onOpenImage: vi.fn(),
-    };
-    const streamPart = {
-      kind: "stream" as const,
-      key: "stream:media:live",
-      text: "MEDIA:https://example.com/voice.ogg",
-      startedAt: 1,
-      isStreaming: true,
-    };
-    const expected = { ...mediaContext, agentId: "current", runActive: true };
+  it.each(["history", "stream", "continuation"] as const)(
+    "opens images and workspace files and applies embed policy in %s",
+    async (surface) => {
+      const imageSource = "data:image/png;base64,cG5n";
+      const widgetUrl = "https://example.test/widget";
+      const text = [
+        `![Synthetic preview](${imageSource})`,
+        "[Read file](reports/result.md:17)",
+        `[embed url="${widgetUrl}" title="Synthetic widget" /]`,
+      ].join("\n\n");
+      const message = {
+        role: "assistant",
+        content: surface === "history" ? text : "Interim answer",
+        timestamp: 1,
+      };
+      const group: MessageGroup = {
+        kind: "group",
+        key: "group:assistant:media",
+        role: "assistant",
+        visibleContent: "text",
+        messages: [createMessageEntry("message:assistant:media", message)],
+        timestamp: 1,
+        isStreaming: false,
+      };
+      const streamPart = {
+        kind: "stream" as const,
+        key: "stream:media:live",
+        text,
+        startedAt: 2,
+        isStreaming: true,
+      };
+      buildChatItemsMock.mockReturnValue(
+        surface === "history" ? [group] : surface === "stream" ? [streamPart] : [group, streamPart],
+      );
+      const onOpenImage = vi.fn();
+      const onRequestOpenImage = vi.fn(() => 7);
+      const onOpenWorkspaceFile = vi.fn();
+      const container = createComposerContainer();
+      const props = {
+        sessionKey: "agent:media:main",
+        currentAgentId: "current",
+        fullMessageAgentId: "media",
+        resourceBasePath: "/resources",
+        embedSandboxMode: "strict" as const,
+        canAbort: true,
+        runActive: true,
+        messages: surface === "stream" ? [] : [message],
+        stream: surface === "history" ? null : text,
+        onOpenImage,
+        onRequestOpenImage,
+        onOpenWorkspaceFile,
+      };
+      renderChatInto(container, { ...props, allowExternalEmbedUrls: false });
+      const frame = expectDefined(container.querySelector("iframe"), "blocked widget frame");
+      expect(frame.getAttribute("src")).toBeNull();
+      expect(frame.getAttribute("sandbox")).toBe("");
 
-    vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([streamPart]);
-    renderChatView({ ...mediaProps, canAbort: true, runActive: true });
-
-    expect(vi.mocked(chatMessageStream.renderStreamGroup).mock.calls.at(-1)?.[1]).toMatchObject(
-      expected,
-    );
-    expect(
-      vi.mocked(chatMessageStream.renderStreamGroup).mock.calls.at(-1)?.[1]?.onOpenImage,
-    ).toEqual(expect.any(Function));
-
-    const reply = {
-      kind: "group" as const,
-      key: "group:assistant:media",
-      role: "assistant",
-      visibleContent: "text" as const,
-      messages: [
-        {
-          key: "message:assistant:media",
-          message: { role: "assistant", content: "Interim answer", timestamp: 1 },
-        },
-      ],
-      timestamp: 1,
-      isStreaming: false,
-    };
-    vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([
-      reply,
-      { kind: "reading-indicator", key: "reading:media", startedAt: 1 },
-    ] as ReturnType<typeof chatThread.buildCachedChatItems>);
-    renderMessageGroupMock.mockClear();
-    renderChatView({
-      ...mediaProps,
-      canAbort: true,
-      runActive: true,
-      messages: [{ role: "assistant", content: "Interim answer", timestamp: 1 }],
-    });
-
-    expect(renderMessageGroupMock.mock.calls.at(-1)?.[1]).toMatchObject(expected);
-    expect(renderMessageGroupMock.mock.calls.at(-1)?.[1].activeContinuation?.options).toMatchObject(
-      expected,
-    );
-  });
+      renderChatInto(container, { ...props, allowExternalEmbedUrls: true });
+      expect(container.querySelector("iframe")?.getAttribute("src")).toBe(widgetUrl);
+      expect(container.querySelector("iframe")?.getAttribute("sandbox")).toBe("");
+      requireElement(container, ".markdown-inline-image-button", "image control").dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+      await waitForFast(() =>
+        expect(onOpenImage).toHaveBeenCalledExactlyOnceWith(
+          { src: imageSource, title: "Synthetic preview" },
+          7,
+        ),
+      );
+      expect(onRequestOpenImage).toHaveBeenCalledOnce();
+      requireElement(container, "a.markdown-file-link", "workspace file link").dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+      expect(onOpenWorkspaceFile).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ path: "reports/result.md", line: 17 }),
+      );
+    },
+  );
 });

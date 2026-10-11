@@ -2,9 +2,9 @@ import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { cleanupPluginHostSessionStore } from "../config/sessions/session-accessor.js";
+import { resolveAllAgentSessionStoreTargetsAsync } from "../config/sessions/targets-runtime.js";
 import {
   isConfiguredSessionStoreAgentId,
-  resolveAllAgentSessionStoreTargetsSync,
   type SessionStoreTarget,
 } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -34,7 +34,7 @@ import { getActivePluginRegistry } from "./runtime.js";
 
 const log = createSubsystemLogger("plugins/cleanup");
 
-type ResolveCleanupSessionStoreTargets = () => readonly SessionStoreTarget[];
+type ResolveCleanupSessionStoreTargets = () => Promise<readonly SessionStoreTarget[]>;
 
 function shouldCleanPlugin(pluginId: string, filterPluginId?: string): boolean {
   return !filterPluginId || pluginId === filterPluginId;
@@ -60,8 +60,8 @@ async function clearPluginSessionStores(params: {
   }
   const storeTargets =
     params.storeTargets ??
-    params.resolveStoreTargets?.() ??
-    resolveAllAgentSessionStoreTargetsSync(params.cfg);
+    (await params.resolveStoreTargets?.()) ??
+    (await resolveAllAgentSessionStoreTargetsAsync(params.cfg));
   let retainedAgentIds: ReadonlySet<string> = new Set();
   if (storeTargets.some((target) => !isConfiguredSessionStoreAgentId(params.cfg, target.agentId))) {
     try {
@@ -373,10 +373,10 @@ export function createPluginHostRegistryRetirement(params: {
     ...previousRegistry.plugins.map((record) => record.id),
     ...hostPluginIds,
   ]);
-  let sessionStoreTargets: readonly SessionStoreTarget[] | undefined;
+  let sessionStoreTargets: Promise<readonly SessionStoreTarget[]> | undefined;
   // Discover stores after admitted writes finish, using the retiring configuration.
   const resolveSessionStoreTargets = () =>
-    (sessionStoreTargets ??= resolveAllAgentSessionStoreTargetsSync(cfg ?? getRuntimeConfig()));
+    (sessionStoreTargets ??= resolveAllAgentSessionStoreTargetsAsync(cfg ?? getRuntimeConfig()));
   const waits: PluginHostRegistryRetirement[] = [];
   for (const pluginId of previousPluginIds) {
     const record = previousRegistry.plugins.find((entry) => entry.id === pluginId);

@@ -1,4 +1,4 @@
-// Auth-profile saves must not report a failed transaction after rows became durable.
+// Failed database admission must preserve auth rows and runtime snapshots.
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
@@ -39,7 +39,7 @@ function withChmodFailure(error: Error, operation: () => void): void {
   }
 }
 
-describe("auth-profile database permission repair", () => {
+describe("auth-profile database-open permission repair", () => {
   afterEach(() => {
     clearRuntimeAuthProfileStoreSnapshots();
     closeOpenClawAgentDatabasesForTest();
@@ -48,7 +48,7 @@ describe("auth-profile database permission repair", () => {
   });
 
   it.each(["snapshot", "transaction"] as const)(
-    "keeps persisted rows and runtime state when %s save permission repair fails",
+    "keeps persisted rows and runtime state when %s save cannot open a private database",
     (mode) => {
       const stateDir = tempDirs.make("openclaw-auth-chmod-");
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -67,6 +67,7 @@ describe("auth-profile database permission repair", () => {
       if (process.platform !== "win32") {
         fs.chmodSync(resolveAuthProfileDatabasePath(agentDir), 0o644);
       }
+      closeOpenClawAgentDatabasesForTest();
       withChmodFailure(permissionError, () => {
         expect(() => {
           if (snapshot) {

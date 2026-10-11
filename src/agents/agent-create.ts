@@ -32,6 +32,7 @@ import type { HeldAgentDatabase } from "../state/agent-deletion-journal.types.js
 import { resolveAgentDeletionRecoveryHoldsInWorker } from "../state/agent-deletion-recovery.js";
 import { recordAgentProvenance, type AgentCreatedVia } from "../state/agent-provenance.js";
 import { createOpenClawAgentDatabasePathMatcher } from "../state/openclaw-agent-db.paths.js";
+import { prepareOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { resolveUserPath } from "../utils.js";
@@ -42,6 +43,7 @@ import { listAgentRoles, loadAgentRole } from "./agent-roles.js";
 import { toAgentEntriesRecord } from "./agent-scope-config.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { resolveSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
+import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
 import {
   createAgentIdentityConfig,
   mergeIdentityMarkdownContent,
@@ -317,8 +319,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
   const agentId = validation.agentId;
   const isBootstrapMain = agentId === BOOTSTRAP_AGENT_ID && params.bootstrapMain === true;
   const automaticBootstrap = params.bootstrapMain === true || params.bootstrapFirstAgent === true;
-  // Staged auth for a recreated identity must open that identity's databases beneath its
-  // completed deletion record. The scope covers only the receipt, so early exits never hold it.
+  // Database preparation and staged auth for a recreated identity share its creation claim.
   const withCreationClaim = <T>(run: () => Promise<T>) =>
     runWithAgentCreationClaim({ agentId }, run);
 
@@ -622,12 +623,14 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           // The receipt owns compensation until the config transform publishes this result.
           // Capture the receipt before settlement so a failed close still reaches rollback.
           beforePersistentApply();
-          if (params.prepareConfigCommit) {
-            const prepareConfigCommit = params.prepareConfigCommit;
-            await withCreationClaim(async () => {
-              configCommitReceipt = (await prepareConfigCommit()) ?? undefined;
-            });
-          }
+          await withCreationClaim(async () => {
+            configCommitReceipt = (await params.prepareConfigCommit?.()) ?? undefined;
+            beforePersistentApply();
+            await prepareOpenClawAgentDatabaseExecution(
+              { agentId, path: resolveAuthProfileDatabasePath(agentDir) },
+              assertHost,
+            );
+          });
 
           return {
             nextConfig,

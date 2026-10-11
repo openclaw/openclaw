@@ -10,7 +10,7 @@ import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blo
 import { handleMarkdownTableInteraction } from "../../components/markdown-tables.ts";
 import { renderPanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import { renderWizardStepControls } from "../../components/wizard-step-controls.ts";
-import "../../components/option-card.ts";
+import "../../components/option-card.tsx";
 import "../../components/openclaw-mascot.ts";
 import { t } from "../../i18n/index.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";

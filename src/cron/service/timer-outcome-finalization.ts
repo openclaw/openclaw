@@ -230,7 +230,7 @@ export async function finalizeCompletedCronRunOutcomes(
       finalizedOutcomes = finalizedOutcomes.filter(canPublish);
       finalizationSucceeded = true;
       if (finalizedOutcomes.length === 0) {
-        runPostPersistCronNotifications(state, postPersistNotifications);
+        await runPostPersistCronNotifications(state, postPersistNotifications);
         return;
       }
       const publishedJobIds = new Set(finalizedOutcomes.map((outcome) => outcome.jobId));
@@ -252,7 +252,7 @@ export async function finalizeCompletedCronRunOutcomes(
           });
         }
       }
-      runPostPersistCronNotifications(state, postPersistNotifications);
+      await runPostPersistCronNotifications(state, postPersistNotifications);
       for (const removedJob of committed.removedJobs) {
         if (publishedJobIds.has(removedJob.id)) {
           emit(state, { jobId: removedJob.id, action: "removed", job: removedJob });

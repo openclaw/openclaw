@@ -28,25 +28,17 @@ explicit application, pane, or test lifetimes. Disposal releases observation and
 retains the last read/published reference; it does not deep-freeze owner objects
 or dispose the authoritative owner.
 
-`projectEvents()` preserves synchronous event delivery, duplicates, order, and
-the upstream subscription lifetime. It has no latest-value signal or replay.
-`projectAsyncEvents()` aggregates returned promises for channels that await
-observers, so publisher completion still includes the consumers' work. Channels whose own
-contract replays an admitted value, such as native drafts, retain that behavior.
+Event consumers subscribe directly to their owners, preserving each channel's
+delivery order, replay behavior, and completion contract.
 
 ## Adapter families
 
-| Module                   | Owners                                                                                                                                                                          |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `application.ts`         | Gateway snapshots/events/logs, config, selections, navigation preferences, dock/input, creation metadata, overlays, mentions, attention, scope upgrade, push, placement startup |
-| `application-native.ts`  | Native drafts, conversation presentation, device settings, notifications, Gateway inventory                                                                                     |
-| `domain-capabilities.ts` | Agents, identity, roster activity, channels, runtime config, sessions and managed list queries                                                                                  |
-| `domain-keyed.ts`        | Projects, progress cards, pull requests, stored outbox reads                                                                                                                    |
-| `domain-board.ts`        | Board value/event sources, existing providers, shared scoped provider leases                                                                                                    |
-| `registries.ts`          | Model catalog, chat metadata, MCP contexts, chat work, plugin help, palette preferences                                                                                         |
-| `events.ts`              | Boot retirement, HTTP failure/auth restoration, outbox/draft/attention changes, snapshot invalidation, initial handoff, activation clearing, picker confirmations               |
-| `events-browser.ts`      | Browser history, native browser state, native occlusion, lobster visits, transcript scroll events                                                                               |
-| `router.ts`              | Router state, with loaders and route retirement left in the router                                                                                                              |
+| Module                   | Owners                                            |
+| ------------------------ | ------------------------------------------------- |
+| `application.ts`         | Gateway snapshots, config, agent selection        |
+| `application-native.ts`  | Native device settings                            |
+| `domain-capabilities.ts` | Agents, roster activity, channels, runtime config |
+| `events-browser.ts`      | Lobster visits                                    |
 
 `projectTheme()` exposes preference and applied-palette projections separately.
 Preferences change immediately; `appliedPalette` advances only after the theme
@@ -59,9 +51,8 @@ Solid consumers import `t` from `lib/reactive/i18n.ts` and keep the call shape
 The existing Lit translator and English registrars are unchanged. Locale loading,
 fallback, persistence, and stale-load rejection stay in the i18n manager. Solid
 consumers call `registerEnglishCatalog(registerPageEnglish)` before reading that
-page's lazy keys, and use `registerLocaleCatalog(manager, locale, catalog)` for
-catalog replacement. These delegate to the existing owners and notify only the
-Solid projections; repeated English registration does not trigger render loops.
+page's lazy keys. This delegates to the existing owner and notifies the Solid
+projections; repeated English registration does not trigger render loops.
 Calling a legacy registrar directly does not notify Solid readers.
 
 `ApplicationContext` and its supporting types live in `app/context-types.ts`.

@@ -73,12 +73,11 @@ type Publication = {
     { rows?: GatewaySessionRow[]; selection?: SessionEntrySelection; selectedAt?: number }
   >;
 };
-type PublicationView = (context: SessionRowReadView["state"]["rowContext"]) => Publication;
+type PublicationView = () => Publication;
 
 const publications = new WeakMap<
   SessionRowProjection,
   {
-    context: SessionRowReadView["state"]["rowContext"];
     revision: object;
   } & Publication
 >();
@@ -100,12 +99,11 @@ export function prepareSessionRowPublication(
   now: number,
   read: SessionRowReadView = projection,
 ) {
-  const view: PublicationView = (context) => {
+  const view: PublicationView = () => {
     const revision = projection.state.revision;
     let publication = publications.get(projection);
     if (!publication) {
       publication = {
-        context,
         revision,
         rows: new WeakMap(),
         lists: new Map(),
@@ -113,14 +111,16 @@ export function prepareSessionRowPublication(
       publications.set(projection, publication);
       const { lists } = publication;
       projection.onSelectionChange(() => lists.clear());
-      projection.onFactsChange(() => {
+      projection.onFactsChange((change) => {
+        if (change.kind === "reset") {
+          lists.clear();
+        }
         // Retire wire snapshots even when no reader returns after a publication or disposal.
         for (const list of lists.values()) {
           list.rows = undefined;
         }
       });
-    } else if (publication.context !== context || publication.revision !== revision) {
-      publication.context = context;
+    } else if (publication.revision !== revision) {
       publication.revision = revision;
       publication.lists.clear();
     }
@@ -144,7 +144,7 @@ export function prepareProjectedSessionPresentation(
     client === undefined
       ? undefined
       : prepareOperatorModelPresentation({ cfg, policyConfig, client });
-  const publicationState = publication?.(rowContext);
+  const publicationState = publication?.();
   const publicationRows = publicationState?.rows;
   const subagentRuns = rowContext.subagentRuns.atTime(now);
   const preparedRowContext = { ...rowContext, subagentRuns };

@@ -17,17 +17,16 @@ async function collectFindings(
   if (declared?.provider !== "openai" || declared.mode !== "oauth") {
     return [];
   }
-  const [{ loadAuthProfileStoreForRuntime }, { listAgentIds, resolveAgentDir }] = await Promise.all(
-    [
+  const [{ loadAuthProfileStoreForRuntimeAsync }, { listAgentIds, resolveAgentDir }] =
+    await Promise.all([
       import("openclaw/plugin-sdk/agent-runtime"),
       import("openclaw/plugin-sdk/agent-scope-runtime"),
-    ],
-  );
+    ]);
   const findings: HealthFinding[] = [];
   const missing: string[] = [];
   for (const agentId of listAgentIds(config)) {
     try {
-      const store = loadAuthProfileStoreForRuntime(
+      const store = await loadAuthProfileStoreForRuntimeAsync(
         resolveAgentDir(config, agentId, env),
         { readOnly: true, config, externalCli: { mode: "none" } },
         env,

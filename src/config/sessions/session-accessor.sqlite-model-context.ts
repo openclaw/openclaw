@@ -1,14 +1,10 @@
 import type { AgentMessage, SessionTreeEntry } from "@openclaw/agent-core";
 import { sql, type AliasableExpression } from "kysely";
-import {
-  iterateSessionContextEntries,
-  iterateSessionContextMessages,
-} from "../../../packages/agent-core/src/harness/session/session.js";
+import { iterateSessionContextMessages } from "../../../packages/agent-core/src/harness/session/session.js";
 import {
   isSyntheticMissingToolResult,
   SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
 } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
-import { isCompactionReplayCheckpoint } from "../../../packages/ai/src/transports/provider-compaction-checkpoint.js";
 import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
@@ -44,11 +40,8 @@ import type {
   SessionTranscriptModelContext,
 } from "./session-history-read.types.js";
 import { projectModelContextEventSql } from "./session-model-context-projection.js";
-import {
-  selectBoundedModelRequests,
-  type ContextEntry,
-  type ModelContextRequest,
-} from "./session-model-context-window.js";
+import { projectSessionModelContext } from "./session-model-context-read.js";
+import type { ContextEntry, ModelContextRequest } from "./session-model-context-window.js";
 import {
   resolveSqliteSessionTranscriptReadFence,
   runWithSessionTranscriptReadFence,
@@ -59,8 +52,8 @@ import {
   transcriptEventJsonSql,
   transcriptEventModelBytesSql,
   transcriptEventModelNavigationSql,
-  transcriptEventNavigationSql,
 } from "./transcript-payload.js";
+import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
@@ -272,75 +265,10 @@ export function readSessionTranscriptModelContext(
   const result = withTranscriptContextSnapshot(
     scope,
     ({ header, entries, readModelEntries, readModelEntrySizes, version }) => {
-      const requests: ModelContextRequest[] = [];
-      for (const { entry, context } of iterateSessionContextEntries(entries)) {
-        const omitCheckpoint =
-          context !== "current" &&
-          entry.type === "message" &&
-          entry.message.role === "assistant" &&
-          isCompactionReplayCheckpoint(entry.message.providerReplay);
-        requests.push({ entry, omitCheckpoint });
-      }
-      const selected = limits
-        ? selectBoundedModelRequests(requests, readModelEntrySizes, limits)
-        : requests;
-      const payloads = readModelEntries(selected);
-      let contextEntries: SessionTreeEntry[];
-      if (limits) {
-        const model = entries.findLast(
-          (entry) =>
-            entry.type === "model_change" ||
-            (entry.type === "message" && entry.message.role === "assistant"),
-        );
-        const thinking = entries.findLast((entry) => entry.type === "thinking_level_change");
-        const detached = entries.flatMap((entry) => {
-          const payload = payloads.get(entry);
-          if (payload) {
-            return [payload];
-          }
-          if (entry === thinking || (entry === model && entry.type === "model_change")) {
-            return [entry];
-          }
-          if (entry === model && entry.type === "message" && entry.message.role === "assistant") {
-            return [
-              {
-                type: "model_change" as const,
-                id: entry.id,
-                parentId: entry.parentId,
-                timestamp: entry.timestamp,
-                provider: entry.message.provider,
-                modelId: entry.message.model,
-              },
-            ];
-          }
-          return [];
-        });
-        const boundaryIndex = detached.findIndex(
-          (entry) => entry.type === "compaction" || entry.type === "reset",
-        );
-        const boundary = detached[boundaryIndex];
-        if (boundary?.type === "compaction" || boundary?.type === "reset") {
-          boundary.firstKeptEntryId =
-            detached
-              .slice(0, boundaryIndex)
-              .find(
-                (entry) =>
-                  entry.type === "message" ||
-                  entry.type === "custom_message" ||
-                  entry.type === "branch_summary",
-              )?.id ?? boundary.id;
-        }
-        contextEntries = detached.map((entry, index) => {
-          entry.parentId = detached[index - 1]?.id ?? null;
-          return entry;
-        });
-      } else {
-        contextEntries = entries.map((entry) => payloads.get(entry) ?? entry);
-      }
-      return {
-        events: [...(header ? [header] : []), ...contextEntries],
-        version,
-      };
+      return projectSessionModelContext(
+        { header, entries, readModelEntries, readModelEntrySizes, version },
+        limits,
+      );
     },
     through,
   );
@@ -380,10 +308,6 @@ function withTranscriptContextSnapshot<T>(
         database.db,
         () => {
           const db = getSessionKysely(database.db);
-          const role = db.fn("json_extract", [
-            transcriptEventNavigationSql(),
-            sql.val("$.message.role"),
-          ]);
           const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
           const version = readTranscriptContextVersionInTransaction(database, resolved.sessionId);
           if (through) {
@@ -398,15 +322,14 @@ function withTranscriptContextSnapshot<T>(
             database.db,
             base
               .select(transcriptEventJsonSql(database.db).as("event_json"))
-              .where(
-                /* kysely-allow-raw: the header discriminator is owned by the transcript codec. */
-                sql<string>`json_extract(${transcriptEventNavigationSql()}, '$.type')`,
-                "=",
-                "session",
+              .select("navigation_valid")
+              .where((eb) =>
+                eb.or([eb("navigation_type", "=", "session"), eb("navigation_valid", "=", 0)]),
               )
               .orderBy("seq", "asc")
               .limit(1),
           );
+          assertTranscriptNavigationValid(header?.navigation_valid);
           const tree = scanSessionTranscriptTree(
             (function* () {
               for (const row of iterateSqliteQuerySync(
@@ -471,7 +394,7 @@ function withTranscriptContextSnapshot<T>(
                                 transcriptEventJsonSql(database.db),
                                 omitCheckpoint,
                                 omission,
-                                role,
+                                eb.ref("message_role"),
                               ),
                             ]),
                           )
@@ -494,13 +417,13 @@ function withTranscriptContextSnapshot<T>(
                 // Bound both IN lists while keeping payload selection inside the navigation snapshot.
                 // SQL removes obsolete replay/private fields before they enter JavaScript.
                 const query = base
-                  .select([
+                  .select((eb) => [
                     "seq",
                     projectModelContextEventSql(
                       transcriptEventJsonSql(database.db),
                       omitCheckpoint,
                       omission,
-                      role,
+                      eb.ref("message_role"),
                     ).as("event_json"),
                   ])
                   .where("seq", "in", [...bySeq.keys()]);
