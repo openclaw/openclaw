@@ -71,7 +71,7 @@ describe("Control UI build chunking", () => {
     expect(controlUiCodeSplitting.includeDependenciesRecursively).toBe(false);
     expect(controlUiCodeSplitting.groups[1]).toMatchObject({
       tags: ["$initial"],
-      maxSize: 1280 * 1024,
+      maxSize: 1024 * 1024,
     });
     for (const [id, expected] of [
       ["/repo/ui/node_modules/lit/index.js", "lit-runtime"],
@@ -134,11 +134,11 @@ describe("Control UI build chunking", () => {
     // Recursive inclusion is a correctness requirement for this group: merging
     // the lazy boot graph without it emitted chunks whose execution order broke
     // at application start.
-    expect(controlUiCodeSplitting.groups[2]).toMatchObject({
-      name: "control-ui-boot-shared",
-      includeDependenciesRecursively: true,
-    });
-    const bootGroup = controlUiCodeSplitting.groups[2] as {
+    const sharedGroup = controlUiCodeSplitting.groups.find(
+      (group) => group.name === "control-ui-boot-shared",
+    );
+    expect(sharedGroup).toMatchObject({ includeDependenciesRecursively: true });
+    const bootGroup = sharedGroup as {
       test: (id: string) => boolean;
     };
     const repoRoot = new URL("../../..", import.meta.url).pathname.replace(/\/$/, "");

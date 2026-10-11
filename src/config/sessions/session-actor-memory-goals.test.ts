@@ -56,6 +56,7 @@ function fixture() {
     pendingInputs: new Map(),
     completions: new Map(),
     goalReceipts: new Map(),
+    historicalWindows: new Map(),
   };
   return {
     state,
