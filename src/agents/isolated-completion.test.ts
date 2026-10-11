@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { AdmittedRunContext } from "./admitted-run-context.js";
 import {
   isolatedAssistant,
+  nativeAuthPlan,
   isolatedCompletionMocks as mocks,
   runIsolatedCompletion,
   preparedModelRuntime,
@@ -12,6 +15,7 @@ import {
   resetIsolatedCompletionTestState,
   type IsolatedCliRunParams,
 } from "./isolated-completion.test-support.js";
+import type * as RuntimeAuth from "./runtime-plan/prepare-auth.js";
 
 // The shared fixture must register mocks before other runtime modules load.
 const { createDeferred } = await import("../../test/helpers/promise.js");
@@ -24,31 +28,343 @@ const { AsyncWorkScope, getAsyncWorkSignal, trackAsyncWork } =
 const { validateAgentRunDelegatedAuthority } = await import("../infra/agent-run-registry.js");
 const { mintSecretSentinel } = await import("../secrets/sentinel.js");
 const { getAdmittedRunDelegatedAuthority } = await import("./admitted-run-context.js");
+const { resolveModelFallbackError } = await import("./failover-error.js");
+const { PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE } = await import("../llm/types.js");
+const { prepareUtilityCompletionForAgent } = await import("./utility-completion.js");
 
 beforeEach(resetIsolatedCompletionTestState);
 
-describe("runIsolatedCompletion", () => {
-  it.each(["v1", "v2"] as const)(
-    "rejects a retained %s dispatch callback after isolated completion closes",
-    async (version) => {
-      const dispatch = vi.fn();
-      let dispatchLater: (() => void) | undefined;
-      const run = async (params: { assertCurrent?: () => void }) => {
-        dispatchLater = () => {
-          params.assertCurrent?.();
-          dispatch();
-        };
-        return { assistant: isolatedAssistant([{ type: "text", text: "done" }]) };
-      };
-      registerIsolatedHarness(
-        version === "v1" ? { runIsolatedCompletion: run } : { runIsolatedCompletionV2: run },
-      );
-      await runIsolatedCompletion(isolatedRequest());
-      if (!dispatchLater) {
-        throw new Error("The harness did not receive its dispatch callback.");
-      }
-      expect(dispatchLater).toThrow("Isolated completion has ended");
+it.each([undefined, "session-activity-summary", "conversation-label", "session-observer"] as const)(
+  "preserves isolated completion purpose %s without changing execution policy",
+  async (purpose) => {
+    mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
+    mocks.runCliAgent.mockResolvedValue({ payloads: [{ text: "done" }] });
+    await runIsolatedCompletion({ ...isolatedRequest(), purpose });
+    expect(mocks.runCliAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        isolatedCompletionPurpose: purpose ?? "isolated-completion",
+        executionMode: "side-question",
+        isolatedCompletion: true,
+        disableTools: true,
+        disableCliLiveSession: true,
+        timeoutMs: 1_000,
+        model: "gpt-test",
+      }),
+    );
+    expect(mocks.runCliAgent.mock.calls[0]?.[0].trigger).toBeUndefined();
+  },
+);
+
+it.each([false, true])(
+  "routes an automatic utility completion with provider auth=%s",
+  async (auth) => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: "anthropic/claude-opus-5",
+          models: { "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } } },
+        },
+      },
+    };
+    const manifestPlugins = [
+      {
+        id: "anthropic",
+        modelCatalog: {
+          providers: {
+            anthropic: {
+              defaultUtilityModel: "claude-haiku-4-5",
+              models: [{ id: "claude-haiku-4-5" }, { id: "claude-opus-5" }],
+            },
+          },
+        },
+      },
+    ] as unknown as PluginMetadataSnapshot["plugins"];
+    mocks.isCliRuntimeAliasForProvider.mockImplementation(
+      ({ runtime, provider }) => runtime === "claude-cli" && provider === "anthropic",
+    );
+    mocks.hasAvailableAuthForProvider.mockResolvedValue(auth);
+    mocks.prepareSimpleCompletionModel.mockResolvedValue(
+      auth
+        ? {
+            model: { provider: "anthropic", id: "claude-haiku-4-5", api: "anthropic-messages" },
+            auth: {
+              apiKey: "anthropic-test-key",
+              source: "profile:anthropic:test",
+              mode: "api-key",
+            },
+          }
+        : { error: 'No API key found for provider "anthropic".' },
+    );
+    mocks.runCliAgent.mockResolvedValue({ payloads: [{ text: "Utility result" }] });
+    const dispatch = vi.fn(async () => ({
+      assistant: isolatedAssistant([{ type: "text", text: "Utility result" }]),
+    }));
+    registerIsolatedHarness({
+      id: "openclaw",
+      label: "OpenClaw",
+      runIsolatedCompletionV2: dispatch,
+    });
+    const prepared = await prepareUtilityCompletionForAgent({
+      cfg,
+      agentId: "main",
+      useUtilityModel: true,
+      manifestPlugins,
+    });
+    const request = {
+      ...prepared,
+      systemPrompt: "Return JSON.",
+      prompt: "Do the task.",
+      timeoutMs: 1_000,
+    };
+
+    expect(prepared.agentHarnessRuntimeOverride).toBe("claude-cli");
+
+    await expect(runIsolatedCompletion(request)).resolves.toMatchObject({
+      text: "Utility result",
+      provider: "anthropic",
+      model: "claude-haiku-4-5",
+      owner: { kind: "cli", id: "claude-cli" },
+    });
+    expect(mocks.prepareSimpleCompletionModel).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(mocks.runCliAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "claude-cli",
+        modelProvider: "anthropic",
+        model: "claude-haiku-4-5",
+        isolatedCompletion: true,
+      }),
+    );
+
+    if (!auth) {
+      // Without the borrowed owner, the same credentialless request reproduces #138789.
+      await expect(
+        runIsolatedCompletion({ ...request, agentHarnessRuntimeOverride: undefined }),
+      ).rejects.toThrow('No API key found for provider "anthropic"');
+      expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledOnce();
       expect(dispatch).not.toHaveBeenCalled();
+      expect(mocks.runCliAgent).toHaveBeenCalledOnce();
+    }
+  },
+);
+
+describe("runIsolatedCompletion", () => {
+  it.each(["cli", "host-v2", "harness-v2", "v1"] as const)(
+    "blocks required worker policy before isolated %s execution using the admitted config",
+    async (route) => {
+      const dispatch = vi.fn(async () => ({
+        assistant: isolatedAssistant([{ type: "text", text: "must not run" }]),
+      }));
+      if (route === "cli") {
+        mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
+        mocks.runCliAgent.mockResolvedValue({ payloads: [{ text: "must not run" }] });
+      } else {
+        registerIsolatedHarness({
+          authBootstrap: route === "harness-v2" ? "harness" : undefined,
+          ...(route === "v1"
+            ? { runIsolatedCompletion: dispatch }
+            : { runIsolatedCompletionV2: dispatch }),
+        });
+      }
+      mocks.acquireAgentRunPreparedModelRuntime.mockImplementationOnce(async () => {
+        Object.assign(preparedModelRuntime, {
+          config: { cloudWorkers: { requiredProfile: "dedicated" } },
+        });
+        return { snapshot: preparedModelRuntime, [Symbol.asyncDispose]: releaseRuntimeLease };
+      });
+      await expect(runIsolatedCompletion(isolatedRequest())).rejects.toMatchObject({
+        code: "unsupported",
+        message: expect.stringContaining("requiredProfile"),
+      });
+      expect(mocks.runCliAgent).not.toHaveBeenCalled();
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(mocks.prepareSimpleCompletionModel).not.toHaveBeenCalled();
+      expect(mocks.resolveModelAsync).not.toHaveBeenCalled();
+      expect(releaseRuntimeLease).toHaveBeenCalledOnce();
+    },
+  );
+
+  function prepareQuotaProfiles() {
+    const profileIds = ["openai:first", "openai:backup"];
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: Object.fromEntries(
+        profileIds.map((id) => [id, { type: "token", provider: "openai", token: id }]),
+      ),
+    });
+    mocks.prepareAgentRuntimeAuth.mockReturnValue({
+      plan: nativeAuthPlan,
+      attempts: profileIds.map((profileId) => ({
+        kind: "profile",
+        profileId,
+        plan: { ...nativeAuthPlan, forwardedAuthProfileId: profileId },
+      })),
+    });
+  }
+
+  it.each([
+    { errorMessage: "429 Too many requests", elapsedMs: 400 },
+    {
+      errorMessage: "You have hit your ChatGPT usage limit. Try again in 120 minutes.",
+      elapsedMs: 0,
+    },
+    { errorMessage: "Your credit balance is too low to access the API.", elapsedMs: 0 },
+    { errorMessage: "429 Too many requests", elapsedMs: 1_000 },
+  ])(
+    "rotates quota failures within one deadline: $errorMessage ($elapsedMs ms)",
+    async ({ errorMessage, elapsedMs }) => {
+      prepareQuotaProfiles();
+      const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      const dispatch = vi
+        .fn()
+        .mockImplementationOnce(async () => {
+          now.mockReturnValue(1_000 + elapsedMs);
+          return { assistant: { ...isolatedAssistant([], "error"), errorMessage } };
+        })
+        .mockResolvedValueOnce({
+          assistant: isolatedAssistant([{ type: "text", text: "recovered" }]),
+        });
+      registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2: dispatch });
+
+      try {
+        const completion = runIsolatedCompletion(isolatedRequest());
+        if (elapsedMs === 1_000) {
+          await expect(completion).rejects.toThrow("timed out");
+          expect(dispatch).toHaveBeenCalledOnce();
+        } else {
+          await expect(completion).resolves.toMatchObject({ text: "recovered" });
+          expect(dispatch).toHaveBeenCalledTimes(2);
+          expect(
+            dispatch.mock.calls.map(([params]) => params.authorization.plan.forwardedAuthProfileId),
+          ).toEqual(["openai:first", "openai:backup"]);
+          expect(dispatch).toHaveBeenNthCalledWith(
+            2,
+            expect.objectContaining({ timeoutMs: 1_000 - elapsedMs }),
+          );
+        }
+        expect(releaseRuntimeLease).toHaveBeenCalledOnce();
+      } finally {
+        now.mockRestore();
+      }
+    },
+  );
+
+  it("preserves the first quota cause when every prepared profile is exhausted", async () => {
+    prepareQuotaProfiles();
+    const dispatch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        assistant: {
+          ...isolatedAssistant([], "error"),
+          errorMessage: "429 Too many requests. Retry after 90 seconds.",
+        },
+      })
+      .mockResolvedValueOnce({
+        assistant: {
+          ...isolatedAssistant([], "error"),
+          errorMessage: "429 Too many requests. Retry after 120 seconds.",
+        },
+      });
+    registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2: dispatch });
+    const error = await runIsolatedCompletion(isolatedRequest()).catch((cause: unknown) => cause);
+    expect(error).toMatchObject({ code: "output-rejected", cause: { retryAfterMs: 90_000 } });
+    expect(resolveModelFallbackError(error)).toMatchObject({
+      kind: "failover",
+      error: { reason: "rate_limit" },
+    });
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not broaden an explicitly selected profile after a returned quota error", async () => {
+    prepareQuotaProfiles();
+    const { prepareAgentRuntimeAuth } = await vi.importActual<typeof RuntimeAuth>(
+      "./runtime-plan/prepare-auth.js",
+    );
+    mocks.prepareAgentRuntimeAuth.mockImplementationOnce(prepareAgentRuntimeAuth);
+    const dispatch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        assistant: { ...isolatedAssistant([], "error"), errorMessage: "429 Too many requests" },
+      })
+      .mockResolvedValueOnce({
+        assistant: isolatedAssistant([{ type: "text", text: "unauthorized backup result" }]),
+      });
+    registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2: dispatch });
+    await expect(
+      runIsolatedCompletion({ ...isolatedRequest(), authProfileId: "openai:first" }),
+    ).rejects.toMatchObject({ code: "output-rejected" });
+    expect(dispatch).toHaveBeenCalledOnce();
+  });
+
+  it.each(["terminal", "tool", "aborted", "authorization", "unknown"] as const)(
+    "does not rotate prepared profiles after %s output",
+    async (kind) => {
+      prepareQuotaProfiles();
+      const assistant = isolatedAssistant(
+        kind === "tool"
+          ? [{ type: "toolCall", id: "call-1", name: "update_plan", arguments: {} }]
+          : kind === "terminal"
+            ? [{ type: "text", text: "Partial output must not be replayed." }]
+            : [],
+        kind === "aborted" ? "aborted" : "error",
+      );
+      assistant.errorMessage =
+        kind === "authorization"
+          ? "403 Permission denied"
+          : kind === "unknown"
+            ? "Unknown failure"
+            : "429 Too many requests";
+      if (kind === "terminal") {
+        assistant.errorCode = PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE;
+      }
+      const dispatch = vi.fn().mockResolvedValue({ assistant });
+      registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2: dispatch });
+      const error = await runIsolatedCompletion(isolatedRequest()).catch(
+        (failure: unknown) => failure,
+      );
+      expect(error).toMatchObject({
+        code: "output-rejected",
+        message: expect.stringContaining(`stop reason ${assistant.stopReason}`),
+      });
+      if (kind === "terminal") {
+        expect(resolveModelFallbackError(error)).toMatchObject({ kind: "unknown" });
+      }
+      expect(dispatch).toHaveBeenCalledOnce();
+      expect(releaseRuntimeLease).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["retired", "aborted"] as const)(
+    "does not rotate after a returned quota error when %s",
+    async (state) => {
+      prepareQuotaProfiles();
+      const controller = new AbortController();
+      let current = true;
+      const expired = new Error("Completion owner retired.");
+      const dispatch = vi.fn(async () => {
+        if (state === "retired") {
+          current = false;
+        } else {
+          controller.abort(expired);
+        }
+        return {
+          assistant: { ...isolatedAssistant([], "error"), errorMessage: "429 Too many requests" },
+        };
+      });
+      registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2: dispatch });
+      await expect(
+        runIsolatedCompletion({
+          ...isolatedRequest(),
+          abortSignal: controller.signal,
+          assertCurrent() {
+            if (!current) {
+              throw expired;
+            }
+          },
+        }),
+      ).rejects.toBe(expired);
+      expect(dispatch).toHaveBeenCalledOnce();
+      expect(releaseRuntimeLease).toHaveBeenCalledOnce();
     },
   );
 
@@ -122,8 +438,8 @@ describe("runIsolatedCompletion", () => {
       mocks.resolveCliRuntimeCanonicalProvider.mockReturnValue(
         provider === "claude-cli" ? "anthropic" : undefined,
       );
-      mocks.resolveEffectiveAgentRuntime.mockReturnValue(
-        provider === "anthropic" ? "claude-cli" : "codex",
+      mocks.resolveCliRuntimeExecutionProvider.mockReturnValue(
+        provider === "anthropic" ? "claude-cli" : undefined,
       );
       mocks.isCliRuntimeAliasForProvider.mockImplementation(
         ({ runtime, provider: modelProvider }) =>
@@ -161,6 +477,12 @@ describe("runIsolatedCompletion", () => {
   it.each([false, true])(
     "captures call-owned choices and authority before admission (retired: %s)",
     async (retired) => {
+      const admitted = {
+        config: { agents: { defaults: { workspace: "/tmp/admitted-workspace" } } },
+        agentDir: "/tmp/admitted-agent",
+        workspaceDir: "/tmp/admitted-workspace",
+      };
+      Object.assign(preparedModelRuntime, admitted);
       const entered = createDeferred();
       const release = createDeferred();
       const expired = new Error("The original completion owner retired.");
@@ -202,8 +524,20 @@ describe("runIsolatedCompletion", () => {
           expect(mocks.prepareSimpleCompletionModel).not.toHaveBeenCalled();
         } else {
           await expect(completion).resolves.toMatchObject({ text: "done" });
+          expect(mocks.ensureSelectedAgentHarnessPlugin).toHaveBeenCalledWith(
+            expect.objectContaining(admitted),
+          );
           expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledWith(
-            expect.objectContaining({ modelId: "gpt-test", profileId: "openai:original" }),
+            expect.objectContaining({
+              cfg: admitted.config,
+              agentDir: admitted.agentDir,
+              workspaceDir: admitted.workspaceDir,
+              preparedModelRuntime,
+              bindAuthOwner: true,
+              provider: "openai",
+              modelId: "gpt-test",
+              profileId: "openai:original",
+            }),
             expect.any(Function),
           );
           expect(dispatch).toHaveBeenCalledOnce();
@@ -219,95 +553,8 @@ describe("runIsolatedCompletion", () => {
     },
   );
 
-  it.each(["host", "cli"])(
-    "uses admitted config and directories for a newly owned %s completion",
-    async (owner) => {
-      const config = { agents: { defaults: { workspace: "/tmp/admitted-workspace" } } };
-      Object.assign(preparedModelRuntime, {
-        config,
-        agentDir: "/tmp/admitted-agent",
-        workspaceDir: "/tmp/admitted-workspace",
-      });
-      if (owner === "cli") {
-        mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
-        mocks.runCliAgent.mockResolvedValue({ payloads: [{ text: "done" }] });
-      } else {
-        registerIsolatedHarness({
-          runIsolatedCompletionV2: async () => ({
-            assistant: isolatedAssistant([{ type: "text", text: "done" }]),
-          }),
-        });
-      }
-
-      await expect(runIsolatedCompletion(isolatedRequest())).resolves.toMatchObject({
-        text: "done",
-      });
-
-      const admitted = {
-        config,
-        agentDir: "/tmp/admitted-agent",
-        workspaceDir: "/tmp/admitted-workspace",
-      };
-      expect(mocks.ensureSelectedAgentHarnessPlugin).toHaveBeenCalledWith(
-        expect.objectContaining(admitted),
-      );
-      if (owner === "cli") {
-        expect(mocks.runCliAgent).toHaveBeenCalledWith(expect.objectContaining(admitted));
-      } else {
-        expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledWith(
-          expect.objectContaining({
-            cfg: config,
-            agentDir: admitted.agentDir,
-            workspaceDir: admitted.workspaceDir,
-            provider: "openai",
-            modelId: "gpt-test",
-          }),
-          expect.any(Function),
-        );
-      }
-      expect(releaseRuntimeLease).toHaveBeenCalledOnce();
-    },
-  );
-
-  it("passes one prepared route to the selected harness and returns text", async () => {
-    const runIsolatedCompletionHarness = vi.fn(async () => ({
-      assistant: isolatedAssistant([{ type: "text", text: '{"ok":true}' }]),
-    }));
-    registerIsolatedHarness({
-      runIsolatedCompletion: runIsolatedCompletionHarness,
-    });
-
-    await expect(runIsolatedCompletion(isolatedRequest())).resolves.toEqual({
-      text: '{"ok":true}',
-      provider: "openai",
-      model: "gpt-test",
-      owner: { kind: "harness", id: "codex" },
-      usage: expect.objectContaining({ input: 1, output: 1, totalTokens: 2 }),
-    });
-    expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        profileId: undefined,
-        bindAuthOwner: true,
-        preparedModelRuntime,
-        workspaceDir: "/tmp/workspace",
-      }),
-      expect.any(Function),
-    );
-    expect(mocks.acquireAgentRunPreparedModelRuntime).toHaveBeenCalledOnce();
-    expect(releaseRuntimeLease).toHaveBeenCalledOnce();
-    expect(runIsolatedCompletionHarness).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        modelId: "gpt-test",
-        sourceAuthFingerprint: "fingerprint",
-        systemPrompt: "Return JSON.",
-        prompt: "Do the task.",
-      }),
-    );
-  });
-
   it.each(["v1", "v2"] as const)(
-    "unwraps prepared credentials at the external %s harness boundary",
+    "unwraps credentials for %s and retires its dispatch callback on completion",
     async (version) => {
       const apiKey = mintSecretSentinel("github-source-token", { label: "isolated-auth" });
       const authorization = mintSecretSentinel("Bearer github-source-token", {
@@ -327,9 +574,15 @@ describe("runIsolatedCompletion", () => {
         },
         sourceAuthFingerprint: "fingerprint",
       });
-      const runIsolatedCompletionHarness = vi.fn(async () => ({
-        assistant: isolatedAssistant([{ type: "text", text: "done" }]),
-      }));
+      const dispatch = vi.fn();
+      let dispatchLater: (() => void) | undefined;
+      const runIsolatedCompletionHarness = vi.fn(async (params: { assertCurrent?: () => void }) => {
+        dispatchLater = () => {
+          params.assertCurrent?.();
+          dispatch();
+        };
+        return { assistant: isolatedAssistant([{ type: "text", text: "done" }]) };
+      });
       registerIsolatedHarness({
         id: "copilot",
         label: "Copilot",
@@ -344,6 +597,11 @@ describe("runIsolatedCompletion", () => {
         agentHarnessRuntimeOverride: "copilot",
       });
 
+      if (!dispatchLater) {
+        throw new Error("The harness did not receive its dispatch callback.");
+      }
+      expect(dispatchLater).toThrow("Isolated completion has ended");
+      expect(dispatch).not.toHaveBeenCalled();
       const expectedCredentials = {
         auth: expect.objectContaining({ apiKey: "github-source-token" }),
         model: expect.objectContaining({
@@ -360,67 +618,49 @@ describe("runIsolatedCompletion", () => {
     },
   );
 
-  it("returns the provider and model identity reported by the harness", async () => {
-    registerIsolatedHarness({
-      runIsolatedCompletion: vi.fn(async () => ({
-        assistant: {
-          ...isolatedAssistant([{ type: "text", text: "done" }]),
-          provider: "openai",
-          model: "gpt-5.6-sol-actual",
-        },
-      })),
-    });
-
-    await expect(runIsolatedCompletion(isolatedRequest())).resolves.toEqual({
-      text: "done",
-      provider: "openai",
-      model: "gpt-5.6-sol-actual",
-      owner: { kind: "harness", id: "codex" },
-      usage: expect.objectContaining({ input: 1, output: 1, totalTokens: 2 }),
-    });
+  it("rejects a non-adopting explicit harness despite an available CLI candidate", async () => {
+    mocks.resolveCliRuntimeExecutionProvider.mockReturnValue("claude-cli");
+    registerIsolatedHarness({ id: "external", label: "External" });
+    await expect(
+      runIsolatedCompletion({ ...isolatedRequest(), agentHarnessRuntimeOverride: "external" }),
+    ).rejects.toThrow("does not support isolated completion");
+    expect(mocks.prepareSimpleCompletionModel).not.toHaveBeenCalled();
+    expect(mocks.runCliAgent).not.toHaveBeenCalled();
   });
 
-  it.each([undefined, "claude-cli"])(
-    "rejects a non-adopting explicit harness despite CLI candidate %s",
-    async (cliCandidate) => {
-      mocks.resolveCliRuntimeExecutionProvider.mockReturnValue(cliCandidate);
-      registerIsolatedHarness({ id: "external", label: "External" });
-      await expect(
-        runIsolatedCompletion({ ...isolatedRequest(), agentHarnessRuntimeOverride: "external" }),
-      ).rejects.toThrow("does not support isolated completion");
-      expect(mocks.prepareSimpleCompletionModel).not.toHaveBeenCalled();
-      expect(mocks.runCliAgent).not.toHaveBeenCalled();
+  it.each<{
+    assistant: ReturnType<typeof isolatedAssistant>;
+    message?: string;
+    classification?: "overloaded";
+  }>([
+    {
+      assistant: isolatedAssistant([
+        { type: "toolCall", id: "call-1", name: "update_plan", arguments: {} },
+      ]),
+      message: "returned a tool call",
     },
-  );
-
-  it("rejects tool-shaped harness output", async () => {
-    registerIsolatedHarness({
-      runIsolatedCompletion: vi.fn(async () => ({
-        assistant: isolatedAssistant([
-          { type: "toolCall", id: "call-1", name: "update_plan", arguments: {} },
-        ]),
-      })),
-    });
-
-    await expect(runIsolatedCompletion(isolatedRequest())).rejects.toMatchObject({
-      code: "output-rejected",
-      message: expect.stringContaining("returned a tool call"),
-    });
-  });
-
-  it.each(["error", "aborted"] as const)(
-    "rejects %s harness output before usage reaches the runtime finalizer",
-    async (stopReason) => {
-      registerIsolatedHarness({
-        runIsolatedCompletion: vi.fn(async () => ({
-          assistant: isolatedAssistant([{ type: "text", text: "partial" }], stopReason),
-        })),
-      });
-
-      await expect(runIsolatedCompletion(isolatedRequest())).rejects.toMatchObject({
-        code: "output-rejected",
-        message: expect.stringContaining(`stop reason ${stopReason}`),
-      });
+    {
+      assistant: { ...isolatedAssistant([], "error"), errorMessage: "529 Overloaded" },
+      classification: "overloaded",
+    },
+  ])(
+    "rejects invalid output and preserves its failure classification: %#",
+    async ({ assistant, message, classification }) => {
+      registerIsolatedHarness({ runIsolatedCompletion: vi.fn(async () => ({ assistant })) });
+      const error = await runIsolatedCompletion(isolatedRequest()).catch(
+        (failure: unknown) => failure,
+      );
+      expect(error).toMatchObject({ code: "output-rejected" });
+      if (message) {
+        expect(error).toMatchObject({ message: expect.stringContaining(message) });
+      }
+      if (classification) {
+        expect(resolveModelFallbackError(error)).toMatchObject({
+          kind: "failover",
+          error: { reason: classification },
+        });
+      }
+      expect(releaseRuntimeLease).toHaveBeenCalledOnce();
     },
   );
 
@@ -460,22 +700,78 @@ describe("runIsolatedCompletion", () => {
     },
   );
 
-  it.each([undefined, { input: 8, output: 3, cacheRead: 2, total: 13 }])(
-    "routes CLI owners through one empty-tool run with reported usage %j",
-    async (usage) => {
-      mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
-      mocks.runCliAgent.mockResolvedValue({
-        payloads: [{ text: '{"cli":true}' }],
-        meta: {
-          durationMs: 1,
-          agentMeta: {
-            sessionId: "cli-session",
-            provider: "claude-cli",
-            model: "claude-test",
-            usage,
-          },
+  it("routes CLI owners through one empty-tool run with reported usage", async () => {
+    const usage = { input: 8, output: 3, cacheRead: 2, total: 13 };
+    mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
+    mocks.runCliAgent.mockResolvedValue({
+      payloads: [{ text: '{"cli":true}' }],
+      meta: {
+        durationMs: 1,
+        agentMeta: {
+          sessionId: "cli-session",
+          provider: "claude-cli",
+          model: "claude-test",
+          usage,
         },
-      });
+      },
+    });
+
+    await expect(
+      runIsolatedCompletion({
+        ...isolatedRequest(),
+        provider: "anthropic",
+        model: "claude-test",
+        agentHarnessRuntimeOverride: "claude-cli",
+      }),
+    ).resolves.toStrictEqual({
+      text: '{"cli":true}',
+      provider: "anthropic",
+      model: "claude-test",
+      owner: { kind: "cli", id: "claude-cli" },
+      usage,
+    });
+    expect(mocks.prepareSimpleCompletionModel).not.toHaveBeenCalled();
+    expect(mocks.runCliAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "claude-cli",
+        modelProvider: "anthropic",
+        authProfileId: undefined,
+        executionMode: "side-question",
+        isolatedCompletion: true,
+        disableTools: true,
+        cliToolAvailability: { native: [], openClaw: [] },
+      }),
+    );
+  });
+
+  it.each([
+    {
+      description: "ordered managed profile",
+      requestedProfile: undefined,
+      selectedProfile: "anthropic:ordered",
+    },
+    {
+      description: "native-login control",
+      requestedProfile: undefined,
+      selectedProfile: undefined,
+    },
+    {
+      description: "explicit managed profile",
+      requestedProfile: "anthropic:locked",
+      selectedProfile: "anthropic:locked",
+    },
+    {
+      description: "explicit native login",
+      requestedProfile: "anthropic:claude-cli",
+      selectedProfile: undefined,
+    },
+  ])(
+    "forwards the shared CLI auth selection for $description",
+    async ({ requestedProfile, selectedProfile }) => {
+      mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
+      mocks.cliBackendAcceptsAuthProfileForwarding.mockReturnValue(true);
+      mocks.resolveCliExecutionAuthProfileId.mockReturnValue(selectedProfile);
+      mocks.runCliAgent.mockResolvedValue({ payloads: [{ text: "isolated result" }] });
 
       await expect(
         runIsolatedCompletion({
@@ -483,30 +779,33 @@ describe("runIsolatedCompletion", () => {
           provider: "anthropic",
           model: "claude-test",
           agentHarnessRuntimeOverride: "claude-cli",
+          authProfileId: requestedProfile,
         }),
-      ).resolves.toStrictEqual({
-        text: '{"cli":true}',
-        provider: "anthropic",
-        model: "claude-test",
+      ).resolves.toMatchObject({
+        text: "isolated result",
         owner: { kind: "cli", id: "claude-cli" },
-        ...(usage ? { usage } : {}),
       });
-      expect(mocks.prepareSimpleCompletionModel).not.toHaveBeenCalled();
+
+      expect(mocks.resolveCliExecutionAuthProfileId).toHaveBeenCalledWith({
+        cliExecutionProvider: "claude-cli",
+        authProfileProvider: "anthropic",
+        config: expect.any(Object),
+        agentDir: "/tmp/agent",
+        selected: { authProfileId: requestedProfile },
+      });
       expect(mocks.runCliAgent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          provider: "claude-cli",
-          modelProvider: "anthropic",
-          authProfileId: undefined,
-          executionMode: "side-question",
-          isolatedCompletion: true,
-          disableTools: true,
-          cliToolAvailability: { native: [], openClaw: [] },
-        }),
+        expect.objectContaining({ authProfileId: selectedProfile }),
       );
     },
   );
 
   it("keeps concurrent CLI isolated completions independently admitted", async () => {
+    const admittedContext = {
+      config: { agents: { defaults: { workspace: "/tmp/admitted-workspace" } } },
+      agentDir: "/tmp/admitted-agent",
+      workspaceDir: "/tmp/admitted-workspace",
+    };
+    Object.assign(preparedModelRuntime, admittedContext);
     mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
     const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const firstStarted = createDeferred();
@@ -518,6 +817,7 @@ describe("runIsolatedCompletion", () => {
       release: ReturnType<typeof createDeferred<void>>;
     }> = [];
     mocks.runCliAgent.mockImplementation(async (params) => {
+      expect(params).toMatchObject(admittedContext);
       const admitted = await params.preparedRunAdmission.admit("embedded");
       const authority = getAdmittedRunDelegatedAuthority(admitted);
       if (!authority) {
@@ -556,6 +856,9 @@ describe("runIsolatedCompletion", () => {
       if (!firstCall || !secondCall) {
         throw new Error("expected both isolated completions to start");
       }
+      expect(mocks.ensureSelectedAgentHarnessPlugin).toHaveBeenCalledWith(
+        expect.objectContaining(admittedContext),
+      );
       expect(firstCall.params.runId).toBe(firstCall.params.sessionId);
       expect(secondCall.params.runId).toBe(secondCall.params.sessionId);
       expect(firstCall.params.runId).not.toBe(secondCall.params.runId);
@@ -581,24 +884,7 @@ describe("runIsolatedCompletion", () => {
     }
   });
 
-  it("forwards one explicit auth profile unchanged to a CLI owner", async () => {
-    mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
-    mocks.runCliAgent.mockResolvedValue({ payloads: [{ text: "done" }] });
-
-    await runIsolatedCompletion({
-      ...isolatedRequest(),
-      provider: "google",
-      model: "gemini-test",
-      authProfileId: "google:locked",
-      agentHarnessRuntimeOverride: "google-gemini-cli",
-    });
-
-    expect(mocks.runCliAgent).toHaveBeenCalledWith(
-      expect.objectContaining({ authProfileId: "google:locked" }),
-    );
-  });
-
-  it("reports the normalized model sent to a CLI owner", async () => {
+  it("keeps the explicit CLI profile and reports its normalized model", async () => {
     mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
     mocks.resolveCliBackendConfig.mockReturnValue({
       config: { command: "gemini", modelAliases: { flash: "gemini-3.1-flash-preview" } },
@@ -613,6 +899,7 @@ describe("runIsolatedCompletion", () => {
         ...isolatedRequest(),
         provider: "google",
         model: "flash",
+        authProfileId: "google:locked",
         agentHarnessRuntimeOverride: "google-gemini-cli",
       }),
     ).resolves.toEqual({
@@ -621,6 +908,9 @@ describe("runIsolatedCompletion", () => {
       model: "gemini-3.1-flash-preview",
       owner: { kind: "cli", id: "google-gemini-cli" },
     });
+    expect(mocks.runCliAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ authProfileId: "google:locked" }),
+    );
   });
 });
 

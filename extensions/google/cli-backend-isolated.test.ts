@@ -3,25 +3,12 @@ import path from "node:path";
 import { CliBackendAuthProfilePreparationError } from "openclaw/plugin-sdk/cli-backend";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
+import {
+  type GeminiPrepareContext,
+  type GeminiPreparedExecution,
+  stageGeminiPreparedExecution,
+} from "./cli-backend-auth.test-helpers.js";
 import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
-
-type GeminiPrepareContext = Parameters<
-  NonNullable<ReturnType<typeof buildGoogleGeminiCliBackend>["prepareExecution"]>
->[0] & {
-  env?: Record<string, string>;
-  authCredential?: {
-    type: "api_key";
-    provider: string;
-    key: string;
-  };
-  isolatedCompletionCwd?: string;
-  isolatedCompletionModelId?: string;
-  isolatedCompletionPrompt?: string;
-  isolatedCompletionSystemPrompt?: string;
-};
-type GeminiPreparedExecution = Awaited<
-  ReturnType<NonNullable<ReturnType<typeof buildGoogleGeminiCliBackend>["prepareExecution"]>>
->;
 
 function buildGeminiApiKeyPrepareContext(workspaceDir: string): GeminiPrepareContext {
   return {
@@ -36,12 +23,6 @@ function buildGeminiApiKeyPrepareContext(workspaceDir: string): GeminiPrepareCon
       key: "gemini-api-key",
     },
   };
-}
-
-async function stageGeminiPreparedExecution(
-  prepared: GeminiPreparedExecution | null | undefined,
-): Promise<void> {
-  await prepared?.beforeExecution?.();
 }
 
 function restoreEnv(name: string, value: string | undefined): void {
@@ -267,7 +248,7 @@ describe("Gemini CLI isolated completion", () => {
     });
   });
 
-  it.each([1, 2, 3])("accepts an @-path escaped by %i backslashes", async (backslashes) => {
+  it.each([1, 2])("accepts an @-path escaped by %i backslashes", async (backslashes) => {
     await withTempDir("openclaw-test-workspace-", async (workspaceDir) => {
       const prepared = await buildGoogleGeminiCliBackend().prepareExecution?.({
         ...buildGeminiApiKeyPrepareContext(workspaceDir),

@@ -5,13 +5,17 @@ import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedChromeMcpProfileOptions } from "./chrome-mcp-contracts.js";
 import { withChromeMcpLease } from "./chrome-mcp-routing.js";
-import { closeChromeMcpSession, resetChromeMcpSessionsForTest } from "./chrome-mcp-session.js";
-import { getChromeMcpPid } from "./chrome-mcp-tabs.js";
+import {
+  closeChromeMcpSession,
+  getChromeMcpPid,
+  resetChromeMcpSessionsForTest,
+} from "./chrome-mcp-session.js";
 
 const { warn } = vi.hoisted(() => ({ warn: vi.fn<(message: string) => void>() }));
 
 // Observe diagnostics before any additional logger redaction; keep the SDK and cleanup real.
-vi.mock("../logging/subsystem.js", () => ({
+vi.mock("openclaw/plugin-sdk/logging-core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/logging-core")>()),
   createSubsystemLogger: () => ({ child: () => ({ warn }) }),
 }));
 
@@ -95,13 +99,12 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
     const pid = Number(await fs.readFile(state.statePath("pid"), "utf8"));
     expect(pid).toBeGreaterThan(0);
     expect(pid).not.toBe(process.pid);
-    await vi.waitFor(async () => {
-      // Windows terminates the process tree before the transport can close stdin.
-      if (process.platform !== "win32") {
-        expect(await fs.readFile(state.statePath("stdin-ended"), "utf8")).toBe("closed");
-      }
-      expect(() => process.kill(pid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
-    });
+    // The awaited session owner joins transport close and verifies its tracked tree is absent.
+    // Windows terminates the process tree before the transport can close stdin.
+    if (process.platform !== "win32") {
+      expect(await fs.readFile(state.statePath("stdin-ended"), "utf8")).toBe("closed");
+    }
+    expect(() => process.kill(pid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
     expect(getChromeMcpPid(profileName)).toBeNull();
   }
 

@@ -11,6 +11,7 @@ import {
   resolveExecModeFromPolicy,
 } from "../infra/exec-approvals-core.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
+import type { ExistingAgentDatabaseTarget } from "../infra/session-sqlite-migration-readers.js";
 import { repairCanonicalSessionEntries } from "./doctor-session-delivery-state.js";
 
 type LegacySessionEntry = SessionEntry & { execSecurity?: unknown; execAsk?: unknown };
@@ -20,6 +21,7 @@ export function repairLegacySessionExecPolicy(params: {
   apply: boolean;
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  targets?: readonly ExistingAgentDatabaseTarget[];
 }): void {
   const messages: string[] = [];
   repairCanonicalSessionEntries({

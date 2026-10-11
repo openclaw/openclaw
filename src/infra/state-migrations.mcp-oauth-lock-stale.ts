@@ -4,10 +4,6 @@ import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
 
 const LEGACY_LOCK_STALE_MS = 60_000;
 
-function parseLockPayload(raw: string): Record<string, unknown> | null {
-  return safeParseJsonRecord(raw) ?? null;
-}
-
 /** Classify only retired-runtime owners whose age and process identity are provably stale. */
 export function isDefinitelyStaleLegacyMcpOAuthLock(params: {
   raw: string;
@@ -15,7 +11,7 @@ export function isDefinitelyStaleLegacyMcpOAuthLock(params: {
   isPidDefinitelyDead?: (pid: number) => boolean;
   getProcessStartTime?: (pid: number) => number | null;
 }): boolean {
-  const payload = parseLockPayload(params.raw);
+  const payload = safeParseJsonRecord(params.raw);
   if (!payload) {
     return false;
   }

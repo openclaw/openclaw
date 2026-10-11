@@ -33,7 +33,26 @@ type Step = {
   "working-directory"?: string;
 };
 type WorkflowTarget = { file: string; job: string; step: string };
+type WorkflowInput = { jobs: Record<string, { steps: Step[] }> };
+type ActionInput = { runs: { steps: (Step & { run: string })[] } };
 export type FetchResult = number | "hang" | "cleanup-failure";
+
+const workflowInputs = new Map<string, WorkflowInput>();
+const actionInputs = new Map<string, ActionInput>();
+const ownerSource = readFileSync(".github/actions/git-owner/owner.py", "utf8");
+const basePolicySource = readFileSync(".github/actions/ensure-base-commit/policy.py", "utf8");
+const publisherPolicySource = readFileSync(
+  ".github/actions/publish-generated-pr/policy.py",
+  "utf8",
+);
+
+function readActionSteps(action: string) {
+  const input =
+    actionInputs.get(action) ??
+    (parse(readFileSync(`.github/actions/${action}/action.yml`, "utf8")) as ActionInput);
+  actionInputs.set(action, input);
+  return input.runs.steps;
+}
 
 const candidate = "a".repeat(40);
 const harness = "b".repeat(40);
@@ -60,6 +79,7 @@ const defaults: Record<string, string> = {
   FROZEN_TARGET: "false",
   HISTORICAL_TARGET: "false",
   FORMAT_CHECK: "false",
+  SKIP_NPM_LOCK: "false",
   CHANGED_CORE_TEST_PATHS_JSON: "",
   RUN_CONTROL_UI_I18N: "false",
   RUN_UI_TESTS: "false",
@@ -84,9 +104,8 @@ function stepEnvironment(step: Step, supplied: Record<string, string>) {
 }
 
 function readWorkflowStep({ file, job, step: name }: WorkflowTarget): Step & { run: string } {
-  const parsed = parse(readFileSync(file, "utf8")) as {
-    jobs: Record<string, { steps: Step[] }>;
-  };
+  const parsed = workflowInputs.get(file) ?? (parse(readFileSync(file, "utf8")) as WorkflowInput);
+  workflowInputs.set(file, parsed);
   const step = parsed.jobs[job]?.steps.find((entry) => entry.name === name);
   if (!step?.run) {
     throw new Error(`Missing executable workflow step ${file}/${job}/${name}`);
@@ -95,6 +114,7 @@ function readWorkflowStep({ file, job, step: name }: WorkflowTarget): Step & { r
 }
 
 export async function runCiGitStep(options: {
+  signal: AbortSignal;
   workflow?: "workflow-sanity" | WorkflowTarget;
   job?: string;
   action?:
@@ -126,10 +146,21 @@ export async function runCiGitStep(options: {
   commandResults?: Record<string, { code: FetchResult; output?: string }>;
   workflowRuns?: {
     id: number;
+    run_attempt: number;
     created_at: string;
     status: string;
     conclusion: string | null;
     head_sha: string;
+  }[];
+  workflowJobs?: {
+    runId: number;
+    runAttempt: number;
+    jobs: {
+      name: string;
+      status: string;
+      conclusion: string | null;
+      steps: { name: string; status: string; conclusion: string | null }[];
+    }[];
   }[];
   publishPath?: "directory" | "file" | "symlink";
   checkoutResults?: number[];
@@ -147,7 +178,9 @@ export async function runCiGitStep(options: {
   scenario?: string;
   lsRemoteResults?: { output: string; code: number | "hang" | "cleanup-failure" }[];
   realClock?: boolean;
+  virtualBackoff?: boolean;
   realDrain?: boolean;
+  readyFetchClockAdvanceSeconds?: number;
   objects?: Record<string, { probe?: number; code?: number; text: string }>;
   cooperativeTrees?: boolean;
   cancelDuringBackoff?: boolean;
@@ -184,11 +217,9 @@ export async function runCiGitStep(options: {
       options.cancelDuringCleanup || options.scenario?.startsWith("cancel-") || options.realDrain,
   };
   const step: (Step & { run: string }) | undefined = options.action
-    ? (
-        parse(readFileSync(`.github/actions/${options.action}/action.yml`, "utf8")) as {
-          runs: { steps: (Step & { run: string })[] };
-        }
-      ).runs.steps.find((entry) => (options.step ? entry.name === options.step : entry.run))
+    ? readActionSteps(options.action).find((entry) =>
+        options.step ? entry.name === options.step : entry.run,
+      )
     : options.workflow
       ? readWorkflowStep(
           options.workflow === "workflow-sanity"
@@ -211,6 +242,7 @@ export async function runCiGitStep(options: {
   let publisherFixture: ReturnType<typeof prepareGeneratedPublisherFixture> | undefined;
   return withCiCheckoutFixture(
     `linux:${options.scenario ?? "configured"}`,
+    options.signal,
     (root) => {
       const actions = path.join(root, "trusted-actions");
       if (options.performance) {
@@ -300,9 +332,16 @@ export async function runCiGitStep(options: {
         mkdirSync(path.join(actions, action), { recursive: true });
         const name = action === "git-owner" ? "owner.py" : "policy.py";
         let source = renderGitTestClock(
-          readFileSync(`.github/actions/${action}/${name}`, "utf8"),
+          action === "git-owner" ? ownerSource : basePolicySource,
           clock,
         );
+        if (
+          action === "git-owner" &&
+          options.cancelDuringCleanup &&
+          !source.includes("cleanup-cancelled.json")
+        ) {
+          throw new Error("Missing copied Git owner cleanup cancellation boundary");
+        }
         if (
           action === "git-owner" &&
           (publisher || maturity || pluginRelease || releaseAdmission || options.performance)
@@ -331,16 +370,39 @@ def main():`,
                     "observe", os.environ["TMPDIR"], "linux:configured", "backoff"], check=True)`,
           );
         }
+        if (action === "git-owner" && options.cancelDuringBackoff) {
+          if (!options.realClock || options.virtualBackoff) {
+            throw new Error("Backoff cancellation requires the real owner clock");
+          }
+          // Existing callers exec Python into the supervised shell's PID.
+          // A non-exec caller would require separate shell propagation proof.
+          if (!step.run.includes('exec python3 -I -S "$CI_GIT_OWNER" --policy')) {
+            throw new Error("Backoff cancellation requires an exec-owned Python policy");
+          }
+          const boundary = "    while time.monotonic() < retry_at:\n        check_cancelled()";
+          if (source.split(boundary).length !== 2) {
+            throw new Error("Missing unique Git owner backoff cancellation boundary");
+          }
+          // Claim before acknowledgment so a dropped first signal cannot be retried.
+          source = source.replace(
+            boundary,
+            `${boundary}
+        fixture_cancel = os.path.join(os.environ["TMPDIR"], "backoff-cancel-claimed.json")
+        if not os.path.exists(fixture_cancel):
+            with open(fixture_cancel, "x") as receipt:
+                json.dump(os.getpid(), receipt)
+            subprocess.run([${JSON.stringify(process.execPath)}, ${JSON.stringify(ciCheckoutFixture)},
+                            "observe", os.environ["TMPDIR"], "linux:configured", "backoff-cancel"], check=True)
+            os.kill(os.getpid(), signal.SIGTERM)`,
+          );
+        }
         writeFileSync(path.join(actions, action, name), source);
       }
       if (publisher) {
         mkdirSync(path.join(actions, "publish-generated-pr"), { recursive: true });
         writeFileSync(
           path.join(actions, "publish-generated-pr/policy.py"),
-          renderGitTestClock(
-            readFileSync(".github/actions/publish-generated-pr/policy.py", "utf8"),
-            clock,
-          ),
+          renderGitTestClock(publisherPolicySource, clock),
         );
         env.PUBLISH_ACTION_PATH = path.join(actions, "publish-generated-pr");
       }
@@ -392,6 +454,7 @@ def main():`,
           diffResult: options.diffResult,
           commandResults: options.commandResults,
           workflowRuns: options.workflowRuns,
+          workflowJobs: options.workflowJobs,
           docsAgent,
           docsPublish,
           maturity,
@@ -407,7 +470,6 @@ def main():`,
           lsRemoteResults: options.lsRemoteResults,
           objects: options.objects,
           cooperativeTrees: options.cooperativeTrees,
-          cancelDuringBackoff: options.cancelDuringBackoff,
           setupFailure: options.setupFailure,
         }),
       );
@@ -418,10 +480,7 @@ def main():`,
         }
       }
       if (externalOwner) {
-        const prepare = parse(readFileSync(".github/actions/git-owner/action.yml", "utf8")) as {
-          runs: { steps: { run?: string }[] };
-        };
-        const prepareRun = prepare.runs.steps[0]?.run;
+        const prepareRun = readActionSteps("git-owner")[0]?.run;
         if (!prepareRun) {
           throw new Error("Missing Git owner preparation body");
         }
@@ -550,6 +609,16 @@ ${run}`;
         : false;
       return {
         ...report,
+        backoffClockAdvancedSeconds: [
+          ...report.output.matchAll(/fixture backoff advanced: ([\d.]+)/gu),
+        ].reduce((total, match) => total + Number(match[1]), 0),
+        ...(options.readyFetchClockAdvanceSeconds === undefined
+          ? {}
+          : {
+              fetchClockAdvancedSeconds:
+                options.readyFetchClockAdvanceSeconds *
+                readdirSync(root).filter((name) => /^fetch-tick-\d+\.json$/u.test(name)).length,
+            }),
         authHeaderPresent,
         initialBranch: publisherFixture?.initialBranch,
         publication: publisherFixture?.inspect(report.output, false),

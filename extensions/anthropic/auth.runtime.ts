@@ -18,7 +18,6 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { upsertAuthProfileWithLockOrThrow } from "openclaw/plugin-sdk/provider-auth-api-key";
 import * as claudeCliAuth from "./cli-auth-seam.js";
-import { buildAnthropicCliBackend } from "./cli-backend.js";
 import { buildAnthropicCliMigrationResult } from "./cli-migration.js";
 
 const PROVIDER_ID = "anthropic";
@@ -35,7 +34,7 @@ const ANTHROPIC_SETUP_TOKEN_NOTE_LINES = [
 ] as const;
 
 function normalizeAnthropicSetupTokenInput(value: string): string {
-  return value.replaceAll(/\s+/g, "").trim();
+  return value.replaceAll(/\s+/g, "");
 }
 
 function resolveAnthropicSetupTokenProfileId(rawProfileId?: unknown): string {
@@ -103,34 +102,29 @@ export async function runAnthropicSetupTokenAuth(
 
 export function validateAnthropicSetupTokenNonInteractive(
   ctx: ProviderAuthMethodNonInteractiveValidationContext,
-): string | null {
+): string {
   if (ctx.opts.secretInputMode === "ref") {
-    ctx.runtime.error(
+    throw new Error(
       "Anthropic setup-token input cannot be stored with --secret-input-mode ref. Use --secret-input-mode plaintext.",
     );
-    ctx.runtime.exit(1);
-    return null;
   }
   const rawToken =
     typeof ctx.opts.token === "string" ? normalizeAnthropicSetupTokenInput(ctx.opts.token) : "";
   const tokenError = validateAnthropicSetupToken(rawToken);
   if (tokenError) {
-    ctx.runtime.error(
+    throw new Error(
       ["Anthropic setup-token auth requires --token with a valid setup-token.", tokenError].join(
         "\n",
       ),
     );
-    ctx.runtime.exit(1);
-    return null;
   }
   try {
     resolveAnthropicSetupTokenExpiry(ctx.opts.tokenExpiresIn);
   } catch (error) {
-    ctx.runtime.error(
+    throw new Error(
       `Invalid --token-expires-in: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
     );
-    ctx.runtime.exit(1);
-    return null;
   }
   return rawToken;
 }
@@ -140,9 +134,6 @@ export async function runAnthropicSetupTokenNonInteractive(
   defaultModel: string,
 ): Promise<ProviderAuthConfig | null> {
   const rawToken = validateAnthropicSetupTokenNonInteractive(ctx);
-  if (!rawToken) {
-    return null;
-  }
 
   const profileId = resolveAnthropicSetupTokenProfileId(ctx.opts.tokenProfileId);
   const expires = resolveAnthropicSetupTokenExpiry(ctx.opts.tokenExpiresIn);
@@ -222,9 +213,7 @@ export function buildAnthropicAuthDoctorHint(params: {
 export async function runAnthropicCliMigration(
   ctx: ProviderAuthContext,
 ): Promise<ProviderAuthResult> {
-  const authStatus = await claudeCliAuth.probeClaudeCliAuthStatus(
-    resolveAnthropicCliAuthProbe(ctx.env ?? process.env),
-  );
+  const authStatus = await claudeCliAuth.probeClaudeCliAuthStatus({ env: ctx.env ?? process.env });
   if (authStatus.status !== "available") {
     throw new Error(
       [
@@ -241,9 +230,7 @@ export async function runAnthropicCliMigrationNonInteractive(ctx: {
   runtime: ProviderAuthContext["runtime"];
   agentDir?: string;
 }): Promise<ProviderAuthContext["config"] | null> {
-  const authStatus = await claudeCliAuth.probeClaudeCliAuthStatus(
-    resolveAnthropicCliAuthProbe(process.env),
-  );
+  const authStatus = await claudeCliAuth.probeClaudeCliAuthStatus();
   if (authStatus.status !== "available") {
     const error =
       authStatus.status === "unreadable"
@@ -255,9 +242,7 @@ export async function runAnthropicCliMigrationNonInteractive(ctx: {
             'Auth choice "anthropic-cli" requires Claude CLI auth on this host.',
             `Run ${formatCliCommand("claude auth login")} first.`,
           ];
-    ctx.runtime.error(error.join("\n"));
-    ctx.runtime.exit(1);
-    return null;
+    throw new Error(error.join("\n"));
   }
 
   const result = buildAnthropicCliMigrationResult(ctx.config);
@@ -290,16 +275,4 @@ export async function runAnthropicCliMigrationNonInteractive(ctx: {
       },
     },
   };
-}
-
-function resolveAnthropicCliAuthProbe(env: NodeJS.ProcessEnv): {
-  command: string;
-  env: NodeJS.ProcessEnv;
-} {
-  const backend = buildAnthropicCliBackend().config;
-  const probeEnv = { ...env, ...backend.env };
-  for (const name of backend.clearEnv ?? []) {
-    delete probeEnv[name];
-  }
-  return { command: backend.command, env: probeEnv };
 }

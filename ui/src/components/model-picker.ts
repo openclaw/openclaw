@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import { renderProviderBrandIcon } from "./provider-icon.ts";
+import { providerDisplayLabel, renderProviderBrandIcon } from "./provider-icon.ts";
 import { renderPicker } from "./select-picker.ts";
 
 export type ModelPickerOption = {
@@ -17,9 +17,10 @@ type ModelPickerParams = {
   options: readonly ModelPickerOption[];
   disabled?: boolean;
   title?: string;
-  className?: string;
   placement?: "top" | "bottom";
   showSelectedDetail?: boolean;
+  groupByProvider?: boolean;
+  searchPlaceholder?: string;
   custom?: {
     label: string;
     placeholder?: string;
@@ -38,11 +39,21 @@ export function renderModelPicker(params: ModelPickerParams) {
   while (values.has(customValue)) {
     customValue += "_";
   }
-  const currentIsKnown = params.options.some((option) => option.value === params.value);
   const options: Array<ModelPickerOption & { description?: string }> = [
     ...params.options.map((option) => ({ ...option, description: option.detail })),
     ...(params.custom ? [{ value: customValue, label: params.custom.label }] : []),
   ];
+  const selectedIndex = options.findIndex((option) => option.value === params.value);
+  if (selectedIndex > 0) {
+    options.unshift(...options.splice(selectedIndex, 1));
+  }
+  const commitCustom = (event: Event) => {
+    if ((event.type === "change") === (params.custom?.commit === "change")) {
+      params.onChange((event.currentTarget as HTMLInputElement).value);
+    }
+  };
+  const providerIcon = (provider: string) =>
+    renderProviderBrandIcon(provider, { className: "model-picker__provider-icon" });
   return html`
     <div class="model-picker">
       ${renderPicker({
@@ -54,13 +65,22 @@ export function renderModelPicker(params: ModelPickerParams) {
         title: params.title,
         placement: params.placement,
         searchable: true,
+        searchPlaceholder: params.searchPlaceholder,
+        groupBy: params.groupByProvider
+          ? (option) =>
+              option.provider
+                ? {
+                    id: option.provider,
+                    label: providerDisplayLabel(option.provider),
+                    leading: providerIcon(option.provider),
+                  }
+                : undefined
+          : undefined,
+        showOptionTooltips: false,
         showSelectedDescription: params.showSelectedDetail,
-        className: `model-picker__select ${params.className ?? ""}`,
+        className: "model-picker__select ",
         onOpen: params.onOpen,
-        renderLeading: (option) =>
-          option.provider
-            ? renderProviderBrandIcon(option.provider, { className: "model-picker__provider-icon" })
-            : nothing,
+        renderLeading: (option) => (option.provider ? providerIcon(option.provider) : nothing),
         onChange: params.onChange,
         onChangeTarget: (value, select) => {
           const wrapper = select.closest(".model-picker");
@@ -86,18 +106,10 @@ export function renderModelPicker(params: ModelPickerParams) {
               aria-describedby=${params.custom.describedBy ?? nothing}
               placeholder=${params.custom.placeholder ?? ""}
               .value=${params.value}
-              ?hidden=${currentIsKnown}
+              ?hidden=${selectedIndex >= 0}
               ?disabled=${params.disabled}
-              @input=${(event: InputEvent) => {
-                if (params.custom?.commit !== "change") {
-                  params.onChange((event.currentTarget as HTMLInputElement).value);
-                }
-              }}
-              @change=${(event: Event) => {
-                if (params.custom?.commit === "change") {
-                  params.onChange((event.currentTarget as HTMLInputElement).value);
-                }
-              }}
+              @input=${commitCustom}
+              @change=${commitCustom}
             />`
           : nothing
       }

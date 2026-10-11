@@ -29,16 +29,6 @@ type LegacySurfaceManifestRecord = NonNullable<
   PluginRuntimeLoadContext["manifestRegistry"]
 >["plugins"][number];
 
-function prepareResult(
-  surfaces: BundledChannelLegacySessionSurface[],
-  failures: string[],
-): PreparedLegacySessionSurfaces {
-  return Object.freeze({
-    surfaces: Object.freeze(surfaces),
-    failures: Object.freeze(failures),
-  });
-}
-
 function formatLoadFailure(pluginId: string, detail: string): string {
   return `Deferred legacy session-key migration for channel owner "${pluginId}": ${detail}. Restore or reinstall the plugin setup entry, then rerun openclaw doctor --fix`;
 }
@@ -101,7 +91,8 @@ function isEnabledLegacySurfaceOwner(params: {
 }
 
 function loadLegacySessionSurface(params: {
-  record: LegacySurfaceManifestRecord & { setupSource: string };
+  record: LegacySurfaceManifestRecord;
+  setupSource: string;
   env: NodeJS.ProcessEnv;
   artifactRegistry: ReturnType<typeof createEmptyPluginRegistry>;
 }): BundledChannelLegacySessionSurface {
@@ -109,7 +100,7 @@ function loadLegacySessionSurface(params: {
     resolvePluginRuntimeArtifact({
       pluginId: params.record.id,
       entryKind: "setup",
-      source: params.record.setupSource,
+      source: params.setupSource,
       rootDir: params.record.rootDir,
       origin: params.record.origin,
       preferBuiltPluginArtifacts: false,
@@ -160,34 +151,33 @@ export function prepareLegacySessionSurfaces(params: {
       config: params.config,
       env: params.env,
     });
-  const manifestRecords = context.manifestRegistry?.plugins ?? [];
-  const selectedPluginIds = new Set(
-    resolveConfiguredChannelPluginIds({
-      config: context.config,
-      activationSourceConfig: context.activationSourceConfig,
-      workspaceDir: context.workspaceDir,
-      env: context.env,
-      manifestRecords,
-    }),
+  const manifestRecords = (context.manifestRegistry?.plugins ?? []).filter(
+    (record) => record.packageManifest?.setupFeatures?.legacySessionSurfaces === true,
   );
   const normalizedConfig = normalizePluginsConfig(context.activationSourceConfig.plugins);
-  for (const record of manifestRecords) {
+  let selectedPluginIds: Set<string> | undefined;
+  const declaringRecords = manifestRecords.filter((record) => {
     if (
-      record.packageManifest?.setupFeatures?.legacySessionSurfaces === true &&
       isEnabledLegacySurfaceOwner({
         record,
         config: context.activationSourceConfig,
         normalizedConfig,
       })
     ) {
-      selectedPluginIds.add(record.id);
+      return true;
     }
-  }
-  const declaringRecords = manifestRecords.filter(
-    (record) =>
-      selectedPluginIds.has(record.id) &&
-      record.packageManifest?.setupFeatures?.legacySessionSurfaces === true,
-  );
+    // Already eligible migration owners do not need persisted-auth presence probes.
+    selectedPluginIds ??= new Set(
+      resolveConfiguredChannelPluginIds({
+        config: context.config,
+        activationSourceConfig: context.activationSourceConfig,
+        workspaceDir: context.workspaceDir,
+        env: context.env,
+        manifestRecords,
+      }),
+    );
+    return selectedPluginIds.has(record.id);
+  });
   if (declaringRecords.length === 0) {
     return EMPTY_LEGACY_SESSION_SURFACES;
   }
@@ -202,18 +192,17 @@ export function prepareLegacySessionSurfaces(params: {
           ),
         ],
   );
-  const loadableRecords = declaringRecords.filter((record) => Boolean(record.setupSource));
-  if (loadableRecords.length === 0) {
-    return prepareResult([], failures);
-  }
-
   const surfaces: BundledChannelLegacySessionSurface[] = [];
   const artifactRegistry = createEmptyPluginRegistry();
-  for (const record of loadableRecords) {
+  for (const record of declaringRecords) {
+    if (!record.setupSource) {
+      continue;
+    }
     try {
       surfaces.push(
         loadLegacySessionSurface({
-          record: record as LegacySurfaceManifestRecord & { setupSource: string },
+          record,
+          setupSource: record.setupSource,
           env: context.env,
           artifactRegistry,
         }),
@@ -223,5 +212,8 @@ export function prepareLegacySessionSurfaces(params: {
       failures.push(formatLoadFailure(record.id, detail));
     }
   }
-  return prepareResult(surfaces, failures);
+  return Object.freeze({
+    surfaces: Object.freeze(surfaces),
+    failures: Object.freeze(failures),
+  });
 }

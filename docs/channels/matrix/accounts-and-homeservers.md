@@ -41,6 +41,8 @@ Both commands accept `--account <id>` for multi-account setups. The repair flow:
 
 It does not delete old rooms automatically. It picks the healthy DM and updates the mapping so future Matrix sends, verification notices, and other direct-message flows target the right room.
 
+Mapping updates read the existing account data before writing. If that read fails, the update stops without replacing existing mappings. Retry the repair after account-data reads recover.
+
 ## Multi-account
 
 ```json5
@@ -78,7 +80,7 @@ It does not delete old rooms automatically. It picks the healthy DM and updates 
 
 **Default account selection:**
 
-- Set `defaultAccount` to pick the named account that implicit routing, probing, and CLI commands prefer.
+- Set `defaultAccount` to pick the named account that implicit routing, checking, and CLI commands prefer.
 - If you have multiple accounts and one is literally named `default`, OpenClaw uses it implicitly even when `defaultAccount` is unset.
 - With multiple named accounts and no default selected, CLI commands refuse to guess - set `defaultAccount` or pass `--account <id>`.
 - The top-level `channels.matrix.*` block is only treated as the implicit `default` account when its auth is complete (`homeserver` + `accessToken`, or `homeserver` + `userId` + `password`). Named accounts remain discoverable from `homeserver` + `userId` once cached credentials cover auth.
@@ -137,7 +139,7 @@ If your Matrix deployment needs an explicit outbound HTTP(S) proxy, set `channel
 }
 ```
 
-Named accounts can override the top-level default with `channels.matrix.accounts.<id>.proxy`. OpenClaw uses the same proxy setting for runtime Matrix traffic and account status probes.
+Named accounts can override the top-level default with `channels.matrix.accounts.<id>.proxy`. OpenClaw uses the same proxy setting for runtime Matrix traffic and account status checks.
 
 ## Target resolution
 
@@ -147,7 +149,10 @@ Matrix accepts these target forms anywhere OpenClaw asks for a room or user targ
 - Rooms: `!room:server`, `room:!room:server`, or `matrix:room:!room:server` (room version 12+ room IDs have no `:server` suffix — `!room`, `room:!room`, `matrix:room:!room` — and are accepted the same way)
 - Aliases: `#alias:server`, `channel:#alias:server`, or `matrix:channel:#alias:server`
 
-Matrix room IDs are case-sensitive. Use the exact room ID casing from Matrix when configuring explicit delivery targets, cron jobs, bindings, or allowlists. OpenClaw keeps internal session keys canonical for storage, so those lowercase keys are not a reliable source for Matrix delivery IDs.
+Matrix room IDs are case-sensitive. Use the exact room ID casing from Matrix when configuring explicit delivery targets, cron jobs, bindings, or allowlists. OpenClaw normalizes internal session keys to lowercase for storage, so those lowercase keys are not a reliable source for Matrix delivery IDs.
+
+Config-backed peer and group listings use the selected account's allowlists and
+configured rooms without loading stored Matrix credentials.
 
 Live directory lookup uses the logged-in Matrix account:
 

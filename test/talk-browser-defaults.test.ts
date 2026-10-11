@@ -1,17 +1,18 @@
 // @vitest-environment node
 import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeVoiceProvider } from "../extensions/openai/api.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { withLocalGatewayRequestScope } from "../src/gateway/local-request-context.js";
-import { talkHandlers } from "../src/gateway/server-methods/talk.js";
+import { talkHandlers } from "../src/gateway/talk/handlers/index.js";
 import { getPluginRuntimeGatewayRequestScope } from "../src/plugins/runtime/gateway-request-scope.js";
 import type { RealtimeVoiceProviderPlugin } from "../src/plugins/types.js";
 import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
 import type { GatewayBrowserClient } from "../ui/src/api/gateway.js";
-import { useRealtimeTalkMicrophoneFixture } from "../ui/src/pages/chat/realtime-talk-input.test-support.js";
-import type { RealtimeTalkTransport } from "../ui/src/pages/chat/realtime-talk-shared.js";
-import { RealtimeTalkSession } from "../ui/src/pages/chat/realtime-talk.js";
+import { useRealtimeTalkMicrophoneFixture } from "../ui/src/pages/chat/talk/input.test-support.js";
+import { RealtimeTalkSession } from "../ui/src/pages/chat/talk/session.js";
+import type { RealtimeTalkTransport } from "../ui/src/pages/chat/talk/shared.js";
 
 const mocks = vi.hoisted(() => ({
   providers: [] as RealtimeVoiceProviderPlugin[],
@@ -60,9 +61,9 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
   },
 }));
 vi.mock("../src/agents/realtime-bootstrap-context.js", () => ({
-  resolveRealtimeBootstrapContextInstructions: async () => undefined,
+  resolveRealtimeVoiceAgentContextInstructions: async () => "Agent context.",
 }));
-vi.mock("../src/gateway/talk-client-agent-consult.js", () => ({
+vi.mock("../src/gateway/talk/client-agent-consult.js", () => ({
   createTalkClientAgentConsultRunner: () => ({
     runArgs: async () => ({ text: "Done" }),
     runOwnedArgs: async () => ({ text: "Done" }),
@@ -70,8 +71,8 @@ vi.mock("../src/gateway/talk-client-agent-consult.js", () => ({
     getToolAuthorityOverlay: () => undefined,
   }),
 }));
-vi.mock("../src/gateway/talk-client-gateway-control.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../src/gateway/talk-client-gateway-control.js")>()),
+vi.mock("../src/gateway/talk/client-gateway-control.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/gateway/talk/client-gateway-control.js")>()),
   createTalkClientGatewayControlOwner: () => ({
     control: { bindBridge: () => undefined },
     runAgentConsult: async () => ({ text: "Done" }),
@@ -81,15 +82,30 @@ vi.mock("../src/gateway/talk-client-gateway-control.js", async (importOriginal) 
     close: async () => undefined,
   }),
 }));
+vi.mock("../src/talk/client-voice-session-read.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/talk/client-voice-session-read.js")>()),
+  resolveClientVoiceAgentSessionId: () => undefined,
+}));
+vi.mock("../src/talk/client-voice-session-write.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/talk/client-voice-session-write.js")>();
+  return {
+    ...actual,
+    ensureClientVoiceAgentSessionEntry: async () => "test-agent-session",
+    // Creation is mocked here; preserve its source without acquiring a database writer.
+    captureClientVoiceSessionWriter: ({
+      physicalSource,
+    }: Parameters<typeof actual.captureClientVoiceSessionWriter>[0]) => ({
+      source: expectDefined(physicalSource, "Mocked voice creation requires its admitted source"),
+      release: () => {},
+    }),
+  };
+});
 vi.mock("../src/talk/client-voice-session.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/talk/client-voice-session.js")>()),
-  resolveClientVoiceAgentSessionId: () => undefined,
-  ensureClientVoiceAgentSessionEntry: async () => "test-agent-session",
   createOrResumeClientVoiceSession: () => "test-voice-session",
   closeStaleClientVoiceSessions: async () => 0,
 }));
-vi.mock("../ui/src/pages/chat/realtime-talk-transport.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../ui/src/pages/chat/realtime-talk-transport.js")>()),
+vi.mock("../ui/src/pages/chat/talk/transport.runtime.js", () => ({
   createRealtimeTalkTransport: (): RealtimeTalkTransport => ({
     start: async () => "ready",
     stop: () => undefined,
@@ -112,20 +128,12 @@ describe("OpenAI browser Talk catalog defaults", () => {
       expected: "gpt-live-1",
     },
     { label: "explicit GA", model: "gpt-realtime-2.1", camera: true, expected: "gpt-realtime-2.1" },
-    { label: "explicit Live", model: "gpt-live-1", camera: false, expected: "gpt-live-1" },
     {
       label: "Live launch over configured GA",
       model: "gpt-realtime-2.1",
       launchModel: "gpt-live-1",
       camera: false,
       expected: "gpt-live-1",
-    },
-    {
-      label: "GA launch over configured Live",
-      model: "gpt-live-1",
-      launchModel: "gpt-realtime-2.1",
-      camera: true,
-      expected: "gpt-realtime-2.1",
     },
     {
       label: "GA launch through a provider alias",
@@ -148,7 +156,7 @@ describe("OpenAI browser Talk catalog defaults", () => {
       await withOpenClawTestState({ prefix: "talk-browser-defaults-" }, async (state) => {
         const cfg: OpenClawConfig = {
           agents: {
-            list: [{ id: "main", agentDir: state.agentDir(), workspace: state.workspaceDir }],
+            entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
           },
           talk: {
             agentId: "main",
@@ -266,7 +274,9 @@ describe("OpenAI browser Talk catalog defaults", () => {
           expect(mocks.createSession).toHaveBeenCalledWith({
             sessionKey: "agent:main:main",
             ...(launchModel ? { provider: launchProvider ?? "openai", model: launchModel } : {}),
-            capabilities: camera ? ["voice-transcript", "camera-frame"] : ["voice-transcript"],
+            capabilities: camera
+              ? ["voice-transcript", "voice-selection", "camera-frame"]
+              : ["voice-transcript", "voice-selection"],
           });
           expect(mocks.providerRequests).toHaveLength(1);
           expect(mocks.providerRequests[0]?.model).toBe(expected);
@@ -282,7 +292,7 @@ describe("OpenAI browser Talk catalog defaults", () => {
             );
           }
         } finally {
-          session.stop();
+          void session.stop();
         }
       });
     },

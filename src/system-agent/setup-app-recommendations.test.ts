@@ -1,7 +1,56 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as clawHubSkills from "../infra/clawhub-skills.js";
+import * as catalog from "../plugins/official-external-plugin-catalog.js";
 import type { OfficialExternalPluginCatalogEntry } from "../plugins/official-external-plugin-catalog.js";
 import { defaultRuntime } from "../runtime.js";
-import { getSetupAppRecommendations, type SetupAppScanPhase } from "./setup-app-recommendations.js";
+import {
+  getSetupAppRecommendations as getRecommendations,
+  type SetupAppScanPhase,
+} from "./setup-app-recommendations.js";
+import * as inference from "./setup-inference.js";
+
+afterEach(() => vi.restoreAllMocks());
+
+async function getSetupAppRecommendations(
+  params: Parameters<typeof getRecommendations>[0] & {
+    deps?: {
+      listPlugins?: typeof catalog.listOfficialExternalPluginCatalogEntries;
+      listChannels?: typeof catalog.listOfficialExternalChannelCatalogEntries;
+      listProviders?: typeof catalog.listOfficialExternalProviderCatalogEntries;
+      searchSkills?: typeof clawHubSkills.searchClawHubSkills;
+      complete?: (prompt: string) => Promise<{ ok: true; text: string }>;
+    };
+  },
+) {
+  const { deps = {}, ...request } = params;
+  if (deps.listPlugins) {
+    vi.spyOn(catalog, "listOfficialExternalPluginCatalogEntries").mockImplementation(
+      deps.listPlugins,
+    );
+  }
+  if (deps.listChannels) {
+    vi.spyOn(catalog, "listOfficialExternalChannelCatalogEntries").mockImplementation(
+      deps.listChannels,
+    );
+  }
+  if (deps.listProviders) {
+    vi.spyOn(catalog, "listOfficialExternalProviderCatalogEntries").mockImplementation(
+      deps.listProviders,
+    );
+  }
+  if (deps.searchSkills) {
+    vi.spyOn(clawHubSkills, "searchClawHubSkills").mockImplementation(deps.searchSkills);
+  }
+  if (deps.complete) {
+    const complete = deps.complete;
+    vi.spyOn(inference, "completeSetupInference").mockImplementation(async ({ prompt }) => ({
+      ...(await complete(prompt)),
+      modelRef: "mock/model",
+      latencyMs: 0,
+    }));
+  }
+  return await getRecommendations(request);
+}
 
 /** Force an "ok" result so the returned candidate `groups` can be asserted. */
 function completeMatching(
@@ -342,6 +391,34 @@ describe("setup app recommendation matcher", () => {
       expect(result.matches[0]?.candidateId).toBe("@demo-owner/notes-tools");
       expect(result.matches[0]?.reason).toBe(`${"a".repeat(118)}…`);
       expect(result.matches[0]?.reason.length).toBeLessThanOrEqual(120);
+    }
+  });
+
+  it("uses the first complete object when prose contains later JSON", async () => {
+    const result = await getSetupAppRecommendations({
+      inventorySource,
+      runtime: defaultRuntime,
+      deps: {
+        ...candidateDeps,
+        complete: async () => ({
+          ok: true,
+          text: `${JSON.stringify({
+            matches: [
+              {
+                appLabel: "Notes",
+                candidateId: "@demo-owner/notes-tools",
+                tier: "recommended",
+                reason: "Connects directly to your notes",
+              },
+            ],
+          })}\nDiagnostics: {"tokens":12}`,
+        }),
+      },
+    });
+
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.matches[0]?.candidateId).toBe("@demo-owner/notes-tools");
     }
   });
 

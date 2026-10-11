@@ -1,4 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { describe, expect, it, vi } from "vitest";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../../infra/runtime-worker-url.js";
+import { agentProcessTestEntrypoints } from "../../process-runtime.test-support.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 
 describe("createEmbeddedAttemptTranscriptLifecycle", () => {
@@ -55,4 +62,56 @@ describe("createEmbeddedAttemptTranscriptLifecycle", () => {
       );
     });
   });
+
+  it("still admits a nested write from a callback that outlives the teardown budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const releaseOwner = vi.fn();
+      const lifecycle = createEmbeddedAttemptTranscriptLifecycle({ onDrained: releaseOwner });
+      let releaseWrite = () => {};
+      const writeGate = new Promise<void>((resolve) => {
+        releaseWrite = resolve;
+      });
+      let nestedWrite: Promise<undefined> | undefined;
+      const admitted = lifecycle.withTranscriptWrite(async () => {
+        await writeGate; // outlives the teardown budget
+        // Once dispose() returns (budget expired, callback still running), a nested
+        // write from this callback must still be admitted as a descendant. The owned
+        // store is only disabled once the actual drain settles, never on the budget.
+        nestedWrite = lifecycle.withTranscriptWrite(() => {
+          expect(releaseOwner).not.toHaveBeenCalled();
+          return undefined;
+        });
+      });
+      const disposeDone = lifecycle.dispose();
+      await vi.advanceTimersByTimeAsync(30_000); // expire the teardown budget
+      await disposeDone;
+      expect(releaseOwner).not.toHaveBeenCalled();
+      releaseWrite();
+      await admitted;
+      // If the store had been disabled when the budget expired, this nested write
+      // would be rejected as disposed instead of admitted.
+      await expect(nestedWrite).resolves.toBeUndefined();
+      await lifecycle.dispose();
+      expect(releaseOwner).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("releases its per-attempt AsyncLocalStorage after dispose (retention child)", async () => {
+    const entrypoint = resolveRuntimeWorkerUrl(
+      agentProcessTestEntrypoints.transcriptLifecycleRetention,
+    );
+    // Legacy Node stores require disable() to collect, so retain that regression coverage.
+    const nodeMajor = Number(process.versions.node.split(".")[0]);
+    const contextFlag =
+      !process.versions.bun && nodeMajor >= 24 ? ["--no-async-context-frame"] : [];
+    const { stdout } = await promisify(execFile)(
+      process.execPath,
+      ["--expose-gc", ...contextFlag, ...resolveRuntimeWorkerArgv(entrypoint)],
+      { timeout: 20_000 },
+    );
+    expect(stdout).toContain("retention ok");
+  }, 25_000);
 });

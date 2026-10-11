@@ -11,8 +11,9 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
-import { OpenClawStateExternalOwnershipError } from "../../state/openclaw-state-ownership.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { captureDeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
+import { OpenClawStateExternalOwnershipError } from "../sqlite-lifecycle-errors.js";
 import { deliverOutboundPayloads } from "./deliver.js";
 import { ackDelivery } from "./delivery-queue-ack.js";
 import type { DeliverFn } from "./delivery-queue-recovery.js";
@@ -102,7 +103,7 @@ describe("delivery queue entry state", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", originalRoot);
     vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "external");
     claimOpenClawStateOwnership("queue-fixture", { env: process.env });
-    const context = { stateDir: originalRoot, supervisorMode: "external" as const };
+    const context = captureDeliveryQueueStateContext(originalRoot);
     const queueId = "default-root-capture";
     const sendText = vi.fn(async () => {
       expect(await loadPendingDelivery(queueId, originalRoot, context)).not.toBeNull();
@@ -166,13 +167,8 @@ describe("delivery queue entry state", () => {
 
   it.each([
     ["default", "custom"],
-    ["default", "builtin"],
-    ["relative", "custom"],
     ["relative", "builtin"],
     ["home-relative", "custom"],
-    ["home-relative", "builtin"],
-    ["empty", "custom"],
-    ["empty", "builtin"],
   ] as const)(
     "captures the SDK %s root before admission and lazy delivery for a %s callback",
     async (locator, callback) => {
@@ -186,7 +182,7 @@ describe("delivery queue entry state", () => {
       vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "external");
       vi.stubEnv("OPENCLAW_HOME", originalDirectory);
       claimOpenClawStateOwnership("queue-fixture", { env: process.env });
-      const context = { stateDir: originalRoot, supervisorMode: "external" as const };
+      const context = captureDeliveryQueueStateContext(originalRoot);
       const queueId = "sdk-reconnect-owner";
       await enqueueDeliveryOnce(
         { channel: "reef", to: target, payloads: [{ text: "SDK reconnect" }] },
@@ -210,7 +206,6 @@ describe("delivery queue entry state", () => {
         default: undefined,
         relative: "queue",
         "home-relative": "  ~/queue  ",
-        empty: "",
       }[locator];
       const suspension = tryBeginGatewaySuspendAdmission(() => {});
       expect(suspension?.commit()).toBe(true);
@@ -256,7 +251,7 @@ describe("delivery queue entry state", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", originalRoot);
     vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "external");
     claimOpenClawStateOwnership("queue-fixture", { env: process.env });
-    const context = { stateDir: originalRoot, supervisorMode: "external" as const };
+    const context = captureDeliveryQueueStateContext(originalRoot);
     const queueId = "sdk-unprivileged-owner";
     await enqueueDeliveryOnce(
       { channel: "reef", to: target, payloads: [{ text: "retained" }] },

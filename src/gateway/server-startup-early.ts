@@ -1,11 +1,15 @@
 // Gateway early-startup runtime helpers.
-// Starts discovery, remote skills, task maintenance, and delayed maintenance setup.
+// Starts discovery, remote skills, and delayed maintenance setup.
+import { setSessionMcpRuntimeScheduler } from "../agents/agent-bundle-mcp-manager-api.js";
 import { isNixMode } from "../config/paths.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
+import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import type { GatewayDiscovery } from "./server-discovery-runtime.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
 import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 
@@ -17,7 +21,9 @@ const loadRemoteSkillsRuntimeModule = async () => await import("../skills/runtim
 
 /** Start early Gateway side runtimes before the main server is fully ready. */
 export async function startGatewayEarlyRuntime(params: {
+  scheduler: GatewayScheduler;
   minimalTestGateway: boolean;
+  isClosing: () => boolean;
   updateCanary?: boolean;
   cfgAtStart: OpenClawConfig;
   port: number;
@@ -37,38 +43,26 @@ export async function startGatewayEarlyRuntime(params: {
   pluginRegistry?: PluginRegistry;
   pluginRuntimeClaim: GatewayPluginRuntimeClaim;
   broadcast: GatewayMaintenanceParams["broadcast"];
-  nodeSendToAllSubscribed: Parameters<StartGatewayMaintenanceTimers>[0]["nodeSendToAllSubscribed"];
-  getPresenceVersion: GatewayMaintenanceParams["getPresenceVersion"];
-  getHealthVersion: GatewayMaintenanceParams["getHealthVersion"];
-  refreshGatewayHealthSnapshot: GatewayMaintenanceParams["refreshGatewayHealthSnapshot"];
-  restartRunningChannels: GatewayMaintenanceParams["restartRunningChannels"];
-  refreshPresence: GatewayMaintenanceParams["refreshPresence"];
-  resetEventLoopHealth: GatewayMaintenanceParams["resetEventLoopHealth"];
-  logHealth: GatewayMaintenanceParams["logHealth"];
-  dedupe: GatewayMaintenanceParams["dedupe"];
-  chatAbortControllers: GatewayMaintenanceParams["chatAbortControllers"];
-  chatQueuedTurns: GatewayMaintenanceParams["chatQueuedTurns"];
-  restartRecoveryCandidates: GatewayMaintenanceParams["restartRecoveryCandidates"];
-  chatRunState: GatewayMaintenanceParams["chatRunState"];
-  removeChatRun: GatewayMaintenanceParams["removeChatRun"];
-  agentRunSeq: GatewayMaintenanceParams["agentRunSeq"];
-  nodeSendToSession: GatewayMaintenanceParams["nodeSendToSession"];
-  skillsRefreshDelayMs: number;
-  getSkillsRefreshTimer: () => ReturnType<typeof setTimeout> | null;
-  setSkillsRefreshTimer: (timer: ReturnType<typeof setTimeout> | null) => void;
+  maintenance: Omit<
+    GatewayMaintenanceParams,
+    | "scheduler"
+    | "broadcast"
+    | "getRuntimeConfig"
+    | "activeWorkInspectors"
+    | "isNixMode"
+    | "runWorktreeGc"
+    | "runDeliveryQueueMediaGc"
+    | "runManagedOutgoingMediaGc"
+  >;
   getRuntimeConfig: () => OpenClawConfig;
   startupTrace?: GatewayStartupTrace;
 }) {
-  if (!params.minimalTestGateway) {
-    await measureStartup(params.startupTrace, "runtime.early.task-state", async () => {
-      const { ensureTaskRuntimeStateReady } = await import("../tasks/runtime-internal.js");
-      ensureTaskRuntimeStateReady();
-    });
-  }
+  await setSessionMcpRuntimeScheduler(params.scheduler);
+  const startSideRuntimes = !params.minimalTestGateway && !params.updateCanary;
   // Startup failure can occur immediately after discovery; publish its owner first.
   params.swapDiscovery(
     await measureStartup(params.startupTrace, "runtime.early.discovery", async () => {
-      if (params.minimalTestGateway) {
+      if (!startSideRuntimes) {
         return null;
       }
       const machineDisplayName = await measureStartup(
@@ -96,38 +90,34 @@ export async function startGatewayEarlyRuntime(params: {
       );
     }),
   );
-  let getActiveTaskCount = () => 0;
-
-  if (!params.minimalTestGateway) {
-    const [{ primeRemoteSkillsCache, setSkillsRemoteRegistry }, taskRegistryMaintenance] =
+  if (startSideRuntimes) {
+    const [{ primeRemoteSkillsCache, setSkillsRemoteRegistry }, { startCronMaintenance }] =
       await measureStartup(params.startupTrace, "runtime.early.lazy-runtime-imports", () =>
-        Promise.all([
-          loadRemoteSkillsRuntimeModule(),
-          import("../tasks/task-registry.maintenance.js"),
-        ]),
+        Promise.all([loadRemoteSkillsRuntimeModule(), import("../cron/maintenance.js")]),
       );
     setSkillsRemoteRegistry(params.nodeRegistry);
     void primeRemoteSkillsCache();
-    // Canary task rows belong to the source Gateway; never reconcile or resume them.
-    if (!params.updateCanary) {
-      // Restart-blocker counts must reflect the same live cron runtime.
-      taskRegistryMaintenance.configureTaskRegistryMaintenance({
-        runtimeAuthoritative: true,
-      });
-      taskRegistryMaintenance.startTaskRegistryMaintenance();
-      getActiveTaskCount = () =>
-        taskRegistryMaintenance.getInspectableActiveTaskRestartBlockers().length;
+    if (!params.isClosing()) {
+      startCronMaintenance(params.scheduler);
     }
   }
 
-  const skillsChangeUnsub = params.minimalTestGateway
+  const skillsChangeUnsub = !startSideRuntimes
     ? async () => {}
     : await measureStartup(params.startupTrace, "runtime.early.skills-listener", async () => {
         const skillsRuntimePromise = import("../skills/runtime/refresh.js");
         const remoteSkillsRuntimePromise = loadRemoteSkillsRuntimeModule();
-        const { closeSkillsWatchers, registerSkillsChangeListener } = await skillsRuntimePromise;
+        const { closeSkillsWatchers, detachSkillsWatchers, registerSkillsChangeListener } =
+          await skillsRuntimePromise;
         const { refreshRemoteBinsForConnectedNodes } = await remoteSkillsRuntimePromise;
         const unregister = registerSkillsChangeListener((event) => {
+          if (params.isClosing()) {
+            return;
+          }
+          if (event.reason === "watch-available") {
+            // Coverage recovery has no new content revision to probe or broadcast.
+            return;
+          }
           if (event.reason === "remote-node") {
             // The snapshot invalidation runs after remote descriptors/bins change;
             // clients can now refetch authoritative skills.status without racing the probe.
@@ -136,67 +126,65 @@ export async function startGatewayEarlyRuntime(params: {
           }
           // Coalesce local skill changes before refreshing connected remote
           // nodes so bulk plugin/skill updates do not stampede node refreshes.
-          const existingTimer = params.getSkillsRefreshTimer();
-          if (existingTimer) {
-            clearTimeout(existingTimer);
-          }
-          const nextTimer = setTimeout(() => {
-            params.setSkillsRefreshTimer(null);
-            void refreshRemoteBinsForConnectedNodes(params.getRuntimeConfig()).then(
-              () => {
-                params.broadcast("skills.changed", { reason: event.reason });
-              },
-              (error: unknown) => {
+          params.scheduler.schedule({
+            id: "skills.remote-bin-refresh",
+            delayMs: 30_000,
+            run: async () => {
+              if (params.isClosing()) {
+                return;
+              }
+              try {
+                await refreshRemoteBinsForConnectedNodes(params.getRuntimeConfig());
+              } catch (error) {
                 params.log.warn(
                   `failed to refresh remote bins after skills change: ${String(error)}`,
                 );
+              }
+              if (!params.isClosing()) {
                 params.broadcast("skills.changed", { reason: event.reason });
-              },
-            );
-          }, params.skillsRefreshDelayMs);
-          params.setSkillsRefreshTimer(nextTimer);
+              }
+            },
+          });
         });
-        return async () => {
+        return async ({ exitAfterClose = false }: { exitAfterClose?: boolean } = {}) => {
           unregister();
-          await closeSkillsWatchers();
+          // Process exit releases native watchers at once; retiring each one here
+          // blocks this thread on fseventsd for seconds apiece on macOS.
+          await (exitAfterClose ? detachSkillsWatchers() : closeSkillsWatchers());
         };
       });
 
-  const startMaintenance = async (activeWorkInspectors: Partial<GatewayActiveWorkInspectors>) => {
+  const startMaintenance = async (
+    activeWorkInspectors: Partial<GatewayActiveWorkInspectors>,
+    resolveGatewayContext?: GatewayContextResolver,
+  ) => {
     // Defer periodic maintenance until the caller has finished ready-state
     // wiring, but keep the lazy import owned by this early-runtime bundle.
-    if (params.minimalTestGateway) {
+    if (!startSideRuntimes || params.isClosing()) {
       return null;
     }
     return await measureStartup(params.startupTrace, "post-ready.maintenance", async () => {
       const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
-      return startGatewayMaintenanceTimers({
-        broadcast: params.broadcast,
-        nodeSendToAllSubscribed: params.nodeSendToAllSubscribed,
-        getPresenceVersion: params.getPresenceVersion,
-        getHealthVersion: params.getHealthVersion,
-        refreshGatewayHealthSnapshot: params.refreshGatewayHealthSnapshot,
-        restartRunningChannels: params.restartRunningChannels,
-        activeWorkInspectors,
-        refreshPresence: params.refreshPresence,
-        resetEventLoopHealth: params.resetEventLoopHealth,
-        logHealth: params.logHealth,
-        dedupe: params.dedupe,
-        chatAbortControllers: params.chatAbortControllers,
-        chatQueuedTurns: params.chatQueuedTurns,
-        restartRecoveryCandidates: params.restartRecoveryCandidates,
-        chatRunState: params.chatRunState,
-        removeChatRun: params.removeChatRun,
-        agentRunSeq: params.agentRunSeq,
-        nodeSendToSession: params.nodeSendToSession,
-        isNixMode,
-        getRuntimeConfig: params.getRuntimeConfig,
-      });
+      if (params.isClosing()) {
+        return null;
+      }
+      return withPluginRuntimeGatewayContextResolver(
+        resolveGatewayContext,
+        () =>
+          startGatewayMaintenanceTimers({
+            ...params.maintenance,
+            scheduler: params.scheduler,
+            broadcast: params.broadcast,
+            activeWorkInspectors,
+            isNixMode,
+            getRuntimeConfig: params.getRuntimeConfig,
+          }),
+        { inheritRequestScope: false },
+      );
     });
   };
 
   return {
-    getActiveTaskCount,
     skillsChangeUnsub,
     startMaintenance,
   };

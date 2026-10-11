@@ -1,23 +1,9 @@
-// Slack plugin module implements stream mode behavior.
-import {
-  resolveSlackNativeStreaming,
-  resolveSlackStreamingMode,
-  type StreamingMode,
-} from "./streaming-compat.js";
+import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 
-type SlackStreamingMode = StreamingMode;
-
-export function resolveSlackStreamingConfig(params: {
-  streaming?: unknown;
-  streamMode?: unknown;
-  nativeStreaming?: unknown;
-}): {
-  mode: SlackStreamingMode;
-  nativeStreaming: boolean;
-} {
+export function resolveSlackStreamingConfig(params: Pick<SlackAccountConfig, "streaming">) {
   return {
-    mode: resolveSlackStreamingMode(params),
-    nativeStreaming: resolveSlackNativeStreaming(params),
+    mode: params.streaming?.mode ?? "progress",
+    nativeStreaming: params.streaming?.nativeTransport ?? true,
   };
 }
 

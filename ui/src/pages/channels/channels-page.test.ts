@@ -92,6 +92,7 @@ function createGateway(): TestGateway {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    subscribeEvents: () => () => undefined,
     emit(patch: Partial<ApplicationGatewaySnapshot>) {
       Object.assign(snapshot, patch);
       for (const listener of listeners) {

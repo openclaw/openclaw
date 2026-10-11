@@ -60,6 +60,11 @@ const bulkSecretEntry: SecretStoreEntry = {
   allowedHosts: [],
 };
 
+const longNameSecretEntry: SecretStoreEntry = {
+  ...secretEntry,
+  name: "REUTERS_OUTLOOK_CALENDAR_ICS_PRODUCTION_ACCESS_TOKEN",
+};
+
 async function capture(
   page: Page,
   fileName: string,
@@ -130,6 +135,126 @@ async function activeGatewayIdentity(page: Page) {
 }
 
 suite.define(() => {
+  it.each([false, true])("keeps narrow row actions visible (touch: %s)", async (hasTouch) => {
+    await suite.withPage({ viewport: { width: 1000, height: 900 }, hasTouch }, async ({ page }) => {
+      await installMockGateway(page, {
+        featureMethods: ["secrets.store.list", "secrets.store.set", "secrets.store.delete"],
+        methodResponses: {
+          "secrets.store.list": { entries: [secretEntry] },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}settings/secrets`);
+      const row = page.getByRole("row", { name: secretEntry.name });
+      const trigger = row.getByRole("button", { name: `Actions: ${secretEntry.name}` });
+      await trigger.waitFor({ state: "visible" });
+      await row.hover();
+      await page.evaluate(() => document.fonts.ready);
+      const [buttonBox, tableBox] = await Promise.all([
+        trigger.boundingBox(),
+        page.locator(".secrets-store__table-wrap").boundingBox(),
+      ]);
+      if (!buttonBox || !tableBox) {
+        throw new Error("Expected row actions and table to have layout boxes");
+      }
+      expect(buttonBox.x + buttonBox.width).toBeLessThanOrEqual(tableBox.x + tableBox.width);
+    });
+  });
+
+  it("keeps long secret names inside the Name column", async () => {
+    await suite.withPage(
+      {
+        viewport: { height: 900, width: 1440 },
+      },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          featureMethods: ["secrets.store.list"],
+          methodResponses: {
+            "secrets.store.list": { entries: [longNameSecretEntry] },
+          },
+        });
+
+        await page.goto(`${suite.server.baseUrl}settings/secrets`);
+        const row = page.getByRole("row", { name: longNameSecretEntry.name });
+        const name = row.locator(".secrets-store__name");
+        const access = row.locator(".secrets-store__mode");
+
+        expect(await name.getAttribute("title")).toBe(longNameSecretEntry.name);
+        const layout = await Promise.all([name.boundingBox(), access.boundingBox()]);
+        const nameBox = layout[0];
+        const accessBox = layout[1];
+        if (!nameBox || !accessBox) {
+          throw new Error("Expected Name and Access cells to have layout boxes");
+        }
+        expect(nameBox.x + nameBox.width).toBeLessThanOrEqual(accessBox.x);
+        const nameStyle = await name.evaluate((element) => {
+          const style = getComputedStyle(element);
+          return {
+            overflowX: style.overflowX,
+            textOverflow: style.textOverflow,
+            whiteSpace: style.whiteSpace,
+            overflows: element.scrollWidth > element.clientWidth,
+          };
+        });
+        expect(nameStyle).toEqual({
+          overflowX: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          overflows: true,
+        });
+      },
+    );
+  });
+
+  it("wraps long secret names in the stacked phone layout", async () => {
+    await suite.withPage(
+      {
+        viewport: { height: 844, width: 390 },
+      },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          featureMethods: ["secrets.store.list"],
+          methodResponses: {
+            "secrets.store.list": { entries: [longNameSecretEntry] },
+          },
+        });
+
+        await page.goto(`${suite.server.baseUrl}settings/secrets`);
+        const row = page.getByRole("row", { name: longNameSecretEntry.name });
+        const name = row.locator(".secrets-store__name");
+
+        expect(await name.textContent()).toBe(longNameSecretEntry.name);
+        const nameStyle = await name.evaluate((element) => {
+          const style = getComputedStyle(element);
+          const text = document.createRange();
+          text.selectNodeContents(element);
+          return {
+            overflowWrap: style.overflowWrap,
+            whiteSpace: style.whiteSpace,
+            fitsHorizontally: element.scrollWidth <= element.clientWidth,
+            wraps: text.getClientRects().length > 1,
+          };
+        });
+        expect(nameStyle).toEqual({
+          overflowWrap: "anywhere",
+          whiteSpace: "normal",
+          fitsHorizontally: true,
+          wraps: true,
+        });
+        for (const selector of ["html", ".secrets-store__table-wrap", ".secrets-store__table"]) {
+          const fits = await page.locator(selector).evaluate((element) => {
+            const box = element.getBoundingClientRect();
+            return (
+              element.scrollWidth <= element.clientWidth &&
+              box.left >= 0 &&
+              box.right <= window.innerWidth
+            );
+          });
+          expect(fits, `${selector} stays inside the phone viewport`).toBe(true);
+        }
+      },
+    );
+  });
+
   it("blocks empty protected values without rejecting empty environment entries", async () => {
     await suite.withPage({}, async ({ page }) => {
       const gateway = await installMockGateway(page, {
@@ -152,7 +277,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}settings/secrets`);
-      await page.getByRole("heading", { name: "Secrets" }).waitFor();
+      await page.getByRole("heading", { name: "Secrets", level: 1, exact: true }).waitFor();
 
       const existingSecretRow = page.getByRole("row", { name: /SERVICE_API_KEY/u });
       await existingSecretRow.getByRole("button", { name: "Actions: SERVICE_API_KEY" }).click();
@@ -266,7 +391,7 @@ suite.define(() => {
         });
 
         await page.goto(`${suite.server.baseUrl}settings/secrets`);
-        await page.getByRole("heading", { name: "Secrets" }).waitFor();
+        await page.getByRole("heading", { name: "Secrets", level: 1, exact: true }).waitFor();
 
         await page.getByRole("button", { name: "Add", exact: true }).click();
         const addDialog = page.locator('openclaw-modal-dialog[label="Add"]');
@@ -489,7 +614,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}settings/secrets`);
-      await page.getByRole("heading", { name: "Secrets" }).waitFor();
+      await page.getByRole("heading", { name: "Secrets", level: 1, exact: true }).waitFor();
       await page.getByText(/Gateway\/admin required/u).waitFor();
       expect(await page.getByRole("button", { name: "Add", exact: true }).count()).toBe(0);
       expect(await page.getByRole("button", { name: "Bulk Add", exact: true }).count()).toBe(0);

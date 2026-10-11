@@ -1,4 +1,7 @@
 import { t } from "../i18n/index.ts";
+import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
+
+registerSettingsEnglish();
 
 type ConfigSectionMeta = {
   label: string;

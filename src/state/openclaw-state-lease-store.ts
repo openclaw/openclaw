@@ -11,8 +11,11 @@ import {
   type StateLeaseProcessOwner,
 } from "../infra/state-lease-process-owner.js";
 import type { DB } from "./openclaw-state-db.generated.js";
+import type {
+  OpenClawStateLeaseIdentity,
+  OpenClawStateLeaseAcquisition,
+} from "./openclaw-state-lease.types.js";
 
-export type OpenClawStateLeaseIdentity = { scope: string; key: string; owner: string };
 type LeaseDatabase = Pick<DB, "state_leases">;
 
 /** The caller owns the write transaction; only absent or expired leases can be acquired. */
@@ -21,10 +24,11 @@ export function acquireOpenClawStateLeaseInTransaction(
   identity: OpenClawStateLeaseIdentity,
   leaseMs: number,
   payloadJson: string | null = null,
-): number | undefined {
-  // BEGIN IMMEDIATE may wait on SQLite. Sample only after admission so a
-  // successful insert never commits an already-expired lease.
-  const now = Date.now();
+  nowMs?: number,
+): OpenClawStateLeaseAcquisition {
+  // Unless the caller owns a captured clock, sample after transaction admission:
+  // BEGIN IMMEDIATE may wait long enough to exhaust a lease sampled beforehand.
+  const now = nowMs ?? Date.now();
   const kysely = getNodeSqliteKysely<LeaseDatabase>(db);
   executeSqliteQuerySync(
     db,
@@ -51,7 +55,18 @@ export function acquireOpenClawStateLeaseInTransaction(
       })
       .onConflict((conflict) => conflict.columns(["scope", "lease_key"]).doNothing()),
   );
-  return inserted.numAffectedRows === 1n ? expiresAt : undefined;
+  if (inserted.numAffectedRows === 1n) {
+    return { kind: "acquired", expiresAt };
+  }
+  const held = readOpenClawStateLease(db, identity);
+  if (!held) {
+    throw new Error("Conflicting state lease disappeared inside its acquisition transaction");
+  }
+  // The owner token and recorded creation time identify this lease's grant, not liveness.
+  return {
+    kind: "held",
+    holder: { owner: held.owner, epoch: held.createdAt, expiresAt: held.expiresAt },
+  };
 }
 
 export function readOpenClawStateLease(
@@ -62,7 +77,13 @@ export function readOpenClawStateLease(
     db,
     getNodeSqliteKysely<LeaseDatabase>(db)
       .selectFrom("state_leases")
-      .select(["owner", "expires_at as expiresAt", "payload_json as payloadJson"])
+      .select([
+        "owner",
+        "created_at as createdAt",
+        "expires_at as expiresAt",
+        "heartbeat_at as heartbeatAt",
+        "payload_json as payloadJson",
+      ])
       .where("scope", "=", identity.scope)
       .where("lease_key", "=", identity.key),
   );
@@ -87,6 +108,7 @@ export function reclaimDeadOpenClawStateLeaseInTransaction(
 export function readOpenClawStateLeaseExpiry(
   db: DatabaseSync,
   identity: OpenClawStateLeaseIdentity,
+  nowMs?: number,
 ): number | undefined {
   return executeSqliteQueryTakeFirstSync(
     db,
@@ -96,7 +118,7 @@ export function readOpenClawStateLeaseExpiry(
       .where("scope", "=", identity.scope)
       .where("lease_key", "=", identity.key)
       .where("owner", "=", identity.owner)
-      .where("expires_at", ">", Date.now())
+      .where("expires_at", ">", nowMs ?? Date.now())
       .$narrowType<{ expires_at: number }>(),
   )?.expires_at;
 }
@@ -136,8 +158,9 @@ export function renewOpenClawStateLeaseInTransaction(
   identity: OpenClawStateLeaseIdentity,
   leaseMs: number,
   processOwner?: StateLeaseProcessOwner,
+  nowMs?: number,
 ): number | undefined {
-  const now = Date.now();
+  const now = nowMs ?? Date.now();
   const expiresAt = now + leaseMs;
   const payloadJson = repairMissingProcessStartTime(db, identity, processOwner);
   const result = executeSqliteQuerySync(

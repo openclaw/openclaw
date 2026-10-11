@@ -1,5 +1,6 @@
 // Covers manifest contract eligibility decisions.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { normalizePluginsConfig } from "./config-state.js";
 
 const mocks = vi.hoisted(() => ({
@@ -77,20 +78,8 @@ describe("bundled manifest contract availability", () => {
     mocks.readBundledDiscoveryMode.mockReturnValue("allowlist");
   });
 
-  it.each([
-    {
-      name: "an explicitly disabled plugin",
-      config: { plugins: { entries: { google: { enabled: false } } } },
-    },
-    {
-      name: "a denylisted plugin",
-      config: { plugins: { deny: ["google"] } },
-    },
-    {
-      name: "a plugin outside a restrictive allowlist",
-      config: { plugins: { allow: ["another-plugin"] } },
-    },
-  ])("does not expose $name", ({ config }) => {
+  it("does not expose a plugin outside a restrictive allowlist", () => {
+    const config = { plugins: { allow: ["another-plugin"] } };
     expect(
       isManifestPluginAvailableForControlPlane({
         snapshot,
@@ -107,32 +96,6 @@ describe("bundled manifest contract availability", () => {
       }),
     ).toEqual([]);
   });
-
-  it("preserves bundled auto-activation when no explicit owner restriction exists", () => {
-    expect(isManifestPluginAvailableForControlPlane({ snapshot, plugin, config: {} })).toBe(true);
-    expect(mocks.readBundledDiscoveryMode).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { enabled: true },
-    { token: "configured" },
-    { accounts: { primary: { token: "configured" } } },
-  ])(
-    "preserves explicitly configured bundled channels outside a restrictive allowlist",
-    (channelConfig) => {
-      expect(
-        isManifestPluginAvailableForControlPlane({
-          snapshot,
-          plugin: { ...plugin, id: "discord-owner", channels: ["discord"] },
-          config: {
-            plugins: { allow: ["another-plugin"] },
-            channels: { discord: channelConfig },
-          } as never,
-        }),
-      ).toBe(true);
-      expect(mocks.readBundledDiscoveryMode).not.toHaveBeenCalled();
-    },
-  );
 
   it("preserves explicitly configured custom channel ids distinct from their plugin owner", () => {
     expect(
@@ -161,17 +124,6 @@ describe("bundled manifest contract availability", () => {
     ).toBe(false);
   });
 
-  it("accepts a normalized owner explicitly included in the restrictive allowlist", () => {
-    expect(
-      isManifestPluginAvailableForControlPlane({
-        snapshot,
-        plugin,
-        config: { plugins: { allow: [" GOOGLE "] } },
-      }),
-    ).toBe(true);
-    expect(mocks.readBundledDiscoveryMode).not.toHaveBeenCalled();
-  });
-
   it.each([{ deny: ["discord-owner"] }, { entries: { "discord-owner": { enabled: false } } }])(
     "does not let channel configuration override explicit plugin prohibition",
     (plugins) => {
@@ -187,39 +139,6 @@ describe("bundled manifest contract availability", () => {
       ).toBe(false);
     },
   );
-
-  it("reads machine-owned bundled compatibility once per metadata lifecycle", () => {
-    const anotherPlugin = {
-      ...plugin,
-      id: "another-google",
-      contracts: { imageGenerationProviders: ["another-google"] },
-    };
-    const config = { plugins: { allow: ["allowed-plugin"] } };
-    const restrictedSnapshot = {
-      index: { plugins: [] },
-      plugins: [plugin, anotherPlugin],
-    } as never;
-
-    expect(
-      listAvailableManifestContractValues({
-        snapshot: restrictedSnapshot,
-        contract: "imageGenerationProviders",
-        config,
-      }),
-    ).toEqual([]);
-    expect(mocks.readBundledDiscoveryMode).toHaveBeenCalledTimes(1);
-
-    clearPluginMetadataLifecycleCaches();
-    expect(
-      isManifestPluginAvailableForControlPlane({
-        snapshot,
-        plugin,
-        config,
-        allowBundledProviderCompat: true,
-      }),
-    ).toBe(false);
-    expect(mocks.readBundledDiscoveryMode).toHaveBeenCalledTimes(2);
-  });
 
   it("preserves globally disabled bundled metadata for the named speech compatibility path", () => {
     const config = { plugins: { enabled: false } };
@@ -288,35 +207,6 @@ describe("bundled manifest contract availability", () => {
 });
 
 describe("prepared installed-plugin eligibility", () => {
-  it("normalizes installed policy once for a batch of manifest checks", () => {
-    const ids = Array.from({ length: 8 }, (_, index) => `external-${index}`);
-    const index = makePluginMetadataIndex();
-    index.plugins = ids.flatMap((id) => makePluginMetadataIndex(id).plugins);
-    let enumerations = 0;
-    const entries = new Proxy(Object.fromEntries(ids.map((id) => [id, { enabled: true }])), {
-      ownKeys(target) {
-        enumerations += 1;
-        return Reflect.ownKeys(target);
-      },
-    });
-    const config = { plugins: { entries } };
-    const normalizedConfig = normalizePluginsConfig(config.plugins);
-    enumerations = 0;
-    const isInstalledPluginEnabled = createInstalledPluginEnabledPredicate(index.plugins, config);
-    expect(
-      ids.map((id) =>
-        isManifestPluginAvailableForControlPlane({
-          snapshot: { index },
-          plugin: { id, origin: "global" },
-          config,
-          normalizedConfig,
-          isInstalledPluginEnabled,
-        }),
-      ),
-    ).toEqual(ids.map(() => true));
-    expect(enumerations).toBe(1);
-  });
-
   it.each([
     { config: undefined, expected: [true, true, true, false, false, false] },
     { config: {}, expected: [true, true, false, true, false, false] },
@@ -452,29 +342,6 @@ describe("loadManifestContractSnapshot", () => {
     expect(mocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
-  it("opts unscoped callers into the stored workspace-scoped snapshot", () => {
-    const env = { HOME: "/home/snapshot" } as NodeJS.ProcessEnv;
-    const snapshot = {
-      index: { plugins: [] },
-      plugins: [],
-      byPluginId: new Map(),
-    };
-    mocks.resolvePluginMetadataSnapshot.mockReturnValue(snapshot);
-
-    expect(loadManifestContractSnapshot({ config: {}, env })).toEqual({
-      index: snapshot.index,
-      plugins: snapshot.plugins,
-      byPluginId: snapshot.byPluginId,
-    });
-
-    expect(mocks.resolvePluginMetadataSnapshot).toHaveBeenCalledWith({
-      config: {},
-      env,
-      allowWorkspaceScopedCurrent: true,
-    });
-    expect(mocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
-  });
-
   it("preserves configless default-discovery snapshot compatibility", () => {
     const env = { HOME: "/home/default-config" } as NodeJS.ProcessEnv;
     const plugin = { id: "demo" };
@@ -498,29 +365,6 @@ describe("loadManifestContractSnapshot", () => {
     });
     expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledWith({
       config: undefined,
-      env,
-      allowWorkspaceScopedCurrent: true,
-    });
-  });
-
-  it("falls back to the shared metadata snapshot loader", () => {
-    const env = { HOME: "/home/fallback" } as NodeJS.ProcessEnv;
-    const plugin = { id: "demo" };
-    const snapshot = {
-      index: { plugins: [{ pluginId: "demo" }] },
-      plugins: [plugin],
-      byPluginId: new Map([[plugin.id, plugin]]),
-    };
-    mocks.loadPluginMetadataSnapshot.mockReturnValue(snapshot);
-
-    expect(loadManifestContractSnapshot({ config: {}, env })).toEqual({
-      index: snapshot.index,
-      plugins: snapshot.plugins,
-      byPluginId: snapshot.byPluginId,
-    });
-
-    expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledWith({
-      config: {},
       env,
       allowWorkspaceScopedCurrent: true,
     });

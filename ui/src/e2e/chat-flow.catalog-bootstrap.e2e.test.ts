@@ -1,20 +1,133 @@
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it } from "vitest";
 import { upsertSessionEntryCore } from "../../../src/config/sessions/session-accessor.js";
 import {
   disconnectGatewayClient,
-  getGatewayE2ePortBlock,
   startGatewayWithClient,
 } from "../../../src/gateway/test-helpers.e2e.js";
-import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.js";
+import { acquireGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.listener.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../../src/test-utils/openclaw-test-state.js";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
-import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
-import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
+import { createRequireRecord } from "../../../test/helpers/record.js";
+import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
+import { installMockGateway } from "./chat-flow.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createChatFlowE2eSuite();
+const token = "synthetic-catalog-mutation-token";
+let state: OpenClawTestState | undefined;
+let gatewayStartup: ReturnType<typeof startGatewayWithClient> | undefined;
+let realGateway: Awaited<ReturnType<typeof startGatewayWithClient>>;
+const suite = createControlUiE2eSuite({
+  name: "Control UI catalog bootstrap",
+  trackBrowserContexts: true,
+  unavailableMessage: (executablePath) =>
+    `Playwright Chromium is not installed or cannot start at ${executablePath}`,
+  resources: {
+    retainedState: () => state?.root,
+    async run(signal) {
+      state = await createOpenClawTestState({
+        label: "chat-catalog-mutation",
+        env: {
+          OPENCLAW_SKIP_CHANNELS: "1",
+          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+          OPENCLAW_SKIP_CRON: "1",
+          OPENCLAW_SKIP_CANVAS_HOST: "1",
+          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+        },
+      });
+      signal.throwIfAborted();
+      await state.writeAuthProfiles(
+        {
+          version: 1,
+          profiles: {
+            "fixture:account-a": {
+              type: "api_key",
+              provider: "fixture",
+              key: "synthetic-a",
+              displayName: "Account A",
+            },
+            "fixture:account-b": {
+              type: "api_key",
+              provider: "fixture",
+              key: "synthetic-b",
+              displayName: "Account B",
+            },
+          },
+        },
+        "alpha",
+      );
+      const portClaim = await acquireGatewayE2ePortBlock();
+      if (signal.aborted) {
+        // Gateway startup has not taken ownership of the claim yet.
+        await portClaim.release();
+        signal.throwIfAborted();
+      }
+      gatewayStartup = startGatewayWithClient({
+        portClaim,
+        configPath: state.configPath,
+        token,
+        scopes: ["operator.admin"],
+        cfg: {
+          gateway: {
+            mode: "local",
+            auth: { mode: "token", token },
+            controlUi: { allowedOrigins: [new URL(suite.server.baseUrl).origin] },
+          },
+          plugins: { enabled: false },
+          agents: {
+            ownership: "explicit",
+            entries: {
+              alpha: {
+                workspace: state.workspaceDir,
+                model: "fixture/first",
+                modelPolicy: { allow: ["fixture/first", "fixture/second"] },
+              },
+            },
+          },
+          models: {
+            catalogRefresh: { enabled: false },
+            providers: {
+              fixture: {
+                api: "openai-completions",
+                baseUrl: "http://127.0.0.1:9/v1",
+                apiKey: "synthetic-provider-key",
+                models: [
+                  { id: "first", name: "First model" },
+                  { id: "second", name: "Second model" },
+                ],
+              },
+            },
+          },
+        },
+      });
+      realGateway = await gatewayStartup;
+      // Startup cron hydration publishes a separate sessions.changed invalidation.
+      await realGateway.server.startupSettled;
+      signal.throwIfAborted();
+    },
+    async close() {
+      const owner = await gatewayStartup;
+      if (owner) {
+        await runQaGatewayFixture(
+          () => disconnectGatewayClient(owner.client),
+          () => owner.server.close({ reason: "catalog mutation browser proof complete" }),
+        );
+      }
+    },
+    async release() {
+      await state?.cleanup();
+    },
+  },
+});
 const requireRecord = createRequireRecord("record", "expected-object-value");
 
 suite.define(() => {
@@ -133,11 +246,13 @@ suite.define(() => {
         const requestsBeforeOpen = (await gateway.getRequests("models.list")).length;
         const sessionRequestsBeforeOpen = (await gateway.getRequests("sessions.list")).length;
         await trigger.click();
+        await revealChatModelOption(currentRow);
         await expect.poll(() => currentRow.isVisible()).toBe(true);
         expect(await picker.textContent()).toContain("Pinned session account");
-        expect(await picker.locator("[data-chat-model-catalog-state]").textContent()).toContain(
-          "fixture",
+        expect(await picker.locator("[data-chat-model-refresh]").textContent()).toContain(
+          "Refreshing models for Fixture…",
         );
+        expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
         expect(await gateway.getRequests("models.list")).toHaveLength(requestsBeforeOpen);
         expect(await gateway.getRequests("sessions.list")).toHaveLength(sessionRequestsBeforeOpen);
         await gateway.resolveDeferred("models.list", { models: [older] });
@@ -152,98 +267,28 @@ suite.define(() => {
         expect(await picker.textContent()).toContain("Pinned session account");
         await trigger.click();
         await trigger.click();
+        await revealChatModelOption(currentRow);
         await expect.poll(() => currentRow.isVisible()).toBe(true);
         expect(await gateway.getRequests("models.list")).toHaveLength(requestsBeforeOpen);
         expect(await gateway.getRequests("sessions.list")).toHaveLength(sessionRequestsBeforeOpen);
       } finally {
-        await context.close();
+        await suite.closeBrowserContext(context);
       }
     },
   );
 
   it.each(["pending", "complete", "reconnect", "ordinary-reconnect"] as const)(
-    "real chat route preserves account state during %s snapshot ordering",
+    "real chat route recovers current account state after %s snapshot ordering",
     async (replacementState) => {
-      const state = await createOpenClawTestState({
-        label: `chat-catalog-mutation-${replacementState}`,
-        env: {
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        },
-      });
-      const port = await getGatewayE2ePortBlock();
-      const token = "synthetic-catalog-mutation-token";
-      const sessionKey = "agent:alpha:session-mutation";
+      const { port, client: admin } = realGateway;
+      const sessionName = `session-mutation-${replacementState}`;
+      const sessionKey = `agent:alpha:${sessionName}`;
       const frames: unknown[] = [];
-      let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
       try {
-        state.applyEnv();
-        await state.writeAuthProfiles(
-          {
-            version: 1,
-            profiles: {
-              "fixture:account-a": {
-                type: "api_key",
-                provider: "fixture",
-                key: "synthetic-a",
-                displayName: "Account A",
-              },
-              "fixture:account-b": {
-                type: "api_key",
-                provider: "fixture",
-                key: "synthetic-b",
-                displayName: "Account B",
-              },
-            },
-          },
-          "alpha",
-        );
-        gateway = await startGatewayWithClient({
-          port,
-          configPath: state.configPath,
-          token,
-          scopes: ["operator.admin"],
-          cfg: {
-            gateway: {
-              mode: "local",
-              auth: { mode: "token", token },
-              controlUi: { allowedOrigins: [new URL(suite.server.baseUrl).origin] },
-            },
-            plugins: { enabled: false },
-            agents: {
-              ownership: "explicit",
-              entries: {
-                alpha: {
-                  workspace: state.workspaceDir,
-                  model: "fixture/first",
-                  modelPolicy: { allow: ["fixture/first", "fixture/second"] },
-                },
-              },
-            },
-            models: {
-              catalogRefresh: { enabled: false },
-              providers: {
-                fixture: {
-                  api: "openai-completions",
-                  baseUrl: "http://127.0.0.1:9/v1",
-                  apiKey: "synthetic-provider-key",
-                  models: [
-                    { id: "first", name: "First model" },
-                    { id: "second", name: "Second model" },
-                  ],
-                },
-              },
-            },
-          },
-        });
-        const admin = gateway.client;
         await upsertSessionEntryCore(
           { agentId: "alpha", sessionKey },
           {
-            sessionId: "catalog-mutation-session",
+            sessionId: `catalog-mutation-${replacementState}`,
             updatedAt: Date.now(),
             authProfileOverride: "fixture:account-a",
             authProfileOverrideSource: "user",
@@ -258,6 +303,7 @@ suite.define(() => {
           const heldReplies: Array<() => void> = [];
           let holdReplacement = true;
           let holdReconnectCatalog = false;
+          let holdInitialSnapshot = true;
           await page.routeWebSocket(`ws://127.0.0.1:${port}/**`, (socket) => {
             const server = socket.connectToServer();
             disconnect.resolve(() => socket.close({ code: 1012, reason: "Reconnect proof" }));
@@ -276,7 +322,7 @@ suite.define(() => {
             });
             server.onMessage((message) => {
               const frame = requireRecord(JSON.parse(message.toString()));
-              if (frame.event === "models.snapshot") {
+              if (frame.event === "models.snapshot" && holdInitialSnapshot) {
                 frames.push({ direction: "held-initial", frame });
                 initialSnapshot.resolve({
                   deliver: () => socket.send(message),
@@ -312,7 +358,7 @@ suite.define(() => {
               socket.send(message);
             });
           });
-          const url = new URL("chat/alpha/~key/session-mutation", suite.server.baseUrl);
+          const url = new URL(`chat/alpha/~key/${sessionName}`, suite.server.baseUrl);
           url.searchParams.set("gatewayUrl", `ws://127.0.0.1:${port}`);
           url.hash = `token=${token}`;
           await page.goto(url.href);
@@ -368,6 +414,7 @@ suite.define(() => {
             await expect.poll(() => account.isVisible()).toBe(true);
             await expect.poll(() => account.textContent()).toContain("Account A");
             const row = picker.locator('[data-chat-model-option="fixture/first"]');
+            await revealChatModelOption(row);
             await expect.poll(() => row.isVisible()).toBe(true);
             expect(await row.isEnabled()).toBe(true);
             expect(catalogRequests.size).toBe(requestsBeforeOpen);
@@ -378,6 +425,7 @@ suite.define(() => {
             heldReplies.splice(0).forEach((send) => send());
             await trigger.click();
             await trigger.click();
+            await revealChatModelOption(row);
             await expect.poll(() => row.isVisible()).toBe(true);
             expect(catalogRequests.size).toBe(requestsBeforeOpen);
             return;
@@ -418,8 +466,17 @@ suite.define(() => {
           if (replacementState === "pending") {
             deliverReplacement();
           }
+          expect(
+            await admin.request("models.list", { agentId: "alpha", sessionKey }),
+          ).toMatchObject({
+            accountSelection: { authProfileId: "fixture:account-b" },
+          });
+          holdInitialSnapshot = false;
+          await page.reload();
+          await trigger.click();
           await expect.poll(() => account.textContent()).toContain("Account B");
           const selectedRow = picker.locator('[data-chat-model-option="fixture/second"]');
+          await revealChatModelOption(selectedRow);
           await expect.poll(() => selectedRow.isVisible()).toBe(true);
           expect(await selectedRow.isEnabled()).toBe(true);
           expect(await account.textContent()).not.toContain("Account A");
@@ -435,11 +492,6 @@ suite.define(() => {
           path.join(suite.artifactDir, `catalog-mutation-${replacementState}.json`),
           JSON.stringify(frames, null, 2),
         );
-        if (gateway) {
-          await disconnectGatewayClient(gateway.client);
-          await gateway.server.close({ reason: "catalog mutation browser proof complete" });
-        }
-        await state.cleanup();
       }
     },
     60_000,

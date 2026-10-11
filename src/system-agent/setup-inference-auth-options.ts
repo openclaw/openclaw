@@ -5,6 +5,7 @@ import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choice
 import type { ProviderInstallCatalogEntry } from "../plugins/provider-install-catalog.js";
 
 type SetupInferenceOptionPresentation = {
+  modelTarget?: "utility";
   /** Provider-auth choice id sent back to the selected setup operation. */
   id: string;
   /** Canonical provider identity for clients with bundled brand artwork. */
@@ -28,7 +29,7 @@ export type SetupInferenceAuthOption = SetupInferenceOptionPresentation & {
 
 type ChoicePresentationSource = Pick<
   ProviderAuthChoiceMetadata,
-  "choiceId" | "providerId" | "choiceLabel" | "choiceHint" | "icon" | "website"
+  "choiceId" | "providerId" | "choiceLabel" | "choiceHint" | "icon" | "website" | "modelTarget"
 >;
 
 function projectChoicePresentation(
@@ -37,6 +38,7 @@ function projectChoicePresentation(
 ): SetupInferenceOptionPresentation {
   return {
     id,
+    ...(choice.modelTarget ? { modelTarget: choice.modelTarget } : {}),
     brandId: choice.providerId,
     label: choice.choiceLabel,
     ...(choice.choiceHint?.trim() ? { hint: choice.choiceHint.trim() } : {}),
@@ -60,12 +62,13 @@ function compareSetupInferenceOptions(
   );
 }
 
-function listSetupInferenceGuidedOptions<
+function listSetupInferenceChoices<
   TOption extends SetupInferenceOptionPresentation & { featured?: boolean },
 >(params: {
   choices: readonly ProviderAuthChoiceMetadata[];
   include: (choice: ProviderAuthChoiceMetadata) => boolean;
   project: (choice: ProviderAuthChoiceMetadata, id: string) => TOption;
+  compare?: (a: TOption, b: TOption) => number;
 }): TOption[] {
   const options = new Map<string, { metadata: ProviderAuthChoiceMetadata; option: TOption }>();
   for (const choice of params.choices) {
@@ -73,12 +76,16 @@ function listSetupInferenceGuidedOptions<
     if (
       !id ||
       options.has(id) ||
+      choice.assistantVisibility === "detected-only" ||
       !supportsSetupTextInference(choice.onboardingScopes) ||
       !params.include(choice)
     ) {
       continue;
     }
     options.set(id, { metadata: choice, option: params.project(choice, id) });
+  }
+  if (params.compare) {
+    return [...options.values()].map(({ option }) => option).toSorted(params.compare);
   }
   return [...options.values()]
     .toSorted(
@@ -111,6 +118,7 @@ export function listSetupInferenceInstallOptions(
     if (
       installed.has(entry.choiceId) ||
       options.has(entry.choiceId) ||
+      entry.assistantVisibility === "detected-only" ||
       !supportsSetupTextInference(entry.onboardingScopes)
     ) {
       continue;
@@ -118,6 +126,7 @@ export function listSetupInferenceInstallOptions(
     options.set(entry.choiceId, {
       ...projectChoicePresentation({
         choiceId: entry.choiceId,
+        ...(entry.modelTarget ? { modelTarget: entry.modelTarget } : {}),
         providerId: entry.providerId,
         choiceLabel: entry.choiceLabel,
         choiceHint: entry.choiceHint,
@@ -147,24 +156,21 @@ export function supportsSetupManualSecret(choice: ProviderAuthChoiceMetadata): b
 export function listSetupInferenceManualProviders(
   authChoices: readonly ProviderAuthChoiceMetadata[],
 ): SetupInferenceManualProvider[] {
-  const choices = new Map<string, SetupInferenceManualProvider>();
-  for (const choice of authChoices) {
-    const id = choice.choiceId.trim();
-    if (!id || choices.has(id) || !supportsSetupManualSecret(choice)) {
-      continue;
-    }
-    choices.set(id, {
+  return listSetupInferenceChoices({
+    choices: authChoices,
+    include: supportsSetupManualSecret,
+    project: (choice, id) => ({
       ...projectChoicePresentation(choice, id),
       ...(choice.groupLabel?.trim() ? { groupLabel: choice.groupLabel.trim() } : {}),
-    });
-  }
-  return [...choices.values()].toSorted(compareSetupInferenceOptions);
+    }),
+    compare: compareSetupInferenceOptions,
+  });
 }
 
 export function listSetupInferenceAuthOptions(
   authChoices: readonly ProviderAuthChoiceMetadata[],
 ): SetupInferenceAuthOption[] {
-  return listSetupInferenceGuidedOptions({
+  return listSetupInferenceChoices({
     choices: authChoices,
     include: (choice) =>
       Boolean(choice.appGuidedAuth) ||
@@ -182,28 +188,25 @@ export function listSetupInferenceEnableOptions(
   choices: readonly ProviderAuthChoiceMetadata[],
 ): SetupInferenceAuthOption[] {
   return choices
-    .filter((choice) => supportsSetupTextInference(choice.onboardingScopes))
-    .map((choice) => {
-      const option: SetupInferenceAuthOption = Object.assign(
+    .filter(
+      (choice) =>
+        choice.assistantVisibility !== "detected-only" &&
+        supportsSetupTextInference(choice.onboardingScopes),
+    )
+    .map((choice): SetupInferenceAuthOption =>
+      Object.assign(
         projectChoicePresentation(choice, choice.choiceId),
-        {
-          kind: "install",
-          featured: choice.onboardingFeatured === true,
-        } as const,
-      );
-      const groupLabel = choice.groupLabel?.trim();
-      if (groupLabel) {
-        option.groupLabel = groupLabel;
-      }
-      return option;
-    })
+        { kind: "install" as const, featured: choice.onboardingFeatured === true },
+        choice.groupLabel?.trim() ? { groupLabel: choice.groupLabel.trim() } : {},
+      ),
+    )
     .toSorted(compareSetupInferenceOptions);
 }
 
 export function listSetupInferencePrepareOptions(
   authChoices: readonly ProviderAuthChoiceMetadata[],
 ): SetupInferencePrepareOption[] {
-  return listSetupInferenceGuidedOptions({
+  return listSetupInferenceChoices({
     choices: authChoices,
     include: (choice) => choice.appGuidedDiscovery === true,
     project: (choice, id) => ({
@@ -215,13 +218,18 @@ export function listSetupInferencePrepareOptions(
   });
 }
 
-export function choiceMatchesCredential(
-  choice: ProviderAuthChoiceMetadata,
+export function findSetupCredentialChoice(
+  choices: readonly ProviderAuthChoiceMetadata[],
   credential: AuthProfileCredential,
-): boolean {
-  return (
-    normalizeProviderId(choice.providerId) === normalizeProviderId(credential.provider) &&
-    supportsSetupTextInference(choice.onboardingScopes) &&
-    (credential.type === "oauth" ? Boolean(choice.appGuidedAuth) : choice.appGuidedSecret === true)
+): ProviderAuthChoiceMetadata | undefined {
+  const saved = credential.setup;
+  return choices.find((choice) =>
+    saved?.authChoice
+      ? choice.choiceId === saved.authChoice && choice.pluginId === saved.pluginId
+      : normalizeProviderId(choice.providerId) === normalizeProviderId(credential.provider) &&
+        supportsSetupTextInference(choice.onboardingScopes) &&
+        (credential.type === "oauth"
+          ? Boolean(choice.appGuidedAuth)
+          : choice.appGuidedSecret === true),
   );
 }

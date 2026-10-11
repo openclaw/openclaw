@@ -23,6 +23,9 @@ When transcription succeeds, `CommandBody`/`RawBody` are also set to the transcr
 For plugin callers, file transcription returns `decision.attachmentProcessing`,
 keyed by attachment index. `"completed"` means a CLI or provider completed input
 processing, including successful empty output; `"omitted"` means none completed.
+Standalone transcription artifacts such as `context:`, `###`, and `Transcribe the audio.`
+are treated as completed audio without speech before they reach meeting storage or
+agent input. Substantive text containing these words is preserved.
 This fact is separate from usable transcript text and attachment display markers.
 An absent field in an older SDK result means processing is unknown. For Discord
 batch voice, known omitted input prevents a partial utterance from becoming a
@@ -42,7 +45,7 @@ If you have not configured models and `tools.media.audio.enabled` is not `false`
    - `parakeet-mlx` on Apple Silicon (MLX-capable; device use remains unobserved)
    - `whisper` (Python CLI; downloads models automatically)
 
-Install/link provenance is capability evidence, not execution evidence. It never moves a candidate ahead of CPU sherpa by itself. OpenClaw does not load a model during setup or status checks just to probe a backend.
+Install/link provenance is capability evidence, not execution evidence. It never moves a candidate ahead of CPU sherpa by itself. OpenClaw does not load a model during setup or status checks just to check a backend.
 Auto-detected whisper.cpp keeps its normal model-run logs enabled so OpenClaw can record the upstream `using … backend` line. Explicit CLI entries keep their configured output flags.
 
 Gemini CLI and Antigravity are not auto-detected for media understanding. Audio
@@ -150,7 +153,7 @@ installation, run them once for that agent.
 
 The `profile` field is not required when OpenClaw can unambiguously select a
 compatible API-key profile, but it is strongly recommended. Explicit selection
-keeps audio routing deterministic if another OpenAI API-key profile exists now or
+keeps audio routing fixed if another OpenAI API-key profile exists now or
 is added later. The auth order still keeps the OAuth profile first for ordinary
 provider resolution.
 
@@ -253,7 +256,7 @@ provider-wide rather than scoped to the audio model entry.
 - Mistral setup details: [Mistral](/providers/mistral).
 - SenseAudio picks up `SENSEAUDIO_API_KEY` when `provider: "senseaudio"` is used. Setup details: [SenseAudio](/providers/senseaudio).
 - Audio providers can use defaults under `tools.media.audio` or override `baseUrl`, `headers`, `providerOptions`, and limits on their `tools.media.models[]` entry.
-- Leave `tools.media.audio.language` unset for language autodetection. OpenAI-compatible transcription requests then omit the implicit English prompt; explicit custom prompts and language hints are preserved. Use transcription prompts for context or spelling in the audio's language, not instructions to the downstream agent.
+- Leave `tools.media.audio.language` unset for language autodetection. Provider transcription requests omit the implicit “Transcribe the audio.” prompt, including when English is selected; explicit custom prompts and language hints are preserved. Use transcription prompts for context or spelling in the audio's language, not instructions to the downstream agent.
 - The built-in audio size cap is 20MB. An entry-level `maxBytes` override can change it; oversize audio is skipped for that model and the next entry is tried.
 - Audio files below 1024 bytes are skipped before provider/CLI transcription.
 - Default `maxChars` for audio is **unset** (full transcript). Set `tools.media.audio.maxChars` or per-entry `maxChars` to trim output.
@@ -301,7 +304,7 @@ On channels that support audio preflight, OpenClaw transcribes audio **before** 
 ## Gotchas
 
 - Scope rules use first-match-wins; `chatType` is normalized to `direct`, `group`, or `channel`.
-- Ensure your CLI exits 0 and prints plain text; JSON output needs to be massaged via `jq -r .text`.
+- Check that your CLI exits 0 and prints plain text; JSON output needs to be massaged via `jq -r .text`.
 - Known file-output modes are authoritative: an empty or missing inferred transcript file produces no transcript instead of falling back to CLI progress output.
 - For `parakeet-mlx`, use `--output-format txt` (or `all`) with `--output-dir` and the default `{filename}` output template. The upstream `PARAKEET_OUTPUT_FORMAT` and `PARAKEET_OUTPUT_TEMPLATE` environment variables are also honored. OpenClaw reads `<output-dir>/<media-basename>.txt`; the default `srt` format, other formats, and custom output templates continue to use stdout.
 - Keep timeouts reasonable (`timeoutSeconds`, default 60s) to avoid blocking the reply queue.

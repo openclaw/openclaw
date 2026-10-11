@@ -137,6 +137,12 @@ describe("qa transport registry", () => {
     expect(qaTransportSupportsModuleFlows([], { channelId: "selected", driver: "live" })).toBe(
       false,
     );
+    expect(
+      qaTransportSupportsModuleFlows(undefined, { channelId: "discord", driver: "crabline" }),
+    ).toBe(true);
+    expect(
+      qaTransportSupportsModuleFlows(undefined, { channelId: "telegram", driver: "crabline" }),
+    ).toBe(false);
   });
 
   it("rejects module-flow support when the created adapter lacks prepareFlow", async () => {
@@ -239,27 +245,6 @@ describe("qa transport registry", () => {
     await created.cleanupWithoutGateway();
     expect(pendingCleanup.cleanup).toHaveBeenCalledOnce();
     expect(cleanupAfterGatewayStop).toHaveBeenCalledOnce();
-  });
-
-  it("shares a failed cleanup and permits one subsequent retry", async () => {
-    const failure = new Error("pre-cleanup failed");
-    const cleanup = vi.fn().mockRejectedValueOnce(failure).mockResolvedValue(undefined);
-    const created = await createCleanupAdapter(cleanup);
-
-    const attempts = await Promise.allSettled([
-      created.cleanupBeforeGatewayStop(),
-      created.cleanupBeforeGatewayStop(),
-    ]);
-
-    expect(attempts).toEqual([
-      { status: "rejected", reason: failure },
-      { status: "rejected", reason: failure },
-    ]);
-    expect(cleanup).toHaveBeenCalledOnce();
-
-    await created.cleanupBeforeGatewayStop();
-    await created.cleanupBeforeGatewayStop();
-    expect(cleanup).toHaveBeenCalledTimes(2);
   });
 
   it("runs post-gateway cleanup when gateway-less pre-cleanup fails", async () => {

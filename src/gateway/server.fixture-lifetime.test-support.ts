@@ -16,10 +16,12 @@ export function createGatewayFixtureFork(
   const lifetime = createFixtureLifetime();
   registerCleanup(() => lifetime.cleanup());
   const repoRoot = path.resolve(import.meta.dirname, "../..");
-  let project: Promise<{ root: string; config: string }> | undefined;
+  const artifactsRoot = path.join(repoRoot, ".artifacts");
+  let project: Promise<{ config: string }> | undefined;
   const prepareProject = () =>
     (project ??= (async () => {
       const root = lifetime.createTempDir("gateway-fixture-code-");
+      await fs.mkdir(artifactsRoot, { recursive: true });
       await fs.symlink(
         path.join(repoRoot, "node_modules"),
         path.join(root, "node_modules"),
@@ -38,6 +40,7 @@ export default defineConfig({
   resolve: sharedVitestConfig.resolve,
   test: {
     pool: "forks", isolate: true, maxWorkers: 1, fileParallelism: false,
+    environment: sharedVitestConfig.test.environment,
     include: ["fixture.test.ts"],
     testTimeout: sharedVitestConfig.test.testTimeout,
     hookTimeout: sharedVitestConfig.test.hookTimeout,
@@ -49,12 +52,12 @@ export default defineConfig({
 });
 `,
       );
-      return { root, config };
+      return { config };
     })());
 
   return function runGatewayFixtureFork(
     context: Pick<TestContext, "signal" | "onTestFinished">,
-    source: (repoRoot: string, root: string) => string,
+    source: (repoRoot: string, root: string, codeRoot: string) => string,
     assertJournal?: (journal: unknown, text: string) => void,
   ): Promise<void> {
     const run = lifetime.run(async () => {
@@ -69,14 +72,14 @@ export default defineConfig({
         const prepared = await prepareProject();
         const require = createRequire(import.meta.url);
         const vitestPackageDir = path.dirname(require.resolve("vitest/package.json"));
-        await fs.symlink(
-          path.join(repoRoot, "node_modules"),
-          path.join(root, "node_modules"),
-          "junction",
-        );
+        // Vite's native runner needs generated tests and their imports under the same root.
+        const codeRoot = lifetime.createTempDir("gateway-fixture-code-", artifactsRoot);
         await fs.mkdir(path.join(root, "home"));
         await fs.mkdir(path.join(root, "tmp"));
-        await fs.writeFile(path.join(root, "fixture.test.ts"), source(repoRoot, root));
+        await fs.writeFile(
+          path.join(codeRoot, "fixture.test.ts"),
+          source(repoRoot, root, codeRoot),
+        );
         const reportFile = path.join(root, "report.json");
         let child: ChildProcess | undefined;
         const output = await runVitestShutdownCommand({
@@ -84,9 +87,9 @@ export default defineConfig({
             path.join(vitestPackageDir, "vitest.mjs"),
             "run",
             "--root",
-            prepared.root,
+            repoRoot,
             "--dir",
-            root,
+            codeRoot,
             "--config",
             prepared.config,
             "--configLoader",
@@ -253,12 +256,13 @@ test("observes startup cleanup ownership through fixture teardown", async () => 
     const address = blocker.address();
     if (!address || typeof address === "string") throw new Error("expected owned TCP blocker");
     const retain = metadataModule.retainGatewayPluginMetadata;
-    const metadataSpy = vi.spyOn(metadataModule, "retainGatewayPluginMetadata").mockImplementation(() => {
-      const owner = retain();
+    const metadataSpy = vi.spyOn(metadataModule, "retainGatewayPluginMetadata").mockImplementation((...metadataArgs) => {
+      const owner = retain(...metadataArgs);
       metadataRetains++;
       return { ...owner, close: async (...args) => {
-        await own(owner.close(...args));
+        const result = await own(owner.close(...args));
         metadataReleases++;
+        return result;
       } };
     });
     restorers.push(() => metadataSpy.mockRestore());
@@ -308,9 +312,12 @@ test("observes startup cleanup ownership through fixture teardown", async () => 
         keyPath: path.join(dir, "synthetic-missing-key.pem"),
       } } }));
     }
-    acquisition = own(gateway.startTestGatewayServer(address.port, {
+    const startupOptions = {
       bind: "loopback", auth: { mode: "none" }, controlUiEnabled: false,
-    }));
+    };
+    acquisition = own(scenario.failCleanup && !scenario.missingTls
+      ? gateway.startGatewayServerWithRetries({ port: address.port, opts: startupOptions })
+      : gateway.startTestGatewayServer(address.port, startupOptions));
     const [acquired] = await Promise.allSettled([acquisition]);
     expect(acquired.status).toBe("rejected");
     const failure = acquired.reason;

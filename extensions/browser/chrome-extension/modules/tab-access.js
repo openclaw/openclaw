@@ -1,11 +1,19 @@
 import { ACCESS_MODE_ALL, ACCESS_MODE_SELECTED } from "./relay-core.js";
 import { addTabToOpenClawGroup } from "./relay-tab-groups.js";
+import { createSerialQueue } from "./serial-queue.js";
 import { TAB_SCOPED_COMMANDS } from "./tab-access-command-scope.js";
 import { createTabDocumentProvenance } from "./tab-document-provenance.js";
 import { effectiveTabUrl, isValidTabId, tabEligibility } from "./tab-eligibility.js";
 import { createTabGroupRevocations } from "./tab-group-revocations.js";
 
 const DENIED_TAB_IDS_KEY = "deniedTabIdsV1";
+const TAB_ACCESS_DENIAL_MESSAGES = {
+  revoked: "access was revoked",
+  paused: "is paused for OpenClaw",
+  "not-selected": "is not in the OpenClaw tab group",
+  incognito: "is incognito and unavailable to OpenClaw",
+  discarded: "is discarded by Chrome; open it to reload before using it",
+};
 
 function initialBlankDocument(tab) {
   return tab.url === "about:blank" || (!tab.url && tab.pendingUrl === "about:blank");
@@ -32,7 +40,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
   let revision = 0;
   let discoveryRevision = 0;
   let initialized = null;
-  let storageChain = Promise.resolve();
+  const mutateStorage = createSerialQueue();
   const addTabToGroup = (tabId, created) =>
     addTabToOpenClawGroup(tabId, { chromeApi, getGroupColor, created });
 
@@ -78,14 +86,8 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       root = documents.rootRevision(tabId);
       tab = await chromeApi.tabs.get(tabId);
     } while (root !== documents.rootRevision(tabId));
-    return tab;
+    return documents.resolveTabSnapshot(tabId, tab);
   }
-
-  const mutateStorage = (task) => {
-    const pending = storageChain.then(task, task);
-    storageChain = pending.catch(() => undefined);
-    return pending;
-  };
 
   const persistedIds = () => [...deniedTabIds].toSorted((left, right) => left - right);
 
@@ -379,12 +381,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       // Chrome reloads the extension and closes its debugger sessions when this
       // permission changes (Chromium extension_util.cc: SetAllowFileAccess).
       fileAccessGranted = allowFiles;
-      const existingIds = new Set();
-      for (const tab of tabs) {
-        if (isValidTabId(tab.id)) {
-          existingIds.add(tab.id);
-        }
-      }
+      const existingIds = new Set(tabs.map((tab) => tab.id).filter(isValidTabId));
       const raw = stored[DENIED_TAB_IDS_KEY];
       if (Array.isArray(raw)) {
         for (const tabId of raw) {
@@ -409,9 +406,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     const normalized = nextMode === ACCESS_MODE_ALL ? ACCESS_MODE_ALL : ACCESS_MODE_SELECTED;
     if (normalized !== mode) {
       mode = normalized;
-      documents.invalidateAll();
-      revision += 1;
-      discoveryRevision += 1;
+      invalidateAll();
     }
     return mode;
   }
@@ -420,18 +415,14 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     const normalized = nextEnabled === true;
     if (normalized !== enabled) {
       enabled = normalized;
-      documents.invalidateAll();
-      revision += 1;
-      discoveryRevision += 1;
+      invalidateAll();
     }
   }
 
   function beginTransition() {
     if (!transitioning) {
       transitioning = true;
-      documents.invalidateAll();
-      revision += 1;
-      discoveryRevision += 1;
+      invalidateAll();
     }
   }
 
@@ -606,19 +597,9 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       }
       return state.tab;
     }
-    if (state.reason === "revoked") {
-      throw new Error(`tab ${tabId} access was revoked`);
-    }
-    if (state.reason === "paused") {
-      throw new Error(`tab ${tabId} is paused for OpenClaw`);
-    }
-    if (state.reason === "not-selected") {
-      throw new Error(`tab ${tabId} is not in the OpenClaw tab group`);
-    }
-    if (state.reason === "incognito") {
-      throw new Error(`tab ${tabId} is incognito and unavailable to OpenClaw`);
-    }
-    throw new Error(`tab ${tabId} is restricted or unavailable to OpenClaw`);
+    const message =
+      TAB_ACCESS_DENIAL_MESSAGES[state.reason] ?? "is restricted or unavailable to OpenClaw";
+    throw new Error(`tab ${tabId} ${message}`);
   }
 
   async function listAccessibleTabs({ allowDuringTransition = false } = {}) {
@@ -633,10 +614,11 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
         continue;
       }
       const accessible = [];
-      for (const tab of tabs) {
+      for (const snapshot of tabs) {
         if (listRevision !== discoveryRevision) {
           break;
         }
+        const tab = documents.resolveTabSnapshot(snapshot.id, snapshot);
         if (tabIsRevoking(tab.id) || !eligibilityForTab(tab).eligible) {
           continue;
         }
@@ -759,7 +741,6 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     addTabToGroup,
     inspectTab,
     requireTab,
-    requireTabAfterNavigation: (tabId, epoch) => requireTab(tabId, epoch, true),
     listAccessibleTabs,
     canPublishTab: (tabId) => !createdTabs.has(tabId) || createdTabs.get(tabId).handedOff,
     pause,

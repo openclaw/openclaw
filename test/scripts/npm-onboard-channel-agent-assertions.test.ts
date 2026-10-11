@@ -170,7 +170,7 @@ describe("npm onboard channel agent assertions", () => {
         JSON.stringify({
           agents: {
             defaults: { models: {} },
-            entries: { main: { default: true, model: "openai/gpt-5.6" } },
+            entries: { main: { model: "openai/gpt-5.6" } },
           },
           models: { providers: {} },
         }),
@@ -184,7 +184,6 @@ describe("npm onboard channel agent assertions", () => {
           entries: Record<
             string,
             {
-              default?: boolean;
               model?: { primary?: string };
               models?: Record<string, { agentRuntime?: { id?: string } }>;
             }
@@ -192,7 +191,6 @@ describe("npm onboard channel agent assertions", () => {
         };
       };
       expect(cfg.agents.entries.main).toMatchObject({
-        default: true,
         model: { primary: "openai/gpt-5.6-luna" },
         models: {
           "openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } },
@@ -214,7 +212,7 @@ describe("npm onboard channel agent assertions", () => {
         JSON.stringify({
           agents: {
             defaults: { models: {} },
-            entries: { main: { default: true, model: "openai/gpt-5.6" } },
+            entries: { main: { model: "openai/gpt-5.6" } },
           },
           models: { providers: {} },
         }),

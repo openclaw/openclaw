@@ -7,8 +7,8 @@ export type LsofListenerRecord = {
   detail: string;
 };
 
-function parseLsofListenerFieldRecords(output: string): LsofListenerRecord[] {
-  const records: LsofListenerRecord[] = [];
+export function parseLsofListenerRecordsByPort(output: string): Map<number, LsofListenerRecord[]> {
+  const recordsByPort = new Map<number, LsofListenerRecord[]>();
   let processFields: Pick<PortListener, "pid" | "command"> = {};
   let processLines: string[] = [];
   let fileLines: string[] = [];
@@ -34,14 +34,17 @@ function parseLsofListenerFieldRecords(output: string): LsofListenerRecord[] {
       continue;
     }
     if (line.startsWith("n")) {
-      records.push({
-        listener: { ...processFields, address: line.slice(1) },
-        detail: [...processLines, ...fileLines, line].join("\n"),
-      });
+      const listener = { ...processFields, address: line.slice(1) };
+      const port = parseLsofListenerPort(listener.address);
+      if (port !== null) {
+        const records = recordsByPort.get(port) ?? [];
+        records.push({ listener, detail: [...processLines, ...fileLines, line].join("\n") });
+        recordsByPort.set(port, records);
+      }
       fileLines = [];
     }
   }
-  return records;
+  return recordsByPort;
 }
 
 function parseLsofListenerPort(address: string | undefined): number | null {
@@ -53,20 +56,6 @@ function parseLsofListenerPort(address: string | undefined): number | null {
     return null;
   }
   return parseTcpEndpoint(normalized)?.port ?? null;
-}
-
-export function parseLsofListenerRecordsByPort(output: string): Map<number, LsofListenerRecord[]> {
-  const recordsByPort = new Map<number, LsofListenerRecord[]>();
-  for (const record of parseLsofListenerFieldRecords(output)) {
-    const port = parseLsofListenerPort(record.listener.address);
-    if (port === null) {
-      continue;
-    }
-    const records = recordsByPort.get(port) ?? [];
-    records.push(record);
-    recordsByPort.set(port, records);
-  }
-  return recordsByPort;
 }
 
 function listenerIdentity(listener: PortListener): string {

@@ -1,9 +1,11 @@
 /* @vitest-environment jsdom */
 
+import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
+import { subscribeBootRecordChanges } from "./boot-record.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import {
   createGatewayStoreTestStore,
@@ -15,6 +17,8 @@ import { resolveApplicationStartupSettings } from "./startup-settings.ts";
 import "./app-host.ts";
 
 vi.hoisted(() => {
+  // Build identity is captured on import, including imports from an earlier shared test.
+  vi.resetModules();
   vi.stubGlobal("OPENCLAW_CONTROL_UI_BUILD_INFO", {
     version: "1.0.0",
     buildId: "serving-build",
@@ -48,6 +52,7 @@ describe("OpenClaw shell Control UI refresh", () => {
   let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 
   beforeEach(() => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
     stubGatewayStoreTestGlobals();
     replace = vi.fn();
     const location = Object.assign(new URL("http://127.0.0.1:18789/chat/main"), { replace });
@@ -69,6 +74,37 @@ describe("OpenClaw shell Control UI refresh", () => {
     document.body.replaceChildren();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it("retires cached roster admission before publishing a replacement connection", () => {
+    store.current().opts.onHello?.({
+      type: "hello-ok",
+      protocol: 1,
+      auth: { role: "operator", scopes: [], recoveryScope: "admitted-account" },
+    });
+    const scope = gatewayCredentialScope(store.gateway.connection.gatewayUrl);
+    const retiredOwners: string[] = [];
+    const unsubscribeRetirement = subscribeBootRecordChanges((change) => {
+      if (change.scope === scope && change.retiredOwner?.recoveryScope) {
+        retiredOwners.push(change.retiredOwner.recoveryScope);
+      }
+    });
+    const observed: string[][] = [];
+    const unsubscribe = store.gateway.subscribe((snapshot) => {
+      if (snapshot.phase === "reconnecting") {
+        observed.push([...retiredOwners]);
+      }
+    });
+    try {
+      store.gateway.connect({ bootstrapToken: "synthetic-replacement-bootstrap" });
+      expect(observed.length).toBeGreaterThan(0);
+      for (const current of observed) {
+        expect(current).toContain("admitted-account");
+      }
+    } finally {
+      unsubscribe();
+      unsubscribeRetirement();
+    }
   });
 
   it.each(["clear", "replace"])(

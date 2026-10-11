@@ -98,7 +98,6 @@ describe("Signal approval reaction durable replay", () => {
           allowedDecisions: ["allow-once"],
           targetAuthorKeys: ["+15550001111"],
           route: { deliveryMode: "session" },
-          routeAllowed: true,
         });
 
         const handler = createSignalEventHandler(
@@ -107,7 +106,6 @@ describe("Signal approval reaction durable replay", () => {
               channels: { signal: { allowFrom: ["+15550001111"] } },
               approvals: { exec: { enabled: true, mode: "session" } },
             },
-            isSignalReactionMessage: (reaction) => reaction != null,
           }),
         );
         const monitor = await startSignalIngressMonitor({

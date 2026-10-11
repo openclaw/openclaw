@@ -6,36 +6,55 @@ import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   replaceSessionEntry,
-  replaceTranscriptEvents,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
-import type { SessionHistorySnapshot } from "../config/sessions/session-history-types.js";
-import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import type {
+  SessionHistoryReadParams,
+  SessionHistorySnapshot,
+} from "../config/sessions/session-history-types.js";
+import { reconcileSessionTranscriptIndexInTransaction } from "../config/sessions/session-transcript-index.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
+import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import {
   assistantTextMessage,
   messageToolCall,
-  messageToolResult,
   textContent,
   userTextMessage,
 } from "./session-history-fixtures.test-support.js";
+import { readSessionHistorySnapshotKernel } from "./session-history-snapshot.js";
 import {
   readSessionHistorySnapshotAsync,
-  readSessionHistorySnapshotLocal,
   SessionHistorySseState,
 } from "./session-history-state.js";
 import { readChatHistoryMessageId } from "./session-history-tail.js";
 import * as sessionTranscriptReaders from "./session-transcript-readers.js";
 
+function readSnapshot(params: SessionHistoryReadParams): Promise<SessionHistorySnapshot> {
+  return readSessionHistorySnapshotKernel(params, {
+    readers: sessionTranscriptReaders,
+    resolveCurrentUserProfileDisplay,
+  });
+}
+
+function historyTarget(state: OpenClawTestState, sessionId: string) {
+  return {
+    agentId: "main",
+    sessionId,
+    sessionKey: `agent:main:${sessionId}`,
+    storePath: path.join(state.sessionsDir(), "sessions.json"),
+  };
+}
+
 describe("session history snapshot reads", () => {
   test("keeps commentary fallback rows reachable across SQLite cursor pages", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const target = {
-        agentId: "main",
-        sessionId: "history-commentary-cursor",
-        sessionKey: "agent:main:history-commentary-cursor",
-        storePath: path.join(state.sessionsDir(), "sessions.json"),
-      };
+      const target = historyTarget(state, "history-commentary-cursor");
       const messages = [
         userTextMessage("check the workspace", 1),
         {
@@ -59,13 +78,13 @@ describe("session history snapshot reads", () => {
           message,
         })),
       ]);
-      const newest = await readSessionHistorySnapshotLocal({ target, limit: 1 });
+      const newest = await readSnapshot({ target, limit: 1 });
       expect(newest.history.messages).toMatchObject([
         { content: textContent("Done."), __openclaw: { seq: 3 } },
       ]);
       expect(newest.history.nextCursor).toBe("3");
 
-      const middle = await readSessionHistorySnapshotLocal({
+      const middle = await readSnapshot({
         target,
         limit: 1,
         cursor: newest.history.nextCursor,
@@ -79,7 +98,7 @@ describe("session history snapshot reads", () => {
       ]);
       expect(middle.history).toMatchObject({ hasMore: true, nextCursor: "2" });
 
-      const oldest = await readSessionHistorySnapshotLocal({
+      const oldest = await readSnapshot({
         target,
         limit: 1,
         cursor: middle.history.nextCursor,
@@ -112,12 +131,7 @@ describe("session history snapshot reads", () => {
     },
   ])("carries $name from the transcript worker into incremental SSE", async (fixture) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const target = {
-        agentId: "main",
-        sessionId: "history-pending-state",
-        sessionKey: "agent:main:history-pending-state",
-        storePath: path.join(state.sessionsDir(), "sessions.json"),
-      };
+      const target = historyTarget(state, "history-pending-state");
       const entry = { sessionId: target.sessionId, updatedAt: 1 };
       await replaceSessionEntry(target, entry);
       await replaceTranscriptEvents(target, [
@@ -142,14 +156,16 @@ describe("session history snapshot reads", () => {
       });
       expect(snapshot.history.items).toBe(snapshot.history.messages);
       const history = SessionHistorySseState.fromSnapshot({ target, snapshot });
-      const appended = history.appendInlineMessage({
-        message: {
-          role: "assistant",
-          content: textContent("The next reply"),
-          stopReason: "stop",
-          __openclaw: { runId: "run-pending" },
-        },
-      });
+      const appended = (
+        await history.prepareInlineMessage({
+          message: {
+            role: "assistant",
+            content: textContent("The next reply"),
+            stopReason: "stop",
+            __openclaw: { runId: "run-pending" },
+          },
+        })
+      )();
       if (fixture.assistantErrorPending) {
         expect(appended).toEqual({ shouldRefresh: true });
       } else {
@@ -164,18 +180,12 @@ describe("session history snapshot reads", () => {
   test.each([
     { cursor: "1", expectedSeq: undefined },
     { cursor: "8", expectedSeq: 7 },
-    { cursor: "9", expectedSeq: 8 },
     { cursor: "99", expectedSeq: 8 },
   ])(
     "keeps cursor $cursor stable when messages append during its read",
     async ({ cursor, expectedSeq }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const target = {
-          agentId: "main",
-          sessionId: "history-cursor-append",
-          sessionKey: "agent:main:history-cursor-append",
-          storePath: path.join(state.sessionsDir(), "sessions.json"),
-        };
+        const target = historyTarget(state, "history-cursor-append");
         await replaceTranscriptEvents(target, [
           { type: "session", version: 3, id: target.sessionId },
           ...Array.from({ length: 8 }, (_, index) => ({
@@ -205,9 +215,7 @@ describe("session history snapshot reads", () => {
             cursor,
           };
 
-          const refreshed = await readSessionHistorySnapshotLocal(history).then(
-            (snapshot) => snapshot.history,
-          );
+          const refreshed = await readSnapshot(history).then((snapshot) => snapshot.history);
 
           expect(await sessionTranscriptReaders.readSessionMessageCountAsync(target)).toBe(10);
           expect(refreshed.messages).toMatchObject(
@@ -304,14 +312,9 @@ describe("session history snapshot reads", () => {
       changedIds: ["M2", "M3", "M4", "M5", "M6", "R2"],
       stableMessageId: "M5",
     },
-  ])("rejects cursor continuation across $name", async (fixture) => {
+  ])("recovers cursor continuation across $name", async (fixture) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const target = {
-        agentId: "main",
-        sessionId: "history-cursor-prefix-change",
-        sessionKey: "agent:main:history-cursor-prefix-change",
-        storePath: path.join(state.sessionsDir(), "sessions.json"),
-      };
+      const target = historyTarget(state, "history-cursor-prefix-change");
       await replaceTranscriptEvents(target, [
         { type: "session", version: 3, id: target.sessionId },
         ...fixture.events,
@@ -333,6 +336,14 @@ describe("session history snapshot reads", () => {
 
           await appendTranscriptEvent(target, fixture.change);
           await waitForSessionTranscriptProjection(target);
+          if (fixture.change.type === "leaf") {
+            // Complete the branch fixture before testing continuity; a pending projection
+            // would let a broad rejection assertion pass without reaching the stale window.
+            const { db } = openOpenClawAgentDatabase({ agentId: target.agentId, env: state.env });
+            runSqliteImmediateTransactionSync(db, () =>
+              reconcileSessionTranscriptIndexInTransaction(db, target.sessionId),
+            );
+          }
           const changed = await readPage(target, { offset: 0, maxMessages: 10 });
           expect(changed.messages).toMatchObject(
             fixture.changedIds.map((id) => ({ __openclaw: { id } })),
@@ -357,9 +368,14 @@ describe("session history snapshot reads", () => {
           cursor: fixture.cursor,
         };
 
-        await expect(
-          readSessionHistorySnapshotLocal(history).then((snapshot) => snapshot.history),
-        ).rejects.toThrow(SessionTranscriptProjectionUnavailableError);
+        const recovered = (await readSnapshot(history)).history;
+        expect(recovered.windowReset).toBe(true);
+        expect(recovered.messages.length).toBeGreaterThan(0);
+        expect(
+          recovered.messages
+            .map(readChatHistoryMessageId)
+            .every((id) => fixture.changedIds.includes(id!)),
+        ).toBe(true);
       } finally {
         pageReadSpy.mockRestore();
       }
@@ -370,12 +386,7 @@ describe("session history snapshot reads", () => {
     "keeps same-sequence siblings at the head of %s cursor history",
     async (source) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const target = {
-          agentId: "main",
-          sessionId: "history-cursor-siblings",
-          sessionKey: "agent:main:history-cursor-siblings",
-          storePath: path.join(state.sessionsDir(), "sessions.json"),
-        };
+        const target = historyTarget(state, "history-cursor-siblings");
         const messages = [
           userTextMessage("send both here", 1),
           {
@@ -385,8 +396,19 @@ describe("session history snapshot reads", () => {
               messageToolCall("call-second", "Second visible reply."),
             ],
           },
-          messageToolResult("call-first", "first", 3),
-          messageToolResult("call-second", "second", 4),
+          {
+            role: "assistant",
+            content: ["First visible reply.", "Second visible reply."].map((text, index) => ({
+              type: "text",
+              text,
+              textSignature: JSON.stringify({
+                v: 1,
+                id: `commentary-${index}`,
+                phase: "commentary",
+              }),
+            })),
+          },
+          assistantTextMessage("NO_REPLY", 4),
           assistantTextMessage("NO_REPLY", 5),
         ];
         const events = [
@@ -416,23 +438,19 @@ describe("session history snapshot reads", () => {
             cursor,
           };
 
-          const refreshed = await readSessionHistorySnapshotLocal(history).then(
-            (snapshot) => snapshot.history,
-          );
+          const refreshed = await readSnapshot(history).then((snapshot) => snapshot.history);
           originalSnapshot ??= refreshed;
 
           expect(refreshed.messages).toMatchObject([
-            { role: "toolResult", toolCallId: "call-first", __openclaw: { seq: 3 } },
-            { role: "toolResult", toolCallId: "call-second", __openclaw: { seq: 4 } },
             {
               content: textContent("First visible reply."),
-              openclawMessageToolMirror: { toolCallId: "call-first" },
+              openclawStreamFallback: { itemId: "commentary-0" },
               __openclaw: { seq: 3 },
             },
             {
               content: textContent("Second visible reply."),
-              openclawMessageToolMirror: { toolCallId: "call-second" },
-              __openclaw: { seq: 4 },
+              openclawStreamFallback: { itemId: "commentary-1" },
+              __openclaw: { seq: 3 },
             },
           ]);
           expect(refreshed.nextCursor).toBe("3");
@@ -474,7 +492,7 @@ describe("session history snapshot reads", () => {
               cursor: "6",
             };
             await expect(
-              readSessionHistorySnapshotLocal(history).then((snapshot) => snapshot.history),
+              readSnapshot(history).then((snapshot) => snapshot.history),
             ).resolves.toEqual(originalSnapshot);
             expect(archiveChanged).toBe(true);
           } finally {

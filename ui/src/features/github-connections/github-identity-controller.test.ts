@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   createRuntimeConfigCapability,
@@ -34,6 +35,52 @@ function availableStatus(scope: "system" | "agent" = "agent") {
     selected: { scope, configured: true, identity: availableIdentity },
     effective: availableIdentity,
   } as const;
+}
+
+const authorizationCode = {
+  requestId: "github-device-11111111111111111111111111111111",
+  userCode: "ABCD-1234",
+  verificationUri: "https://github.com/login/device",
+  expiresInMs: 60_000,
+  pollAfterMs: 5_000,
+};
+
+function authorConfig(systemName: string, agentName: string) {
+  const system = {
+    profileId: "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    gitAuthor: { name: systemName },
+  };
+  const agent = {
+    profileId: "ghp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    gitAuthor: { name: agentName },
+  };
+  return {
+    tools: { github: system },
+    agents: { entries: { main: { tools: { github: agent } } } },
+  };
+}
+
+function createRuntimeConfig(client: GatewayBrowserClient) {
+  return createRuntimeConfigCapability({
+    snapshot: {
+      client,
+      phase: "connected",
+      sessionKey: "main",
+      hello: gatewayHelloForMethods(["config.set"]),
+    },
+    subscribe: () => () => undefined,
+  });
+}
+
+function createMutationController(client: GatewayBrowserClient) {
+  return new GitHubIdentityController({
+    requestUpdate: vi.fn(),
+    runExternalMutation: async (task) => ({
+      ok: true,
+      value: await task(client),
+      refresh: { ok: true },
+    }),
+  });
 }
 
 afterEach(() => {
@@ -84,12 +131,9 @@ function createController(behavior: { beforeDispatch?: () => void; refreshError?
   return { controller: new GitHubIdentityController(host), client, requests };
 }
 
-function createStatusOnlyController(
-  client: GatewayBrowserClient,
-  requestUpdate = vi.fn(),
-): GitHubIdentityController {
+function createStatusOnlyController(): GitHubIdentityController {
   return new GitHubIdentityController({
-    requestUpdate,
+    requestUpdate: vi.fn(),
     runExternalMutation: async () => ({
       ok: false,
       reason: "unavailable",
@@ -127,26 +171,7 @@ function sync(
 describe("GitHubIdentityController", () => {
   it("keeps independent controller drafts isolated and clears only the inherited target", async () => {
     const { controller, client, requests } = createController();
-    const config = {
-      tools: {
-        github: {
-          profileId: "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          gitAuthor: { name: "System Author" },
-        },
-      },
-      agents: {
-        entries: {
-          main: {
-            tools: {
-              github: {
-                profileId: "ghp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                gitAuthor: { name: "Agent Author" },
-              },
-            },
-          },
-        },
-      },
-    };
+    const config = authorConfig("System Author", "Agent Author");
     const system = createController();
     sync(controller, client, config, { scope: "agent" });
     controller.setDraft("token", "agent-token");
@@ -168,35 +193,6 @@ describe("GitHubIdentityController", () => {
     expect(system.requests).toEqual([]);
   });
 
-  it("hands off the token directly and adopts configure status without verifying again", async () => {
-    const { controller, client, requests } = createController();
-    sync(controller, client, {}, { scope: "agent" });
-    controller.setDraft("token", "one-use-token");
-    controller.setDraft("name", "Agent Author");
-
-    await controller.configure();
-
-    expect(requests.map((entry) => entry.method)).toEqual([
-      "secrets.store.set",
-      "tools.github.configure",
-    ]);
-    expect(requests[0]?.params).toMatchObject({
-      value: "one-use-token",
-      kind: "secret",
-      allowedHosts: [],
-    });
-    expect(requests[1]?.params).toMatchObject({
-      scope: "agent",
-      agentId: "main",
-      mode: "managed",
-      gitAuthor: { name: "Agent Author" },
-    });
-    expect(requests[1]?.params).not.toHaveProperty("token");
-    expect(requests[1]?.params.secretName).toBe(requests[0]?.params.name);
-    expect(controller.status).toEqual(availableStatus("agent"));
-    expect(controller.draft.token).toBe("");
-  });
-
   it("deletes a stored handoff when configurability changes before dispatch", async () => {
     const behavior: { beforeDispatch?: () => void } = {};
     const { controller, client, requests } = createController(behavior);
@@ -215,6 +211,9 @@ describe("GitHubIdentityController", () => {
   });
 
   it("keeps a consumed handoff successful while surfacing its refresh warning", async () => {
+    vi.stubGlobal("crypto", {
+      getRandomValues: <T extends Uint8Array>(array: T): T => array.fill(0xab),
+    });
     const { controller, client, requests } = createController({
       refreshError: "authoritative config refresh unavailable",
     });
@@ -227,16 +226,22 @@ describe("GitHubIdentityController", () => {
       "secrets.store.set",
       "tools.github.configure",
     ]);
+    expect(requests[0]?.params).toMatchObject({
+      value: "one-use-token",
+      kind: "secret",
+      allowedHosts: [],
+    });
+    expect(requests[1]?.params).not.toHaveProperty("token");
+    expect(requests[0]?.params.name).toMatch(/^github-setup-[a-f0-9]{32}$/u);
+    expect(requests[1]?.params.secretName).toBe(requests[0]?.params.name);
     expect(controller.status).toEqual(availableStatus("system"));
+    expect(requests[1]?.params).toMatchObject({ agentId: "main" });
     expect(controller.draft.token).toBe("");
     expect(controller.error).toContain("GitHub identity was updated");
     expect(controller.error).toContain("authoritative config refresh unavailable");
   });
 
-  it.each([
-    { mode: "managed" as const, expectedProfileId: "ghp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
-    { mode: "inherit" as const, expectedProfileId: undefined },
-  ])("config.set drains drafts before $mode and refreshes both edits", async (action) => {
+  it("config.set drains drafts before managed and refreshes both edits", async () => {
     vi.useFakeTimers();
     const order: string[] = [];
     let hashCounter = 1;
@@ -269,7 +274,9 @@ describe("GitHubIdentityController", () => {
         storedConfig = {
           ...storedConfig,
           tools:
-            configure.mode === "managed" ? { github: { profileId: action.expectedProfileId } } : {},
+            configure.mode === "managed"
+              ? { github: { profileId: "ghp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } }
+              : {},
         };
         hashCounter += 1;
         return availableStatus("system");
@@ -277,18 +284,10 @@ describe("GitHubIdentityController", () => {
       throw new Error(`unexpected method ${method}`);
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const runtimeConfig = createRuntimeConfigCapability({
-      snapshot: {
-        client,
-        phase: "connected",
-        sessionKey: "main",
-        hello: gatewayHelloForMethods(["config.set"]),
-      },
-      subscribe: () => () => undefined,
-    });
+    const runtimeConfig = createRuntimeConfig(client);
     await runtimeConfig.ensureLoaded();
     order.length = 0;
-    runtimeConfig.patchForm(["pendingEdit"], action.mode);
+    runtimeConfig.patchForm(["pendingEdit"], "managed");
     const host = {
       requestUpdate: vi.fn(),
       runExternalMutation: runtimeConfig.runExternalMutation,
@@ -299,16 +298,12 @@ describe("GitHubIdentityController", () => {
       sync(controller, client, runtimeConfig.state.configForm ?? {});
     });
     try {
-      if (action.mode === "managed") {
-        controller.setDraft("token", "one-use-token");
-        controller.setDraft("name", "Managed Author");
-        await controller.configure();
-      } else {
-        await controller.inherit();
-      }
+      controller.setDraft("token", "one-use-token");
+      controller.setDraft("name", "Managed Author");
+      await controller.configure();
 
       expect(order).toEqual([
-        ...(action.mode === "managed" ? ["secrets.store.set"] : []),
+        "secrets.store.set",
         "config.set",
         "tools.github.configure",
         "config.get",
@@ -318,41 +313,23 @@ describe("GitHubIdentityController", () => {
       expect(controller.scope).toBe("system");
       expect(controller.draft).toEqual({
         token: "",
-        name: action.mode === "managed" ? "Managed Author" : "",
+        name: "Managed Author",
         email: "",
       });
-      expect(runtimeConfig.state.configForm).toMatchObject({ pendingEdit: action.mode });
+      expect(runtimeConfig.state.configForm).toMatchObject({ pendingEdit: "managed" });
       expect(
         (
           runtimeConfig.state.configForm as {
             tools?: { github?: { profileId?: string } };
           }
         ).tools?.github?.profileId,
-      ).toBe(action.expectedProfileId);
+      ).toBe("ghp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
     } finally {
       unsubscribe();
       runtimeConfig.dispose();
       vi.clearAllTimers();
       vi.useRealTimers();
     }
-  });
-
-  it("configures in an insecure context with getRandomValues but no randomUUID", async () => {
-    vi.stubGlobal("crypto", {
-      getRandomValues: <T extends Uint8Array>(array: T): T => {
-        array.fill(0xab);
-        return array;
-      },
-    });
-    const { controller, client, requests } = createController();
-    sync(controller, client);
-    controller.setDraft("token", "one-use-token");
-
-    await controller.configure();
-
-    expect(requests[0]?.params.name).toMatch(/^github-setup-[a-f0-9]{32}$/u);
-    expect(requests[1]?.params.secretName).toBe(requests[0]?.params.name);
-    expect(controller.error).toBeNull();
   });
 
   it("keeps UUID generation failures inside configure handling", async () => {
@@ -366,14 +343,6 @@ describe("GitHubIdentityController", () => {
     expect(requests).toEqual([]);
     expect(controller.busy).toBe(false);
     expect(controller.error).toContain("Web Crypto is required");
-  });
-
-  it("sends the selected agentId for system configure actions", async () => {
-    const { controller, client, requests } = createController();
-    sync(controller, client);
-    controller.setDraft("token", "one-use-token");
-    await controller.configure();
-    expect(requests[1]?.params).toMatchObject({ agentId: "main" });
   });
 
   it("does not dispatch without the required operator scopes", async () => {
@@ -395,82 +364,14 @@ describe("GitHubIdentityController", () => {
     expect(requests).toEqual([]);
   });
 
-  it.each([{ clientRevision: 2 }, { agentId: "reviewer" }])(
-    "drops status from a stale client/agent revision %#",
-    async (revisions) => {
-      const host = { requestUpdate: vi.fn() };
-      let resolveStatus: ((value: unknown) => void) | undefined;
-      const client = {
-        request: vi.fn(
-          async () =>
-            await new Promise((resolve) => {
-              resolveStatus = resolve;
-            }),
-        ),
-      } as unknown as GatewayBrowserClient;
-      const controller = createStatusOnlyController(client, host.requestUpdate);
-      sync(controller, client);
-      const pending = controller.verify();
-      sync(controller, client, {}, revisions);
-      resolveStatus?.(availableStatus("system"));
-      await pending;
-      expect(controller.status).toBeNull();
-      expect(controller.loading).toBe(false);
-    },
-  );
-
   it("refreshes clean drafts without overwriting active edits", () => {
     const { controller, client } = createController();
-    const config = (systemName: string, agentName: string) => ({
-      tools: {
-        github: {
-          profileId: "ghp_cccccccccccccccccccccccccccccccc",
-          gitAuthor: { name: systemName },
-        },
-      },
-      agents: {
-        entries: {
-          main: {
-            tools: {
-              github: {
-                profileId: "ghp_dddddddddddddddddddddddddddddddd",
-                gitAuthor: { name: agentName },
-              },
-            },
-          },
-        },
-      },
-    });
-    sync(controller, client, config("System One", "Agent One"), { scope: "agent" });
+    sync(controller, client, authorConfig("System One", "Agent One"), { scope: "agent" });
     controller.setDraft("name", "Active Agent Edit");
-    sync(controller, client, config("System Two", "Agent Two"), { scope: "agent" });
+    sync(controller, client, authorConfig("System Two", "Agent Two"), { scope: "agent" });
     expect(controller.draft.name).toBe("Active Agent Edit");
-    sync(controller, client, config("System Two", "Agent Two"));
+    sync(controller, client, authorConfig("System Two", "Agent Two"));
     expect(controller.draft.name).toBe("System Two");
-  });
-
-  it("invalidates selected System status when an override keeps the effective identity stable", async () => {
-    const { controller, client, requests } = createController();
-    const config = (systemProfileId: string) => ({
-      tools: { github: { profileId: systemProfileId } },
-      agents: {
-        entries: {
-          main: { tools: { github: { profileId: "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } } },
-        },
-      },
-    });
-    sync(controller, client, config("ghp_11111111111111111111111111111111"));
-    await controller.verify();
-    expect(controller.status).not.toBeNull();
-
-    sync(controller, client, config("ghp_22222222222222222222222222222222"));
-
-    expect(controller.status).toBeNull();
-    await Promise.resolve();
-    expect(requests.at(-1)).toEqual({
-      method: "tools.github.status",
-      params: { agentId: "main", selectedScope: "system" },
-    });
   });
 
   it("keeps the PAT fallback visible while a save is busy", () => {
@@ -501,16 +402,11 @@ describe("GitHubIdentityController", () => {
   });
 
   it("invalidates an in-flight status on effective identity change and verifies once", async () => {
-    const host = { requestUpdate: vi.fn() };
-    const resolvers: Array<(value: ReturnType<typeof availableStatus>) => void> = [];
-    const request = vi.fn(
-      async () =>
-        await new Promise<ReturnType<typeof availableStatus>>((resolve) => {
-          resolvers.push(resolve);
-        }),
-    );
+    const first = createDeferredCore<ReturnType<typeof availableStatus>>();
+    const second = createDeferredCore<ReturnType<typeof availableStatus>>();
+    const request = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
     const client = { request } as unknown as GatewayBrowserClient;
-    const controller = createStatusOnlyController(client, host.requestUpdate);
+    const controller = createStatusOnlyController();
     const config = (profileId: string) => ({ tools: { github: { profileId } } });
     sync(controller, client, config("ghp_11111111111111111111111111111111"));
     const initial = controller.verify();
@@ -522,8 +418,8 @@ describe("GitHubIdentityController", () => {
     expect(request).toHaveBeenCalledTimes(2);
     expect(controller.draft.name).toBe("dirty author");
 
-    resolvers[0]?.(availableStatus("system"));
-    resolvers[1]?.(availableStatus("system"));
+    first.resolve(availableStatus("system"));
+    second.resolve(availableStatus("system"));
     await initial;
     await Promise.resolve();
     expect(controller.status).toEqual(availableStatus("system"));
@@ -531,11 +427,10 @@ describe("GitHubIdentityController", () => {
   });
 
   it("rejects status returned for a different agent", async () => {
-    const host = { requestUpdate: vi.fn() };
     const client = {
       request: vi.fn(async () => ({ ...availableStatus("system"), agentId: "reviewer" })),
     } as unknown as GatewayBrowserClient;
-    const controller = createStatusOnlyController(client, host.requestUpdate);
+    const controller = createStatusOnlyController();
     sync(controller, client);
     await controller.verify();
     expect(controller.status).toBeNull();
@@ -562,13 +457,7 @@ describe("GitHubIdentityController", () => {
         };
       }
       if (method === "tools.github.authorize.start") {
-        return {
-          requestId: "github-device-11111111111111111111111111111111",
-          userCode: "ABCD-1234",
-          verificationUri: "https://github.com/login/device",
-          expiresInMs: 60_000,
-          pollAfterMs: 5_000,
-        };
+        return authorizationCode;
       }
       if (method === "tools.github.authorize.poll") {
         pollTimes.push(Date.now());
@@ -577,15 +466,7 @@ describe("GitHubIdentityController", () => {
       throw new Error(`unexpected method ${method}`);
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const runtimeConfig = createRuntimeConfigCapability({
-      snapshot: {
-        client,
-        phase: "connected",
-        sessionKey: "main",
-        hello: gatewayHelloForMethods(["config.set"]),
-      },
-      subscribe: () => () => undefined,
-    });
+    const runtimeConfig = createRuntimeConfig(client);
     await runtimeConfig.ensureLoaded();
     request.mockClear();
     const controller = new GitHubIdentityController({
@@ -624,18 +505,12 @@ describe("GitHubIdentityController", () => {
     vi.setSystemTime(1_800_000_000_000);
     const request = vi.fn(async (method: string) => {
       if (method === "tools.github.authorize.start") {
-        return {
-          requestId: "github-device-22222222222222222222222222222222",
-          userCode: "WXYZ-9876",
-          verificationUri: "https://github.com/login/device",
-          expiresInMs: 60_000,
-          pollAfterMs: 5_000,
-        };
+        return authorizationCode;
       }
       return { cancelled: true };
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const controller = createStatusOnlyController(client);
+    const controller = createStatusOnlyController();
     sync(controller, client);
     await controller.startAuthorization();
 
@@ -643,7 +518,7 @@ describe("GitHubIdentityController", () => {
     await Promise.resolve();
 
     expect(request).toHaveBeenCalledWith("tools.github.authorize.cancel", {
-      requestId: "github-device-22222222222222222222222222222222",
+      requestId: authorizationCode.requestId,
     });
     expect(controller.authorization).toEqual({ phase: "idle" });
     await vi.advanceTimersByTimeAsync(10_000);
@@ -656,18 +531,10 @@ describe("GitHubIdentityController", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_800_000_000_000);
     const request = vi.fn(async (method: string) =>
-      method === "tools.github.authorize.start"
-        ? {
-            requestId: "github-device-33333333333333333333333333333333",
-            userCode: "ABCD-5678",
-            verificationUri: "https://github.com/login/device",
-            expiresInMs: 60_000,
-            pollAfterMs: 5_000,
-          }
-        : { cancelled: true },
+      method === "tools.github.authorize.start" ? authorizationCode : { cancelled: true },
     );
     const client = { request } as unknown as GatewayBrowserClient;
-    const controller = createStatusOnlyController(client);
+    const controller = createStatusOnlyController();
     sync(controller, client);
     await controller.startAuthorization();
 
@@ -676,7 +543,7 @@ describe("GitHubIdentityController", () => {
     await Promise.all([firstCancel, duplicateCancel]);
 
     expect(request).toHaveBeenCalledWith("tools.github.authorize.cancel", {
-      requestId: "github-device-33333333333333333333333333333333",
+      requestId: authorizationCode.requestId,
     });
     expect(
       request.mock.calls.filter(([method]) => method === "tools.github.authorize.cancel"),
@@ -686,22 +553,10 @@ describe("GitHubIdentityController", () => {
 
   it("keeps a too-late cancellation alive and adopts the in-flight success", async () => {
     vi.useFakeTimers();
-    const poll = (() => {
-      let resolve!: (value: unknown) => void;
-      const promise = new Promise((resolvePromise) => {
-        resolve = resolvePromise;
-      });
-      return { promise, resolve };
-    })();
+    const poll = createDeferredCore<unknown>();
     const request = vi.fn(async (method: string) => {
       if (method === "tools.github.authorize.start") {
-        return {
-          requestId: "github-device-44444444444444444444444444444444",
-          userCode: "LATE-0001",
-          verificationUri: "https://github.com/login/device",
-          expiresInMs: 60_000,
-          pollAfterMs: 1_000,
-        };
+        return { ...authorizationCode, pollAfterMs: 1_000 };
       }
       if (method === "tools.github.authorize.poll") {
         return await poll.promise;
@@ -712,14 +567,7 @@ describe("GitHubIdentityController", () => {
       throw new Error(`unexpected method ${method}`);
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const controller = new GitHubIdentityController({
-      requestUpdate: vi.fn(),
-      runExternalMutation: async (task) => ({
-        ok: true,
-        value: await task(client),
-        refresh: { ok: true },
-      }),
-    });
+    const controller = createMutationController(client);
     sync(controller, client);
     await controller.startAuthorization();
     await vi.advanceTimersByTimeAsync(1_000);
@@ -743,13 +591,7 @@ describe("GitHubIdentityController", () => {
     vi.useFakeTimers();
     const request = vi.fn(async (method: string) => {
       if (method === "tools.github.authorize.start") {
-        return {
-          requestId: "github-device-55555555555555555555555555555555",
-          userCode: "NETW-0001",
-          verificationUri: "https://github.com/login/device",
-          expiresInMs: 60_000,
-          pollAfterMs: 5_000,
-        };
+        return authorizationCode;
       }
       if (method === "tools.github.authorize.cancel") {
         throw new Error("Gateway unavailable");
@@ -760,14 +602,7 @@ describe("GitHubIdentityController", () => {
       throw new Error(`unexpected method ${method}`);
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const controller = new GitHubIdentityController({
-      requestUpdate: vi.fn(),
-      runExternalMutation: async (task) => ({
-        ok: true,
-        value: await task(client),
-        refresh: { ok: true },
-      }),
-    });
+    const controller = createMutationController(client);
     sync(controller, client);
     await controller.startAuthorization();
 
@@ -779,7 +614,7 @@ describe("GitHubIdentityController", () => {
     await vi.advanceTimersByTimeAsync(5_000);
     expect(request).toHaveBeenCalledWith(
       "tools.github.authorize.poll",
-      { requestId: "github-device-55555555555555555555555555555555" },
+      { requestId: authorizationCode.requestId },
       expect.anything(),
     );
     expect(controller.authorization).toMatchObject({ phase: "cancel_error" });

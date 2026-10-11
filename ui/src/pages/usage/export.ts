@@ -1,12 +1,16 @@
 import type { ReactiveControllerHost } from "lit";
 import { t } from "../../i18n/index.ts";
+import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
 import { downloadTextFile } from "../../lib/download.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { requestSessionUsage, type SessionUsageQuery } from "../../lib/sessions/usage.ts";
 import { showToast } from "../../lib/toast.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
-import { currentLocalDate, toUsageErrorMessage } from "./helpers.ts";
+import { formatIsoDate } from "./helpers.ts";
 import { createUsageRequest } from "./request.ts";
 import type { UsageJsonExport, UsageSessionEntry } from "./types.ts";
+
+registerUsageEnglish();
 
 // Logical keys can be reused after deletion; context belongs to a concrete session.
 function sessionIdentity({ agentId, key, sessionId }: UsageSessionEntry): string {
@@ -24,7 +28,7 @@ export function createUsageJsonExportRequest(
       if (!connection) {
         throw new Error(t("common.offline"));
       }
-      const filename = `openclaw-usage-${currentLocalDate()}.json`;
+      const filename = `openclaw-usage-${formatIsoDate(new Date())}.json`;
       let weights = new Map<string, UsageSessionEntry["contextWeight"]>();
       if (data.sessions.some((session) => session.hasContextWeight)) {
         const result = await requestSessionUsage(connection.client, query(), {
@@ -58,7 +62,9 @@ export function createUsageJsonExportRequest(
       }
     },
     onError: (error) => {
-      showToast({ message: `${t("usage.export.label")}: ${toUsageErrorMessage(error)}` });
+      showToast({
+        message: `${t("usage.export.label")}: ${formatUiError(error, "request failed")}`,
+      });
     },
   });
 }

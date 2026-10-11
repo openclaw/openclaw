@@ -14,16 +14,12 @@ import type { PreparedReplyConversation } from "./prompt-session-context.js";
 
 const groupsRuntimeLoader = createLazyImportLoader(() => import("./groups.runtime.js"));
 
-function loadGroupsRuntime() {
-  return groupsRuntimeLoader.load();
-}
-
 async function resolveRuntimeChannelId(raw?: string | null): Promise<string | null> {
   const normalized = normalizeOptionalLowercaseString(raw);
   if (!normalized) {
     return null;
   }
-  const { getChannelPlugin, normalizeChannelId } = await loadGroupsRuntime();
+  const { getChannelPlugin, normalizeChannelId } = await groupsRuntimeLoader.load();
   try {
     if (getChannelPlugin(normalized)) {
       return normalized;
@@ -50,7 +46,7 @@ export async function resolveGroupRequireMention(params: {
   }
   const { groupId, groupChannel, groupSpace, accountId } = group;
   let requireMention: boolean | undefined;
-  const runtime = await loadGroupsRuntime();
+  const runtime = await groupsRuntimeLoader.load();
   try {
     requireMention = runtime.getChannelPlugin(channel)?.groups?.resolveRequireMention?.({
       cfg,
@@ -94,10 +90,6 @@ function resolveProviderLabel(rawProvider: string | undefined): string {
   return `${providerKey.at(0)?.toUpperCase() ?? ""}${providerKey.slice(1)}`;
 }
 
-function resolveSharedChatNoun(chatType?: string | null): "group chat" | "channel" {
-  return normalizeOptionalLowercaseString(chatType) === "channel" ? "channel" : "group chat";
-}
-
 /**
  * Builds trusted group/channel delivery guidance.
  *
@@ -114,11 +106,13 @@ export function buildGroupChatContext(params: {
   const providerLabel = resolveProviderLabel(params.sessionCtx.Provider);
   const provider = normalizeOptionalLowercaseString(params.sessionCtx.Provider);
   const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
-  const sharedChatNoun = resolveSharedChatNoun(params.sessionCtx.ChatType);
-  const destinationLabel = sharedChatNoun === "channel" ? "this channel" : "this group chat";
+  const sharedChatNoun =
+    normalizeOptionalLowercaseString(params.sessionCtx.ChatType) === "channel"
+      ? "channel"
+      : "group chat";
+  const destinationLabel = `this ${sharedChatNoun}`;
 
-  const lines: string[] = [];
-  lines.push(`You are in a ${providerLabel} ${sharedChatNoun}.`);
+  const lines = [`You are in a ${providerLabel} ${sharedChatNoun}.`];
   if (messageToolOnly) {
     lines.push(
       `Normal final replies are private and are not automatically sent to ${destinationLabel}. To post visible output here, use the message tool with action=send; the target defaults to ${destinationLabel}.`,
@@ -161,27 +155,34 @@ export function buildGroupChatContext(params: {
 }
 
 /** Builds system prompt context for direct conversations. */
-export function buildDirectChatContext(params: {
+function buildDirectChatContext(params: {
   sessionCtx: TemplateContext;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 }): string {
   const providerLabel = resolveProviderLabel(params.sessionCtx.Provider);
-  const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
-  const lines: string[] = [];
-  lines.push(`You are in a ${providerLabel} direct conversation.`);
-  if (messageToolOnly) {
-    lines.push(
-      "Normal final replies are private and are not automatically sent to this conversation. To post visible output here, use the message tool with action=send; the target defaults to this conversation.",
-    );
-    lines.push(
-      "If no visible direct response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the conversation.",
-    );
-    return lines.join(" ");
-  }
-  lines.push(
-    "Your replies are automatically sent to this conversation unless the current-turn context says final replies stay private.",
-  );
-  return lines.join(" ");
+  return [
+    `You are in a ${providerLabel} direct conversation.`,
+    ...(params.sourceReplyDeliveryMode === "message_tool_only"
+      ? [
+          "Normal final replies are private and are not automatically sent to this conversation. To post visible output here, use the message tool with action=send; the target defaults to this conversation.",
+          "If no visible direct response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the conversation.",
+        ]
+      : [
+          "Your replies are automatically sent to this conversation unless the current-turn context says final replies stay private.",
+        ]),
+  ].join(" ");
+}
+
+/** Selects the conversation guidance shared by incoming and continuation turns. */
+export function buildSourceConversationContext(
+  params: Parameters<typeof buildGroupChatContext>[0],
+): string {
+  const chatType = normalizeOptionalLowercaseString(params.sessionCtx.ChatType);
+  return chatType === "direct" || chatType === "dm"
+    ? buildDirectChatContext(params)
+    : chatType === "group" || chatType === "channel"
+      ? buildGroupChatContext(params)
+      : "";
 }
 
 /** Builds the channel-specific group intro injected into the system prompt. */

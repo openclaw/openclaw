@@ -1,4 +1,3 @@
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import OpenAI from "openai";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
@@ -225,59 +224,6 @@ describe("openai transport stream", () => {
     });
   });
 
-  it("preserves Responses replay item ids for store-capable third-party opt-in routes", () => {
-    const params = buildOpenAIResponsesParams(
-      makeResponsesModel({
-        id: "store-capable-model",
-        name: "Store-capable model",
-        provider: "custom-openai-responses",
-        baseUrl: "https://custom.example.com/v1",
-        compat: { supportsStore: true } as never,
-      }),
-      replayContext({
-        provider: "custom-openai-responses",
-        model: "store-capable-model",
-        thinking: { signature: { type: "reasoning", id: "rs_prior", summary: [] } },
-        text: true,
-        toolCalls: [
-          { id: "call_abc|fc_prior", name: "price_lookup", arguments: { symbol: "SOL" } },
-        ],
-      }),
-      { replayResponsesItemIds: true, sessionId: "session-123" },
-    ) as {
-      input?: Array<{
-        type?: string;
-        role?: string;
-        id?: string;
-        call_id?: string;
-        phase?: string;
-        summary?: unknown;
-      }>;
-    };
-
-    const reasoningItem = params.input?.find((item) => item.type === "reasoning");
-    expectRecordFields(reasoningItem, {
-      type: "reasoning",
-      id: "rs_prior",
-      summary: [],
-    });
-    const assistantMessage = params.input?.find(
-      (item) => item.type === "message" && item.role === "assistant",
-    );
-    expectRecordFields(assistantMessage, {
-      type: "message",
-      role: "assistant",
-      id: "msg_prior",
-      phase: "commentary",
-    });
-    const functionCall = params.input?.find((item) => item.type === "function_call");
-    expectRecordFields(functionCall, {
-      type: "function_call",
-      id: "fc_prior",
-      call_id: "call_abc",
-    });
-  });
-
   it("omits prior Responses replay item ids when store is disabled for custom Codex-compatible responses", () => {
     const model = makeResponsesModel({
       id: "gpt-5.4",
@@ -340,39 +286,6 @@ describe("openai transport stream", () => {
     expect(functionCall?.id).toBeUndefined();
   });
 
-  it("keeps GitHub Copilot Responses reasoning replay when store-disabled ids are omitted", () => {
-    const model = makeResponsesModel({
-      id: "gpt-5.5",
-      name: "GPT-5.5",
-      provider: "github-copilot",
-      baseUrl: "https://api.githubcopilot.com",
-      contextWindow: 400000,
-    });
-    const longReasoningId = `rs_${"x".repeat(380)}`;
-
-    const params = buildOpenAIResponsesParams(
-      model,
-      replayContext({
-        source: model,
-        thinking: { signature: { type: "reasoning", id: longReasoningId, summary: [] } },
-      }),
-      { sessionId: "session-123" },
-    ) as {
-      input?: Array<{
-        type?: string;
-        id?: string;
-        summary?: unknown;
-      }>;
-    };
-
-    const reasoningItem = params.input?.find((item) => item.type === "reasoning");
-    expectRecordFields(reasoningItem, {
-      type: "reasoning",
-      summary: [],
-    });
-    expect(reasoningItem?.id).toBeUndefined();
-  });
-
   it("drops oversized GitHub Copilot Responses reasoning replay ids before send", () => {
     const model = makeResponsesModel({
       id: "gpt-5.5",
@@ -398,84 +311,6 @@ describe("openai transport stream", () => {
     };
 
     expect(params.input?.some((item) => item.type === "reasoning")).toBe(false);
-  });
-
-  it("strips encrypted reasoning replay when provenance does not match", () => {
-    const model = makeResponsesModel({
-      id: "gpt-5.4",
-      name: "GPT-5.4",
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://proxy.example.com/v1",
-    });
-
-    const params = buildOpenAIResponsesParams(
-      model,
-      replayContext({
-        source: model,
-        thinking: {
-          signature: { type: "reasoning", id: "rs_prior", encrypted_content: "ciphertext" },
-          replayMetadata: testing.buildOpenAIResponsesReasoningReplayMetadata(model, {
-            authProfileId: "openai:oauth",
-            sessionId: "different-session",
-          }),
-        },
-      }),
-      { authProfileId: "openai:oauth", sessionId: "session-123" },
-    ) as {
-      input?: Array<{
-        type?: string;
-        id?: string;
-        encrypted_content?: string;
-        summary?: unknown;
-      }>;
-    };
-
-    const reasoningItem = params.input?.find((item) => item.type === "reasoning");
-    expectRecordFields(reasoningItem, {
-      type: "reasoning",
-      summary: [],
-    });
-    expect(reasoningItem?.id).toBeUndefined();
-    expect(reasoningItem).not.toHaveProperty("encrypted_content");
-  });
-
-  it("strips encrypted reasoning replay when the auth profile provenance changes", () => {
-    const model = makeResponsesModel({
-      id: "gpt-5.4",
-      name: "GPT-5.4",
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://proxy.example.com/v1",
-    });
-
-    const params = buildOpenAIResponsesParams(
-      model,
-      replayContext({
-        source: model,
-        thinking: {
-          signature: { type: "reasoning", id: "rs_prior", encrypted_content: "ciphertext" },
-          replayMetadata: testing.buildOpenAIResponsesReasoningReplayMetadata(model, {
-            authProfileId: "openai:old-oauth",
-            sessionId: "session-123",
-          }),
-        },
-      }),
-      { authProfileId: "openai:new-oauth", sessionId: "session-123" },
-    ) as {
-      input?: Array<{
-        type?: string;
-        id?: string;
-        encrypted_content?: string;
-        summary?: unknown;
-      }>;
-    };
-
-    const reasoningItem = params.input?.find((item) => item.type === "reasoning");
-    expectRecordFields(reasoningItem, {
-      type: "reasoning",
-      summary: [],
-    });
-    expect(reasoningItem?.id).toBeUndefined();
-    expect(reasoningItem).not.toHaveProperty("encrypted_content");
   });
 
   it("keeps embedded replay provenance as a compatibility fallback", () => {
@@ -568,7 +403,7 @@ describe("openai transport stream", () => {
     const onCompactionRejected = vi.fn();
 
     await expect(
-      testing.createResponsesStreamWithEncryptedContentRetry({
+      testing.createResponsesStreamWithRecovery({
         client: { responses: { create } } as never,
         request: request as never,
         requestOptions: undefined,
@@ -577,8 +412,6 @@ describe("openai transport stream", () => {
       }),
     ).resolves.toMatchObject({
       stream: recoveredStream,
-      response: recoveredResponse,
-      attempt: { kind: "reasoning-stripped" },
     });
 
     expect(create).toHaveBeenCalledTimes(2);
@@ -595,54 +428,6 @@ describe("openai transport stream", () => {
     expect(onCompactionRejected).not.toHaveBeenCalled();
   });
 
-  it("removes compaction only after a compaction-preserving retry rejects it", async () => {
-    const request = {
-      model: "gpt-5.5",
-      stream: true,
-      input: [
-        { type: "reasoning", encrypted_content: "reasoning-ciphertext", summary: [] },
-        { type: "compaction", id: "cmp_prior", encrypted_content: "compaction-ciphertext" },
-      ],
-    };
-    const invalidEncryptedContent = () =>
-      Object.assign(new Error("invalid encrypted content"), {
-        code: "invalid_encrypted_content",
-      });
-    const recoveredStream = streamChunks([]);
-    const recoveredResponse = new Response(null, { status: 200 });
-    const create = vi
-      .fn()
-      .mockReturnValueOnce({ withResponse: vi.fn().mockRejectedValue(invalidEncryptedContent()) })
-      .mockReturnValueOnce({ withResponse: vi.fn().mockRejectedValue(invalidEncryptedContent()) })
-      .mockReturnValueOnce({
-        withResponse: vi.fn().mockResolvedValue({
-          data: recoveredStream,
-          response: recoveredResponse,
-        }),
-      });
-    const onCompactionRejected = vi.fn();
-
-    await expect(
-      testing.createResponsesStreamWithEncryptedContentRetry({
-        client: { responses: { create } } as never,
-        request: request as never,
-        requestOptions: undefined,
-        model: makeResponsesModel({ id: "gpt-5.5", name: "GPT-5.5" }),
-        onCompactionRejected,
-      }),
-    ).resolves.toMatchObject({
-      stream: recoveredStream,
-      response: recoveredResponse,
-      attempt: { kind: "compaction-stripped" },
-    });
-
-    expect(create).toHaveBeenCalledTimes(3);
-    expect(JSON.stringify(create.mock.calls[1]?.[0])).not.toContain("reasoning-ciphertext");
-    expect(JSON.stringify(create.mock.calls[1]?.[0])).toContain("compaction-ciphertext");
-    expect(JSON.stringify(create.mock.calls[2]?.[0])).not.toContain("compaction-ciphertext");
-    expect(onCompactionRejected).toHaveBeenCalledOnce();
-  });
-
   it("does not tombstone compaction when the final recovery attempt fails", async () => {
     const invalidEncryptedContent = Object.assign(new Error("invalid encrypted content"), {
       code: "invalid_encrypted_content",
@@ -656,7 +441,7 @@ describe("openai transport stream", () => {
     const onCompactionRejected = vi.fn();
 
     await expect(
-      testing.createResponsesStreamWithEncryptedContentRetry({
+      testing.createResponsesStreamWithRecovery({
         client: { responses: { create } } as never,
         request: {
           model: "gpt-5.5",
@@ -691,7 +476,7 @@ describe("openai transport stream", () => {
     const onCompactionRejected = vi.fn();
 
     await expect(
-      testing.createResponsesStreamWithEncryptedContentRetry({
+      testing.createResponsesStreamWithRecovery({
         client: { responses: { create } } as never,
         request: {
           model: "gpt-5.5",
@@ -724,7 +509,7 @@ describe("openai transport stream", () => {
         response: new Response(null, { status: 200 }),
       }),
     });
-    const result = await testing.createResponsesStreamWithEncryptedContentRetry({
+    const result = await testing.createResponsesStreamWithRecovery({
       client: { responses: { create } } as never,
       request: {
         model: "gpt-5.5",
@@ -742,150 +527,6 @@ describe("openai transport stream", () => {
       }
     }).rejects.toBe(streamFailure);
     expect(create).toHaveBeenCalledOnce();
-  });
-
-  it("retries thinking_signature_invalid once without encrypted reasoning content", async () => {
-    const request = {
-      model: "gpt-5.5",
-      stream: true,
-      input: [
-        {
-          type: "reasoning",
-          id: "rs_prior",
-          encrypted_content: "ciphertext",
-          summary: [],
-        },
-        {
-          type: "message",
-          id: "msg_prior",
-          role: "assistant",
-          content: [{ type: "output_text", text: "visible answer" }],
-        },
-        {
-          type: "function_call",
-          id: "fc_prior",
-          call_id: "call_abc",
-          name: "price_lookup",
-          arguments: "{}",
-        },
-      ],
-    };
-    const recoveredStream = streamChunks([]);
-    const recoveredResponse = new Response(null, { status: 200 });
-    const create = vi
-      .fn()
-      .mockReturnValueOnce({
-        withResponse: vi.fn().mockRejectedValue(
-          new OpenAI.BadRequestError(
-            400,
-            {
-              code: "thinking_signature_invalid",
-              message:
-                "The encrypted content for item rs_prior could not be verified. Reason: Encrypted content could not be decrypted or parsed.",
-              type: "invalid_request_error",
-            },
-            undefined,
-            new Headers(),
-          ),
-        ),
-      })
-      .mockReturnValueOnce({
-        withResponse: vi.fn().mockResolvedValue({
-          data: recoveredStream,
-          response: recoveredResponse,
-          request_id: null,
-        }),
-      });
-
-    await expect(
-      testing.createResponsesStreamWithEncryptedContentRetry({
-        client: { responses: { create } } as never,
-        request: request as never,
-        requestOptions: undefined,
-        model: makeResponsesModel({
-          id: "gpt-5.5",
-          name: "GPT-5.5",
-        }),
-      }),
-    ).resolves.toMatchObject({
-      stream: recoveredStream,
-      response: recoveredResponse,
-      attempt: { kind: "reasoning-stripped" },
-    });
-
-    expect(create).toHaveBeenCalledTimes(2);
-    expect(create.mock.calls[0]?.[0]).toBe(request);
-    expect(create.mock.calls[1]?.[0]).toEqual({
-      ...request,
-      input: [
-        {
-          type: "reasoning",
-          id: "rs_prior",
-          summary: [],
-        },
-        request.input[1],
-        request.input[2],
-      ],
-    });
-  });
-
-  it("preserves HTTP status when a managed Responses request rejects", async () => {
-    const failure = new OpenAI.RateLimitError(
-      429,
-      {
-        code: "rate_limit_exceeded",
-        message: "rate limited",
-        type: "rate_limit_error",
-      },
-      undefined,
-      new Headers(),
-    );
-    const withResponse = vi.fn().mockRejectedValue(failure);
-
-    await expect(
-      testing.createResponsesStreamWithEncryptedContentRetry({
-        client: {
-          responses: {
-            create: vi.fn().mockReturnValue({ withResponse }),
-          },
-        } as never,
-        request: { model: "gpt-5.5", stream: true, input: [] } as never,
-        requestOptions: undefined,
-        model: makeResponsesModel({
-          id: "gpt-5.5",
-          name: "GPT-5.5",
-        }),
-      }),
-    ).rejects.toBe(failure);
-
-    expect(failure.status).toBe(429);
-    expect(withResponse).toHaveBeenCalledOnce();
-  });
-
-  it.each([
-    {
-      label: "matches xAI's code-less encrypted-content 400",
-      status: 400,
-      message:
-        "Could not decrypt the provided encrypted_content. Ensure the value is the unmodified encrypted_content from a previous response.",
-      expected: true,
-    },
-    {
-      label: "rejects an unrelated decrypt 400",
-      status: 400,
-      message: "Could not decrypt encrypted_content metadata for the OAuth sidecar.",
-      expected: false,
-    },
-    {
-      label: "rejects the xAI phrase on a 500",
-      status: 500,
-      message: "Could not decrypt the provided encrypted_content.",
-      expected: false,
-    },
-  ])("$label", ({ status, message, expected }) => {
-    const error = OpenAI.APIError.generate(status, { error: message }, undefined, new Headers());
-
-    expect(testing.isInvalidEncryptedContentError(error)).toBe(expected);
   });
 
   it("normalizes overlong Copilot Responses replay tool ids before dispatch", () => {
@@ -1040,98 +681,6 @@ describe("openai transport stream", () => {
     expect(outputText).not.toBe("(see attached image)");
   });
 
-  it("omits distinct overlong Copilot Responses replay item ids when store is disabled", () => {
-    const sharedToolItemPrefix = "iVec" + "A".repeat(160);
-    const firstToolCallId = `call_first|${sharedToolItemPrefix}Aa`;
-    const secondToolCallId = `call_second|${sharedToolItemPrefix}BB`;
-    const params = buildOpenAIResponsesParams(
-      makeResponsesModel({
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-        provider: "github-copilot",
-        baseUrl: "https://api.githubcopilot.com",
-      }),
-      replayContext({
-        provider: "github-copilot",
-        toolCalls: [
-          { id: firstToolCallId, name: "read", arguments: { path: "a" } },
-          { id: secondToolCallId, name: "read", arguments: { path: "b" } },
-        ],
-        results: [
-          { id: firstToolCallId, name: "read", content: [{ type: "text", text: "a" }] },
-          {
-            id: secondToolCallId,
-            name: "read",
-            content: [{ type: "text", text: "b" }],
-            timestamp: 3,
-          },
-        ],
-        after: [{ role: "user", content: "continue", timestamp: 4 }],
-      }),
-      { sessionId: "session-123" },
-    ) as {
-      input?: Array<{ type?: string; id?: string; call_id?: string }>;
-    };
-
-    const functionCalls = params.input?.filter((item) => item.type === "function_call") ?? [];
-    const functionOutputs =
-      params.input?.filter((item) => item.type === "function_call_output") ?? [];
-    expect(functionCalls.map((item) => item.id)).toEqual([undefined, undefined]);
-    expect(functionOutputs.map((item) => item.call_id)).toEqual(["call_first", "call_second"]);
-  });
-
-  it("adds minimal user input for Codex responses when only the system prompt is present", () => {
-    const params = buildOpenAIResponsesParams(
-      makeResponsesModel({
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api",
-      }),
-      {
-        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
-        messages: [],
-        tools: [],
-      } as never,
-      undefined,
-    ) as {
-      input?: Array<{ role?: string; content?: Array<{ type?: string; text?: string }> }>;
-      instructions?: string;
-    };
-
-    expect(params.instructions).toBe("Stable prefix\nDynamic suffix");
-    expect(params.input).toEqual([
-      {
-        type: "message",
-        role: "user",
-        content: [{ type: "input_text", text: " " }],
-      },
-    ]);
-  });
-
-  it("does not infer high reasoning when the runtime passes thinking off", () => {
-    const params = buildOpenAIResponsesParams(
-      responsesModelFixture("gpt-5.4", "GPT-5.4"),
-      emptyResponsesContext(),
-      undefined,
-    ) as { reasoning?: unknown; include?: string[] };
-
-    expect(params.reasoning).toEqual({ effort: "none" });
-    expect(params).not.toHaveProperty("include");
-  });
-
-  it("uses shared stream reasoning as OpenAI Responses effort", () => {
-    const params = buildOpenAIResponsesParams(
-      responsesModelFixture("gpt-5.4", "GPT-5.4"),
-      emptyResponsesContext(),
-      {
-        reasoning: "high",
-      } as never,
-    ) as { reasoning?: unknown };
-
-    expect(params.reasoning).toEqual({ effort: "high", summary: "auto" });
-  });
-
   it("normalizes canonical reasoning casing in Responses and Chat Completions payloads", () => {
     const context = emptyResponsesContext();
     const baseModel = {
@@ -1163,44 +712,6 @@ describe("openai transport stream", () => {
 
     expect(responses.reasoning).toEqual({ effort: "xhigh", summary: "auto" });
     expect(completions.reasoning_effort).toBe("xhigh");
-  });
-
-  it("uses disabled OpenAI Responses reasoning when the model supports none", () => {
-    const params = buildOpenAIResponsesParams(
-      responsesModelFixture("gpt-5.4", "GPT-5.4"),
-      emptyResponsesContext(),
-      {
-        reasoningEffort: "none",
-      } as never,
-    ) as { reasoning?: unknown; include?: unknown };
-
-    expect(params.reasoning).toEqual({ effort: "none" });
-    expect(params).not.toHaveProperty("include");
-  });
-
-  it("omits disabled OpenAI Responses reasoning when the model does not support none", () => {
-    const params = buildOpenAIResponsesParams(
-      responsesModelFixture("gpt-5", "GPT-5"),
-      emptyResponsesContext(),
-      {
-        reasoningEffort: "none",
-      } as never,
-    ) as { reasoning?: unknown; include?: unknown };
-
-    expect(params).not.toHaveProperty("reasoning");
-    expect(params).not.toHaveProperty("include");
-  });
-
-  it("maps minimal shared reasoning to low for OpenAI Responses", () => {
-    const params = buildOpenAIResponsesParams(
-      responsesModelFixture("gpt-5.4", "GPT-5.4"),
-      emptyResponsesContext(),
-      {
-        reasoning: "minimal",
-      } as never,
-    ) as { reasoning?: unknown };
-
-    expect(params.reasoning).toEqual({ effort: "low", summary: "auto" });
   });
 
   it("raises minimal OpenAI Responses reasoning when web_search is available", () => {
@@ -1263,242 +774,6 @@ describe("openai transport stream", () => {
     expect(params.reasoning).toEqual({ effort: "minimal", summary: "auto" });
   });
 
-  it("maps low reasoning to medium for Codex mini responses models", () => {
-    const params = buildOpenAIResponsesParams(
-      makeResponsesModel({
-        id: "gpt-5.1-codex-mini",
-        name: "gpt-5.1-codex-mini",
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api",
-      }),
-      emptyResponsesContext(),
-      {
-        reasoning: "low",
-      } as never,
-    ) as { reasoning?: unknown };
-
-    expect(params.reasoning).toEqual({ effort: "medium", summary: "auto" });
-  });
-
-  it.each([
-    {
-      label: "openai-platform",
-      model: {
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-        api: "openai-responses",
-        provider: "openai",
-        baseUrl: "https://api.openai.com/v1",
-      },
-    },
-    {
-      label: "openai-chatgpt",
-      model: {
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-        api: "openai-chatgpt-responses",
-        provider: "openai",
-        baseUrl: "https://chatgpt.com/backend-api",
-      },
-    },
-    {
-      label: "azure-openai-responses",
-      model: {
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-        api: "azure-openai-responses",
-        provider: "azure-openai-responses",
-        baseUrl: "https://azure.example.openai.azure.com/openai/v1",
-      },
-    },
-    {
-      label: "custom-openai-responses",
-      model: {
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-        api: "openai-responses",
-        provider: "custom-openai-responses",
-        baseUrl: "https://proxy.example.com/v1",
-      },
-    },
-  ])("omits orphan phase-tagged ids for $label responses payloads", ({ label: _label, model }) => {
-    const params = buildOpenAIResponsesParams(
-      {
-        ...model,
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
-        maxTokens: 8192,
-      } as Model<"openai-responses">,
-      replayContext({
-        api: model.api,
-        provider: model.provider,
-        model: model.id,
-        stopReason: "stop",
-        text: { id: "msg_commentary", phase: "commentary", text: "Working..." },
-        after: [{ role: "user", content: "Continue", timestamp: 2 }],
-      }),
-      undefined,
-    ) as {
-      input?: Array<{ role?: string; id?: string; phase?: string }>;
-    };
-
-    const assistantItem = params.input?.find((item) => item.role === "assistant");
-    expectRecordFields(assistantItem, {
-      role: "assistant",
-      phase: "commentary",
-    });
-    expect(assistantItem?.id).toBeUndefined();
-  });
-
-  it("strips the internal cache boundary from OpenAI system prompts", () => {
-    const params = buildOpenAIResponsesParams(
-      responsesModelFixture("gpt-5.4", "GPT-5.4"),
-      {
-        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
-        messages: [],
-        tools: [],
-      } as never,
-      undefined,
-    ) as { instructions?: string };
-
-    expect(params.instructions).toBe("Stable prefix\nDynamic suffix");
-  });
-
-  it("defaults responses tool schemas to strict on native OpenAI routes", () => {
-    const params = buildOpenAIResponsesParams(
-      responsesModelFixture("gpt-5.4", "GPT-5.4"),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [
-          {
-            name: "lookup_weather",
-            description: "Get forecast",
-            parameters: { type: "object", properties: {}, additionalProperties: false },
-          },
-        ],
-      } as never,
-      undefined,
-    ) as { tools?: Array<{ strict?: boolean }> };
-
-    expect(params.tools?.[0]?.strict).toBe(true);
-    expectRecordFields(params.tools?.[0], {
-      parameters: {
-        type: "object",
-        properties: {},
-        additionalProperties: false,
-        required: [],
-      },
-    });
-  });
-
-  it("passes explicit Responses tool_choice when tools are present", () => {
-    const params = buildOpenAIResponsesParams(
-      responsesModelFixture("gpt-5.4", "GPT-5.4"),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [
-          {
-            name: "lookup_weather",
-            description: "Get forecast",
-            parameters: { type: "object", properties: {}, additionalProperties: false },
-          },
-        ],
-      } as never,
-      { toolChoice: "required" } as never,
-    ) as { tool_choice?: string };
-
-    expect(params.tool_choice).toBe("required");
-  });
-
-  it("keeps healthy Responses tools when a sibling schema is unreadable", () => {
-    const params = buildOpenAIResponsesParams(
-      responsesModelFixture("gpt-5.5", "GPT-5.5"),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [
-          {
-            name: "broken",
-            description: "Broken",
-            get parameters(): never {
-              throw new Error("parameters exploded");
-            },
-          },
-          {
-            name: "lookup",
-            description: "Lookup",
-            parameters: {},
-          },
-        ],
-      } as never,
-      { toolChoice: { type: "function", name: "lookup" } },
-    ) as {
-      tools?: Array<{ name?: string; strict?: boolean }>;
-      tool_choice?: unknown;
-    };
-
-    expect(params.tools).toEqual([expect.objectContaining({ name: "lookup", strict: true })]);
-    expect(params.tool_choice).toEqual({ type: "function", name: "lookup" });
-  });
-
-  it("fails locally when a pinned Responses tool is unreadable", () => {
-    expect(() =>
-      buildOpenAIResponsesParams(
-        responsesModelFixture("gpt-5.5", "GPT-5.5"),
-        {
-          systemPrompt: "system",
-          messages: [],
-          tools: [
-            {
-              name: "broken",
-              get parameters(): never {
-                throw new Error("parameters exploded");
-              },
-            },
-          ],
-        } as never,
-        { toolChoice: { type: "function", name: "broken" } },
-      ),
-    ).toThrow('requested unavailable tool "broken"');
-  });
-
-  it("filters official Responses allowed_tools against projected functions", () => {
-    const params = buildOpenAIResponsesParams(
-      responsesModelFixture("gpt-5.5", "GPT-5.5"),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [
-          {
-            name: "lookup",
-            description: "Lookup",
-            parameters: {},
-          },
-        ],
-      } as never,
-      {
-        toolChoice: {
-          type: "allowed_tools",
-          mode: "required",
-          tools: [
-            { type: "function", name: "broken" },
-            { type: "function", name: "lookup" },
-          ],
-        },
-      },
-    ) as { tool_choice?: unknown };
-
-    expect(params.tool_choice).toEqual({
-      type: "allowed_tools",
-      mode: "required",
-      tools: [{ type: "function", name: "lookup" }],
-    });
-  });
-
   it("does not reread an unreadable tool inventory length", () => {
     const tools = new Proxy([], {
       get(target, property, receiver) {
@@ -1528,45 +803,53 @@ describe("openai transport stream", () => {
     );
   });
 
-  it("sorts Responses tools by name for stable prompt-cache payloads", () => {
-    const model = responsesModelFixture("gpt-5.4", "GPT-5.4");
-    const zetaTool = {
-      name: "zeta",
-      description: "Z",
-      parameters: { type: "object", properties: {}, additionalProperties: false },
-    };
-    const alphaTool = {
-      name: "alpha",
-      description: "A",
-      parameters: { type: "object", properties: {}, additionalProperties: false },
-    };
-
-    const first = buildOpenAIResponsesParams(
-      model,
+  it("serializes raw string tool-call arguments without double-encoding them", () => {
+    const params = buildOpenAIResponsesParams(
+      makeResponsesModel({
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+      }),
       {
         systemPrompt: "system",
-        messages: [],
-        tools: [zetaTool, alphaTool],
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-responses",
+            provider: "openai",
+            model: "gpt-5.4",
+            usage: createZeroUsageFixture(),
+            stopReason: "stop",
+            timestamp: 1,
+            content: [
+              {
+                type: "toolCall",
+                id: "call_abc|fc_item1",
+                name: "my_tool",
+                arguments: "not valid json",
+              },
+            ],
+          },
+        ],
+        tools: [],
       } as never,
-      { sessionId: "session-123" } as never,
-    ) as { tools?: Array<{ name?: string }> };
-    const second = buildOpenAIResponsesParams(
-      model,
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [alphaTool, zetaTool],
-      } as never,
-      { sessionId: "session-123" } as never,
-    ) as { tools?: Array<{ name?: string }> };
+      undefined,
+    ) as {
+      input?: Array<{ type?: string; arguments?: string }>;
+    };
 
-    expect(first.tools?.map((tool) => tool.name)).toEqual(["alpha", "zeta"]);
-    expect(first.tools).toEqual(second.tools);
+    const functionCall = params.input?.find((item) => item.type === "function_call");
+    expectRecordFields(functionCall, {
+      type: "function_call",
+      arguments: "not valid json",
+    });
   });
 
-  it("falls back to strict:false when a native OpenAI tool schema is not strict-compatible", () => {
+  it("normalizes responses tool parameters while downgrading native strict:false", () => {
     const params = buildOpenAIResponsesParams(
-      responsesModelFixture("gpt-5.4", "GPT-5.4"),
+      makeResponsesModel({
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+      }),
       {
         systemPrompt: "system",
         messages: [],
@@ -1575,8 +858,6 @@ describe("openai transport stream", () => {
             name: "read",
             description: "Read file",
             parameters: {
-              type: "object",
-              additionalProperties: false,
               properties: { path: { type: "string" } },
               required: [],
             },
@@ -1584,75 +865,13 @@ describe("openai transport stream", () => {
         ],
       } as never,
       undefined,
-    ) as { tools?: Array<{ strict?: boolean }> };
+    ) as { tools?: Array<{ strict?: boolean; parameters?: Record<string, unknown> }> };
 
     expect(params.tools?.[0]?.strict).toBe(false);
-  });
-
-  it("deduplicates repeated OpenAI strict schema downgrade diagnostics", async () => {
-    const debug = vi.fn();
-    const logger = {
-      subsystem: "openai-transport",
-      isEnabled: vi.fn((level: string, target?: string) => level === "debug" && target === "any"),
-      trace: vi.fn(),
-      debug,
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-      fatal: vi.fn(),
-      raw: vi.fn(),
-      child: vi.fn(),
-    };
-    logger.child.mockReturnValue(logger);
-
-    vi.resetModules();
-    vi.doMock("../logging/subsystem.js", async (importOriginal) => ({
-      ...(await importOriginal<typeof import("../logging/subsystem.js")>()),
-      createSubsystemLogger: vi.fn(() => logger),
-    }));
-
-    try {
-      const { testing: isolatedTesting } =
-        await import("./openai-transport-stream.test-support.js");
-      const isolatedBuildOpenAIResponsesParams = isolatedTesting.buildOpenAIResponsesParams;
-      const model = responsesModelFixture("gpt-5.4", "GPT-5.4");
-      const context = {
-        systemPrompt: "system",
-        messages: [],
-        tools: [
-          {
-            name: "read",
-            description: "Read file",
-            parameters: {
-              type: "object",
-              additionalProperties: false,
-              properties: { path: { type: "string" } },
-              required: [],
-            },
-          },
-        ],
-      } as never;
-
-      const first = isolatedBuildOpenAIResponsesParams(model, context, undefined) as {
-        tools?: Array<{ strict?: boolean }>;
-      };
-      const second = isolatedBuildOpenAIResponsesParams(model, context, undefined) as {
-        tools?: Array<{ strict?: boolean }>;
-      };
-
-      expect(first.tools?.[0]?.strict).toBe(false);
-      expect(second.tools?.[0]?.strict).toBe(false);
-      expect(
-        debug.mock.calls.filter(
-          ([message]) =>
-            typeof message === "string" &&
-            message.includes("tool schema strict mode downgraded to strict=false"),
-        ),
-      ).toHaveLength(1);
-    } finally {
-      vi.doUnmock("../logging/subsystem.js");
-      vi.resetModules();
-    }
+    expectRecordFields(params.tools?.[0]?.parameters, {
+      type: "object",
+      properties: { path: { type: "string" } },
+      required: [],
+    });
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

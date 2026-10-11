@@ -1,7 +1,6 @@
-// Qa Lab plugin module implements self check scenario behavior.
-import { extractQaToolPayload } from "./extract-tool-payload.js";
+import type { QaBusMessage } from "openclaw/plugin-sdk/qa-channel-protocol";
+import { extractToolPayload as extractQaToolPayload } from "openclaw/plugin-sdk/tool-payload";
 import type { QaTransportState } from "./qa-transport.js";
-import type { QaBusMessage } from "./runtime-api.js";
 import type { QaScenarioDefinition } from "./scenario.js";
 import { waitForOutboundMessage } from "./suite-runtime-transport.js";
 
@@ -9,7 +8,7 @@ export function createQaSelfCheckScenario(options?: {
   waitTimeoutMs?: number;
 }): QaScenarioDefinition {
   const waitTimeoutMs = options?.waitTimeoutMs ?? 5_000;
-  let lifecycle: { target: string; message: QaBusMessage } | undefined;
+  let lifecycle: { target: string; threadId: string; message: QaBusMessage } | undefined;
   const waitForReply = (state: QaTransportState, inbound: QaBusMessage) =>
     waitForOutboundMessage(
       state,
@@ -48,12 +47,11 @@ export function createQaSelfCheckScenario(options?: {
           });
           const threadPayload = extractQaToolPayload(
             threadResult as Parameters<typeof extractQaToolPayload>[0],
-          ) as { target?: string; thread?: { id?: string } } | undefined;
-          const threadId = threadPayload?.thread?.id;
-          if (!threadId || !threadPayload?.target) {
+          ) as { target?: string; threadId?: string; thread?: { id?: string } } | undefined;
+          const threadId = threadPayload?.threadId;
+          if (!threadId || threadId !== threadPayload?.thread?.id || !threadPayload.target) {
             throw new Error("thread-create did not return thread id and target");
           }
-
           const inbound = await state.addInboundMessage({
             conversation: { id: "qa-room", kind: "channel", title: "QA Room" },
             senderId: "alice",
@@ -64,6 +62,7 @@ export function createQaSelfCheckScenario(options?: {
           });
           lifecycle = {
             target: threadPayload.target,
+            threadId,
             message: await waitForReply(state, inbound),
           };
           return threadId;
@@ -78,44 +77,44 @@ export function createQaSelfCheckScenario(options?: {
           if (!lifecycle) {
             throw new Error("threaded outbound message and target not found");
           }
-          const { target, message: outboundMessage } = lifecycle;
-
-          await performAction("react", {
-            to: target,
-            messageId: outboundMessage.id,
-            emoji: "white_check_mark",
-          });
-          const reacted = await state.readMessage({ messageId: outboundMessage.id });
-          if (!reacted) {
-            throw new Error("reacted message not found");
-          }
-          if (reacted.reactions.length === 0) {
-            throw new Error("reaction not recorded");
-          }
-
-          await performAction("edit", {
-            to: target,
-            messageId: outboundMessage.id,
-            text: "qa-echo: inside thread (edited)",
-          });
-          const edited = await state.readMessage({ messageId: outboundMessage.id });
-          if (!edited) {
-            throw new Error("edited message not found");
-          }
-          if (!edited.text.includes("(edited)")) {
-            throw new Error("edit not recorded");
-          }
-
-          await performAction("delete", {
-            to: target,
-            messageId: outboundMessage.id,
-          });
-          const deleted = await state.readMessage({ messageId: outboundMessage.id });
-          if (!deleted) {
-            throw new Error("deleted message not found");
-          }
-          if (!deleted.deleted) {
-            throw new Error("delete not recorded");
+          const { target, threadId, message: outboundMessage } = lifecycle;
+          const actions = [
+            {
+              action: "react",
+              args: { emoji: "white_check_mark" },
+              missing: "reacted message not found",
+              unrecorded: "reaction not recorded",
+              recorded: (message: QaBusMessage) => message.reactions.length !== 0,
+            },
+            {
+              action: "edit",
+              args: { text: "qa-echo: inside thread (edited)" },
+              missing: "edited message not found",
+              unrecorded: "edit not recorded",
+              recorded: (message: QaBusMessage) => message.text.includes("(edited)"),
+            },
+            {
+              action: "delete",
+              args: {},
+              missing: "deleted message not found",
+              unrecorded: "delete not recorded",
+              recorded: (message: QaBusMessage) => message.deleted,
+            },
+          ] as const;
+          for (const { action, args, missing, unrecorded, recorded } of actions) {
+            await performAction(action, {
+              to: target,
+              threadId,
+              messageId: outboundMessage.id,
+              ...args,
+            });
+            const message = await state.readMessage({ messageId: outboundMessage.id });
+            if (!message) {
+              throw new Error(missing);
+            }
+            if (!recorded(message)) {
+              throw new Error(unrecorded);
+            }
           }
         },
       },

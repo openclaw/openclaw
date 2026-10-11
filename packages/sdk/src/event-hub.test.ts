@@ -1,7 +1,13 @@
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../../src/infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../../../src/test-utils/node-process.js";
 import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import { EventHub } from "./event-hub.js";
+import { eventHubRetentionEntrypoint } from "./retention-runtime.test-support.js";
 
 describe("EventHub subscriber ownership", () => {
   it("releases retired iterator payloads without discarding a closed hub's unread event", async ({
@@ -10,9 +16,10 @@ describe("EventHub subscriber ownership", () => {
     const result = await runNodeScript(
       [
         "--expose-gc",
-        "--import",
-        "./scripts/tsx.mjs",
-        fileURLToPath(new URL("./event-hub.retention.test-support.ts", import.meta.url)),
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(eventHubRetentionEntrypoint),
+          resolveTestNodeExecPath(),
+        ),
       ],
       { ...process.env, NODE_OPTIONS: "", TSX_DISABLE_CACHE: "1" },
       15_000,
@@ -64,18 +71,6 @@ describe("EventHub subscriber ownership", () => {
     await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
   });
 
-  it("drains undefined payloads before propagating an explicit undefined close error", async () => {
-    const hub = new EventHub<number | undefined>();
-    const iterator = hub.stream()[Symbol.asyncIterator]();
-    hub.publish(0);
-    hub.publish(undefined);
-    hub.close(undefined);
-
-    await expect(iterator.next()).resolves.toEqual({ done: false, value: 0 });
-    await expect(iterator.next()).resolves.toEqual({ done: false, value: undefined });
-    await expect(iterator.next()).rejects.toBeUndefined();
-  });
-
   it("preserves nested publish order when a subscriber filter emits another event", async () => {
     const hub = new EventHub<string>();
     const filteredStream = hub.stream((event) => {
@@ -94,40 +89,6 @@ describe("EventHub subscriber ownership", () => {
       await expect(iterator.next()).resolves.toEqual({ done: false, value: "outer" });
       await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
     }
-  });
-
-  it("isolates a failing filter from healthy event streams", async () => {
-    const hub = new EventHub<string>();
-    const failedStream = hub.stream(() => {
-      throw new Error("subscriber filter failed");
-    });
-    const failed = failedStream[Symbol.asyncIterator]();
-    const healthy = hub.stream()[Symbol.asyncIterator]();
-    const failedRead = failed.next();
-    const healthyRead = healthy.next();
-
-    hub.publish("first");
-    await expect(failedRead).rejects.toThrow("subscriber filter failed");
-    await expect(healthyRead).resolves.toEqual({ done: false, value: "first" });
-
-    const nextHealthyRead = healthy.next();
-    hub.publish("second");
-    await expect(nextHealthyRead).resolves.toEqual({ done: false, value: "second" });
-  });
-
-  it("settles concurrent reads in event order", async () => {
-    const hub = new EventHub<string>();
-    const iterator = hub.stream()[Symbol.asyncIterator]();
-    const first = iterator.next();
-    const second = iterator.next();
-
-    hub.publish("first");
-    hub.publish("second");
-
-    await expect(Promise.all([first, second])).resolves.toEqual([
-      { done: false, value: "first" },
-      { done: false, value: "second" },
-    ]);
   });
 
   it("reserves a published event for the reader it wakes", async () => {
@@ -168,15 +129,5 @@ describe("EventHub subscriber ownership", () => {
 
     await expect(first).rejects.toThrow("gateway event stream closed");
     await expect(second).rejects.toThrow("gateway event stream closed");
-  });
-
-  it("does not yield buffered events after its iterator closes", async () => {
-    const hub = new EventHub<string>();
-    const iterator = hub.stream()[Symbol.asyncIterator]();
-    hub.publish("stale");
-
-    await iterator.return?.();
-
-    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
   });
 });

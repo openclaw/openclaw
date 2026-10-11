@@ -13,10 +13,17 @@ import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { SessionsListResult } from "../api/types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const sessionKey = "agent:main:stop-finished";
 const replyText = "Finished reply from the fixture provider.";
+type SessionDescriptor = {
+  key?: string;
+  lastRunId?: string | null;
+  hasActiveRun?: boolean;
+  status?: string;
+};
 type EventPayload = {
   sessionKey?: string;
   sessionId?: string;
@@ -30,7 +37,8 @@ type EventPayload = {
   phase?: string;
   stream?: string;
   data?: { phase?: string };
-  session?: { lastRunId?: string | null; hasActiveRun?: boolean; status?: string };
+  session?: SessionDescriptor;
+  sessions?: SessionDescriptor[];
   ok?: boolean;
   aborted?: boolean;
   runIds?: string[];
@@ -250,14 +258,14 @@ suite.define(() => {
         const { browserUrl }: { browserUrl: string } = JSON.parse(handoff.stdout);
         const url = new URL(browserUrl);
         url.pathname = "/chat/main/stop-finished";
-        url.search = "?nav=collapsed";
+        url.search = "";
         try {
           await suite.withPage(
             { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
             async ({ page }) => {
               await page.addInitScript(() => {
                 localStorage.setItem(
-                  "openclaw:control-ui:community-invite",
+                  "openclaw:control-ui:community-invite:v2",
                   JSON.stringify({ dismissedAtMs: 1770000000000 }),
                 );
               });
@@ -317,15 +325,24 @@ suite.define(() => {
                       socket.send(message);
                     };
                     const session = frame.payload?.session;
+                    const hasTerminalDescriptor =
+                      (request?.method === "sessions.describe" &&
+                        request.params?.key === sessionKey &&
+                        session?.lastRunId === runId &&
+                        session?.status === "done") ||
+                      (request?.method === "sessions.list" &&
+                        frame.payload?.sessions?.some(
+                          (row) =>
+                            row.key === sessionKey &&
+                            row.lastRunId === runId &&
+                            row.status === "done",
+                        ));
                     if (
                       delayTerminalDescriptors &&
                       runId &&
                       frame.type === "res" &&
                       frame.ok === true &&
-                      request?.method === "sessions.describe" &&
-                      request.params?.key === sessionKey &&
-                      session?.lastRunId === runId &&
-                      session.status === "done"
+                      hasTerminalDescriptor
                     ) {
                       // Shared descriptor observations can settle ownership before Stop.
                       // Delay this exact terminal fact, then deliver the real reply unchanged.
@@ -360,6 +377,7 @@ suite.define(() => {
               try {
                 stage = "open same-origin authenticated Chat";
                 await page.goto(url.href);
+                await enterControlUiSession(page);
                 await waitForControlUiGatewayReady(page);
                 const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
                 await composer.fill("Finish this fixture turn.");

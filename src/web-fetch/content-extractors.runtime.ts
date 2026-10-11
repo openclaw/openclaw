@@ -1,17 +1,10 @@
 /** Runtime bridge for plugin-provided readable-content extractors used by web fetch. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createConfigScopedPromiseLoader } from "../plugins/plugin-cache-primitives.js";
 import type {
   WebContentExtractionResult,
   WebContentExtractMode,
 } from "../plugins/web-content-extractor-types.js";
 import { resolvePluginWebContentExtractors } from "../plugins/web-content-extractors.runtime.js";
-
-// Runtime loader for plugin-provided readable-content extractors. The loader is
-// config-scoped so plugin registry results can be reused within a config view.
-const webContentExtractorLoader = createConfigScopedPromiseLoader((config?: OpenClawConfig) =>
-  resolvePluginWebContentExtractors(config ? { config } : undefined),
-);
 
 /** Runs configured content extractors until one returns readable text. */
 export async function extractReadableContent(params: {
@@ -20,9 +13,9 @@ export async function extractReadableContent(params: {
   extractMode: WebContentExtractMode;
   config?: OpenClawConfig;
 }): Promise<(WebContentExtractionResult & { extractor: string }) | null> {
-  let extractors: Awaited<ReturnType<typeof webContentExtractorLoader.load>>;
+  let extractors: ReturnType<typeof resolvePluginWebContentExtractors>;
   try {
-    extractors = await webContentExtractorLoader.load(params.config);
+    extractors = resolvePluginWebContentExtractors({ config: params.config });
   } catch {
     return null;
   }

@@ -2,22 +2,21 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { assertSqliteSchemaContains } from "../../infra/sqlite-schema-contract.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { getOpenClawStateRuntimeSchema } from "../../state/openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-});
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
 describe("worker placement move schema", () => {
-  it("survives a same-version previous reader and candidate reopen", () => {
+  it("survives a same-version previous reader and candidate reopen", async () => {
     const stateDir = tempDirs.make("openclaw-placement-move-schema-");
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const database = openOpenClawStateDatabase(options);
@@ -59,7 +58,16 @@ describe("worker placement move schema", () => {
       );
     `);
     const store = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
-    const begun = store.beginPlacementMove({
+    const beforeMove = await store.readProjection(["session-move"]);
+    expect(beforeMove.placements.get("session-move")).toMatchObject({ state: "active" });
+    expect(beforeMove.moves.size).toBe(0);
+    expect(beforeMove.workspaceResultReconcilingSessionIds.size).toBe(0);
+    database.db.exec("DROP TABLE worker_session_placement_moves");
+    const withoutMoveTable = await store.readProjection(["session-move"]);
+    expect(withoutMoveTable.placements.get("session-move")).toMatchObject({ state: "active" });
+    expect(withoutMoveTable.moves.size).toBe(0);
+    database.db.exec(previousSchema.slice(moveSchemaStart, moveSchemaEnd + ") STRICT;".length));
+    const begun = await store.beginPlacementMove({
       sessionId: "session-move",
       source: { generation: 4, environmentId: "environment-source", ownerEpoch: 7 },
       target: {
@@ -69,6 +77,9 @@ describe("worker placement move schema", () => {
         os: "os-a",
       },
     });
+    expect((await store.readProjection(["session-move"])).moves.get("session-move")).toEqual(
+      begun.intent,
+    );
     expect(database.db.prepare("PRAGMA table_info(worker_session_placement_moves)").all()).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ name: "target_machine_class" }),
@@ -81,7 +92,7 @@ describe("worker placement move schema", () => {
       ]),
     );
     const databasePath = database.path;
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
 
     const previousReader = new DatabaseSync(databasePath);
     expect(() =>
@@ -103,6 +114,9 @@ describe("worker placement move schema", () => {
     const reopened = openOpenClawStateDatabase(options);
     const reopenedStore = createWorkerSessionPlacementStore({ database: reopened });
     expect(reopenedStore.getPlacementMove("session-move")).toEqual(begun.intent);
+    expect(
+      (await reopenedStore.readProjection(["session-move"])).moves.get("session-move"),
+    ).toEqual(begun.intent);
     expect(reopened.db.prepare("PRAGMA user_version").get()).toEqual(versionBefore);
     expect(
       reopened.db

@@ -1,13 +1,20 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
+  AgentSummary,
   ProjectRecord,
   WorktreesBranchesResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../../app/context.ts";
+import type { SessionCreateParams } from "../../lib/sessions/create.ts";
+import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import type { DraftRepositoryState } from "./discovery.ts";
+import type { SubmittedWorktreePreference } from "./draft-preference-state.ts";
 import type { NewSessionPreference } from "./preferences.ts";
 import type { DraftRemoteProject } from "./project-chip.ts";
 
 type DraftRepositorySnapshot = Readonly<{
+  agentId: string;
+  agents: readonly AgentSummary[];
   remotePlacement: boolean;
   selectedProject: ProjectRecord | undefined;
   remoteProject: DraftRemoteProject | null;
@@ -20,6 +27,10 @@ type DraftRepositorySnapshot = Readonly<{
 type DraftRepositoryCallbacks = {
   requestUpdate: () => void;
   persistPreference: (patch: NewSessionPreference) => void;
+  capturePreferenceConsumption: (
+    owner: Readonly<{ agentId: string; workspace: string }>,
+    expected: SubmittedWorktreePreference,
+  ) => ((consume: () => void) => void | Promise<void>) | undefined;
 };
 
 type ResolvedRepository = Exclude<DraftRepositoryState, { kind: "checking" }>;
@@ -40,13 +51,13 @@ function initialRepositoryState(snapshot: DraftRepositorySnapshot): DraftReposit
 
 export class DraftRepositoryController {
   private worktreeValue = false;
-  private worktreeNameValue = "";
-  private baseRefOverride: string | undefined;
+  private readonly details: { baseRef?: string; worktreeName: string } = { worktreeName: "" };
   private repositoryValue: DraftRepositoryState = { kind: "idle" };
   private requestToken = 0;
+  private selectionRevision = 0;
   private preferredWorktreeRestore = false;
   private worktreeSelectedByUser = false;
-  private detailsSelectedByUser = false;
+  private readonly selectedDetails = new Set<"baseRef" | "worktreeName">();
 
   constructor(
     private readonly read: () => DraftRepositorySnapshot,
@@ -57,14 +68,26 @@ export class DraftRepositoryController {
     return this.worktreeValue;
   }
 
+  get preferenceWorktree(): boolean {
+    return this.worktreeValue || this.preferredWorktreeRestore;
+  }
+
   get worktreeName(): string {
-    return this.worktreeNameValue;
+    return this.details.worktreeName;
   }
 
   get baseRef(): string {
-    // Discovery supplies defaults; reconnects never rewrite the operator's selection.
-    const repository = this.repositoryValue.kind === "git" ? this.repositoryValue : undefined;
-    return this.baseRefOverride ?? (repository?.defaultBranch || repository?.headBranch || "");
+    // An omitted ref lets the Gateway fetch its default; discovery is only a suggestion.
+    return this.details.baseRef ?? "";
+  }
+
+  get remoteRepository(): SessionCreateParams["repository"] {
+    const { remotePlacement, remoteProject } = this.read();
+    if (!remotePlacement || !remoteProject) {
+      return undefined;
+    }
+    const ref = this.baseRef.trim();
+    return { url: remoteProject.cloneUrl, ...(ref ? { ref } : {}) };
   }
 
   get repository(): DraftRepositoryState {
@@ -76,17 +99,29 @@ export class DraftRepositoryController {
   }
 
   get hasUserSelection(): boolean {
-    return this.worktreeSelectedByUser || this.detailsSelectedByUser;
+    return this.worktreeSelectedByUser || this.selectedDetails.size > 0;
   }
 
   adoptPreference(preference: NewSessionPreference | null) {
     if (!this.worktreeSelectedByUser) {
       this.worktreeValue = false;
-      this.preferredWorktreeRestore = preference?.worktree === true;
+      // Remote worktree flags describe placement isolation, not a local checkout choice.
+      this.preferredWorktreeRestore =
+        preference?.worktree === true && (!preference.where || preference.where.kind === "local");
     }
-    if (!this.detailsSelectedByUser) {
-      this.baseRefOverride = preference?.baseRef || undefined;
-      this.worktreeNameValue = preference?.worktreeName ?? "";
+    if (!this.selectedDetails.has("baseRef")) {
+      const baseRef = preference?.baseRef || undefined;
+      if (this.details.baseRef !== baseRef) {
+        this.selectionRevision += 1;
+      }
+      this.details.baseRef = baseRef;
+    }
+    if (!this.selectedDetails.has("worktreeName")) {
+      const worktreeName = preference?.worktreeName ?? "";
+      if (this.details.worktreeName !== worktreeName) {
+        this.selectionRevision += 1;
+      }
+      this.details.worktreeName = worktreeName;
     }
     if (!this.matchesCurrentRepo()) {
       // Retire the old folder's RPC before it can consume the new preference.
@@ -105,9 +140,10 @@ export class DraftRepositoryController {
   }
 
   clearDetails(persist = false) {
-    this.baseRefOverride = undefined;
-    this.worktreeNameValue = "";
-    this.detailsSelectedByUser = false;
+    this.selectionRevision += 1;
+    this.details.baseRef = undefined;
+    this.details.worktreeName = "";
+    this.selectedDetails.clear();
     if (persist) {
       this.callbacks.persistPreference({ baseRef: "", worktreeName: "" });
     }
@@ -119,6 +155,7 @@ export class DraftRepositoryController {
   }
 
   selectWorktree(value: boolean, clearName = true) {
+    this.selectionRevision += 1;
     this.preferredWorktreeRestore = false;
     this.worktreeSelectedByUser = true;
     this.worktreeValue = value;
@@ -127,49 +164,83 @@ export class DraftRepositoryController {
     }
   }
 
-  forceWorktree(value: boolean) {
-    this.worktreeValue = value;
-  }
-
   rejectPreferredWorktree() {
     this.preferredWorktreeRestore = false;
     this.worktreeValue = false;
     this.clearDetails(true);
   }
 
-  select(value: boolean) {
-    if (this.worktreeValue === value || this.read().remotePlacement) {
-      return;
+  select(value: boolean): boolean {
+    if (
+      this.worktreeValue === value ||
+      this.read().remotePlacement ||
+      (value && !this.available())
+    ) {
+      return false;
     }
     this.selectWorktree(value, false);
     this.callbacks.persistPreference({
       folder: this.read().folder.trim() || this.read().workspace,
       worktree: this.worktreeValue,
     });
-    if (this.worktreeValue && !this.available()) {
-      this.load();
-    }
     this.callbacks.requestUpdate();
+    return true;
   }
 
-  setBaseRef(baseRef: string, submitting: boolean) {
+  setDetail(key: "baseRef" | "worktreeName", value: string, submitting: boolean) {
     if (submitting) {
       return;
     }
-    this.baseRefOverride = baseRef;
-    this.detailsSelectedByUser = true;
-    this.callbacks.persistPreference({ baseRef });
+    this.selectionRevision += 1;
+    this.details[key] = value;
+    this.selectedDetails.add(key);
+    this.callbacks.persistPreference({ [key]: value });
     this.callbacks.requestUpdate();
   }
 
-  setWorktreeName(worktreeName: string, submitting: boolean) {
-    if (submitting) {
-      return;
+  captureSubmittedName(
+    params: Pick<
+      SessionCreateParams,
+      "worktree" | "worktreeName" | "worktreeBaseRef" | "cwd" | "projectId"
+    >,
+    submission: Readonly<{ agentId: string; recovered?: boolean }>,
+  ) {
+    const name = params.worktreeName?.trim();
+    if (!params.worktree || !name) {
+      return undefined;
     }
-    this.worktreeNameValue = worktreeName;
-    this.detailsSelectedByUser = true;
-    this.callbacks.persistPreference({ worktreeName });
-    this.callbacks.requestUpdate();
+    const revision = this.selectionRevision;
+    const snapshot = this.read();
+    const agentId = normalizeAgentId(submission.agentId);
+    const agent = snapshot.agents.find((candidate) => normalizeAgentId(candidate.id) === agentId);
+    const owner = { agentId, workspace: normalizeOptionalString(agent?.workspace) ?? "" };
+    const currentAgent = owner.agentId === snapshot.agentId;
+    const persist = this.callbacks.capturePreferenceConsumption(owner, {
+      worktreeName: name,
+      ...(!submission.recovered ? { selectedBaseRef: this.details.baseRef?.trim() ?? "" } : {}),
+      folder:
+        params.cwd ?? (currentAgent ? snapshot.folder.trim() || owner.workspace : owner.workspace),
+      baseRef: params.worktreeBaseRef ?? (currentAgent ? this.baseRef : undefined),
+      projectId: params.projectId ?? (currentAgent ? snapshot.selectedProject?.id : undefined),
+    });
+    return (
+      persist &&
+      (() =>
+        persist(() => {
+          if (
+            owner.agentId !== this.read().agentId ||
+            revision !== this.selectionRevision ||
+            name !== this.details.worktreeName.trim()
+          ) {
+            return;
+          }
+          // A custom name belongs to one accepted draft; keep the checkout defaults.
+          this.selectionRevision += 1;
+          this.details.worktreeName = "";
+          this.selectedDetails.add("worktreeName");
+          this.callbacks.requestUpdate();
+        }))
+    );
   }
 
   available(): boolean {
@@ -245,14 +316,13 @@ export class DraftRepositoryController {
     // Worktree preferences can arrive while discovery is pending.
     this.repositoryValue = state;
     if (state.kind === "direct") {
-      if (!this.read().remotePlacement) {
-        const rejectedWorktree = this.worktreeValue || this.preferredWorktreeRestore;
-        this.worktreeValue = false;
-        if (rejectedWorktree) {
-          this.callbacks.persistPreference({ worktree: false });
-        }
+      const rejectedWorktree = this.worktreeValue || this.preferredWorktreeRestore;
+      this.worktreeValue = false;
+      if (rejectedWorktree && !this.read().remotePlacement) {
+        this.callbacks.persistPreference({ worktree: false });
       }
-    } else if (this.preferredWorktreeRestore && !this.worktreeSelectedByUser && this.available()) {
+    } else if (this.preferredWorktreeRestore && !this.worktreeSelectedByUser) {
+      // Failed discovery cannot revoke isolation intent; the submit gate checks availability.
       this.worktreeValue = true;
     }
     this.preferredWorktreeRestore = false;

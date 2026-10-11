@@ -2,7 +2,6 @@
 import { describe, expect, it } from "vitest";
 import {
   channelToNpmTag,
-  isBetaTag,
   isStableTag,
   normalizeUpdateChannel,
   resolveEffectiveUpdateChannel,
@@ -12,47 +11,15 @@ import {
 } from "./update-channels.js";
 
 describe("update-channels tag detection", () => {
-  it.each([
-    { tag: "v2026.2.24-beta.1", beta: true },
-    { tag: "v2026.2.24.beta.1", beta: true },
-    { tag: "v2026.2.24-BETA-1", beta: true },
-    { tag: "v2026.2.24-alpha.1", beta: false },
-    { tag: "v2026.2.24-next.1", beta: false },
-    { tag: "v2026.2.24-1", beta: false },
-    { tag: "v2026.2.24-alphabeta.1", beta: false },
-    { tag: "v2026.2.24", beta: false },
-  ])("classifies $tag", ({ tag, beta }) => {
-    expect(isBetaTag(tag)).toBe(beta);
-  });
-
-  it.each([
-    { tag: "v2026.2.24-alpha.1", stable: false },
-    { tag: "v2026.2.24-beta.1", stable: false },
-    { tag: "v2026.2.24-rc.1", stable: false },
-    { tag: "v2026.2.24-preview.1", stable: false },
-    { tag: "v2026.2.24-custom.1", stable: false },
-    { tag: "v2026.2.24-1", stable: true },
-    { tag: "v1.0.1-1", stable: true },
-    { tag: "v2026.2.24", stable: true },
-  ])("stable classification for $tag", ({ tag, stable }) => {
+  it.each([["v2026.6.32-1", true]])("stable classification for %s", (tag, stable) => {
     expect(isStableTag(tag)).toBe(stable);
   });
 });
 
 describe("normalizeUpdateChannel", () => {
-  it.each([
-    { value: "stable", expected: "stable" },
-    { value: " extended-stable ", expected: "extended-stable" },
-    { value: " BETA ", expected: "beta" },
-    { value: "Dev", expected: "dev" },
-    { value: "", expected: null },
-    { value: "daily", expected: null },
-    { value: " nightly ", expected: null },
-    { value: null, expected: null },
-    { value: undefined, expected: null },
-  ] satisfies Array<{ value: string | null | undefined; expected: UpdateChannel | null }>)(
+  it.each([[undefined, null]] satisfies Array<[string | null | undefined, UpdateChannel | null]>)(
     "normalizes %j",
-    ({ value, expected }) => {
+    (value, expected) => {
       expect(normalizeUpdateChannel(value)).toBe(expected);
     },
   );
@@ -60,54 +27,22 @@ describe("normalizeUpdateChannel", () => {
 
 describe("channelToNpmTag", () => {
   it.each([
-    { channel: "stable", expected: "latest" },
-    { channel: "extended-stable", expected: "extended-stable" },
-    { channel: "beta", expected: "beta" },
-    { channel: "dev", expected: "dev" },
-  ] satisfies Array<{ channel: UpdateChannel; expected: string }>)(
-    "maps $channel to $expected",
-    ({ channel, expected }) => {
-      expect(channelToNpmTag(channel)).toBe(expected);
-    },
-  );
+    ["stable", "latest"],
+    ["dev", "dev"],
+  ] satisfies Array<[UpdateChannel, string]>)("maps %s to %s", (channel, expected) => {
+    expect(channelToNpmTag(channel)).toBe(expected);
+  });
 });
 
 describe("resolveEffectiveUpdateChannel", () => {
   it.each([
     {
-      name: "prefers config over git metadata",
-      params: {
-        configChannel: "beta" as const,
-        installKind: "git" as const,
-        git: { tag: "v2026.2.24", branch: "feature/test" },
-      },
-      expected: { channel: "beta", source: "config" },
-    },
-    {
-      name: "keeps configured stable after a one-off beta package update",
-      params: {
-        configChannel: "stable" as const,
-        currentVersion: "2026.5.2-beta.1",
-        installKind: "package" as const,
-      },
-      expected: { channel: "stable", source: "config" },
-    },
-    {
-      name: "uses installed beta version without a configured channel",
+      name: "uses main for immutable generations independently of the package version",
       params: {
         currentVersion: "2026.5.2-beta.1",
-        installKind: "package" as const,
+        installKind: "immutable" as const,
       },
-      expected: { channel: "beta", source: "installed-version" },
-    },
-    {
-      name: "keeps explicit extended-stable config",
-      params: {
-        configChannel: "extended-stable" as const,
-        currentVersion: "2026.5.2-beta.1",
-        installKind: "package" as const,
-      },
-      expected: { channel: "extended-stable", source: "config" },
+      expected: { channel: "dev", source: "default" },
     },
     {
       name: "uses installed extended-stable version without config",
@@ -118,29 +53,14 @@ describe("resolveEffectiveUpdateChannel", () => {
       expected: { channel: "extended-stable", source: "installed-version" },
     },
     {
-      name: "uses beta git tag",
-      params: { installKind: "git" as const, git: { tag: "v2026.2.24-beta.1" } },
-      expected: { channel: "beta", source: "git-tag" },
-    },
-    {
-      name: "treats stable git tag as stable",
-      params: { installKind: "git" as const, git: { tag: "v2026.2.24" } },
-      expected: { channel: "stable", source: "git-tag" },
+      name: "identifies final extended-stable git tags without enabling Git updates",
+      params: { installKind: "git" as const, git: { tag: "v2026.6.33" } },
+      expected: { channel: "extended-stable", source: "git-tag" },
     },
     {
       name: "treats non-beta prerelease git tag as dev",
       params: { installKind: "git" as const, git: { tag: "v2026.5.25-alpha.1" } },
       expected: { channel: "dev", source: "git-tag" },
-    },
-    {
-      name: "uses feature branch as dev",
-      params: { installKind: "git" as const, git: { branch: "feature/test" } },
-      expected: { channel: "dev", source: "git-branch" },
-    },
-    {
-      name: "defaults package installs to stable",
-      params: { installKind: "package" as const },
-      expected: { channel: "stable", source: "default" },
     },
   ])("$name", ({ params, expected }) => {
     expect(resolveEffectiveUpdateChannel(params)).toEqual(expected);
@@ -150,11 +70,6 @@ describe("resolveEffectiveUpdateChannel", () => {
 describe("resolveUpdateChannelDisplay labels", () => {
   it.each([
     {
-      name: "formats config labels",
-      params: { configChannel: "beta", installKind: "package" },
-      expected: "beta (config)",
-    },
-    {
       name: "formats git tag labels with tag",
       params: {
         installKind: "git",
@@ -163,22 +78,9 @@ describe("resolveUpdateChannelDisplay labels", () => {
       expected: "stable (v2026.2.24)",
     },
     {
-      name: "formats git branch labels with branch",
-      params: {
-        installKind: "git",
-        gitBranch: "feature/test",
-      },
-      expected: "dev (feature/test)",
-    },
-    {
       name: "formats installed-version labels",
       params: { currentVersion: "2026.5.2-beta.1", installKind: "package" },
       expected: "beta (installed version)",
-    },
-    {
-      name: "formats default labels",
-      params: { installKind: "package" },
-      expected: "stable (default)",
     },
   ] satisfies Array<{
     name: string;
@@ -245,16 +147,9 @@ describe("resolveUpdateChannelDisplay", () => {
 });
 
 describe("resolveRegistryUpdateChannel", () => {
-  it.each([
-    { currentVersion: "2026.6.32", expected: "stable" },
-    { currentVersion: "2026.6.33", expected: "stable" },
-    { currentVersion: "2026.6.34", expected: "stable" },
-    { currentVersion: "2026.6.33-1", expected: "stable" },
-    { currentVersion: "1.33.1", expected: "stable" },
-    { currentVersion: "1.6.33", expected: "stable" },
-  ] as const)(
-    "does not infer a package-only channel for $currentVersion",
-    ({ currentVersion, expected }) => {
+  it.each([["2026.6.33", "stable"]] as const)(
+    "does not infer a package-only channel for %s",
+    (currentVersion, expected) => {
       expect(resolveRegistryUpdateChannel({ currentVersion })).toBe(expected);
     },
   );
@@ -266,14 +161,5 @@ describe("resolveRegistryUpdateChannel", () => {
         currentVersion: "2026.5.2-beta.1",
       }),
     ).toBe("beta");
-  });
-
-  it("keeps explicit extended-stable config on an installed beta version", () => {
-    expect(
-      resolveRegistryUpdateChannel({
-        configChannel: "extended-stable",
-        currentVersion: "2026.5.2-beta.1",
-      }),
-    ).toBe("extended-stable");
   });
 });

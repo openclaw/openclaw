@@ -56,19 +56,8 @@ function emit(output: ReefCliOutput, payload: Record<string, unknown>, lines: st
   }
 }
 
-async function fail(output: ReefCliOutput, message: string): Promise<never> {
-  const stream = output.json ? process.stdout : process.stderr;
-  const text = output.json ? `${JSON.stringify({ error: message })}\n` : `${message}\n`;
-  // Drain before exiting: piped stdout writes are async and process.exit()
-  // would truncate the machine-readable error automation depends on.
-  await new Promise<void>((resolve) => {
-    stream.write(text, () => resolve());
-  });
-  process.exit(1);
-}
-
 // Every action funnels through here so the documented --json contract holds
-// for relay, filesystem, and config failures, not only explicit fail() calls.
+// for relay, filesystem, config, and validation failures.
 function reefCliAction<TOptions extends { json: boolean }, TArgs extends unknown[]>(
   run: (output: ReefCliOutput, options: TOptions, ...args: TArgs) => Promise<void>,
 ): (...args: [...TArgs, TOptions]) => Promise<void> {
@@ -82,7 +71,10 @@ function reefCliAction<TOptions extends { json: boolean }, TArgs extends unknown
     try {
       await run(output, options, ...positional);
     } catch (error) {
-      await fail(output, error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      const stream = output.json ? process.stdout : process.stderr;
+      stream.write(output.json ? `${JSON.stringify({ error: message })}\n` : `${message}\n`);
+      process.exitCode = 1;
     }
   };
 }
@@ -116,19 +108,19 @@ function currentReefConfig(): ReefChannelConfig | undefined {
   return parsed.success ? parsed.data : undefined;
 }
 
-async function loadConfiguredManager(output: ReefCliOutput): Promise<{
+async function loadConfiguredManager(): Promise<{
   config: ReefChannelConfig;
   keys: ReefKeys;
   manager: ReefFriendManager;
 }> {
   const config = currentReefConfig();
   if (!config?.handle) {
-    return await fail(output, "Reef is not configured. Run `openclaw reef register` first.");
+    throw new Error("Reef is not configured. Run `openclaw reef register` first.");
   }
   const keys = await loadOrCreateKeys(false);
   const runtime = getReefRuntime();
   const relayUrl = parseReefRelayUrl(config.relayUrl);
-  assertReefIdentityBinding(runtime, { handle: config.handle, relayUrl });
+  await assertReefIdentityBinding(runtime, { handle: config.handle, relayUrl });
   const transport = new ReefTransportClient(relayUrl, config.handle, keys);
   const pairing = createChannelPairingController({
     core: runtime,
@@ -189,12 +181,12 @@ async function writeReefMigrationStateDir(stateDir: string): Promise<void> {
 
 async function runRegister(output: ReefCliOutput, options: RegisterOptions): Promise<void> {
   if (!options.email.includes("@")) {
-    return await fail(output, "A valid --email is required.");
+    throw new Error("A valid --email is required.");
   }
   const provider = options.guardProvider as keyof typeof GUARD_DEFAULTS;
   const guardDefaults = GUARD_DEFAULTS[provider];
   if (!guardDefaults) {
-    return await fail(output, "--guard-provider must be one of: anthropic, openai.");
+    throw new Error("--guard-provider must be one of: anthropic, openai.");
   }
   const relayUrl = parseReefRelayUrl(options.relay);
   const legacyStateDir = options.stateDir ?? currentReefConfig()?.stateDir;
@@ -202,14 +194,13 @@ async function runRegister(output: ReefCliOutput, options: RegisterOptions): Pro
   // One plugin-state identity may bind to one handle and relay. This check
   // survives config deletion and prevents linking peers under reused keys.
   const runtime = getReefRuntime();
-  const identity = loadReefIdentityBinding(runtime);
+  const identity = await loadReefIdentityBinding(runtime);
   if (
     identity?.handle &&
     (identity.relayUrl !== relayUrl ||
       (explicitHandle !== undefined && identity.handle !== explicitHandle))
   ) {
-    return await fail(
-      output,
+    throw new Error(
       `This OpenClaw state already holds the Reef identity @${identity.handle} on ${identity.relayUrl}. Re-register the same handle and relay.`,
     );
   }
@@ -239,7 +230,7 @@ async function runRegister(output: ReefCliOutput, options: RegisterOptions): Pro
   // command output or automation logs. It is scoped to the relay and email it
   // was minted for, and explicit --session/--token always take precedence, so
   // stale state can never reach another account or origin.
-  const stored = loadReefSetupSession(runtime);
+  const stored = await loadReefSetupSession(runtime);
   const token = options.token?.trim();
   const storedSession =
     !options.session?.trim() && stored?.relayUrl === relayUrl && stored?.email === options.email
@@ -273,7 +264,7 @@ async function runRegister(output: ReefCliOutput, options: RegisterOptions): Pro
   // claim a handle that a retry then finds taken.
   const handle = requestedHandle;
   if (!handle || !HANDLE_PATTERN.test(handle)) {
-    return await fail(output, "A valid --handle is required (lowercase letters, digits, - or _).");
+    throw new Error("A valid --handle is required (lowercase letters, digits, - or _).");
   }
   const guard = {
     provider,
@@ -298,7 +289,7 @@ async function runRegister(output: ReefCliOutput, options: RegisterOptions): Pro
   ReefChannelConfigSchema.parse(provisional);
   // Reserve keys to this handle before consuming auth or mutating the relay.
   // Retries are idempotent; mismatched concurrent registrations fail closed.
-  const reservation = reserveReefIdentityBinding(runtime, { handle, relayUrl });
+  const reservation = await reserveReefIdentityBinding(runtime, { handle, relayUrl });
 
   let resolvedSession = session;
   if (!resolvedSession) {
@@ -306,20 +297,20 @@ async function runRegister(output: ReefCliOutput, options: RegisterOptions): Pro
       resolvedSession = (await bootstrap.authComplete(token ?? "")).session;
     } catch (error) {
       if (isDefinitiveReefRegistrationFailure(error)) {
-        releaseReefIdentityReservation(runtime, reservation);
+        await releaseReefIdentityReservation(runtime, reservation);
       } else {
-        finalizeReefIdentityBinding(runtime, reservation);
+        await finalizeReefIdentityBinding(runtime, reservation);
       }
       throw error;
     }
     try {
-      saveReefSetupSession(runtime, {
+      await saveReefSetupSession(runtime, {
         session: resolvedSession,
         relayUrl,
         email: options.email,
       });
     } catch (error) {
-      releaseReefIdentityReservation(runtime, reservation);
+      await releaseReefIdentityReservation(runtime, reservation);
       throw error;
     }
   }
@@ -340,40 +331,40 @@ async function runRegister(output: ReefCliOutput, options: RegisterOptions): Pro
         owned = true;
       } catch (verificationError) {
         if (isReefOwnershipRejection(verificationError)) {
-          releaseReefIdentityReservation(runtime, reservation);
+          await releaseReefIdentityReservation(runtime, reservation);
         } else {
           // A failed probe proves non-ownership only for the relay's explicit
           // unknown-handle result. Keep all other outcomes bound to these keys.
-          finalizeReefIdentityBinding(runtime, reservation);
+          await finalizeReefIdentityBinding(runtime, reservation);
         }
         throw verificationError;
       }
     }
     if (!owned) {
       if (isDefinitiveReefRegistrationFailure(error)) {
-        releaseReefIdentityReservation(runtime, reservation);
+        await releaseReefIdentityReservation(runtime, reservation);
       } else {
-        finalizeReefIdentityBinding(runtime, reservation);
+        await finalizeReefIdentityBinding(runtime, reservation);
       }
       throw error;
     }
     // Signed access proves these keys already own the handle. Persist that
     // invariant before the account-list request, which can fail ambiguously.
-    finalizeReefIdentityBinding(runtime, reservation);
+    await finalizeReefIdentityBinding(runtime, reservation);
     const { handles } = await transport.listOwnHandles(resolvedSession);
     const existingHandle = handles.find((entry) => entry.handle === handle);
     if (!existingHandle) {
       // Our keys own the handle but this session's account does not list it:
       // the supplied session belongs to a different relay account. Completing
       // would record an email/policy the relay never associated with the claw.
-      return await fail(
-        output,
+      throw new Error(
         `Handle @${handle} is owned by this claw's keys, but the supplied session belongs to a different relay account. Use a session for the account that registered the handle.`,
+        { cause: error },
       );
     }
     effectivePolicy = existingHandle.request_policy;
   }
-  finalizeReefIdentityBinding(runtime, reservation);
+  await finalizeReefIdentityBinding(runtime, reservation);
 
   const candidate = ReefChannelConfigSchema.parse({
     ...provisional,
@@ -383,12 +374,12 @@ async function runRegister(output: ReefCliOutput, options: RegisterOptions): Pro
   try {
     await writeReefRegistration(candidate);
   } catch (error) {
-    await fail(
-      output,
+    throw new Error(
       `Handle @${handle} is claimed, but writing the local config failed: ${error instanceof Error ? error.message : String(error)}. Fix the local issue and rerun the exact same command — the retry reuses the stored session and recognizes the existing claim.`,
+      { cause: error },
     );
   }
-  clearReefSetupSession(runtime);
+  await clearReefSetupSession(runtime);
 
   const printed = fingerprint(keys.signing.publicKey, keys.encryption.publicKey);
   emit(output, { status: "registered", handle, relayUrl, fingerprint: printed }, [
@@ -426,7 +417,7 @@ export function registerReefCli({ program }: { program: Command }): void {
     .option("--json", "Emit JSON", false)
     .action(
       reefCliAction<{ json: boolean }, []>(async (output) => {
-        const { config, keys, manager } = await loadConfiguredManager(output);
+        const { config, keys, manager } = await loadConfiguredManager();
         const friends = await manager.list();
         const printed = fingerprint(keys.signing.publicKey, keys.encryption.publicKey);
         emit(
@@ -466,7 +457,7 @@ export function registerReefCli({ program }: { program: Command }): void {
     .option("--json", "Emit JSON", false)
     .action(
       reefCliAction<{ json: boolean }, []>(async (output) => {
-        const { manager } = await loadConfiguredManager(output);
+        const { manager } = await loadConfiguredManager();
         const minted = await manager.mintCode();
         const expires = new Date(minted.expires * 1000).toISOString();
         emit(output, { code: minted.code, expires }, [
@@ -481,7 +472,7 @@ export function registerReefCli({ program }: { program: Command }): void {
     .option("--json", "Emit JSON", false)
     .action(
       reefCliAction<{ json: boolean }, [string, string]>(async (output, _options, handle, tier) => {
-        const { manager } = await loadConfiguredManager(output);
+        const { manager } = await loadConfiguredManager();
         const peer = handle.replace(/^@/, "").toLowerCase();
         const autonomy = ReefAutonomySchema.parse(tier);
         await manager.setAutonomy(peer, autonomy);
@@ -496,7 +487,7 @@ export function registerReefCli({ program }: { program: Command }): void {
     .option("--json", "Emit JSON", false)
     .action(
       reefCliAction<{ code?: string; json: boolean }, [string]>(async (output, options, handle) => {
-        const { manager } = await loadConfiguredManager(output);
+        const { manager } = await loadConfiguredManager();
         const peer = handle.replace(/^@/, "").toLowerCase();
         const result = await manager.request(peer, options.code);
         emit(output, { peer, status: result.status }, [
@@ -511,7 +502,7 @@ export function registerReefCli({ program }: { program: Command }): void {
     .option("--json", "Emit JSON", false)
     .action(
       reefCliAction<{ json: boolean }, []>(async (output) => {
-        const { manager } = await loadConfiguredManager(output);
+        const { manager } = await loadConfiguredManager();
         const friends = await manager.list();
         emit(
           output,
@@ -540,7 +531,7 @@ export function registerReefCli({ program }: { program: Command }): void {
     .option("--json", "Emit JSON", false)
     .action(
       reefCliAction<{ json: boolean }, [string]>(async (output, _options, handle) => {
-        const { manager } = await loadConfiguredManager(output);
+        const { manager } = await loadConfiguredManager();
         const peer = handle.replace(/^@/, "").toLowerCase();
         await manager.remove(peer);
         emit(output, { peer, status: "removed" }, [`Removed @${peer}.`]);

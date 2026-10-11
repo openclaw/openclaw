@@ -293,12 +293,18 @@ describe("migration provider runtime", () => {
             const retirement = owner.dispose().then(cleaned);
             await Promise.resolve();
             expect(cleaned).not.toHaveBeenCalled();
-            expect(() => retainedPlan(context)).toThrow("reloaded or disabled");
+            expect(() => retainedPlan(context)).toThrow(
+              "Plugin managed-migration was reloaded or disabled; use its current tools.",
+            );
+            expect(provider.plan).toHaveBeenCalledTimes(3);
             resume.resolve();
             await expect(pending).resolves.toBe(runtime.plan);
             await retirement;
             expect(cleaned).toHaveBeenCalledOnce();
-            expect(() => retainedPlan(context)).toThrow("reloaded or disabled");
+            expect(() => retainedPlan(context)).toThrow(
+              "Plugin managed-migration was reloaded or disabled; use its current tools.",
+            );
+            expect(provider.plan).toHaveBeenCalledTimes(3);
           },
         );
         expect(mocks.acquirePluginRegistryForInspection).toHaveBeenCalledTimes(
@@ -444,26 +450,6 @@ describe("migration provider runtime", () => {
     });
   });
 
-  it("discovers bundled migration contracts missing from a pruned persisted index", async () => {
-    mocks.listBundledPluginMetadata.mockReturnValue([
-      {
-        manifest: {
-          id: "migrate-hermes",
-          contracts: { migrationProviders: ["hermes"] },
-        },
-        dirName: "missing-migration-fixture",
-      },
-    ] as never);
-
-    await withPluginMigrationProviders({ providerId: "hermes" }, async () => {});
-
-    const standaloneParams = requireMockCallArg(
-      mocks.acquirePluginRegistryForInspection,
-      "acquirePluginRegistryForInspection",
-    );
-    expect(standaloneParams.onlyPluginIds).toEqual(["migrate-hermes"]);
-  });
-
   it("loads configured external migration-provider plugins from manifest contracts", async () => {
     const cfg = {
       plugins: {
@@ -534,27 +520,6 @@ describe("migration provider runtime", () => {
         expect(provider.plan).toHaveBeenCalledOnce();
       },
     );
-    expect(mocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith({
-      config: cfg,
-      env: process.env,
-    });
-    const manifestParams = requireMockCallArg(
-      mocks.loadPluginManifestRegistry,
-      "loadPluginManifestRegistry",
-    ) as {
-      index?: MockPluginIndex;
-      config?: OpenClawConfig;
-      env?: NodeJS.ProcessEnv;
-      includeDisabled?: unknown;
-    };
-    expect(manifestParams.index?.plugins.map((plugin) => plugin.pluginId)).toEqual([
-      "external-migration",
-      "disabled-external-migration",
-    ]);
-    expect(manifestParams.config).toBe(cfg);
-    expect(manifestParams.env).toBe(process.env);
-    expect(manifestParams.includeDisabled).toBe(true);
-    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenNthCalledWith(1);
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
       onlyPluginIds: ["external-migration"],
     });

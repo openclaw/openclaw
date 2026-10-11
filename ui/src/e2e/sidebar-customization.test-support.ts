@@ -79,3 +79,28 @@ export async function openSidebarCustomizationPage(
   await page.locator("openclaw-app-sidebar").waitFor();
   return { context, page };
 }
+
+export async function openSidebarPages(page: Page): Promise<Locator> {
+  const sidebar = page.locator("openclaw-app-sidebar:visible");
+  await sidebar.getByRole("button", { name: "Pages", exact: true }).click();
+  const pages = sidebar.locator(".sidebar-pages");
+  await pages.waitFor();
+  return pages;
+}
+
+export async function openSidebarPinMenu(page: Page, entry = "route:dashboards"): Promise<Locator> {
+  const row = page
+    .locator("openclaw-app-sidebar:visible")
+    .locator(`[data-sidebar-entry="${entry}"]`);
+  const menu = row.locator("wa-dropdown.sidebar-reorder-menu");
+  const transition = await menu.evaluateHandle((element) => ({
+    shown: new Promise<void>((resolve) => {
+      element.addEventListener("wa-after-show", () => resolve(), { once: true });
+    }),
+  }));
+  await row.getByRole("button", { name: /^Reorder / }).focus();
+  await page.keyboard.press("Enter");
+  await transition.evaluate(({ shown }) => shown);
+  await transition.dispose();
+  return menu;
+}

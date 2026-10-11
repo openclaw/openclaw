@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawn } from "@lydell/node-pty";
 import { afterEach, describe, expect, it } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { loadPersistedSharedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
@@ -15,7 +14,9 @@ import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/sessio
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadCronJobsStore, resolveCronJobsStorePath, saveCronJobsStore } from "../cron/store.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { spawnTerminalPty } from "../process/terminal-pty.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
@@ -26,9 +27,11 @@ import {
 } from "../state/user-model-accounts.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { getFreePort } from "../test-utils/ports.js";
 
-function runDoctor(env: NodeJS.ProcessEnv) {
-  closeOpenClawAgentDatabasesForTest();
+async function runDoctor(env: NodeJS.ProcessEnv) {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   const result = spawnSync(
     process.execPath,
     ["openclaw.mjs", "doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
@@ -44,30 +47,43 @@ function runDoctor(env: NodeJS.ProcessEnv) {
 }
 
 async function runInteractiveDoctor(env: NodeJS.ProcessEnv, expectImport: boolean) {
-  closeOpenClawAgentDatabasesForTest();
-  const child = spawn(process.execPath, ["openclaw.mjs", "doctor"], {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
+  const ptyEnv: Record<string, string> = {};
+  for (const [key, value] of Object.entries({
+    ...env,
+    NODE_ENV: undefined,
+    VITEST: undefined,
+    OPENCLAW_NO_RESPAWN: "1",
+    TERM: "xterm-256color",
+    NO_COLOR: "1",
+  })) {
+    if (value !== undefined) {
+      ptyEnv[key] = value;
+    }
+  }
+  const deadline = performance.now() + 60_000;
+  const child = await spawnTerminalPty({
+    file: process.execPath,
+    args: ["openclaw.mjs", "doctor"],
     cwd: fileURLToPath(new URL("../../", import.meta.url)),
     cols: 240,
     rows: 40,
     name: "xterm-256color",
-    env: {
-      ...env,
-      NODE_ENV: undefined,
-      VITEST: undefined,
-      OPENCLAW_NO_RESPAWN: "1",
-      TERM: "xterm-256color",
-      NO_COLOR: "1",
-    },
+    env: ptyEnv,
   });
   let output = "";
   let answeredThrough = 0;
   let importsAccepted = 0;
   let failure: string | undefined;
   const exitCode = await new Promise<number>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      failure = "Interactive Doctor did not exit";
-      child.kill();
-    }, 60_000);
+    const timeout = setTimeout(
+      () => {
+        failure = "Interactive Doctor did not exit";
+        child.kill();
+      },
+      Math.max(0, deadline - performance.now()),
+    );
     child.onData((data) => {
       output += data;
       if (failure) {
@@ -81,6 +97,8 @@ async function runInteractiveDoctor(env: NodeJS.ProcessEnv, expectImport: boolea
       answeredThrough += prompt.index + prompt[0].length;
       const question = prompt[1]!.trim();
       if (
+        question ===
+          "Pause the managed Gateway while you review repairs? Doctor restores its prior service state when finished." ||
         question === "Migrate auth profile JSON files into SQLite now?" ||
         question === "Apply recommended config repairs now?"
       ) {
@@ -164,6 +182,8 @@ describe("doctor auth-profile consumers", () => {
           prefix: "openclaw-doctor-auth-consumers-",
           scenario: "external-service",
           env: {
+            DBUS_SESSION_BUS_ADDRESS: undefined,
+            DBUS_SYSTEM_BUS_ADDRESS: undefined,
             OPENCLAW_BUNDLED_PLUGINS_DIR: fileURLToPath(
               new URL("../../extensions", import.meta.url),
             ),
@@ -203,7 +223,8 @@ describe("doctor auth-profile consumers", () => {
           const config: OpenClawConfig = {
             gateway: {
               mode: "local",
-              port: 1,
+              // A privileged port cannot be verified free by an unprivileged Doctor process.
+              port: await getFreePort(),
               auth: { mode: "token", token: "synthetic-doctor-token" },
               controlUi: { enabled: false, sessionObserver: false },
             },
@@ -218,7 +239,7 @@ describe("doctor auth-profile consumers", () => {
                 modelPolicy: { allow: ["anthropic/*"] },
                 models: { "anthropic/test-model@claude-cli:work": { alias: "work-model" } },
               },
-              entries: { main: { default: true } },
+              entries: { main: {} },
             },
             auth: {
               profiles: {

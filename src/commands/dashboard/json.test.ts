@@ -4,7 +4,7 @@ import { createTestRuntime } from "../test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   copyToClipboard: vi.fn(),
-  ensureGatewayReadyForOperation: vi.fn(),
+  ensureDashboardGatewayReady: vi.fn(),
   inspectPortUsage: vi.fn(),
   issueDeviceBootstrapToken: vi.fn(),
   openUrl: vi.fn(),
@@ -39,7 +39,7 @@ vi.mock("../../infra/ports-inspect.js", () => ({
 }));
 
 vi.mock("../gateway-readiness.js", () => ({
-  ensureGatewayReadyForOperation: mocks.ensureGatewayReadyForOperation,
+  ensureDashboardGatewayReady: mocks.ensureDashboardGatewayReady,
 }));
 
 vi.mock("../control-ui-handoff.js", async (importOriginal) => ({
@@ -91,7 +91,7 @@ function mockReadyDashboard() {
     ],
     hints: [],
   });
-  mocks.ensureGatewayReadyForOperation.mockResolvedValue({
+  mocks.ensureDashboardGatewayReady.mockResolvedValue({
     ready: true,
     recovered: false,
     status: {},
@@ -207,7 +207,7 @@ describe("dashboardCommand --json", () => {
   });
 
   it("prints one failure object and exits non-zero when not ready", async () => {
-    mocks.ensureGatewayReadyForOperation.mockResolvedValue({
+    mocks.ensureDashboardGatewayReady.mockResolvedValue({
       ready: false,
       reason: "Gateway is not running.",
       recoverable: false,
@@ -216,7 +216,7 @@ describe("dashboardCommand --json", () => {
 
     await dashboardCommand(runtime, { json: true });
 
-    expect(mocks.ensureGatewayReadyForOperation).toHaveBeenCalledWith(
+    expect(mocks.ensureDashboardGatewayReady).toHaveBeenCalledWith(
       expect.objectContaining({
         allowInstall: false,
         interactive: false,

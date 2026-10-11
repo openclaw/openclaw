@@ -11,7 +11,7 @@ import {
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import { createCompiledSdkHost } from "../../plugins/compiled-sdk-host.test-support.js";
-import { registerComputerUseProvider } from "../../plugins/computer-use-contract.js";
+import { registerComputerUseProvider } from "../../plugins/computer-use-registration.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
 import { computerUseSdkEntrypoint } from "../../plugins/loader-sdk-bridge-artifacts.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -20,12 +20,15 @@ import {
   createColdPluginFixture,
 } from "../../plugins/test-helpers/cold-plugin-fixtures.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { createGatewayAuxHandlers } from "../server-aux-handlers.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { computerHandlers } from "../server-methods/computer.js";
 import type { RespondFn } from "../server-methods/types.js";
+import { SharedGatewaySessionGenerationState } from "../server-shared-auth-generation.js";
+import { createTestRuntimeSecretsActivator } from "../server-startup-config.test-support.js";
 import { createGatewayComputerService } from "./computer-service.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -153,7 +156,7 @@ module.exports = {
     config.plugins!.allow = [pluginId];
     config.desktop = { host: { enabled: true, managed: true } };
     await state.writeConfig(config);
-    const sdkHost = createCompiledSdkHost(computerUseSdkEntrypoint, (prefix) =>
+    const sdkHost = createCompiledSdkHost([computerUseSdkEntrypoint], (prefix) =>
       tempDirs.make(prefix),
     );
     const env = {
@@ -214,6 +217,7 @@ module.exports = {
       getConfig: () => config,
       getPluginRegistry: () => registry,
       hostDesktopService: {
+        reconcileRuntimePolicy: async () => {},
         observe: async () => {
           throw new Error("Unexpected desktop observer");
         },
@@ -242,11 +246,14 @@ module.exports = {
       new AbortController().signal,
     ]);
     const aux = createGatewayAuxHandlers({
+      scheduler: createTestGatewayScheduler(),
       log: {},
-      activateRuntimeSecrets: async () => {
-        throw new Error("Unexpected secrets reload");
-      },
-      sharedGatewaySessionGenerationState: { current: undefined, required: null },
+      getNativeApprovalRouteCoordinator: () => undefined,
+      activateRuntimeSecrets: createTestRuntimeSecretsActivator(),
+      sharedGatewaySessionGenerationState: new SharedGatewaySessionGenerationState({
+        current: undefined,
+        required: null,
+      }),
       resolveSharedGatewaySessionGenerationForConfig: () => undefined,
       clients: [],
       channelManager: {

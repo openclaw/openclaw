@@ -20,7 +20,7 @@ Use a **node host** when your Gateway runs on one machine and you want commands 
 
 Approval note:
 
-- Approval-backed node runs bind exact request context. The exec path prepares a canonical `systemRunPlan` before approval; once granted, the gateway forwards that stored plan, not any later caller-edited command/cwd/session fields, and re-validates the working directory before running.
+- Approval-backed node runs bind exact request context. The exec path prepares a `systemRunPlan` before approval; once granted, the gateway forwards that stored plan, not any later caller-edited command/cwd/session fields, and re-validates the working directory before running.
 - For direct shell/runtime file executions, OpenClaw also best-effort binds one concrete local file operand and denies the run if that file changes before execution.
 - If OpenClaw cannot identify exactly one concrete local file for an interpreter/runtime command, approval-backed execution is denied instead of pretending full runtime coverage. Use sandboxing, separate hosts, or an explicit trusted allowlist/full workflow for broader interpreter semantics.
 
@@ -29,8 +29,8 @@ Approval note:
 A Gateway can remain healthy for browser users while node hosting is unavailable. Run `openclaw doctor` on the Gateway before onboarding nodes, and check these preconditions:
 
 - **Machine authentication:** Tailscale identity headers do not authenticate node-role connections. In `gateway.auth.mode: "trusted-proxy"`, a new node also cannot supply the proxy's user identity headers. To use a shared token, switch to token mode and configure `gateway.auth.token` with a SecretRef; trusted-proxy mode rejects mixed token configuration. A trusted-proxy Gateway can use `gateway.auth.password` only for clean loopback/direct callers. See [trusted-proxy mixed token configuration](/gateway/trusted-proxy-auth#mixed-token-configuration).
-- **Node onboarding URL:** With only the default `gateway.bind: "loopback"` and no advertised endpoint, `openclaw devices join-code` reports: `Gateway is only bound to loopback. Set gateway.bind=lan, enable tailscale serve, or configure plugins.entries.device-pair.config.publicUrl.` Configure a reachable endpoint through Tailscale Serve, `gateway.remote.url`, or `plugins.entries.device-pair.config.publicUrl`. Remote join URLs require TLS; enabling LAN bind alone does not enable plaintext remote join URLs. Explicitly configured loopback endpoints can produce HTTP join URLs, but the joining machine must be able to reach that loopback endpoint, for example through a local tunnel. Plaintext LAN pairing can use a setup code directly.
-- **Node onboarding support:** Join-code creation and `/j` redemption are core Gateway operations. They do not require enabling the `device-pair` plugin, even though its retained `publicUrl` configuration field can supply an endpoint. See [Join codes](/cli/devices#openclaw-devices-join-code) for the printed `npx openclaw connect <url>` command.
+- **Node onboarding URL:** With only the default `gateway.bind: "loopback"` and no advertised endpoint, `openclaw devices join-code` reports that the Gateway is only bound to loopback and recommends `gateway.publicOrigin` as the primary fix. For public HTTPS ingress, set it to the proxy's reachable origin. Existing Tailscale Serve, `gateway.remote.url`, bind-derived addresses, and the pairing-specific `plugins.entries.device-pair.config.publicUrl` override retain their precedence; `publicOrigin` supplies the loopback fallback. Remote join URLs require TLS; enabling LAN bind alone does not enable plaintext remote join URLs. Explicitly configured loopback endpoints can produce HTTP join URLs, but the joining machine must be able to reach that loopback endpoint, for example through a local tunnel. Plaintext LAN pairing can use a setup code directly.
+- **Node onboarding support:** Join-code creation and `/j` redemption are core Gateway operations. They do not require enabling the `device-pair` plugin, even though its retained `publicUrl` configuration field can supply an endpoint. See [Join codes](/cli/devices#openclaw-devices-join-code) for the printed `npx -y openclaw connect <url> --service --session-host` command and the command-only alternative.
 - **Device session runtime:** Paired-device runners support the embedded OpenClaw runtime and explicitly authorized Codex `remote-exec`; ACPX routes cannot dispatch to a paired device. Codex requires `codex.exec-server.stdio.v1` in `gateway.nodes.commands.allow` plus its normal pairing and invocation approvals. Runtime policy belongs on provider/model routes, not the ignored whole-agent runtime keys. Multi-agent rosters must also set `agents.ownership: "explicit"`. See [Codex paired-device placement](/plugins/codex-harness/placement#run-codex-on-a-paired-device) and [runtime policy](/gateway/config-agents/runtime-and-cli-backends#runtime-policy).
 - **Edge routing:** When a reverse proxy or access edge fronts the Gateway, the node must satisfy edge auth on the join request, its main Gateway WebSocket, and the worker WebSocket. Keep WebSocket upgrade enabled for `/__openclaw__/worker`. You can instead exempt `/j/*` and `/__openclaw__/worker` from edge identity auth because both routes enforce their own short-lived credentials. See [worker protocol](/gateway/protocol/handshake#worker-role-and-closed-protocol).
 
@@ -46,7 +46,7 @@ For a Cloudflare Access-fronted Gateway:
    openclaw connect https://gateway.example/j/<code> --service
    ```
 
-The canonical node connection keys are `gateway.cloudflareAccess.clientId` and `gateway.cloudflareAccess.clientSecret`; both accept SecretInput values. The environment fallback above persists those keys as env SecretRefs, not copied plaintext. For installed nodes, OpenClaw stores the environment values in the managed service environment file rather than inline in launchd, systemd, or Task Scheduler definitions. Resolved values are bound to the configured Gateway origin and are not followed across redirects. OpenClaw rejects the pair before resolution on plaintext `http://` or `ws://` routes; credential-free loopback and private-network plaintext behavior is unchanged.
+The node connection keys are `gateway.cloudflareAccess.clientId` and `gateway.cloudflareAccess.clientSecret`; both accept SecretInput values. The environment fallback above persists those keys as env SecretRefs, not copied plaintext. For installed nodes, OpenClaw stores the environment values in the managed service environment file rather than inline in launchd, systemd, or Task Scheduler definitions. Resolved values are bound to the configured Gateway origin and are not followed across redirects. OpenClaw rejects the pair before resolution on plaintext `http://` or `ws://` routes; credential-free loopback and private-network plaintext behavior is unchanged.
 
 ### Start a node host (foreground)
 
@@ -76,6 +76,8 @@ them before using the link if that access is too broad. See
 
 `node run` also accepts `--pair`, `--context-path` (Gateway WS context path), `--tls`, `--tls-fingerprint <sha256>`, and `--node-id` (override the legacy client instance ID; this does not reset pairing). On macOS, pass `--share-installed-apps` to advertise `device.apps`; sharing is off by default. Use `--no-share-installed-apps` to disable a previously saved opt-in.
 
+Pass `--session-host` to enable worker hosting for this foreground process without changing the saved preference. Automatic restarts preserve this choice.
+
 ### Remote gateway via SSH tunnel (loopback bind)
 
 If the Gateway binds to loopback (`gateway.bind=loopback`, default in local mode), remote node hosts cannot connect directly. Create an SSH tunnel and point the node host at the local end of the tunnel.
@@ -88,18 +90,14 @@ ssh -N -L 18790:127.0.0.1:18789 user@gateway-host
 
 # Terminal B: export the gateway token and connect through the tunnel
 export OPENCLAW_GATEWAY_TOKEN="<gateway-token>"
-openclaw node run --host 127.0.0.1 --port 18790 --display-name "Build Node"
+openclaw node run --host 127.0.0.1 --port 18790 --display-name "Build Node" --auth-from-env
 ```
 
 Notes:
 
-- `openclaw node run` supports token or password auth.
-- Env vars are preferred: `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`.
-- Config fallback is `gateway.auth.token` / `gateway.auth.password`.
-- In local mode, node host intentionally ignores `gateway.remote.token` / `gateway.remote.password`.
-- In remote mode, `gateway.remote.token` / `gateway.remote.password` are eligible per remote precedence rules.
-- If active local `gateway.auth.*` SecretRefs are configured but unresolved, node-host auth fails closed.
-- Node-host auth resolution only honors `OPENCLAW_GATEWAY_*` env vars.
+- Reconnecting to the saved Gateway endpoint uses the paired device token, not ambient credentials from another Gateway.
+- `--auth-from-env` explicitly selects `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`, including when a paired token exists. Use the same flag with `openclaw node install` to persist this choice for a service.
+- Without a pairing, normal environment/config auth remains available. See [node-host authentication](/cli/node#gateway-auth-for-node-host) for precedence and SecretRef behavior.
 
 ### Restrict the node command surface
 
@@ -142,6 +140,70 @@ openclaw node restart
 
 `node install` also accepts `--context-path`, `--tls`, `--tls-fingerprint`, `--node-id` (legacy client instance ID only), `--share-installed-apps` / `--no-share-installed-apps`, `--runtime <node|bun>` (default: `node`), and `--force` to reinstall. Bun requires version 1.4+ with WAL-reset-safe `node:sqlite` and is an explicit opt-in; Node remains recommended. `node status`, `node stop`, and `node uninstall` are also available.
 
+For `npx openclaw node install` or `npx openclaw connect <join-url> --service`,
+OpenClaw installs the selected release into `<state-dir>/npm` before writing
+the service. The state directory respects `OPENCLAW_STATE_DIR` and profiles.
+Both launchd and systemd run the durable package after npm clears its `_npx`
+cache. Installation prints the package version, chosen runtime, service command,
+and a node update command:
+
+```bash
+npx -y openclaw@latest node install --force
+```
+
+Use the same profile and state-directory settings. Replace `latest` with `beta`
+or an exact version when needed. This installs into the same managed prefix,
+rewrites the service, and reuses the saved pairing. Reinstalling the same version
+repairs missing package files. It does not accumulate a directory per release.
+The automatic node-runtime updates below remain independent of this CLI package.
+
+Node shutdown waits for plugin availability watchers and active computer executions
+to finish cleanup, and reports failures from those cleanup operations. If a command
+reports `Node disconnect cleanup failed`, reconnect the node to retry disconnect cleanup
+before sending another command.
+
+### Session-host workspace permissions
+
+A node started with `--session-host` checks workspace staging before advertising
+session capacity. On Unix, the state directory (`OPENCLAW_STATE_DIR`, or
+`~/.openclaw`) and its resolved ancestors must satisfy the filesystem owner's
+checks. Group- or world-writable ancestors without sticky protection prevent
+session hosting, even when the `node-host` directory itself is private.
+
+The node log and `environments.list` identify the offending directory and the
+remediation: run `chmod go-w '<reported-path>'` on the node, then restart the node
+host. Review shared-directory permissions before changing them; alternatively,
+move node state under a private directory. OpenClaw does not change ancestor
+permissions or bypass staging checks. A trusted sticky system temporary directory
+remains supported.
+
+A session-host failure does not disconnect the node or disable its desktop and
+other available commands. `environments.list` keeps a connected node available,
+reports `sessionHost: false` and the hosting diagnostic, and refuses session
+placement until the hosting problem is repaired.
+
+Disabled-host reasons are published only when the Gateway advertises
+`node-worker-host-diagnostics-v1`. Older Gateways still receive disabled hosting;
+the node log retains the reason. Workspace transfers also report the same
+remediation if permissions change after startup.
+
+### Automatic node updates
+
+Packaged headless nodes check for updates hourly by default, in both foreground
+and service mode. They prepare a separate runtime, wait until all node work is
+idle, then restart and reconnect with the same identity, pairing, and launch
+options. A node update does not replace the global CLI package or a co-located
+Gateway. Automatic activations are at least 12 hours apart, and busy work can
+defer an update indefinitely.
+
+Set `nodeHost.autoUpdate.enabled: false` on the node to opt out. The shared
+`update.checkOnStart: false` and `OPENCLAW_NO_AUTO_UPDATE=1` opt-outs also apply.
+Source checkouts, native app nodes, private workers, `dev`, and
+`extended-stable` installs do not auto-apply. Releases requiring database
+migrations defer to the normal update workflow. See
+[Headless node updates](/install/updating/automatic-updates#headless-node-updates)
+for the idle-work rules and configuration.
+
 ### Pair + name
 
 On the Gateway host, approve the device request:
@@ -153,9 +215,8 @@ openclaw devices approve <deviceRequestId>
 
 If the node retries with changed auth details, re-run `openclaw devices list` and approve the current `requestId`.
 
-Restart an installed node with `openclaw node restart`, or stop and rerun its
-foreground `openclaw node run` command. A node paused on `PAIRING_REQUIRED`
-does not resume automatically after manual approval. Its reconnect creates a
+The node keeps reconnecting while device approval is pending, with exponential
+backoff capped at 30 seconds. After approval, its next reconnect creates a
 separate command-surface request. On the Gateway:
 
 ```bash
@@ -163,6 +224,10 @@ openclaw nodes pending
 openclaw nodes approve <nodeRequestId>
 openclaw nodes describe --node <id|name|ip>
 ```
+
+If an older client already reports that reconnect is paused, restart the
+installed node with `openclaw node restart`, or stop and rerun its foreground
+`openclaw node run` command once.
 
 The device and node request IDs are distinct. An initial unapproved surface has
 no effective commands. SSH-verified and bootstrap enrollment can approve the
@@ -195,6 +260,12 @@ Doctor-owned migration inputs. Stop the node host and run
 `openclaw doctor --fix`; Doctor imports and verifies their rows in SQLite before
 removing the old files.
 
+The headless node and macOS app worker check this state before preparing
+capabilities. Pending device auth, exec approvals, or a missing stored
+identity with retired identity data requires Doctor; startup preserves the
+inputs and does not create replacement keys or import execution policy. A valid
+stored identity keeps precedence over stale `identity/device.json` data.
+
 ## System commands (node host / mac node)
 
 The macOS node and headless node host both expose `system.run.prepare`, `system.run`, `system.which`, and `system.execApprovals.get/set`; the macOS node also exposes `system.notify`.
@@ -211,7 +282,7 @@ Notes:
 - `system.run` returns stdout/stderr/exit code in the payload.
 - Shell execution goes through the `exec` tool with `host=node`; the separate `nodes.run` execution path was removed in 2026.3.31. `nodes` remains the direct-RPC surface for explicit node commands.
 - `nodes invoke` does not expose `system.run` or `system.run.prepare`; those stay on the exec path only.
-- The exec path reads the node policy and prepares a canonical `systemRunPlan`. Full/off execution resolves working-directory aliases without adding approval-only script checks. When caller or node policy requires approval binding, stricter path and script checks remain in place. Once an approval is granted, the gateway forwards that stored plan, not any later caller-edited command/cwd/session fields.
+- The exec path reads the node policy and prepares a `systemRunPlan`. Full/off execution resolves working-directory aliases without adding approval-only script checks. When caller or node policy requires approval binding, stricter path and script checks remain in place. Once an approval is granted, the gateway forwards that stored plan, not any later caller-edited command/cwd/session fields.
 - `system.notify` respects notification permission state on the macOS app; supports `--priority <passive|active|timeSensitive>` and `--delivery <system|overlay|auto>`.
 - Unrecognized node `platform` / `deviceFamily` metadata uses a conservative default allowlist that excludes `system.run` and `system.which`. If you intentionally need those commands for an unknown platform, add them explicitly via `gateway.nodes.commands.allow`.
 - A `system.run` request supports `cwd`, an `env` map, `timeoutMs`, and `needsScreenRecording` — these are fields of the request payload carried on the exec path (see above), not `nodes invoke` CLI flags.

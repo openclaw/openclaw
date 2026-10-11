@@ -1,4 +1,3 @@
-// Line plugin module implements send receipt behavior.
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,

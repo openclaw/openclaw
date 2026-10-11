@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import type { v2 } from "./app-server/protocol.js";
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
+import type { CodexControlRequestOptions } from "./command-rpc.js";
 import { createCodexPluginsTool } from "./native-plugin-tool.js";
 
 function catalog(): v2.PluginListResponse {
@@ -42,7 +43,10 @@ function toolFixture(params?: {
   const read = vi.fn<CodexAppServerBindingStore["read"]>(() =>
     params?.bindingCwd ? { threadId: "bound-thread", cwd: params.bindingCwd } : undefined,
   );
-  const bindingStore = { read };
+  const bindingStore = { read, readAsync: async (identity) => read(identity) } satisfies Pick<
+    CodexAppServerBindingStore,
+    "read" | "readAsync"
+  >;
   const context: OpenClawPluginToolContext = {
     config: {},
     agentId: "main",
@@ -53,7 +57,12 @@ function toolFixture(params?: {
     ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   };
   const request = vi.fn(
-    async (_config: unknown, _method: string, _params: unknown, _options: unknown) => catalog(),
+    async (
+      _config: unknown,
+      _method: string,
+      _params: unknown,
+      _options: CodexControlRequestOptions,
+    ) => catalog(),
   );
   const tool = createCodexPluginsTool({
     bindingStore,
@@ -66,7 +75,7 @@ function toolFixture(params?: {
     }),
     request: request as never,
   });
-  return { tool, request, read };
+  return { tool, request, read, context };
 }
 
 describe("native Codex plugin discovery tool", () => {
@@ -130,4 +139,37 @@ describe("native Codex plugin discovery tool", () => {
       expect.anything(),
     );
   });
+
+  it.each(["metadata", "thread", "workspace", "config"] as const)(
+    "revalidates plugin discovery after a %s change",
+    async (change) => {
+      const { tool, request, read, context } = toolFixture({ bindingCwd: "/bound/company" });
+      const dispatch = vi.fn(catalog);
+      request.mockImplementation(async (_config, _method, _params, options) => {
+        read.mockReturnValue({
+          threadId: change === "thread" ? "replacement-thread" : "bound-thread",
+          cwd: change === "workspace" ? "/replacement/workspace" : "/bound/company",
+          historyCoveredThrough: "2026-09-16T12:00:00Z",
+          continuityCalibration: { promptChars: 2000, inputTokens: 200 },
+        });
+        if (change === "config") {
+          context.config = { ...context.config };
+        }
+        expect(options.assertCurrent).toBeTypeOf("function");
+        options.assertCurrent!();
+        return dispatch();
+      });
+
+      const pending = tool!.execute("selection-change", {});
+      if (change === "metadata") {
+        await expect(pending).resolves.toMatchObject({
+          details: { workspaceDir: "/bound/company", total: 1 },
+        });
+        expect(dispatch).toHaveBeenCalledTimes(2);
+      } else {
+        await expect(pending).rejects.toThrow("discovery ownership changed");
+        expect(dispatch).not.toHaveBeenCalled();
+      }
+    },
+  );
 });

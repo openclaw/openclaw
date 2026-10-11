@@ -4,7 +4,6 @@ import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { writeRetentionBuild } from "./control-ui-asset-retention.test-support.js";
 
 const fixture = vi.hoisted(() => ({
   root: "",
@@ -26,8 +25,11 @@ vi.mock("../version.js", async (importOriginal) => ({
   resolveRuntimeServiceBuildId: () => fixture.buildId,
 }));
 
-import { handleControlUiHttpRequest, type ControlUiRootState } from "./control-ui.js";
-import { createGatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
+import { handleControlUiHttpRequest } from "./control-ui.js";
+import {
+  createGatewayControlUiRootLifecycle,
+  type ControlUiRootState,
+} from "./server-control-ui-root.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 async function requestIndex(root: ControlUiRootState) {
@@ -41,7 +43,8 @@ async function requestIndex(root: ControlUiRootState) {
 }
 
 async function writeUi(root: string, buildId: string) {
-  await writeRetentionBuild(root, buildId, { assetPath: "assets/startup.js" });
+  await fs.mkdir(path.join(root, "assets"), { recursive: true });
+  await fs.writeFile(path.join(root, "assets/startup.js"), "export {};");
   await fs.writeFile(
     path.join(root, "index.html"),
     `<html data-openclaw-control-ui-build-id="${buildId}-${"a".repeat(64)}"><script src="./assets/startup.js"></script></html>`,

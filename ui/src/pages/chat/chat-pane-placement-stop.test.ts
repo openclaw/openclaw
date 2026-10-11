@@ -1,11 +1,11 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
-import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import {
   answerConfirmDialog,
@@ -17,6 +17,8 @@ import {
   resolveChatPaneWorkerPresentation,
 } from "./chat-pane-placement.ts";
 import {
+  createInitializationContext,
+  createRenderTestChatPane,
   activePlacementSession,
   createGatewayBrowserClientFixture,
   createSessionCapabilityFixture,
@@ -87,38 +89,62 @@ function startupSession(placement: GatewaySessionRow["placement"]): GatewaySessi
   };
 }
 
-describe.each([
-  { placement: startupPlacements[0], cloudLabel: "Runs on Cloud" },
-  { placement: startupPlacements[1], cloudLabel: "device-service · device-profile" },
-  { placement: startupPlacements[2], cloudLabel: "device-service · device-profile" },
-  { placement: startupPlacements[3], cloudLabel: "device-service · device-profile" },
-])("$placement.state placement stop presentation", ({ placement, cloudLabel }) => {
-  const phase = placement.state;
-  it.each([
-    { phase, targetKind: "device", copy: deviceCopy },
-    { phase, targetKind: "auto-device", copy: deviceCopy },
-    { phase, targetKind: "profile", copy: { ...cloudCopy, label: cloudLabel } },
-    { phase, targetKind: undefined, copy: unknownCopy },
-    { phase: "failed", targetKind: "device", copy: unknownCopy },
-    { phase: "failed", targetKind: "auto-device", copy: unknownCopy },
-    { phase: "failed", targetKind: "profile", copy: unknownCopy },
-  ] as const)(
-    "projects $phase $targetKind intent into operator copy",
-    ({ phase: startupPhase, targetKind, copy }) => {
-      expect(
-        resolveChatPaneWorkerPresentation(
-          startupSession(placement),
-          targetKind ? { phase: startupPhase, targetKind } : null,
-        ),
-      ).toEqual(copy);
-    },
-  );
+describe("chat pane startup worker copy", () => {
+  it("retains the startup retry callback across renders and resolves the current pane session", () => {
+    const context = createInitializationContext();
+    const pane = createRenderTestChatPane();
+    const state = pane.initialize(context);
+    state.sessionKey = "agent:main:startup";
+    const startup = {
+      sessionKey: state.sessionKey,
+      phase: "failed" as const,
+      startedAt: 1,
+      retryable: true,
+      initialTurn: {
+        id: "initial",
+        text: "Retained prompt",
+        createdAt: 1,
+        sendState: "failed" as const,
+      },
+    };
+    const get = vi.spyOn(context.placementStartup, "get").mockImplementation((sessionKey) => ({
+      ...startup,
+      sessionKey,
+    }));
+    const retry = vi.spyOn(context.placementStartup, "retry");
+    pane.render();
+    const action = expectDefined(pane.chatProps?.onRetrySessionPlacementStartup, "startup retry");
+    pane.render();
+    expect(pane.chatProps?.onRetrySessionPlacementStartup).toBe(action);
+    action();
+    expect(retry).toHaveBeenLastCalledWith(state.sessionKey);
+
+    const nextState = pane.initialize(context);
+    nextState.sessionKey = "agent:main:next-startup";
+    action();
+    expect(retry).toHaveBeenLastCalledWith(nextState.sessionKey);
+    expect(retry).toHaveBeenCalledTimes(2);
+    pane.render();
+    expect(pane.chatProps?.onRetrySessionPlacementStartup).toBe(action);
+
+    get.mockReturnValue({ ...startup, retryable: false });
+    pane.render();
+    expect(pane.chatProps?.onRetrySessionPlacementStartup).toBeUndefined();
+  });
+
+  it("uses generic cloud copy before a requested profile has worker metadata", () => {
+    expect(
+      resolveChatPaneWorkerPresentation(startupSession(startupPlacements[0]), {
+        phase: "requested",
+        targetKind: "profile",
+      }),
+    ).toEqual(cloudCopy);
+  });
 });
 
 describe("chat pane worker stop", () => {
   it.each([
     { placement: startupPlacements[0], targetKind: "device", copy: deviceCopy },
-    { placement: startupPlacements[1], targetKind: "auto-device", copy: deviceCopy },
     {
       placement: startupPlacements[2],
       targetKind: "profile",
@@ -129,10 +155,10 @@ describe("chat pane worker stop", () => {
     "stops $placement.state $targetKind startup from the placement menu",
     async ({ placement, targetKind, copy }) => {
       const request = dialogs.mockRequest(async () => ({ ok: true }));
-      const refreshReplacement = vi.fn(async () => createSessionsListResult());
+      const reconcileMutation = vi.fn(async () => ({ status: "refreshed" as const }));
       const { pane } = createTestChatPane({
         client: createGatewayBrowserClientFixture({ request }),
-        sessions: createSessionCapabilityFixture({ refreshReplacement }),
+        sessions: createSessionCapabilityFixture({ reconcileMutation }),
       });
       const session = startupSession(placement);
       const startup = targetKind
@@ -147,7 +173,7 @@ describe("chat pane worker stop", () => {
           session,
           placementStartupStatus: startup,
           onPlacementReclaim: () => {
-            reclaim = dialogs.track(pane.reclaimHeaderPlacement(session));
+            reclaim = dialogs.track(pane.changeHeaderPlacement(session, "reclaim"));
           },
         }),
         container,
@@ -205,7 +231,7 @@ describe("chat pane worker stop", () => {
       moveDisabledReason: undefined,
       reclaimDisabledReason:
         "Reconnect the device to stop and sync its workspace, or Continue on Gateway.",
-      restartDisabledReason: "This Gateway does not support this session action.",
+      recoveryDisabledReason: "This Gateway does not support this session action.",
     });
     expect(
       resolveChatPanePlacement({
@@ -219,8 +245,41 @@ describe("chat pane worker stop", () => {
       restarting: false,
       moveDisabledReason: undefined,
       reclaimDisabledReason: undefined,
-      restartDisabledReason: "This Gateway does not support this session action.",
+      recoveryDisabledReason: "This Gateway does not support this session action.",
     });
+  });
+
+  it("requires restoring an archived repository session before worker dispatch", () => {
+    const { pane } = createTestChatPane({
+      client: createGatewayBrowserClientFixture(),
+      sessions: createSessionCapabilityFixture(),
+    });
+    pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
+      ["sessions.dispatch"],
+      ["operator.read", "operator.write"],
+    );
+
+    expect(
+      resolveChatPanePlacement({
+        gatewaySnapshot: pane.context.gateway.snapshot,
+        movingKey: null,
+        reclaimingKey: null,
+        row: {
+          key: "agent:main:archived-repository",
+          kind: "direct",
+          updatedAt: 0,
+          archived: true,
+          repositoryWorkspaceId: "repository-workspace-1",
+          placement: {
+            state: "local",
+            generation: 1,
+            createdAtMs: 1,
+            updatedAtMs: 1,
+            stateChangedAtMs: 1,
+          },
+        },
+      }).recoveryDisabledReason,
+    ).toBe("This session is archived. Unarchive it to continue the conversation.");
   });
 
   it("does not issue reclaim for an offline device placement", async () => {
@@ -234,7 +293,7 @@ describe("chat pane worker stop", () => {
       ["operator.read", "operator.write"],
     );
 
-    await pane.reclaimHeaderPlacement({ ...offlineDeviceSession(), hasActiveRun: false });
+    await pane.changeHeaderPlacement({ ...offlineDeviceSession(), hasActiveRun: false }, "reclaim");
 
     expect(request).not.toHaveBeenCalled();
     expect(document.body.querySelector("dialog[open]")).toBeNull();
@@ -263,16 +322,11 @@ describe("chat pane worker stop", () => {
       restarting: false,
       moveDisabledReason: "This Gateway does not support this session action.",
       reclaimDisabledReason: undefined,
-      restartDisabledReason: "This Gateway does not support this session action.",
+      recoveryDisabledReason: "This Gateway does not support this session action.",
     });
   });
 
-  it.each([
-    { runner: "cloud", startupPhase: "starting" },
-    { runner: "device", startupPhase: "starting" },
-    { runner: "cloud", startupPhase: "failed" },
-    { runner: "device", startupPhase: "failed" },
-  ] as const)(
+  it.each([{ runner: "device", startupPhase: "failed" }] as const)(
     "reclaims an active $runner placement with conflicting $startupPhase intent after the operator confirms",
     async ({ runner, startupPhase }) => {
       vi.stubGlobal(
@@ -282,10 +336,10 @@ describe("chat pane worker stop", () => {
         }),
       );
       const request = dialogs.mockRequest(async () => ({ ok: true }));
-      const refreshReplacement = vi.fn(async () => createSessionsListResult());
+      const reconcileMutation = vi.fn(async () => ({ status: "refreshed" as const }));
       const { pane } = createTestChatPane({
         client: createGatewayBrowserClientFixture({ request }),
-        sessions: createSessionCapabilityFixture({ refreshReplacement }),
+        sessions: createSessionCapabilityFixture({ reconcileMutation }),
       });
       pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
         ["sessions.reclaim"],
@@ -302,7 +356,7 @@ describe("chat pane worker stop", () => {
         targetKind: runner === "device" ? "profile" : "device",
       });
 
-      const reclaim = dialogs.track(pane.reclaimHeaderPlacement(session));
+      const reclaim = dialogs.track(pane.changeHeaderPlacement(session, "reclaim"));
       const actions = await waitForConfirmDialogActions();
       const actionText = actions.textContent;
       const confirmation = document.body.querySelector("openclaw-modal-dialog")?.textContent;
@@ -328,7 +382,7 @@ describe("chat pane worker stop", () => {
         }),
       );
       expect(pane.context.placementStartup.pause).toHaveBeenCalledBefore(request);
-      expect(refreshReplacement).toHaveBeenCalledWith("main");
+      expect(reconcileMutation).toHaveBeenCalledWith("main");
     },
   );
 
@@ -359,7 +413,7 @@ describe("chat pane worker stop", () => {
       targetKind: "device",
     });
 
-    const reclaim = dialogs.track(pane.reclaimHeaderPlacement(session));
+    const reclaim = dialogs.track(pane.changeHeaderPlacement(session, "reclaim"));
     const actions = await waitForConfirmDialogActions();
     answerConfirmDialog(actions, "cancel");
     await reclaim;
@@ -395,7 +449,7 @@ describe("chat pane worker stop", () => {
       targetKind: "device",
     });
 
-    const reclaim = dialogs.track(pane.reclaimHeaderPlacement(session));
+    const reclaim = dialogs.track(pane.changeHeaderPlacement(session, "reclaim"));
     const actions = await waitForConfirmDialogActions();
     pane.connectionGeneration += 1;
     answerConfirmDialog(actions, "confirm");
@@ -421,7 +475,7 @@ describe("chat pane worker stop", () => {
     );
     const session = activePlacementSession();
 
-    const reclaim = dialogs.track(pane.reclaimHeaderPlacement(session));
+    const reclaim = dialogs.track(pane.changeHeaderPlacement(session, "reclaim"));
     const actions = await waitForConfirmDialogActions();
     answerConfirmDialog(actions, "confirm");
     await reclaim;
@@ -444,7 +498,7 @@ describe("chat pane worker stop", () => {
     const session = activePlacementSession();
 
     try {
-      const reclaim = dialogs.track(pane.reclaimHeaderPlacement(session));
+      const reclaim = dialogs.track(pane.changeHeaderPlacement(session, "reclaim"));
       const actions = await waitForConfirmDialogActions();
       answerConfirmDialog(actions, "confirm");
       await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
@@ -463,10 +517,10 @@ describe("chat pane worker stop", () => {
   it("keeps reclaim progress with its session when the pane switches rows", async () => {
     const response = createDeferred<{ ok: true }>();
     const request = dialogs.mockRequest(() => response.promise);
-    const refreshReplacement = vi.fn(async () => createSessionsListResult());
+    const reconcileMutation = vi.fn(async () => ({ status: "refreshed" as const }));
     const { pane, state } = createTestChatPane({
       client: createGatewayBrowserClientFixture({ request }),
-      sessions: createSessionCapabilityFixture({ refreshReplacement }),
+      sessions: createSessionCapabilityFixture({ reconcileMutation }),
     });
     pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
       ["sessions.reclaim"],
@@ -484,7 +538,7 @@ describe("chat pane worker stop", () => {
     } satisfies GatewaySessionRow;
 
     try {
-      const pendingReclaim = dialogs.track(pane.reclaimHeaderPlacement(sessionA));
+      const pendingReclaim = dialogs.track(pane.changeHeaderPlacement(sessionA, "reclaim"));
       const actions = await waitForConfirmDialogActions();
       answerConfirmDialog(actions, "confirm");
       await vi.waitFor(() => expect(pane.headerPlacementReclaimingKey).toBe(sessionA.key));

@@ -1,11 +1,8 @@
-/**
- * Shared protocol and runtime state types for the Codex sandbox exec-server
- * transport-neutral execution session.
- */
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
+import type { CodexNativeProcessClient } from "../native-process-authority.js";
 import type { JsonObject, JsonValue } from "../protocol.js";
-import type { SandboxChildOwner } from "./sandbox-child.js";
+import type { SandboxChild, SandboxChildOwner } from "./sandbox-child.js";
 
 /** Minimal JSON-RPC request shape accepted by the sandbox exec-server. */
 export type JsonRpcRequest = {
@@ -23,7 +20,6 @@ export type CodexSandboxExecMessageTransport = {
 /** Notification delivery and lifetime owned by one execution session. */
 export type CodexSandboxExecSessionNotifications = {
   send: (method: string, params: JsonObject) => void;
-  isOpen: () => boolean;
   signal: AbortSignal;
 };
 
@@ -34,17 +30,14 @@ export type ProcessChunk = {
   chunk: string;
 };
 
-/** Directory entry metadata returned through the sandbox filesystem bridge. */
 export type DirectoryEntry = {
   fileName: string;
   isDirectory: boolean;
   isFile: boolean;
 };
 
-/** Access level granted by resolved sandbox filesystem policy. */
 export type FsAccessMode = "read" | "write" | "none";
 
-/** Normalized filesystem sandbox policy entry, either literal path or glob matcher. */
 export type ResolvedFsSandboxEntry =
   | {
       kind: "path";
@@ -54,24 +47,21 @@ export type ResolvedFsSandboxEntry =
   | {
       kind: "glob";
       pattern: string;
-      matcher: RegExp;
+      matcher: (target: string) => boolean;
       literalPrefix: string;
       access: FsAccessMode;
     };
 
-/** Fully resolved filesystem sandbox policy for one exec-server environment. */
 export type ResolvedFsSandboxPolicy = {
   unrestricted: boolean;
   entries: ResolvedFsSandboxEntry[];
 };
 
-/** Header pair accepted by sandboxed HTTP requests. */
 export type HttpHeader = {
   name: string;
   value: string;
 };
 
-/** Runtime state for one process launched through the sandbox exec-server. */
 export type ManagedProcess = {
   processId: string;
   chunks: ProcessChunk[];
@@ -84,7 +74,7 @@ export type ManagedProcess = {
   tty: boolean;
   pipeStdin: boolean;
   terminationRequested: boolean;
-  child: SandboxChildOwner | null;
+  child: SandboxChild | null;
   startPromise?: Promise<void>;
   evictionTimer?: ReturnType<typeof setTimeout>;
   waiters: Array<() => void>;
@@ -110,6 +100,7 @@ type OpenClawExecServerLease = {
 
 /** Locally interpreted exec-server protocol backed by an OpenClaw sandbox. */
 export type OpenClawExecServer = OpenClawExecServerLease & {
+  processAuthorities?: Map<string, CodexNativeProcessClient>;
   backend: NonNullable<SandboxContext["backend"]>;
   fsBridge: NonNullable<SandboxContext["fsBridge"]>;
   readonly networkIsolated: boolean;

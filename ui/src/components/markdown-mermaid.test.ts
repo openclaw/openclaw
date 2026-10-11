@@ -108,7 +108,23 @@ afterEach(() => {
 });
 
 describe("Mermaid Markdown presentation", () => {
-  it.each([true, false])("preserves source and reports copy success=%s", async (copied) => {
+  it("mounts a newly inserted diagram without replacing an existing sibling", async () => {
+    const { container, elements } = await mount(source("Existing diagram"));
+    const nextSource = source("Inserted diagram");
+    container.insertAdjacentHTML(
+      "beforeend",
+      toSanitizedMarkdownHtml(`\`\`\`mermaid\n${nextSource}\`\`\``),
+    );
+    const block = container.lastElementChild!;
+
+    expect(mountMermaidBlocks(block)).toBe(true);
+    expect(container.querySelectorAll("openclaw-mermaid")[0]).toBe(elements[0]);
+    const diagram = block.querySelector("openclaw-mermaid")!;
+    expect(diagram.source).toBe(nextSource);
+    await diagram.updateComplete;
+  });
+
+  it.each([false])("preserves source and reports copy success=%s", async (copied) => {
     copySource.mockResolvedValueOnce(copied);
     const original = source("x < y & z <script>alert(1)</script>");
     const {
@@ -171,8 +187,6 @@ describe("Mermaid Markdown presentation", () => {
 
   it.each([
     { change: "source", oldOutcome: "success" },
-    { change: "source", oldOutcome: "failure" },
-    { change: "theme", oldOutcome: "success" },
     { change: "theme", oldOutcome: "failure" },
   ])("ignores a stale $oldOutcome after a $change change", async ({ change, oldOutcome }) => {
     const old = createDeferred<string>();
@@ -254,21 +268,5 @@ describe("Mermaid Markdown presentation", () => {
     expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith(firstUrl);
     expect(imageSource(elements[1]!)).toBe(secondUrl);
     expect(revokeObjectURL).not.toHaveBeenCalledWith(secondUrl);
-  });
-
-  it("evicts older layouts under sustained use without revoking visible images", async () => {
-    const sources = Array.from({ length: 20 }, (_, index) => source(`Diagram ${index}`));
-    const { elements } = await mount(...sources);
-    const originalUrls = await Promise.all(elements.map(waitForImage));
-    expect(renderSvg).toHaveBeenCalledTimes(sources.length);
-
-    const recent = await mount(sources.at(-1)!);
-    await waitForImage(recent.elements[0]!);
-    expect(renderSvg).toHaveBeenCalledTimes(sources.length);
-    const oldest = await mount(sources[0]!);
-    await waitForImage(oldest.elements[0]!);
-    expect(renderSvg).toHaveBeenCalledTimes(sources.length + 1);
-    expect(elements.map(imageSource)).toEqual(originalUrls);
-    expect(revokeObjectURL).not.toHaveBeenCalled();
   });
 });

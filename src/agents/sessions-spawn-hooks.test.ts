@@ -220,8 +220,8 @@ beforeAll(async () => {
 });
 
 describe("sessions_spawn subagent lifecycle hooks", () => {
-  beforeEach(() => {
-    resetSubagentRegistryForTests();
+  beforeEach(async () => {
+    await resetSubagentRegistryForTests();
     hoisted.callGatewayMock.mockReset();
     hoisted.updateSessionStoreMock.mockReset();
     hookRunnerMocks.hasSubagentEndedHook = true;
@@ -284,9 +284,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
     });
   });
 
-  afterEach(() => {
-    resetSubagentRegistryForTests();
-  });
+  afterEach(() => resetSubagentRegistryForTests());
 
   it("binds the subagent thread in core and emits subagent_spawned with requester metadata", async () => {
     const result = await spawn({
@@ -428,28 +426,6 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
     );
   });
 
-  it("respects explicit mode=run when thread binding is requested", async () => {
-    const result = await spawn({
-      runTimeoutSeconds: 1,
-      thread: true,
-      mode: "run",
-      agentTo: "channel:123",
-      context: "isolated",
-    });
-
-    expectFields(result, { status: "accepted", runId: "run-1", mode: "run" }, "spawn result");
-    expect(bindingMocks.bind).toHaveBeenCalledTimes(1);
-    const event = getSpawnedEventCall();
-    expectFields(
-      event,
-      {
-        mode: "run",
-        threadRequested: true,
-      },
-      "spawned event",
-    );
-  });
-
   it("returns error when thread binding cannot be created", async () => {
     bindingMocks.bind.mockRejectedValueOnce(
       new Error("Unable to create or bind a Discord thread for this subagent session."),
@@ -517,7 +493,10 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       context: "isolated",
     });
 
-    expectErrorResultMessage(result, /only available on channels that expose thread bindings/i);
+    expectErrorResultMessage(
+      result,
+      /only available on channels that open a separate thread for the worker/i,
+    );
     expect(hookRunnerMocks.runSubagentSpawned).not.toHaveBeenCalled();
     expectSessionsDeleteWithoutAgentStart();
   });

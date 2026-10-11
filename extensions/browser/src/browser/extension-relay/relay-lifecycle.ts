@@ -1,9 +1,9 @@
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 /**
  * Extension relay lifecycle: one owned listener or authenticated borrowed lease
  * per extension-driver profile in the browser control runtime.
  */
-import { extractErrorCode } from "../../infra/errors.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { extractErrorCode } from "openclaw/plugin-sdk/security-runtime";
 import { resolveProfile, type ResolvedBrowserProfile } from "../config.js";
 import {
   getProfileLifecycle,
@@ -28,16 +28,8 @@ type PendingRelayEnsure = {
 
 const pendingRelayEnsures = new WeakMap<ProfileRuntimeState, PendingRelayEnsure>();
 
-/** Human guidance for a relay without a paired/connected extension. */
 export const EXTENSION_PAIRING_HINT =
   "Run `openclaw browser extension install`, load the printed unpacked directory once, and wait for automatic setup.";
-
-function relays(state: BrowserServerState): Map<string, ExtensionRelayResource> {
-  if (!state.extensionRelays) {
-    state.extensionRelays = new Map();
-  }
-  return state.extensionRelays;
-}
 
 function applyInternalRelayToken(
   state: BrowserServerState,
@@ -60,12 +52,8 @@ function applyInternalRelayToken(
 }
 
 /**
- * Start the relay server for one extension-driver profile, reconciling any
- * existing one. Idempotency is keyed on profile name, but the desired (port,
- * token) can drift when the host-local relay secret is rotated or the profile's
- * cdpPort changes — a stale relay would then authenticate the extension against
- * the old token or listen on the wrong port. When the desired config differs,
- * the old relay is closed and a fresh one bound.
+ * Reconcile each profile's relay against its current port, host key, and auth policy.
+ * Key rotation and config changes retire the old relay before binding its replacement.
  */
 export async function ensureExtensionRelayForProfile(
   state: BrowserServerState,
@@ -104,19 +92,12 @@ export async function ensureExtensionRelayForProfile(
       Object.assign(runtime.profile, desiredProfile);
     }
     const pending = pendingRelayEnsures.get(runtime);
-    if (pending) {
-      if (
-        pending.port === desiredProfile.cdpPort &&
-        pending.token === token &&
-        pending.allowLegacyAuth === state.resolved.extensionRelay.allowLegacyAuth
-      ) {
-        const handle = await waitForProfileOperation(pending.promise, signal);
-        const current = resolveProfile(state.resolved, profile.name);
-        if (current) {
-          Object.assign(profile, current);
-        }
-        return handle;
-      }
+    if (
+      pending &&
+      (pending.port !== desiredProfile.cdpPort ||
+        pending.token !== token ||
+        pending.allowLegacyAuth !== state.resolved.extensionRelay.allowLegacyAuth)
+    ) {
       try {
         await waitForProfileOperation(pending.promise, signal);
       } catch (err) {
@@ -128,20 +109,20 @@ export async function ensureExtensionRelayForProfile(
       continue;
     }
 
-    const promise = ensureDesiredRelay({ state, runtime, profile: desiredProfile, token });
-    const owned = {
-      port: desiredProfile.cdpPort,
-      token,
-      allowLegacyAuth: state.resolved.extensionRelay.allowLegacyAuth,
-      promise,
-    };
-    pendingRelayEnsures.set(runtime, owned);
-    const settlePending = () => {
-      if (pendingRelayEnsures.get(runtime) === owned) {
+    const promise =
+      pending?.promise ?? ensureDesiredRelay({ state, runtime, profile: desiredProfile, token });
+    if (!pending) {
+      pendingRelayEnsures.set(runtime, {
+        port: desiredProfile.cdpPort,
+        token,
+        allowLegacyAuth: state.resolved.extensionRelay.allowLegacyAuth,
+        promise,
+      });
+      const settlePending = () => {
         pendingRelayEnsures.delete(runtime);
-      }
-    };
-    void promise.then(settlePending, settlePending);
+      };
+      void promise.then(settlePending, settlePending);
+    }
     const handle = await waitForProfileOperation(promise, signal);
     const current = resolveProfile(state.resolved, profile.name);
     if (current) {
@@ -161,10 +142,9 @@ async function ensureDesiredRelay(params: {
   return await withProfileOperationLease({
     state,
     runtime,
-    configRevision: getProfileLifecycle(runtime).configRevision,
     ownership: "lifecycle",
     run: async (signal) => {
-      const map = relays(state);
+      const map = (state.extensionRelays ??= new Map());
       const actor = getProfileLifecycle(runtime);
       const existing = map.get(profile.name);
       if (existing) {

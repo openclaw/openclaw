@@ -4,14 +4,14 @@ import Testing
 @MainActor
 struct ExecApprovalsGatewayPrompterTests {
     @Test func `session match prefers active session`() {
-        let matches = ExecApprovalsGatewayPrompter._testShouldPresent(
+        let matches = ExecApprovalsGatewayPrompter.shouldPresent(
             mode: .remote,
             activeSession: " main ",
             requestSession: "main",
             lastInputSeconds: nil)
         #expect(matches)
 
-        let mismatched = ExecApprovalsGatewayPrompter._testShouldPresent(
+        let mismatched = ExecApprovalsGatewayPrompter.shouldPresent(
             mode: .remote,
             activeSession: "other",
             requestSession: "main",
@@ -20,7 +20,7 @@ struct ExecApprovalsGatewayPrompterTests {
     }
 
     @Test func `session fallback uses recent activity`() {
-        let recent = ExecApprovalsGatewayPrompter._testShouldPresent(
+        let recent = ExecApprovalsGatewayPrompter.shouldPresent(
             mode: .remote,
             activeSession: nil,
             requestSession: "main",
@@ -28,7 +28,7 @@ struct ExecApprovalsGatewayPrompterTests {
             thresholdSeconds: 120)
         #expect(recent)
 
-        let stale = ExecApprovalsGatewayPrompter._testShouldPresent(
+        let stale = ExecApprovalsGatewayPrompter.shouldPresent(
             mode: .remote,
             activeSession: nil,
             requestSession: "main",
@@ -38,14 +38,14 @@ struct ExecApprovalsGatewayPrompterTests {
     }
 
     @Test func `remote gateway requests without presentable UI are left unresolved`() {
-        let local = ExecApprovalsGatewayPrompter._testShouldPresent(
+        let local = ExecApprovalsGatewayPrompter.shouldPresent(
             mode: .local,
             activeSession: nil,
             requestSession: nil,
             lastInputSeconds: 400)
         #expect(local)
 
-        let remote = ExecApprovalsGatewayPrompter._testShouldPresent(
+        let remote = ExecApprovalsGatewayPrompter.shouldPresent(
             mode: .remote,
             activeSession: nil,
             requestSession: nil,

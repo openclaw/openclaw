@@ -10,11 +10,12 @@ import type {
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { hasOperatorReadAccess } from "../../app/operator-access.ts";
+import { hasOperatorReadAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isArchiveAccessDeniedError } from "../../lib/gateway-errors.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { PollController } from "../../lit/poll-controller.ts";
 import {
   transcriptListParams,
   transcriptRouteSearch,
@@ -30,8 +31,6 @@ type ArchiveReadResults = {
   "transcripts.get": TranscriptsGetResult;
   "transcripts.export": TranscriptsExportResult;
 };
-// Keep a bounded reading window even when a room has stayed subscribed for days.
-const READER_WINDOW_PAGES = 5;
 
 class MeetingsPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -43,9 +42,16 @@ class MeetingsPage extends OpenClawLightDomElement {
   @state() private readerDenial: unknown = null;
   private accessGeneration = 0;
   @state() private readerCursor: string | null = null;
+  private loadedReaderCursor: string | null = null;
+  private lastReaderRefresh = 0;
+  @state() private now = Date.now();
   @state() private summary: TranscriptsGetResult | null = null;
+  @state() private summaryGeneration: {
+    kind: "idle" | "loading" | "done" | "error";
+    message?: string;
+  } = { kind: "idle" };
+  private summaryAbort: AbortController | null = null;
   @state() private readerPages: TranscriptsGetResult[] = [];
-  @state() private trimmed = false;
   @state() private exportState: { kind: "idle" | "loading" | "done" | "error"; message?: string } =
     { kind: "idle" };
   private connectionHello: unknown;
@@ -55,6 +61,7 @@ class MeetingsPage extends OpenClawLightDomElement {
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
     invalidateRequests: () => this.resetConnection(),
+    onPageActivation: () => this.refreshLive(true),
     onSnapshot: ({ snapshot: { hello } }) => {
       // A new handshake or authorization can replace a still-connected client.
       if (hello !== this.connectionHello || hello?.auth !== this.connectionAuth) {
@@ -65,6 +72,12 @@ class MeetingsPage extends OpenClawLightDomElement {
       this.connectionAuth = hello?.auth;
     },
   });
+  private readonly polling = new PollController(this, 3_000, () => this.refreshLive());
+
+  constructor() {
+    super();
+    void this.polling;
+  }
 
   private requestClient() {
     const snapshot = this.context?.gateway.snapshot;
@@ -85,10 +98,30 @@ class MeetingsPage extends OpenClawLightDomElement {
 
   private get readerTab(): "text" | "summary" {
     const params = new URLSearchParams(this.routeSearch);
-    return params.get("tab") === "transcript" ||
-      (!params.has("tab") && Boolean(this.selection.query))
-      ? "text"
-      : "summary";
+    if (params.has("tab")) {
+      return params.get("tab") === "transcript" ? "text" : "summary";
+    }
+    return this.selection.query ? "text" : "summary";
+  }
+
+  private captureArchiveRequest(client: GatewayClient | null) {
+    const scope = this.gateway.capture();
+    const gateway = this.context.gateway;
+    const hello = gateway.snapshot.hello;
+    const auth = gateway.snapshot.hello?.auth;
+    const generation = this.accessGeneration;
+    return {
+      scope,
+      auth,
+      isCurrent: () =>
+        this.requestClient() === client &&
+        this.context.gateway === gateway &&
+        gateway.snapshot.hello === hello &&
+        gateway.snapshot.hello?.auth === auth &&
+        scope !== null &&
+        this.gateway.isCurrent(scope) &&
+        this.accessGeneration === generation,
+    };
   }
 
   private async readArchive<Method extends keyof ArchiveReadResults>(request: {
@@ -99,21 +132,8 @@ class MeetingsPage extends OpenClawLightDomElement {
     current: () => boolean;
     accept: (result: ArchiveReadResults[Method]) => void;
   }) {
-    const scope = this.gateway.capture();
-    const gateway = this.context.gateway;
-    const hello = gateway.snapshot.hello;
-    const auth = gateway.snapshot.hello?.auth;
-    const generation = this.accessGeneration;
-    const current = () =>
-      !request.signal.aborted &&
-      this.requestClient() === request.client &&
-      this.context.gateway === gateway &&
-      gateway.snapshot.hello === hello &&
-      gateway.snapshot.hello?.auth === auth &&
-      scope !== null &&
-      this.gateway.isCurrent(scope) &&
-      this.accessGeneration === generation &&
-      request.current();
+    const context = this.captureArchiveRequest(request.client);
+    const current = () => !request.signal.aborted && context.isCurrent() && request.current();
     try {
       const result = await request.client.request<ArchiveReadResults[Method]>(
         request.method,
@@ -134,12 +154,12 @@ class MeetingsPage extends OpenClawLightDomElement {
         // Archive access is shared across these RPCs. Retire every older request,
         // but leave Task args alone: changing cursors here would auto-retry denial.
         this.accessGeneration++;
+        this.cancelSummaryGeneration();
         this.listDenial = error;
         this.readerDenial = error;
         this.list = null;
         this.summary = null;
         this.readerPages = [];
-        this.trimmed = false;
         this.cancelExport();
       }
       throw error;
@@ -190,6 +210,7 @@ class MeetingsPage extends OpenClawLightDomElement {
         accept: (result) => {
           this.readerDenial = null;
           this.summary = result;
+          void this.generateMissingSummary();
         },
       });
     },
@@ -225,9 +246,17 @@ class MeetingsPage extends OpenClawLightDomElement {
           this.readerCursor === cursor,
         accept: (result) => {
           this.readerDenial = null;
-          const pages = cursor ? [...this.readerPages, result] : [result];
-          this.trimmed ||= pages.length > READER_WINDOW_PAGES;
-          this.readerPages = pages.slice(-READER_WINDOW_PAGES);
+          // A background read replaces the current page; only forward paging appends.
+          const pages = cursor
+            ? [
+                ...(cursor === this.loadedReaderCursor
+                  ? this.readerPages.slice(0, -1)
+                  : this.readerPages),
+                result,
+              ]
+            : [result];
+          this.loadedReaderCursor = cursor;
+          this.readerPages = pages;
         },
       });
     },
@@ -238,7 +267,15 @@ class MeetingsPage extends OpenClawLightDomElement {
       const previous = new URLSearchParams(String(changed.get("routeSearch") ?? ""));
       const next = new URLSearchParams(this.routeSearch);
       if (previous.get("selector") !== next.get("selector")) {
+        this.cancelSummaryGeneration();
         this.summary = null;
+        this.lastReaderRefresh = 0;
+      }
+      if (
+        JSON.stringify(transcriptListParams(String(changed.get("routeSearch") ?? ""))) !==
+        JSON.stringify(transcriptListParams(this.routeSearch))
+      ) {
+        this.list = null;
       }
       // Only route-owned changes replace drafts; async reader/list work does not.
       for (const key of [...TRANSCRIPT_FILTER_KEYS, "find"]) {
@@ -262,6 +299,16 @@ class MeetingsPage extends OpenClawLightDomElement {
   }
 
   override updated() {
+    const nextCursor = this.readerPages.at(-1)?.nextCursor;
+    if (
+      this.readerTask.status === TaskStatus.COMPLETE &&
+      document.visibilityState !== "hidden" &&
+      !this.readerDenial &&
+      nextCursor &&
+      nextCursor !== this.readerCursor
+    ) {
+      this.readerCursor = nextCursor;
+    }
     if (!this.focusSelection) {
       return;
     }
@@ -275,10 +322,12 @@ class MeetingsPage extends OpenClawLightDomElement {
   }
 
   private resetConnection() {
+    this.cancelSummaryGeneration();
     this.list = null;
     this.listDenial = null;
     this.readerDenial = null;
     this.summary = null;
+    this.lastReaderRefresh = 0;
     this.listTask.abort();
     this.summaryTask.abort();
     this.readerTask.abort();
@@ -288,14 +337,73 @@ class MeetingsPage extends OpenClawLightDomElement {
 
   private resetReader() {
     this.readerCursor = null;
+    this.loadedReaderCursor = null;
     this.readerPages = [];
-    this.trimmed = false;
   }
 
   private cancelExport() {
     this.exportAbort?.abort();
     this.exportAbort = null;
     this.exportState = { kind: "idle" };
+  }
+
+  private cancelSummaryGeneration() {
+    this.summaryAbort?.abort();
+    this.summaryAbort = null;
+    this.summaryGeneration = { kind: "idle" };
+  }
+
+  private async generateMissingSummary(retry = false) {
+    const client = this.requestClient();
+    const { selector } = this.selection;
+    const context = this.captureArchiveRequest(client);
+    if (
+      !client ||
+      !selector ||
+      !context.scope ||
+      this.readerDenial ||
+      !hasOperatorWriteAccess(context.auth ?? null) ||
+      !this.summary ||
+      this.summary.summary ||
+      this.summary.session.utteranceCount === 0 ||
+      this.summaryGeneration.kind === "loading" ||
+      (!retry && this.summaryGeneration.kind !== "idle")
+    ) {
+      return;
+    }
+    const abort = new AbortController();
+    this.summaryAbort = abort;
+    this.summaryGeneration = { kind: "loading" };
+    const current = () =>
+      !abort.signal.aborted &&
+      this.summaryAbort === abort &&
+      context.isCurrent() &&
+      this.selection.selector === selector;
+    try {
+      const result = await client.request<TranscriptsGetResult>(
+        "transcripts.summarize",
+        { selector },
+        {
+          signal: abort.signal,
+          // Allow the shared summary lane to drain an earlier generation before inference.
+          timeoutMs: 120_000,
+        },
+      );
+      if (!current()) {
+        return;
+      }
+      this.summaryTask.abort();
+      this.summary = result;
+      this.summaryGeneration = { kind: "done" };
+    } catch (error) {
+      if (current()) {
+        this.summaryGeneration = { kind: "error", message: formatUiError(error) };
+      }
+    } finally {
+      if (this.summaryAbort === abort) {
+        this.summaryAbort = null;
+      }
+    }
   }
 
   private navigate(patch: Record<string, string | null>) {
@@ -321,6 +429,41 @@ class MeetingsPage extends OpenClawLightDomElement {
     }
     void this.summaryTask.run();
     void this.readerTask.run();
+  }
+
+  private refreshLive(foreground = false) {
+    if (
+      !this.requestClient() ||
+      document.visibilityState === "hidden" ||
+      this.listDenial ||
+      this.readerDenial
+    ) {
+      return;
+    }
+    this.now = Date.now();
+    if (this.listTask.status !== TaskStatus.PENDING) {
+      void this.listTask.run();
+    }
+    if (!this.selection.selector) {
+      return;
+    }
+    const session = this.summary?.session ?? this.readerPages.at(-1)?.session;
+    const summary = this.summary?.summary;
+    const interimSummary =
+      session?.stoppedAt &&
+      summary?.generatedAt &&
+      Date.parse(summary.generatedAt) < Date.parse(session.stoppedAt);
+    // Interim notes remain visible while the final summary is being generated.
+    const interval = session?.active || !summary || interimSummary ? 3_000 : 15_000;
+    if (!foreground && this.now - this.lastReaderRefresh < interval) {
+      return;
+    }
+    this.lastReaderRefresh = this.now;
+    for (const task of [this.summaryTask, this.readerTask]) {
+      if (task.status !== TaskStatus.PENDING) {
+        void task.run();
+      }
+    }
   }
 
   private async download(format: TranscriptsExportParams["format"]) {
@@ -378,10 +521,10 @@ class MeetingsPage extends OpenClawLightDomElement {
       error:
         this.readerDenial ??
         (activeReaderTask.status === TaskStatus.ERROR ? activeReaderTask.error : null),
-      trimmed: this.trimmed,
     };
     return renderTranscripts({
       basePath: this.context.basePath,
+      now: this.now,
       search: this.routeSearch,
       drafts: this.drafts,
       onDraft: (key, value) => {
@@ -389,12 +532,14 @@ class MeetingsPage extends OpenClawLightDomElement {
       },
       connected: snapshot.phase === "connected",
       allowed: hasOperatorReadAccess(snapshot.hello?.auth ?? null),
-      list: client && this.listTask.status === TaskStatus.COMPLETE ? this.list : null,
+      list: client ? this.list : null,
       listLoading: !this.listDenial && this.listTask.status === TaskStatus.PENDING,
       listError:
         this.listDenial ?? (this.listTask.status === TaskStatus.ERROR ? this.listTask.error : null),
       reader,
       readerTab: this.readerTab,
+      summaryGeneration: this.summaryGeneration,
+      onSummaryRetry: () => void this.generateMissingSummary(true),
       exportState: this.exportState,
       onNavigate: (patch) => this.navigate(patch),
       onRefresh: () => this.refresh(),
@@ -413,13 +558,6 @@ class MeetingsPage extends OpenClawLightDomElement {
       },
       onReaderTab: (tab) => {
         this.navigate({ tab: tab === "text" ? "transcript" : "summary" });
-      },
-      onLoadMore: () => {
-        this.readerCursor = this.readerPages.at(-1)?.nextCursor ?? null;
-      },
-      onReaderStart: () => {
-        this.resetReader();
-        void this.readerTask.run();
       },
       onDownload: (format) => void this.download(format),
     });

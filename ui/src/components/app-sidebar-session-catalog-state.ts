@@ -66,7 +66,7 @@ export function preserveExpandedCatalogHost(
     return freshHost;
   }
   const { sessions: _freshSessions, nextCursor: _freshNextCursor, ...freshDetails } = freshHost;
-  const { nextCursor, ...previousDetails } = previous;
+  const { nextCursor, pending: _pending, ...previousDetails } = previous;
   return {
     ...previousDetails,
     ...freshDetails,
@@ -112,7 +112,12 @@ export function mergeSessionCatalogPage(params: {
     } else {
       advancedHostIds.push(host.hostId);
     }
-    const { nextCursor: _currentCursor, error: _currentError, ...currentHost } = host;
+    const {
+      nextCursor: _currentCursor,
+      error: _currentError,
+      pending: _pending,
+      ...currentHost
+    } = host;
     return {
       ...currentHost,
       ...pageHostDetails,
@@ -154,7 +159,7 @@ export async function refetchExpandedSessionCatalogPages(params: {
         catalog.hosts.map(async (host) => {
           const pageDepth =
             params.pageDepths.get(sessionCatalogHostKey(catalog.id, host.hostId)) ?? 0;
-          if (pageDepth === 0) {
+          if (pageDepth === 0 || host.pending) {
             return host;
           }
           const previous = previousHosts.get(host.hostId);
@@ -166,6 +171,11 @@ export async function refetchExpandedSessionCatalogPages(params: {
           }
           let sessions = host.sessions;
           let nextCursor = host.nextCursor;
+          const preserveOnError = (error: NonNullable<SessionCatalog["error"]>) =>
+            preserveExpandedCatalogHost(
+              { ...host, error },
+              previous ?? { ...host, sessions, nextCursor },
+            );
           const requestedCursors = new Set<string>();
           for (let loadedPages = 0; loadedPages < pageDepth && nextCursor; loadedPages += 1) {
             // Pausing automatic replay must retain the full visible window, not its partial prefix.
@@ -185,10 +195,7 @@ export async function refetchExpandedSessionCatalogPages(params: {
                 },
               );
             } catch (error) {
-              return preserveExpandedCatalogHost(
-                { ...host, error: sessionCatalogRequestError(error) },
-                previous ?? { ...host, sessions, nextCursor },
-              );
+              return preserveOnError(sessionCatalogRequestError(error));
             }
             if (!params.isCurrent()) {
               return previous ?? host;
@@ -196,19 +203,10 @@ export async function refetchExpandedSessionCatalogPages(params: {
             const page = result.catalogs.find((candidate) => candidate.id === catalog.id);
             const pageHost = page?.hosts.find((candidate) => candidate.hostId === host.hostId);
             if (page?.error) {
-              return preserveExpandedCatalogHost(
-                { ...host, error: page.error },
-                previous ?? { ...host, sessions, nextCursor },
-              );
+              return preserveOnError(page.error);
             }
             if (!pageHost) {
-              return preserveExpandedCatalogHost(
-                {
-                  ...host,
-                  error: missingCatalogPageError(),
-                },
-                previous ?? { ...host, sessions, nextCursor },
-              );
+              return preserveOnError(missingCatalogPageError());
             }
             if (pageHost.error) {
               return preserveExpandedCatalogHost({ ...host, ...pageHost }, previous ?? host);
@@ -216,10 +214,7 @@ export async function refetchExpandedSessionCatalogPages(params: {
             sessions = mergeCatalogSessionRows(sessions, pageHost.sessions);
             nextCursor = pageHost.nextCursor;
             if (nextCursor && requestedCursors.has(nextCursor)) {
-              return preserveExpandedCatalogHost(
-                { ...host, error: repeatedCatalogCursorError() },
-                previous ?? { ...host, sessions, nextCursor },
-              );
+              return preserveOnError(repeatedCatalogCursorError());
             }
           }
           const { nextCursor: _cursor, sessions: _sessions, ...freshHost } = host;

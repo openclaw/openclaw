@@ -23,7 +23,7 @@ nightly on `main` and from manual dispatch with the mock parity lane, live
 Matrix lane, Convex-managed live Telegram lane, and Convex-managed live Discord
 lane as parallel jobs. Scheduled QA and selected release checks run the
 catalog-derived Matrix selection through the shared live adapter. Release
-transport checks use `mock-openai/gpt-5.6-luna` so they stay deterministic and
+transport checks use `mock-openai/gpt-5.6-luna` so they use fixed responses and
 avoid normal provider-plugin startup. These live transport gateways disable
 memory search; memory behavior stays covered by the QA parity suites.
 
@@ -49,6 +49,18 @@ inside every shard.
     gateway workers. `qa-channel` defaults to concurrency 4 (bounded by the
     selected scenario count). Use `--concurrency <count>` to tune the worker
     count, or `--concurrency 1` for the older serial lane.
+    Each worker owns a stable named profile as well as separate home, state,
+    and config paths, so its CLI bootstrap cannot select the operator's installed
+    Gateway service. Parent profiles and runtime environment patches do not
+    override that worker identity.
+    Child temporary files and default compiler caches stay in the worker's
+    temporary root and are removed after its processes stop. Parent temporary
+    paths and runtime environment patches do not redirect this scratch storage.
+    `OPENCLAW_QA_KEEP_TEMP=1` retains that root for debugging.
+    If the controller dies, the current Gateway's parent watchdog exits without
+    deleting runtime files that descendants may still use. A surviving owner or
+    host maintenance must confirm that those writers stopped before removing the
+    retained roots.
   - Exits non-zero when any scenario fails. Use `--allow-failures` for
     artifacts without a failing exit code.
   - Supports provider modes `live-frontier`, `mock-openai`, and `aimock`.
@@ -66,7 +78,7 @@ inside every shard.
 - `pnpm test:plugins:kitchen-sink-live`
   - Runs the live OpenAI Kitchen Sink plugin gauntlet through QA Lab.
     Installs the external Kitchen Sink package, verifies the plugin SDK
-    surface inventory, probes `/healthz` and `/readyz`, records gateway
+    surface inventory, checks `/healthz` and `/readyz`, records gateway
     CPU/RSS evidence, runs a live OpenAI turn, and checks adversarial
     diagnostics. Requires live OpenAI auth such as `OPENAI_API_KEY`. In
     hydrated Testbox sessions it automatically sources the Testbox live-auth
@@ -103,7 +115,7 @@ inside every shard.
   - Use `OPENCLAW_NPM_ONBOARD_CHANNEL=discord` to run the same packaged-install
     lane with Discord.
 - `pnpm test:docker:session-runtime-context`
-  - Runs a deterministic built-app Docker smoke for embedded runtime context
+  - Runs a repeatable built-app Docker smoke check for embedded runtime context
     transcripts. Verifies hidden OpenClaw runtime context persists as a
     non-display custom message instead of leaking into the visible user
     turn, then seeds an affected broken session JSONL and verifies
@@ -126,15 +138,19 @@ inside every shard.
     `OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES`,
     `OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS`, or
     `OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES` to tune the run.
-    `OPENCLAW_NPM_TELEGRAM_RTT_CHECKS` accepts zero or exactly one canonical
+    `OPENCLAW_NPM_TELEGRAM_RTT_CHECKS` accepts zero or exactly one registered
     Telegram QA scenario id. When omitted, the normal lane samples
-    `channel-canary`; focused non-RTT scenario runs stay probe-free. An explicit
+    `channel-canary`; focused non-RTT scenario runs stay check-free. An explicit
     RTT scenario is included in scenario selection automatically, so callers do
     not need to repeat it in `OPENCLAW_NPM_TELEGRAM_SCENARIOS`. Multiple ids
-    fail immediately, while unknown or inapplicable ids fail canonical scenario
+    fail immediately, while unknown or inapplicable ids fail the shared scenario
     validation. The package runner promotes the selected RTT scenario once to
     the first position before the remaining taxonomy-backed fail-fast release
-    scenarios.
+    scenarios. Checks continue in its most recently observed conversation and
+    thread, using the leased primary participant. The first sample starts a
+    new message; later samples chain their own replies rather than a reply
+    observed by another scenario participant. Delivery-only scenarios use their
+    observed outbound route and need no additional catalog metadata.
   - Uses the same Convex-leased Test Server userbot credentials as
     `pnpm openclaw qa telegram`. Set `OPENCLAW_QA_CONVEX_SITE_URL` and the
     secret for the selected role. The Docker wrapper selects Convex by default.
@@ -161,6 +177,19 @@ inside every shard.
   or `custom` lane profiles. Set `telegram_mode=mock-openai` or
   `live-frontier` to run the Telegram QA workflow against the same
   `package-under-test` artifact.
+  - For legacy Telegram topic bindings across a published-driver update, select
+    `suite_profile=telegram`, `telegram_mode=mock-openai`, and the single scenario
+    `telegram-published-upgrade-bindings`. Supply `package_spec` as an exact
+    published baseline, such as `openclaw@2026.9.6`, and resolve the candidate
+    through `source=ref` or a verified tarball artifact. This scenario installs
+    the baseline before leasing Test Server credentials, lets it spawn a
+    thread-bound child that takes over the forum topic, and runs that
+    installation's normal `openclaw update` against the candidate. It checks that
+    the topic routes back to the parent session after activation and another
+    Gateway restart while the child session stays intact, including all three
+    orderly shutdowns. Raw credential, session, and transport state stays in
+    container scratch; uploaded evidence contains the package identities and
+    redacted outcome only.
   - Latest beta product proof:
 
 ```bash
@@ -280,9 +309,9 @@ gh workflow run package-acceptance.yml --ref main \
     `--credential-role`.
   - Defaults cover canary, mention gating, command addressing, `/status`,
     bot-to-bot mentioned replies, and core native command replies.
-    `mock-openai` defaults also cover deterministic reply-chain and
+    `mock-openai` defaults also cover fixed-response reply-chain and
     Telegram final-message streaming regressions. Use `--list-scenarios`
-    for optional probes such as `session_status`.
+    for optional checks such as `session_status`.
   - Exits non-zero when any scenario fails. Use `--allow-failures` for
     artifacts without a failing exit code.
   - The leased user drives and observes the shared Test Server group. No
@@ -396,6 +425,6 @@ for Slack rows.
 The architecture and scenario-helper names for new channel adapters live in
 [QA overview - Adding a channel](/concepts/qa-e2e-automation#adding-a-channel).
 The minimum bar: implement the transport runner on the shared `qa-lab` host
-seam, add an `adapterFactory` for shared scenarios, declare `qaRunners` in the
+API, add an `adapterFactory` for shared scenarios, declare `qaRunners` in the
 plugin manifest, mount as `openclaw qa <runner>`, and author scenarios under
 `qa/scenarios/`.

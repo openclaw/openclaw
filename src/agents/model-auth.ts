@@ -7,7 +7,6 @@ export {
 } from "./auth-profiles.js";
 export { resolveAuthProfileOrderWithMetadata } from "./auth-profiles/order.js";
 export { resolveEnvApiKey } from "./model-auth-env.js";
-export type { EnvApiKeyResult } from "./model-auth-env.js";
 export {
   applyAuthHeaderOverride,
   applyLocalNoAuthHeaderOverride,
@@ -18,7 +17,6 @@ export {
 } from "./model-auth-model.js";
 export type { ModelAuthMode } from "./model-auth-model.js";
 export {
-  canUseProfileAsProviderEntryApiKey,
   getCustomProviderApiKey,
   hasSyntheticLocalProviderAuthConfig,
   hasUsableCustomProviderApiKey,
@@ -28,9 +26,7 @@ export {
   resolveUsableCustomProviderApiKey,
   shouldPreferExplicitConfigApiKeyAuth,
 } from "./model-auth-provider-config.js";
-export type { ProviderEntryApiKeyBindingResolution } from "./model-auth-provider-config.js";
 export { resolveApiKeyForProviderCore } from "./model-auth-provider.js";
-export type { ProviderCredentialPrecedence } from "./model-auth-provider.js";
 export {
   createRuntimeProviderAuthLookup,
   hasRuntimeAvailableProviderAuth,
@@ -44,6 +40,5 @@ export {
   MissingProviderAuthError,
   ProviderAuthError,
   requireApiKey,
-  resolveAwsSdkEnvVarName,
 } from "./model-auth-runtime-shared.js";
 export type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";

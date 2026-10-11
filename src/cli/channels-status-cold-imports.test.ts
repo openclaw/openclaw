@@ -1,5 +1,7 @@
 // The real route-first channel status path must honor the shared catalog guard policy.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as gatewayCall from "../gateway/call.js";
+import { DEFAULT_RESTART_HEALTH_TIMEOUT_MS } from "./daemon-cli/restart-health.constants.js";
 
 const loaded = vi.hoisted(() => {
   const modules = new Set<string>();
@@ -10,7 +12,6 @@ const loaded = vi.hoisted(() => {
     },
   };
 });
-const callGatewayMock = vi.hoisted(() => vi.fn(async () => ({ channelAccounts: {} })));
 const runtime = vi.hoisted(() => ({
   error: vi.fn(),
   exit: vi.fn(),
@@ -32,10 +33,6 @@ vi.mock("../commands/channels/status.runtime.js", () => {
   };
 });
 
-vi.mock("../gateway/call.js", () => ({
-  callGateway: callGatewayMock,
-}));
-
 vi.mock("./progress.js", () => ({
   withProgress: vi.fn(async (_opts, run: () => Promise<unknown>) => await run()),
 }));
@@ -53,12 +50,16 @@ describe("routed channels status cold imports", () => {
     // eager import during route.js's own static import graph is exactly the
     // regression evidence this test exists to keep.
     vi.clearAllMocks();
+    // Keep readiness target/auth selection real; replace only the wire request.
+    vi.spyOn(gatewayCall, "callGateway").mockResolvedValue({ channelAccounts: {} });
+    vi.spyOn(performance, "now").mockReturnValue(0);
   });
+  afterEach(() => vi.restoreAllMocks());
 
   it("keeps successful all-channel JSON routes cold with and without probing", async () => {
     for (const probe of [false, true]) {
       vi.clearAllMocks();
-      const timeoutMs = probe ? 30000 : 10000;
+      const timeoutMs = DEFAULT_RESTART_HEALTH_TIMEOUT_MS;
       const argv = [
         "node",
         "openclaw",
@@ -74,11 +75,12 @@ describe("routed channels status cold imports", () => {
 
       await expect(tryRouteCli(argv)).resolves.toBe(true);
 
-      expect(callGatewayMock).toHaveBeenCalledOnce();
-      expect(callGatewayMock).toHaveBeenCalledWith({
+      expect(gatewayCall.callGateway).toHaveBeenCalledOnce();
+      expect(gatewayCall.callGateway).toHaveBeenCalledWith({
         method: "channels.status",
         params: { probe, timeoutMs },
         timeoutMs,
+        sharedStateMode: "read-only",
       });
       expect(runtime.writeJson).toHaveBeenCalledWith({ channelAccounts: {} }, 2);
       expect(loaded.modules).not.toContain("config-guard");

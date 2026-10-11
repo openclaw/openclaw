@@ -3,11 +3,12 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { OpenClawConfig } from "../../config/config.js";
 import { hasStagedMediaFacts } from "../../media/media-facts.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import type { SkillSnapshot } from "../../skills/types.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import { hasInboundMedia } from "./inbound-media.js";
 
 const stageSandboxMediaRuntimeLoader = createLazyImportLoader(
-  () => import("./stage-sandbox-media.runtime.js"),
+  () => import("./stage-sandbox-media.js"),
 );
 
 /**
@@ -23,6 +24,7 @@ export async function stageRemoteInboundMediaIfNeeded(params: {
   agentId?: string;
   sessionKey?: string;
   workspaceDir: string;
+  skillsSnapshot?: SkillSnapshot;
   remoteMediaMode?: "sandbox-or-cache" | "cache";
   abortSignal?: AbortSignal;
 }): Promise<boolean> {

@@ -1,15 +1,8 @@
-/**
- * Channel config matching helpers.
- *
- * Resolves direct, parent, normalized, and wildcard config entries with match metadata.
- */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 
-/** How a channel config entry was selected. */
 export type ChannelMatchSource = "direct" | "parent" | "wildcard";
 
-/** Match result carrying direct, parent, and wildcard candidates for channel config lookup. */
 export type ChannelEntryMatch<T> = {
   entry?: T;
   key?: string;
@@ -21,7 +14,6 @@ export type ChannelEntryMatch<T> = {
   matchSource?: ChannelMatchSource;
 };
 
-/** Copies match metadata onto resolved channel config output. */
 export function applyChannelMatchMeta<
   TResult extends { matchKey?: string; matchSource?: ChannelMatchSource },
 >(result: TResult, match: ChannelEntryMatch<unknown>): TResult {
@@ -43,7 +35,6 @@ export function resolveChannelMatchConfig<
   return applyChannelMatchMeta(resolveEntry(match.entry), match);
 }
 
-/** Normalizes human channel names into config-safe slugs. */
 export function normalizeChannelSlug(value: string): string {
   return normalizeLowercaseStringOrEmpty(value)
     .replace(/^#/, "")
@@ -51,7 +42,6 @@ export function normalizeChannelSlug(value: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
-/** Builds unique config lookup keys from optional channel/account identifiers. */
 export function buildChannelKeyCandidates(...keys: Array<string | undefined | null>): string[] {
   return normalizeUniqueSingleOrTrimmedStringList(keys);
 }
@@ -93,61 +83,33 @@ export function resolveChannelEntryMatchWithFallback<T>(params: {
     wildcardKey: params.wildcardKey,
   });
 
-  if (direct.entry && direct.key) {
-    return { ...direct, matchKey: direct.key, matchSource: "direct" };
-  }
-
-  const normalizeKey = params.normalizeKey;
-  if (normalizeKey) {
-    const normalizedKeys = params.keys.map((key) => normalizeKey(key)).filter(Boolean);
-    if (normalizedKeys.length > 0) {
-      for (const [entryKey, entry] of Object.entries(params.entries ?? {})) {
-        const normalizedEntry = normalizeKey(entryKey);
-        if (normalizedEntry && normalizedKeys.includes(normalizedEntry)) {
-          return {
-            ...direct,
-            entry,
-            key: entryKey,
-            matchKey: entryKey,
-            matchSource: "direct",
-          };
-        }
-      }
-    }
-  }
-
-  const parentKeys = params.parentKeys ?? [];
-  if (parentKeys.length > 0) {
-    const parent = resolveChannelEntryMatch({ entries: params.entries, keys: parentKeys });
-    if (parent.entry && parent.key) {
-      return {
-        ...direct,
-        entry: parent.entry,
-        key: parent.key,
-        parentEntry: parent.entry,
-        parentKey: parent.key,
-        matchKey: parent.key,
-        matchSource: "parent",
-      };
-    }
-    if (normalizeKey) {
-      const normalizedParentKeys = parentKeys.map((key) => normalizeKey(key)).filter(Boolean);
-      if (normalizedParentKeys.length > 0) {
+  for (const source of ["direct", "parent"] as const) {
+    const keys = source === "direct" ? params.keys : (params.parentKeys ?? []);
+    const candidate =
+      source === "direct" ? direct : resolveChannelEntryMatch({ entries: params.entries, keys });
+    let found = candidate.entry && candidate.key ? candidate : undefined;
+    const normalizeKey = params.normalizeKey;
+    if (!found && normalizeKey) {
+      const normalizedKeys = keys.map((key) => normalizeKey(key)).filter(Boolean);
+      if (normalizedKeys.length > 0) {
         for (const [entryKey, entry] of Object.entries(params.entries ?? {})) {
           const normalizedEntry = normalizeKey(entryKey);
-          if (normalizedEntry && normalizedParentKeys.includes(normalizedEntry)) {
-            return {
-              ...direct,
-              entry,
-              key: entryKey,
-              parentEntry: entry,
-              parentKey: entryKey,
-              matchKey: entryKey,
-              matchSource: "parent",
-            };
+          if (normalizedEntry && normalizedKeys.includes(normalizedEntry)) {
+            found = { entry, key: entryKey };
+            break;
           }
         }
       }
+    }
+    if (found) {
+      return {
+        ...direct,
+        entry: found.entry,
+        key: found.key,
+        ...(source === "parent" ? { parentEntry: found.entry, parentKey: found.key } : {}),
+        matchKey: found.key,
+        matchSource: source,
+      };
     }
   }
 

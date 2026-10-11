@@ -1,179 +1,111 @@
-import {
-  buildChannelProgressDraftLine,
-  createChannelProgressDraftCompositor,
-  type ChannelProgressDraftCompositorSnapshot,
-} from "openclaw/plugin-sdk/channel-outbound";
+import { buildChannelProgressDraftLineForEntry } from "openclaw/plugin-sdk/channel-outbound";
 import { describe, expect, it } from "vitest";
-import { telegramHtmlToPlainTextFallback } from "./format.js";
 import { renderTelegramProgressDraftPreview } from "./progress-draft-preview.js";
 
-const options = { richMessages: false, toolProgress: true, maxLines: 8, maxLineChars: 300 };
-
-describe("renderTelegramProgressDraftPreview", () => {
-  it.each(["Bash", "bash", "exec", "Read"])("prints one tool icon for %s", (name) => {
-    const line = buildChannelProgressDraftLine(
-      {
-        event: "tool",
-        toolCallId: "call-1",
-        name,
-        phase: "start",
-        args: { command: "echo alpha", description: "print text", file_path: "/tmp/x.ts" },
-      },
-      { commandText: "raw" },
-    );
-    if (!line?.icon) {
-      throw new Error(`expected an icon for ${name}`);
-    }
-    const preview = renderTelegramProgressDraftPreview({ lines: [line] }, options);
-    expect(preview.text.split(line.icon)).toHaveLength(2);
-    expect(preview.text).toContain(`<b>${line.icon} ${line.label}</b>`);
-  });
-
-  it("renders native checkboxes and equivalent readable HTML from the same plan", () => {
-    const snapshot: ChannelProgressDraftCompositorSnapshot = {
-      lines: [],
-      statusHeadline: "1/3 complete",
-      plan: [
-        { step: "Inspect <fixture>", status: "completed" },
-        { step: "Repair & verify", status: "in_progress" },
-        { step: "Ship the fix", status: "pending" },
-      ],
-    };
-    const rich = renderTelegramProgressDraftPreview(snapshot, { ...options, richMessages: true });
-    const html = renderTelegramProgressDraftPreview(snapshot, options);
-    expect(rich.richMessage?.blocks).toEqual([
-      { type: "paragraph", text: { type: "bold", text: "1/3 complete" } },
-      {
-        type: "list",
-        items: [
-          {
-            has_checkbox: true,
-            is_checked: true,
-            blocks: [{ type: "paragraph", text: "Inspect <fixture>" }],
-          },
-          {
-            has_checkbox: true,
-            blocks: [
-              { type: "paragraph", text: { type: "bold", text: "Repair & verify (in progress)" } },
-            ],
-          },
-          { has_checkbox: true, blocks: [{ type: "paragraph", text: "Ship the fix" }] },
-        ],
-      },
-    ]);
-    expect(telegramHtmlToPlainTextFallback(html.text)).toBe(rich.text);
-    expect(html.text).not.toContain("<code>");
-    expect(html.text).toContain("Inspect &lt;fixture&gt;");
-    expect(html.complete).toBe(true);
-    expect(rich.complete).toBe(true);
-  });
-
-  it.each([undefined, "exit 1", "exit 0"])(
-    "keeps approval and the active step within the window regardless of status (%s)",
-    (status) => {
+describe("progress draft item labels", () => {
+  it.each([false, true])("renders plain notes as literal prose (rich=%s)", (richMessages) => {
+    for (const label of [undefined, "Working"]) {
+      const note = "**Check** <queue> & `jobs` https://example.test";
       const preview = renderTelegramProgressDraftPreview(
-        {
-          lines: [
-            { kind: "tool", label: "Read", text: "Read files" },
-            {
-              kind: "approval",
-              label: "Approval",
-              text: "Approval",
-              detail: "Confirm access",
-              status,
-            },
-          ],
-          diffStat: { files: 1, added: 2, removed: 1 },
-          plan: [
-            { step: "Inspect", status: "completed" },
-            { step: "Repair", status: "in_progress" },
-            { step: "Verify", status: "pending" },
-            { step: "Ship", status: "pending" },
-          ],
-        },
-        { ...options, richMessages: true, maxLines: 3 },
+        { label, statusHeadline: note, statusHeadlineFormat: "plain", lines: [] },
+        { richMessages, toolProgress: true, maxLines: 8, maxLineChars: 120 },
       );
-      expect(preview.text.split("\n")).toHaveLength(3);
-      expect(preview.text).toContain("Confirm access");
-      expect(preview.text).toContain("Repair (in progress)");
-      expect(preview.text).toContain("1/4 done");
-      expect(preview.text).not.toContain("Read files");
-    },
-  );
-
-  it.each([true, false])(
-    "renders a quiet plan without intermediate command failures (rich=%s)",
-    async (richMessages) => {
-      const previews: string[] = [];
-      const progress = createChannelProgressDraftCompositor({
-        active: true,
-        mode: "progress",
-        seed: "test",
-        entry: { streaming: { mode: "progress", progress: { toolProgress: false, label: false } } },
-        update: (_text, { snapshot }) => {
-          const preview = renderTelegramProgressDraftPreview(snapshot, {
-            ...options,
-            richMessages,
-            toolProgress: false,
-            maxLines: 3,
-          });
-          previews.push(telegramHtmlToPlainTextFallback(preview.text));
-        },
-      });
-      try {
-        await progress.pushPlanProgress([
-          { step: "Inspect", status: "completed" },
-          { step: "Repair", status: "in_progress" },
-          { step: "Verify", status: "pending" },
-        ]);
-        await progress.pushCommandOutputEvent({ name: "Bash", phase: "end", exitCode: 1 });
-        await progress.pushCommandOutputEvent({ name: "Bash", phase: "end", exitCode: 2 });
-        expect(previews).toHaveLength(1);
-        expect(previews[0]).not.toMatch(/Bash|exit [12]/u);
-        expect(previews[0]).toContain("Repair (in progress)");
-        expect(previews[0]?.split("\n")).toHaveLength(3);
-      } finally {
-        progress.cancel();
+      expect(preview.linkPreview).toBe(false);
+      if (richMessages) {
+        expect(preview.richMessage).toMatchObject({
+          skip_entity_detection: true,
+          blocks: [
+            ...(label ? [{ type: "paragraph", text: { type: "bold", text: label } }] : []),
+            { type: "paragraph", text: label ? note : { type: "bold", text: note } },
+          ],
+        });
+      } else {
+        const escaped = "**Check** &lt;queue&gt; &amp; `jobs` https://example.test";
+        expect(preview.text).toBe(label ? `<b>Working</b><br>${escaped}` : `<b>${escaped}</b>`);
       }
+    }
+  });
+
+  it.each([false, true])(
+    "renders authored preambles without internal titles (rich=%s)",
+    (richMessages) => {
+      const line = buildChannelProgressDraftLineForEntry(undefined, {
+        event: "item",
+        itemKind: "preamble",
+        itemId: "preamble-1",
+        title: "Preamble",
+        progressText: "I'll list the **workspace** first.",
+      })!;
+      const preview = renderTelegramProgressDraftPreview(
+        { lines: [line] },
+        { richMessages, toolProgress: true, maxLines: 8, maxLineChars: 120 },
+      );
+      expect(preview.text).toBe(
+        richMessages ? "I'll list the workspace first." : "I'll list the <b>workspace</b> first.",
+      );
     },
   );
 
-  it("keeps the full plan when non-zero exits fill the activity window", () => {
-    const preview = renderTelegramProgressDraftPreview(
-      {
-        lines: Array.from({ length: 8 }, (_, index) => ({
-          id: `command:${index}`,
-          kind: "command-output" as const,
-          label: "Exec",
-          text: `🛠️ exit ${index + 1}`,
-          status: `exit ${index + 1}`,
-        })),
-        plan: [
-          { step: "Inspect", status: "completed" },
-          { step: "Repair", status: "in_progress" },
-          { step: "Verify", status: "pending" },
-          { step: "Audit", status: "pending" },
-          { step: "Ship", status: "pending" },
-        ],
-      },
-      { ...options, maxLines: 8 },
-    );
-    const text = telegramHtmlToPlainTextFallback(preview.text);
-    for (const step of ["Inspect", "Repair", "Verify", "Audit", "Ship"]) {
-      expect(text).toContain(step);
-    }
-    expect(text).toContain("exit 8");
-    expect(text).not.toContain("exit 1");
-  });
-  it.each([true, false])(
-    "renders retained edit totals without a plan (rich=%s)",
-    (richMessages) => {
+  it.each([false, true])("budgets the complete raw command row (rich=%s)", (richMessages) => {
+    for (const status of ["running", "completed"]) {
+      const line = buildChannelProgressDraftLineForEntry(
+        { streaming: { mode: "progress", progress: { commandText: "raw" } } },
+        {
+          event: "item",
+          name: "exec",
+          itemId: "command-1",
+          summary: "run sleep 3 → print text, sleep 3 && echo a long command suffix",
+          status,
+        },
+        { toolIcons: true, detailMode: "raw" },
+      )!;
       const preview = renderTelegramProgressDraftPreview(
-        { lines: [], diffStat: { files: 1, added: 2, removed: 1 } },
-        { ...options, richMessages },
+        { lines: [line] },
+        { richMessages, toolProgress: true, maxLines: 8, maxLineChars: 40 },
       );
-      expect(telegramHtmlToPlainTextFallback(preview.text)).toBe("📝 1 files +2 −1");
-      expect(preview.text).not.toContain("<code>");
-    },
-  );
+      const text = preview.text.replace(/<[^>]*>/g, "");
+      expect(Array.from(text).length).toBeLessThanOrEqual(40);
+      expect(text).toContain("🛠️ Exec ");
+      expect(text).toContain("…");
+      if (status === "running") {
+        expect(text).toMatch(/ running$/);
+      }
+    }
+  });
+
+  it.each([false, true])("budgets oversized prepared labels (rich=%s)", (richMessages) => {
+    const line = buildChannelProgressDraftLineForEntry(undefined, {
+      event: "item",
+      name: "read",
+      title: "Read /workspace/a-very-long-directory-name/another-directory/file.txt",
+      status: "running",
+    })!;
+    const preview = renderTelegramProgressDraftPreview(
+      { lines: [line] },
+      { richMessages, toolProgress: true, maxLines: 8, maxLineChars: 40 },
+    );
+    expect(Array.from(preview.text.replace(/<[^>]*>/g, "")).length).toBeLessThanOrEqual(40);
+  });
+
+  it.each([false, true])("preserves already fitting Read rows (rich=%s)", (richMessages) => {
+    const line = buildChannelProgressDraftLineForEntry(
+      undefined,
+      {
+        event: "item",
+        name: "read",
+        summary: "from…p/deep/file.txt",
+        status: "failed",
+      },
+      { toolIcons: true, detailMode: "raw" },
+    )!;
+    const preview = renderTelegramProgressDraftPreview(
+      { lines: [line] },
+      { richMessages, toolProgress: true, maxLines: 8, maxLineChars: 40 },
+    );
+    expect(preview.text).toBe(
+      richMessages
+        ? "📖 Read from…p/deep/file.txt failed"
+        : "<b>📖 Read</b> from…p/deep/file.txt <i>failed</i>",
+    );
+  });
 });

@@ -9,8 +9,8 @@ import {
 import { Agent as HttpsAgent } from "node:https";
 import net, { type Socket } from "node:net";
 import path from "node:path";
-import type { Duplex, Readable, Writable } from "node:stream";
-import { createServer as createTlsServer, rootCertificates } from "node:tls";
+import { Readable, type Duplex, type Writable } from "node:stream";
+import { createSecureContext, createServer as createTlsServer, rootCertificates } from "node:tls";
 import { URL } from "node:url";
 import { normalizeExactAllowedHost as normalizeHostname } from "../exact-hostname.js";
 import {
@@ -41,7 +41,7 @@ import {
 const PROXY_AUTH_USERNAME = "openclaw";
 const PROXY_AUTH_REALM = "OpenClaw secret egress";
 
-type SecretEgressProxyAuditEvent = {
+export type SecretEgressProxyAuditEvent = {
   kind: "forwarded" | "refused";
   host: string;
   substituted: boolean;
@@ -54,26 +54,31 @@ export type SecretEgressSentinelBinding = Readonly<{
   allowedHosts: readonly string[];
 }>;
 
+export type SecretEgressProcessGrant = {
+  env: Record<string, string>;
+  revoke: () => void;
+};
+
 export type SecretEgressProxyHandle = {
   caCertPath: string;
   proxyOrigin: string;
   getCertificateStatus: () => SecretEgressCertificateStatus;
-  registerRun: (
-    run: Readonly<{ instanceId: string; runId: string }>,
+  registerProcess: (
     bindings?: readonly SecretEgressSentinelBinding[],
-  ) => Record<string, string>;
-  revokeRun: (run: Readonly<{ instanceId: string; runId: string }>) => void;
+    isActive?: () => boolean,
+  ) => SecretEgressProcessGrant;
   stop: () => Promise<void>;
 };
 
 type ConnectTarget = { hostname: string; port: number };
-type RegisteredRun = {
-  key: string;
+type RegisteredProcess = {
   sentinelBindings: Map<string, { allowedHosts: Set<string>; name: string }>;
   token: Buffer;
   isActive: () => boolean;
+  resolveSentinel: (sentinel: string) => string | undefined;
   resources: Set<Readable | Writable>;
   tlsServers: Map<string, SecretEgressTlsContext>;
+  upstreamTlsAgent: HttpsAgent;
 };
 
 function parseConnectTarget(rawTarget: string | undefined): ConnectTarget {
@@ -98,19 +103,7 @@ function parseConnectTarget(rawTarget: string | undefined): ConnectTarget {
   return { hostname: normalizeHostname(target.hostname), port };
 }
 
-function runKey(run: Readonly<{ instanceId: string; runId: string }>): string {
-  return `${run.runId}\0${run.instanceId}`;
-}
-
-function parseProxyToken(token: string): Buffer | undefined {
-  if (!/^[A-Za-z0-9_-]{43}$/u.test(token)) {
-    return undefined;
-  }
-  const bytes = Buffer.from(token, "base64url");
-  return bytes.length === 32 && bytes.toString("base64url") === token ? bytes : undefined;
-}
-
-function parseBasicProxyPassword(header: string | string[] | undefined): string | undefined {
+function parseBasicProxyToken(header: string | string[] | undefined): Buffer | undefined {
   if (typeof header !== "string") {
     return undefined;
   }
@@ -128,7 +121,12 @@ function parseBasicProxyPassword(header: string | string[] | undefined): string 
   if (colon === -1 || decoded.slice(0, colon) !== PROXY_AUTH_USERNAME) {
     return undefined;
   }
-  return decoded.slice(colon + 1);
+  const token = decoded.slice(colon + 1);
+  if (!/^[A-Za-z0-9_-]{43}$/u.test(token)) {
+    return undefined;
+  }
+  const bytes = Buffer.from(token, "base64url");
+  return bytes.length === 32 && bytes.toString("base64url") === token ? bytes : undefined;
 }
 
 function sendProxyAuthRequired(socket: Duplex): void {
@@ -140,7 +138,7 @@ function sendProxyAuthRequired(socket: Duplex): void {
 function resolveRegisteredSentinel(params: {
   sentinel: string;
   host: string;
-  registered: RegisteredRun;
+  registered: RegisteredProcess;
 }): string | undefined {
   if (!params.registered.isActive()) {
     return undefined;
@@ -155,80 +153,47 @@ function resolveRegisteredSentinel(params: {
       secretName: binding.name,
     });
   }
-  return resolveSecretSentinel(params.sentinel);
+  return params.registered.resolveSentinel(params.sentinel);
 }
 
-function swapRequestText(params: {
-  value: string;
-  urlMode: boolean;
-  host: string;
-  registered: RegisteredRun;
-}): { value: string; substituted: boolean } {
-  if (!containsSecretSentinel(params.value)) {
-    return { value: params.value, substituted: false };
-  }
+function substituteRequest(params: {
+  target: URL;
+  headers: IncomingHttpHeaders;
+  resolveSentinel: (sentinel: string) => string | undefined;
+}): { target: URL; headers: IncomingHttpHeaders; substituted: boolean } {
   let substituted = false;
-  const swapped = params.value.replace(
-    new RegExp(SECRET_SENTINEL_PATTERN.source, "g"),
-    (sentinel) => {
-      const resolved = resolveRegisteredSentinel({
-        sentinel,
-        host: params.host,
-        registered: params.registered,
-      });
+  const swap = (value: string, urlMode = false) => {
+    if (!containsSecretSentinel(value)) {
+      return value;
+    }
+    const swapped = value.replace(new RegExp(SECRET_SENTINEL_PATTERN.source, "g"), (sentinel) => {
+      const resolved = params.resolveSentinel(sentinel);
       if (resolved === undefined) {
         return sentinel;
       }
       substituted = true;
-      return params.urlMode ? encodeURIComponent(resolved) : resolved;
-    },
-  );
-  if (containsSecretSentinel(swapped)) {
-    throw new SecretEgressSubstitutionError("unresolved-sentinel");
-  }
-  return { value: swapped, substituted };
-}
-
-function swapRequestHeaders(params: {
-  headers: IncomingHttpHeaders;
-  host: string;
-  registered: RegisteredRun;
-}): {
-  headers: IncomingHttpHeaders;
-  substituted: boolean;
-} {
+      return urlMode ? encodeURIComponent(resolved) : resolved;
+    });
+    if (containsSecretSentinel(swapped)) {
+      throw new SecretEgressSubstitutionError("unresolved-sentinel");
+    }
+    return swapped;
+  };
+  const target = new URL(swap(params.target.toString(), true));
   const output: IncomingHttpHeaders = {};
-  let substituted = false;
   for (const [name, rawValue] of Object.entries(params.headers)) {
     const lowerName = name.toLowerCase();
     if (lowerName === "proxy-authorization" || lowerName === "proxy-connection") {
       continue;
     }
     if (Array.isArray(rawValue)) {
-      output[name] = rawValue.map((value) => {
-        const swapped = swapRequestText({
-          value,
-          urlMode: false,
-          host: params.host,
-          registered: params.registered,
-        });
-        substituted ||= swapped.substituted;
-        return swapped.value;
-      });
-      continue;
-    }
-    if (rawValue !== undefined) {
-      const swapped = swapRequestText({
-        value: rawValue,
-        urlMode: false,
-        host: params.host,
-        registered: params.registered,
-      });
-      substituted ||= swapped.substituted;
-      output[name] = swapped.value;
+      output[name] = rawValue.map((value) => swap(value));
+    } else if (rawValue !== undefined) {
+      output[name] = swap(rawValue);
     }
   }
-  return { headers: output, substituted };
+  output.host = target.host;
+  return { target, headers: output, substituted };
 }
 
 /** Starts one authenticated, loopback-only substitution proxy. */
@@ -237,12 +202,15 @@ export async function startSecretEgressProxyServer(params: {
   allowedHosts?: readonly string[];
   bypassHosts?: readonly string[];
   onAudit: (event: SecretEgressProxyAuditEvent) => void;
+  resolveSentinel?: (sentinel: string) => string | undefined;
 }): Promise<SecretEgressProxyHandle> {
   const certificates = await createSecretEgressCertificates(params.caDir);
   const { caPem } = certificates;
   const trustBundlePath = path.join(params.caDir, "trust-bundle.pem");
   fs.writeFileSync(trustBundlePath, `${rootCertificates.join("\n")}\n${caPem}`, { mode: 0o644 });
-  const upstreamTlsAgent = new HttpsAgent({
+  // The CA set is immutable for this proxy lifetime. A new proxy owns new trust;
+  // leaf renewal does not change it. Share only parsed CAs across process grants.
+  const upstreamSecureContext = createSecureContext({
     ca: [...rootCertificates, caPem],
   });
   const bypassHosts = new Set((params.bypassHosts ?? []).map(normalizeHostname));
@@ -250,19 +218,31 @@ export async function startSecretEgressProxyServer(params: {
     params.allowedHosts === undefined
       ? undefined
       : new Set(params.allowedHosts.map(normalizeHostname));
-  const registrations = new Map<string, RegisteredRun>();
+  const registrations = new Set<RegisteredProcess>();
   const acquireBody = createSecretEgressBodyBudget();
   const sockets = new Set<Socket>();
   let stopped = false;
   let stopPromise: Promise<void> | undefined;
 
   const ownResource = <T extends Readable | Writable>(
-    registered: RegisteredRun,
+    registered: RegisteredProcess,
     resource: T,
   ): T => {
     if (!registered.resources.has(resource)) {
       registered.resources.add(resource);
       resource.once("close", () => registered.resources.delete(resource));
+      const wasFlowing = resource instanceof Readable && resource.readableFlowing === true;
+      // A shared revocation can precede its cleanup message. Fence every stream
+      // before its pipe listeners hand another chunk to HTTP, TLS, or a tunnel.
+      resource.prependListener("data", () => {
+        if (!registered.isActive()) {
+          revokeRegistration(registered);
+        }
+      });
+      // Installing a guard must not drain queued WebSocket frames before pipe().
+      if (resource instanceof Readable && !wasFlowing) {
+        resource.pause();
+      }
       // Revocation aborts HTTP/TLS streams as well as raw sockets. Their expected
       // reset errors must stay local instead of becoming uncaught Gateway errors.
       resource.on("error", () => resource.destroy());
@@ -272,9 +252,10 @@ export async function startSecretEgressProxyServer(params: {
     }
     return resource;
   };
-  const revokeRegistration = (registered: RegisteredRun) => {
-    registrations.delete(registered.key);
+  const revokeRegistration = (registered: RegisteredProcess) => {
+    registrations.delete(registered);
     registered.sentinelBindings.clear();
+    registered.upstreamTlsAgent.destroy();
     for (const resource of registered.resources) {
       resource.destroy();
     }
@@ -286,7 +267,12 @@ export async function startSecretEgressProxyServer(params: {
   };
 
   const audit = (event: SecretEgressProxyAuditEvent) => params.onAudit(event);
-  const hostAllowed = (host: string, registered: RegisteredRun): boolean => {
+  const auditUnsubstitutedRequest = (
+    host: string,
+    reason: NonNullable<SecretEgressProxyAuditEvent["reason"]>,
+    kind: SecretEgressProxyAuditEvent["kind"] = "refused",
+  ) => audit({ kind, host, substituted: false, reason });
+  const hostAllowed = (host: string, registered: RegisteredProcess): boolean => {
     if (allowedHosts === undefined || allowedHosts.has(host) || bypassHosts.has(host)) {
       return true;
     }
@@ -301,21 +287,17 @@ export async function startSecretEgressProxyServer(params: {
     `Host "${host}" is not in the secret egress proxy traffic allowlist. Add it to secrets.egressProxy.allowedHosts or bind a store secret to it with: openclaw secrets store set <NAME> --allow-host ${host}, then restart the Gateway.\n`;
   const authorize = (
     headers: IncomingHttpHeaders,
-  ): RegisteredRun | Exclude<SecretEgressRefusalReason, "destination-not-allowed"> => {
+  ): RegisteredProcess | Exclude<SecretEgressRefusalReason, "destination-not-allowed"> => {
     const rawHeader = headers["proxy-authorization"];
     if (rawHeader === undefined) {
       return "missing-proxy-auth";
     }
-    const password = parseBasicProxyPassword(rawHeader);
-    if (!password) {
-      return "invalid-proxy-auth";
-    }
-    const candidate = parseProxyToken(password);
+    const candidate = parseBasicProxyToken(rawHeader);
     if (!candidate) {
       return "invalid-proxy-auth";
     }
     for (const registered of registrations.values()) {
-      if (timingSafeEqual(candidate, registered.token)) {
+      if (registered.isActive() && timingSafeEqual(candidate, registered.token)) {
         return registered;
       }
     }
@@ -333,7 +315,7 @@ export async function startSecretEgressProxyServer(params: {
     } catch {
       // URL accepts hostnames our exact-host policy rejects. Both checks must
       // stay inside refusal handling for direct requests and decrypted tunnels.
-      audit({ kind: "refused", host: "unknown", substituted: false, reason: "upstream-error" });
+      auditUnsubstitutedRequest("unknown", "upstream-error");
       sendHttpRefusal(response, 400);
       request.resume();
       return undefined;
@@ -345,8 +327,9 @@ export async function startSecretEgressProxyServer(params: {
     response: ServerResponse;
     target: URL;
     host: string;
-    registered: RegisteredRun;
+    registered: RegisteredProcess;
     upgrade?: UpgradeRequest;
+    allowLoopbackHttp?: boolean;
   }) => {
     ownResource(forward.registered, forward.request);
     ownResource(forward.registered, forward.response);
@@ -365,24 +348,33 @@ export async function startSecretEgressProxyServer(params: {
       return;
     }
     const { host } = forward;
-    if (forward.target.protocol !== "https:") {
-      audit({
-        kind: "refused",
-        host,
-        substituted: false,
-        reason: "non-https-request",
-      });
+    // Decide from the literal target, never DNS: remote names must not gain
+    // cleartext forwarding just because an answer happens to be loopback.
+    const loopbackHttp =
+      forward.allowLoopbackHttp &&
+      forward.target.protocol === "http:" &&
+      (host === "localhost" || host === "::1" || (net.isIPv4(host) && host.startsWith("127.")));
+    if (forward.target.protocol !== "https:" && !loopbackHttp) {
+      auditUnsubstitutedRequest(host, "non-https-request");
       sendHttpRefusal(forward.response);
       forward.request.resume();
       return;
     }
     if (!hostAllowed(host, forward.registered)) {
-      audit({ kind: "refused", host, substituted: false, reason: "host-not-allowed" });
+      auditUnsubstitutedRequest(host, "host-not-allowed");
       sendHttpRefusal(forward.response, 403, hostNotAllowedBody(host));
       forward.request.resume();
       return;
     }
 
+    const resolveSentinel = (sentinel: string) => {
+      if (loopbackHttp) {
+        const error = new SecretEgressSubstitutionError("non-https-request");
+        error.message = REFUSAL_BODY.trimEnd();
+        throw error;
+      }
+      return resolveRegisteredSentinel({ sentinel, host, registered: forward.registered });
+    };
     forwardSecretEgressRequest({
       request: forward.request,
       response: forward.response,
@@ -395,38 +387,24 @@ export async function startSecretEgressProxyServer(params: {
           error.message = hostNotAllowedBody(host).trimEnd();
           throw error;
         }
-        const swappedUrl = swapRequestText({
-          value: forward.target.toString(),
-          urlMode: true,
-          host,
-          registered: forward.registered,
-        });
-        const target = new URL(swappedUrl.value);
-        const swappedHeaders = swapRequestHeaders({
+        return substituteRequest({
+          target: forward.target,
           headers: forward.request.headers,
-          host,
-          registered: forward.registered,
+          resolveSentinel,
         });
-        swappedHeaders.headers.host = target.host;
-        return {
-          target,
-          headers: swappedHeaders.headers,
-          substituted: swappedUrl.substituted || swappedHeaders.substituted,
-        };
       },
-      upstreamTlsAgent,
+      upstreamTlsAgent: forward.registered.upstreamTlsAgent,
       isActive: forward.registered.isActive,
       ownResource: (resource) => ownResource(forward.registered, resource),
       releaseResponse: () => {
         forward.registered.resources.delete(forward.response);
       },
-      resolveSentinel: (sentinel) =>
-        resolveRegisteredSentinel({ sentinel, host, registered: forward.registered }),
+      resolveSentinel,
       audit,
     });
   };
 
-  const tlsServerFor = (target: ConnectTarget, registered: RegisteredRun) => {
+  const tlsServerFor = (target: ConnectTarget, registered: RegisteredProcess) => {
     const key = `${target.hostname}:${target.port}`;
     let context = registered.tlsServers.get(key);
     if (!context) {
@@ -479,7 +457,7 @@ export async function startSecretEgressProxyServer(params: {
     const { host } = parsed;
     const authorization = authorize(request.headers);
     if (typeof authorization === "string") {
-      audit({ kind: "refused", host, substituted: false, reason: authorization });
+      auditUnsubstitutedRequest(host, authorization);
       response.writeHead(407, {
         "Proxy-Authenticate": `Basic realm="${PROXY_AUTH_REALM}"`,
         Connection: "close",
@@ -490,7 +468,14 @@ export async function startSecretEgressProxyServer(params: {
       request.resume();
       return;
     }
-    forwardRequest({ request, response, ...parsed, registered: authorization, upgrade });
+    forwardRequest({
+      request,
+      response,
+      ...parsed,
+      registered: authorization,
+      upgrade,
+      allowLoopbackHttp: !upgrade,
+    });
   };
   const proxy = createHttpServer(handleProxyRequest).on("upgrade", (request, _socket, head) =>
     handleUpgradeRequest(handleProxyRequest, request, head),
@@ -512,18 +497,13 @@ export async function startSecretEgressProxyServer(params: {
       try {
         target = parseConnectTarget(request.url);
       } catch {
-        audit({ kind: "refused", host: "unknown", substituted: false, reason: "upstream-error" });
+        auditUnsubstitutedRequest("unknown", "upstream-error");
         clientSocket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
         return;
       }
       const authorization = authorize(request.headers);
       if (typeof authorization === "string") {
-        audit({
-          kind: "refused",
-          host: target.hostname,
-          substituted: false,
-          reason: authorization,
-        });
+        auditUnsubstitutedRequest(target.hostname, authorization);
         sendProxyAuthRequired(clientSocket);
         return;
       }
@@ -541,12 +521,7 @@ export async function startSecretEgressProxyServer(params: {
               upstream.write(head);
             }
             clientSocket.pipe(upstream).pipe(clientSocket);
-            audit({
-              kind: "forwarded",
-              host: target.hostname,
-              substituted: false,
-              reason: "bypass",
-            });
+            auditUnsubstitutedRequest(target.hostname, "bypass", "forwarded");
           }),
         );
         clientSocket.once("close", () => upstream.destroy());
@@ -556,12 +531,7 @@ export async function startSecretEgressProxyServer(params: {
       }
       if (!hostAllowed(target.hostname, authorization)) {
         const body = hostNotAllowedBody(target.hostname);
-        audit({
-          kind: "refused",
-          host: target.hostname,
-          substituted: false,
-          reason: "host-not-allowed",
-        });
+        auditUnsubstitutedRequest(target.hostname, "host-not-allowed");
         clientSocket.end(
           `HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(body)}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${body}`,
         );
@@ -582,12 +552,7 @@ export async function startSecretEgressProxyServer(params: {
         if (!authorization.isActive() || clientSocket.destroyed) {
           return;
         }
-        audit({
-          kind: "refused",
-          host: target.hostname,
-          substituted: false,
-          reason: "certificate-error",
-        });
+        auditUnsubstitutedRequest(target.hostname, "certificate-error");
         const body = `${error instanceof SecretEgressCertificateError ? error.message : "Secret egress TLS certificate unavailable. Check Gateway logs, then retry."}\n`;
         clientSocket.end(
           `HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`,
@@ -612,54 +577,56 @@ export async function startSecretEgressProxyServer(params: {
     caCertPath: certificates.caCertPath,
     proxyOrigin,
     getCertificateStatus: certificates.getStatus,
-    registerRun: (run, bindings = []) => {
+    registerProcess: (bindings = [], isActive = () => true) => {
       if (stopped) {
         throw new Error("Secret egress proxy has stopped");
       }
-      const key = runKey(run);
-      let registered = registrations.get(key);
-      if (!registered) {
-        registered = {
-          key,
-          sentinelBindings: new Map(),
-          token: randomBytes(32),
-          isActive: () => !stopped && registrations.get(key) === registered,
-          resources: new Set(),
-          tlsServers: new Map(),
-        };
-        registrations.set(key, registered);
-      }
-      registered.sentinelBindings = new Map(
-        bindings.map((binding) => [
-          binding.sentinel,
-          {
-            allowedHosts: new Set(binding.allowedHosts.map(normalizeHostname)),
-            name: binding.name,
-          },
-        ]),
-      );
+      const registered: RegisteredProcess = {
+        sentinelBindings: new Map(
+          bindings.map((binding) => [
+            binding.sentinel,
+            {
+              allowedHosts: new Set(binding.allowedHosts.map(normalizeHostname)),
+              name: binding.name,
+            },
+          ]),
+        ),
+        token: randomBytes(32),
+        isActive: () => !stopped && registrations.has(registered) && isActive(),
+        resolveSentinel: params.resolveSentinel ?? resolveSecretSentinel,
+        resources: new Set(),
+        tlsServers: new Map(),
+        // Node pools by origin. Grant ownership keeps connections and TLS sessions
+        // isolated and lets revocation destroy idle sockets as well as live work.
+        upstreamTlsAgent: new HttpsAgent({
+          secureContext: upstreamSecureContext,
+          keepAlive: true,
+          maxSockets: 64,
+          maxTotalSockets: 64,
+          maxFreeSockets: 4,
+          timeout: 30_000,
+        }),
+      };
+      registrations.add(registered);
       // Basic is deliberately used because curl and Go net/http derive it from
       // proxy-URL credentials. Base64 is acceptable here: loopback is the only
-      // listener, the token is run-scoped, and a process that can read it from
+      // listener, the token is process-scoped, and a process that can read it from
       // this env can already read the sentinels that authorize substitution.
       const token = registered.token.toString("base64url");
       const proxyUrl = `http://${PROXY_AUTH_USERNAME}:${token}@127.0.0.1:${address.port}`;
       return {
-        HTTPS_PROXY: proxyUrl,
-        HTTP_PROXY: proxyUrl,
-        NODE_USE_ENV_PROXY: "1",
-        NODE_EXTRA_CA_CERTS: trustBundlePath,
-        SSL_CERT_FILE: trustBundlePath,
-        CURL_CA_BUNDLE: trustBundlePath,
-        REQUESTS_CA_BUNDLE: trustBundlePath,
-        GIT_SSL_CAINFO: trustBundlePath,
+        env: {
+          HTTPS_PROXY: proxyUrl,
+          HTTP_PROXY: proxyUrl,
+          NODE_USE_ENV_PROXY: "1",
+          NODE_EXTRA_CA_CERTS: trustBundlePath,
+          SSL_CERT_FILE: trustBundlePath,
+          CURL_CA_BUNDLE: trustBundlePath,
+          REQUESTS_CA_BUNDLE: trustBundlePath,
+          GIT_SSL_CAINFO: trustBundlePath,
+        },
+        revoke: () => revokeRegistration(registered),
       };
-    },
-    revokeRun: (run) => {
-      const registered = registrations.get(runKey(run));
-      if (registered) {
-        revokeRegistration(registered);
-      }
     },
     stop: () => {
       if (stopPromise) {
@@ -669,7 +636,6 @@ export async function startSecretEgressProxyServer(params: {
       for (const registered of registrations.values()) {
         revokeRegistration(registered);
       }
-      upstreamTlsAgent.destroy();
       for (const socket of sockets) {
         socket.destroy();
       }
@@ -680,7 +646,7 @@ export async function startSecretEgressProxyServer(params: {
         new Promise<void>((resolve) => {
           proxy.close(() => resolve());
         }),
-        certificates.waitForPreparations(),
+        certificates.close(),
       ]).then(() => {});
       return stopPromise;
     },

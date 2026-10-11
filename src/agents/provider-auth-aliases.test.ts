@@ -3,6 +3,7 @@
  * Verifies plugin metadata aliases, origin priority, trust, and cache behavior.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildPluginMetadataProviderFacts } from "../plugins/plugin-metadata-provider-facts.js";
 import { buildDeclaredProviderOwnerIndex } from "../plugins/provider-owner-index.js";
 
 const pluginRegistryMocks = vi.hoisted(() => {
@@ -14,17 +15,12 @@ const pluginRegistryMocks = vi.hoisted(() => {
     resolveInstalledManifestRegistryIndexFingerprint: vi.fn(() => "test-index"),
     loadPluginMetadataSnapshot: vi.fn((params: unknown) => {
       const registry = loadManifestRegistry(params) ?? { plugins: [], diagnostics: [] };
-      return {
-        index: {
-          plugins: registry.plugins.map((plugin: { id: string; origin?: string }) => ({
-            pluginId: plugin.id,
-            origin: plugin.origin ?? "global",
-            enabled: true,
-            enabledByDefault: true,
-          })),
-        },
-        plugins: registry.plugins,
-      };
+      return createPluginMetadataSnapshot({
+        plugins: registry.plugins.map(
+          (plugin: Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id">) =>
+            createPluginManifestRecord({ ...plugin, origin: plugin.origin ?? "global" }),
+        ),
+      });
     }),
   };
 });
@@ -135,7 +131,10 @@ function createPluginMetadataSnapshot(params: {
     byPluginId: new Map(params.plugins.map((plugin) => [plugin.id, plugin])),
     normalizePluginId: (pluginId) => pluginId,
     declaredProviderOwners: buildDeclaredProviderOwnerIndex(params.plugins),
-    owners: makeEmptyPluginMetadataOwners(),
+    owners: {
+      ...makeEmptyPluginMetadataOwners(),
+      ...buildPluginMetadataProviderFacts(params.plugins),
+    },
     metrics: {
       registrySnapshotMs: 0,
       manifestRegistryMs: 0,
@@ -228,9 +227,6 @@ describe("provider auth aliases", () => {
 
   it.each([
     ["https://openrouter.ai/api/v1", "openrouter"],
-    ["https://openrouter.ai/v1/", "openrouter"],
-    ["https://api.arcee.ai/api/v1", "arcee"],
-    ["https://proxy.example/api/v1", "arcee"],
     ["https://openrouter.ai.example/api/v1", "arcee"],
     ["https://openrouter.ai/api/v1?account=other", "arcee"],
     ["http://openrouter.ai/api/v1", "arcee"],
@@ -269,39 +265,6 @@ describe("provider auth aliases", () => {
       snapshot: { plugins: [] },
     });
     pluginRegistryMocks.loadPluginMetadataSnapshot.mockClear();
-  });
-
-  it("does not enumerate alias metadata again after snapshot preparation", async () => {
-    const enumerateAliases = vi.fn(Reflect.ownKeys);
-    const { snapshot } = await prepareAliasSnapshot([
-      createPluginManifestRecord({
-        id: "selected",
-        origin: "bundled",
-        providerAuthAliases: { selected: "selected-provider" },
-      }),
-      createPluginManifestRecord({
-        id: "unrelated",
-        origin: "bundled",
-        providerAuthAliases: new Proxy<Record<string, string>>(
-          { unrelated: "unrelated-provider" },
-          {
-            ownKeys: enumerateAliases,
-          },
-        ),
-      }),
-    ]);
-    enumerateAliases.mockClear();
-
-    for (let repeat = 0; repeat < 8; repeat += 1) {
-      expect(resolveProviderIdForAuth("selected", { metadataSnapshot: snapshot })).toBe(
-        "selected-provider",
-      );
-      expect(resolveProviderIdForAuth("unrelated", { metadataSnapshot: snapshot })).toBe(
-        "unrelated-provider",
-      );
-      expect(resolveProviderIdForAuth("missing", { metadataSnapshot: snapshot })).toBe("missing");
-    }
-    expect(enumerateAliases).not.toHaveBeenCalled();
   });
 
   it("preserves alias precedence, normalized collisions and eligible declaration order", async () => {
@@ -434,71 +397,6 @@ describe("provider auth aliases", () => {
     ).toBe("first-provider");
   });
 
-  it("keeps public partial metadata views fresh when the caller mutates them", () => {
-    const aliases = { fixture: "first-provider" };
-    const plugins = [
-      createPluginManifestRecord({
-        id: "mutable-view",
-        origin: "global",
-        providerAuthAliases: aliases,
-      }),
-    ];
-    const metadataSnapshot = { plugins };
-    expect(resolveProviderIdForAuth("fixture", { metadataSnapshot })).toBe("first-provider");
-    aliases.fixture = "second-provider";
-    expect(resolveProviderIdForAuth("fixture", { metadataSnapshot })).toBe("second-provider");
-    plugins.push(
-      createPluginManifestRecord({
-        id: "added-view",
-        origin: "bundled",
-        providerAuthAliases: { added: "added-provider" },
-      }),
-    );
-    expect(resolveProviderIdForAuth("added", { metadataSnapshot })).toBe("added-provider");
-  });
-
-  it("retains alias ownership through worker cloning, projection and metadata replacement", async () => {
-    const { metadata, snapshot } = await prepareAliasSnapshot([
-      createPluginManifestRecord({
-        id: "first",
-        origin: "bundled",
-        providerAuthAliases: { fixture: "first-provider" },
-      }),
-      createPluginManifestRecord({
-        id: "second",
-        origin: "bundled",
-        providerAuthAliases: { second: "second-provider" },
-      }),
-    ]);
-    const { normalizePluginId: _normalizePluginId, ...serialized } = snapshot;
-    const restored = metadata.restorePluginMetadataSnapshot(structuredClone(serialized));
-    expect(resolveProviderAuthAliasMap({ metadataSnapshot: restored })).toEqual({
-      fixture: "first-provider",
-      second: "second-provider",
-    });
-    const projected = metadata.projectPluginMetadataSnapshot(restored, ["second"]);
-    expect(resolveProviderIdForAuth("fixture", { metadataSnapshot: projected })).toBe("fixture");
-    expect(resolveProviderIdForAuth("second", { metadataSnapshot: projected })).toBe(
-      "second-provider",
-    );
-    const replacement = metadata.rebasePluginMetadataSnapshotManifestRegistry(restored, {
-      plugins: [
-        createPluginManifestRecord({
-          id: "first",
-          origin: "bundled",
-          providerAuthAliases: { fixture: "replacement-provider" },
-        }),
-      ],
-      diagnostics: [],
-    });
-    expect(resolveProviderIdForAuth("fixture", { metadataSnapshot: replacement })).toBe(
-      "replacement-provider",
-    );
-    expect(resolveProviderIdForAuth("fixture", { metadataSnapshot: restored })).toBe(
-      "first-provider",
-    );
-  });
-
   it("does not reuse implicit auth aliases across fresh operation owners", () => {
     const config = {};
     const env = { HOME: "/home/owner-test" };
@@ -529,156 +427,6 @@ describe("provider auth aliases", () => {
         expect(pluginRegistryMocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(2);
       },
     );
-  });
-
-  it("treats deprecated auth choice ids as provider auth aliases", () => {
-    const metadataSnapshot = createPluginMetadataSnapshot({
-      plugins: [
-        createPluginManifestRecord({
-          id: "openai",
-          origin: "bundled",
-          providerAuthChoices: [
-            {
-              provider: "openai",
-              method: "oauth",
-              choiceId: "openai",
-              deprecatedChoiceIds: ["codex-cli", "openai-chatgpt-import"],
-            },
-          ],
-        }),
-      ],
-    });
-
-    expect(resolveProviderIdForAuth("codex-cli", { metadataSnapshot })).toBe("openai");
-    expect(resolveProviderIdForAuth("openai-chatgpt-import", { metadataSnapshot })).toBe("openai");
-    expect(resolveProviderIdForAuth("openai", { metadataSnapshot })).toBe("openai");
-  });
-
-  it("does not reuse aliases across env-resolved plugin roots", () => {
-    const config = {};
-    const env = {
-      HOME: "/home/one",
-      OPENCLAW_HOME: undefined,
-    } as NodeJS.ProcessEnv;
-    setCurrentPluginMetadataSnapshot(
-      createPluginMetadataSnapshot({
-        config,
-        plugins: [
-          createPluginManifestRecord({
-            id: "one",
-            origin: "global",
-            providerAuthAliases: { fixture: "provider-one" },
-          }),
-        ],
-      }),
-      { config, env },
-    );
-
-    expect(resolveProviderIdForAuth("fixture", { config, env })).toBe("provider-one");
-    env.HOME = "/home/two";
-    setCurrentPluginMetadataSnapshot(
-      createPluginMetadataSnapshot({
-        config,
-        plugins: [
-          createPluginManifestRecord({
-            id: "two",
-            origin: "global",
-            providerAuthAliases: { fixture: "provider-two" },
-          }),
-        ],
-      }),
-      { config, env },
-    );
-
-    expect(resolveProviderIdForAuth("fixture", { config, env })).toBe("provider-two");
-  });
-
-  it("refreshes cached aliases when plugin metadata changes without changing config or env", () => {
-    const config = {};
-    const env = { HOME: "/home/test" } as NodeJS.ProcessEnv;
-
-    const setProviderAuthAlias = (target: string) => {
-      setCurrentPluginMetadataSnapshot(
-        createPluginMetadataSnapshot({
-          config,
-          plugins: [
-            createPluginManifestRecord({
-              id: "alias-owner",
-              origin: "global",
-              providerAuthAliases: { fixture: target },
-            }),
-          ],
-        }),
-        { config, env },
-      );
-    };
-
-    setProviderAuthAlias("provider-one");
-    expect(resolveProviderIdForAuth("fixture", { config, env })).toBe("provider-one");
-
-    clearPluginMetadataLifecycleCaches();
-    setProviderAuthAlias("provider-two");
-
-    expect(resolveProviderIdForAuth("fixture", { config, env })).toBe("provider-two");
-    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
-  });
-
-  it("uses caller-provided metadata snapshots without loading plugin metadata", () => {
-    const env = { HOME: "/home/test" } as NodeJS.ProcessEnv;
-    const metadataSnapshot = {
-      plugins: [],
-    } as never;
-
-    expect(
-      resolveProviderIdForAuth("fixture", {
-        config: {
-          models: {
-            providers: {
-              fixture: {
-                baseUrl: "http://127.0.0.1:1234/v1",
-                api: "openai-responses",
-                models: [],
-              },
-            },
-          },
-        },
-        env,
-        metadataSnapshot,
-      }),
-    ).toBe("fixture");
-    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
-  });
-
-  it("preserves metadata auth aliases even when the alias is configured as a provider", () => {
-    const env = { HOME: "/home/test" } as NodeJS.ProcessEnv;
-    const metadataSnapshot = {
-      plugins: [
-        {
-          id: "alias-owner",
-          origin: "global",
-          providerAuthAliases: { fixture: "provider-two" },
-        },
-      ],
-    } as never;
-
-    expect(
-      resolveProviderIdForAuth("fixture", {
-        config: {
-          models: {
-            providers: {
-              fixture: {
-                baseUrl: "http://127.0.0.1:1234/v1",
-                api: "openai-responses",
-                models: [],
-              },
-            },
-          },
-        },
-        env,
-        metadataSnapshot,
-      }),
-    ).toBe("provider-two");
-    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
   it("shares manifest env vars across aliased providers", () => {

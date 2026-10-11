@@ -9,6 +9,9 @@ title: "Team setup"
 
 This guide sets up one OpenClaw gateway that a whole team uses: a bot in the workspace chat you already have, shared sessions everyone can open and steer in the Control UI, and roles that bound what each person can do. It is the same product as the [personal assistant setup](/start/openclaw) - team operation is configuration, not a separate edition.
 
+For an always-on Linux deployment with Cloudflare Access, GitHub identity sync,
+role bootstrap, and operations, follow [Deploy a team server](/gateway/team-server).
+
 ## Before you begin
 
 - A host for the Gateway that stays on: a small VPS, an office Mac, or any [supported install target](/install).
@@ -21,7 +24,7 @@ This guide sets up one OpenClaw gateway that a whole team uses: a bot in the wor
 
 A gateway is one trust domain. Everyone who can message a tool-enabled agent shares that agent's delegated tool authority, and everyone with operator access shares one control plane. That is the right model for a team whose members already trust each other - session ownership, presence, and [roles](/gateway/operator-scopes#named-operator-roles) are collaboration guardrails inside the boundary, not isolation between adversaries.
 
-If you need to serve mutually untrusted people or organizations, run one gateway per tenant instead: [Multi-tenant hosting](/gateway/multi-tenant-hosting).
+If you need to serve mutually untrusted people or organizations, run one gateway per tenant instead: [Security trust model](/gateway/security/trust-model).
 
 ## Step 1: Give the team access to the Gateway
 
@@ -146,7 +149,7 @@ container network when that access needs tighter controls. See
 ## When to split things up
 
 - **Separate workspaces or personas** (projects that must not share memory or files): use multiple agents on one gateway - see [Multi-agent routing](/concepts/multi-agent).
-- **Mutually untrusted users, customers, or organizations:** separate gateways, ideally separate OS users or hosts - see [Multi-tenant hosting](/gateway/multi-tenant-hosting) and [Security](/gateway/security).
+- **Mutually untrusted users, customers, or organizations:** separate gateways, ideally separate OS users or hosts - see [Security trust model](/gateway/security/trust-model) and [Security](/gateway/security).
 
 ## Related
 

@@ -1,49 +1,85 @@
-/**
- * Requester completion calls, direct fallback, and source-delivery evidence.
- */
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizePendingFinalDeliveryText } from "../../../auto-reply/reply/pending-final-delivery-state.js";
+import {
+  getRestartRecoveryTerminalDeliveryEvidence,
+  hasRestartRecoverySourceClaim,
+  hasRestartRecoveryTerminalRun,
+} from "../../../config/sessions/restart-recovery-state.js";
+import type { RestartRecoveryTerminalDeliveryEvidence } from "../../../config/sessions/restart-recovery-types.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { waitForGatewayDispatch } from "../../../gateway/server-in-process-dispatch.js";
+import type { GatewayRecoveryTypingParams } from "../../../gateway/server-instance-runtime.types.js";
+import { getGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime-context.js";
+import { normalizeOutboundReplyPayloadCore } from "../../../infra/outbound/reply-payload-normalize.js";
 import { sourceDeliveryTargetsMatch } from "../../../infra/outbound/source-delivery-plan.js";
+import { splitMediaFromOutput } from "../../../media/parse.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../../sessions/input-provenance.js";
 import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
 import { isNonTerminalAgentRunStatus } from "../../../shared/agent-run-status.js";
+import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
+import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
 import { sanitizeAgentRunTerminalReplyText } from "../../agent-run-terminal-reply.js";
 import {
+  getGatewayAgentResult,
   hasCommittedSourceReplyDeliveryEvidence,
   hasMessagingToolDeliveryEvidence,
   hasUnaccountedMessagingToolAggregateEvidence,
   resolveExplicitFinalSourceReplyDeliveryEvidence,
 } from "../../embedded-agent-runner/delivery-evidence.js";
+import { hasVisibleAgentPayload } from "../../embedded-agent-runner/message-visibility.js";
 import { hasVisibleCompletionResult } from "../../internal-event-contract.js";
-import type { AgentInternalEvent } from "../../internal-events.js";
+import { collectAgentInternalEventMedia, type AgentInternalEvent } from "../../internal-events.js";
+import { createAgentRunDirectAbortError } from "../../run-termination.js";
 import {
+  hasAnnounceSendEvidence,
   SourceOwnerChangedError,
-  sourceOwnerChangedResult,
   summarizeDeliveryError,
 } from "./subagent-announce-delivery-retry.js";
 import {
-  dispatchSubagentAnnounceAgent,
   sendSubagentAnnounceMessage,
   tryResolveSubagentRequesterAgentId,
 } from "./subagent-announce-delivery.runtime.js";
-import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
+import {
+  sourceOwnerChangedResult,
+  type SubagentAnnounceDeliveryResult,
+} from "./subagent-announce-dispatch.js";
 import type { SubagentCompletionToolHandoffRegistration } from "./subagent-announce-handoff.js";
 import { inferDeliveryTargetChatType } from "./subagent-announce-origin.js";
+import { dispatchGatewayMethodInProcess } from "./subagent-announce.runtime.js";
 
 export async function runAnnounceAgentCall(params: {
   agentParams: Record<string, unknown>;
   privateCompletion?: true;
+  typing?: Omit<GatewayRecoveryTypingParams, "isCurrent">;
+  settleWakeSourceSessionKeys?: readonly string[];
   delegatedToolPolicyHandoff?: SubagentCompletionToolHandoffRegistration;
   expectFinal?: boolean;
+  onAccepted?: (payload: unknown) => void;
+  onExecutionStarted?: () => void;
   signal?: AbortSignal;
   timeoutMs?: number;
   isExecutionAllowed: () => boolean;
+  isSourceSessionAdmissionAllowed?: () => boolean;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
 }): Promise<unknown> {
+  const typingRuntime = params.typing
+    ? params.resolveGatewayContext
+      ? params.resolveGatewayContext()?.recoveryRuntime
+      : getGatewayRecoveryRuntime()
+    : undefined;
+  let stopTyping: (() => void) | undefined;
   const deadline = new AbortController();
-  const signal = params.signal
-    ? AbortSignal.any([params.signal, deadline.signal])
-    : deadline.signal;
+  const sourceLifecycle = new AbortController();
+  const isSourceSessionAdmissionAllowed = params.isSourceSessionAdmissionAllowed;
+  const lifecycleSignal = params.signal
+    ? AbortSignal.any([params.signal, sourceLifecycle.signal])
+    : sourceLifecycle.signal;
+  const signal = AbortSignal.any([lifecycleSignal, deadline.signal]);
+  // A private input stays owned by Gateway admission when an observer times out.
+  // Caller or source lifecycle cancellation still stops that underlying turn.
+  const executionSignal = params.privateCompletion ? lifecycleSignal : signal;
   const timer =
     params.timeoutMs === undefined
       ? undefined
@@ -53,31 +89,77 @@ export async function runAnnounceAgentCall(params: {
         );
   timer?.unref?.();
   try {
-    return await dispatchSubagentAnnounceAgent(params.agentParams, {
+    signal.throwIfAborted();
+    const dispatch = dispatchGatewayMethodInProcess("agent", params.agentParams, {
       cancelOnDeadline: true,
       privateCompletion: params.privateCompletion,
+      settleWakeReplay: params.settleWakeSourceSessionKeys
+        ? {
+            sourceSessionKeys: params.settleWakeSourceSessionKeys,
+            assertCurrent: () => {
+              if (!params.isExecutionAllowed()) {
+                throw new SourceOwnerChangedError();
+              }
+            },
+          }
+        : undefined,
       expectFinal: params.expectFinal,
       forceSyntheticClient: shouldPreserveUserFacingSessionStateForInputProvenance(
         params.agentParams.inputProvenance,
       ),
       operatorRoleActor: { kind: "system" },
       delegatedToolPolicyHandoff: params.delegatedToolPolicyHandoff,
-      signal,
+      signal: executionSignal,
+      ...(isSourceSessionAdmissionAllowed
+        ? {
+            sessionMutationCommitGuard: () => {
+              if (!isSourceSessionAdmissionAllowed()) {
+                const error = new SourceOwnerChangedError();
+                sourceLifecycle.abort(error);
+                throw error;
+              }
+            },
+          }
+        : {}),
       // Accepted queue waits belong to session admission; execution belongs to
       // the requester runtime budget, not the announcement handoff deadline.
-      onAccepted: () => clearTimeout(timer),
+      onAccepted: (payload) => {
+        clearTimeout(timer);
+        params.onAccepted?.(payload);
+      },
       onExecutionStarted: () => {
-        signal.throwIfAborted();
+        executionSignal.throwIfAborted();
         if (!params.isExecutionAllowed()) {
-          throw new SourceOwnerChangedError();
+          sourceLifecycle.abort(new SourceOwnerChangedError());
+          // Classify execution immediately, before Gateway observes cancellation.
+          throw createAgentRunDirectAbortError();
         }
         // Execution can be observed before acceptance on an already-running replay.
         clearTimeout(timer);
+        params.onExecutionStarted?.();
+        if (params.typing) {
+          stopTyping ??= typingRuntime?.startRecoveryTyping?.({
+            ...params.typing,
+            isCurrent: () =>
+              !executionSignal.aborted &&
+              params.isExecutionAllowed() &&
+              (params.resolveGatewayContext
+                ? params.resolveGatewayContext()?.recoveryRuntime === typingRuntime
+                : getGatewayRecoveryRuntime() === typingRuntime),
+          });
+        }
       },
       resolveGatewayContext: params.resolveGatewayContext,
     });
+    return params.privateCompletion
+      ? await waitForGatewayDispatch("agent", dispatch, undefined, signal)
+      : await dispatch;
+  } catch (error) {
+    sourceLifecycle.signal.throwIfAborted();
+    throw error;
   } finally {
     clearTimeout(timer);
+    stopTyping?.();
   }
 }
 
@@ -85,11 +167,102 @@ const FAILED_COMPLETION_NOTICE =
   "A delegated task failed before it could report a result. Please retry the task.";
 
 export function isGatewayAgentRunPending(response: unknown): boolean {
-  if (!response || typeof response !== "object") {
-    return false;
+  return isNonTerminalAgentRunStatus(asOptionalObjectRecord(response)?.status);
+}
+
+/** A recovery successor owns its admitted input until its exact final can be reconciled. */
+export function resolveRequesterRecoveryDelivery(
+  entry: SessionEntry | undefined,
+  runId: string,
+):
+  | { kind: "result"; result: RestartRecoveryTerminalDeliveryEvidence }
+  | { kind: "delivery"; delivery: SubagentAnnounceDeliveryResult }
+  | undefined {
+  const result = getRestartRecoveryTerminalDeliveryEvidence(entry, runId);
+  if (result) {
+    return { kind: "result", result };
   }
-  const status = (response as { status?: unknown }).status;
-  return isNonTerminalAgentRunStatus(status);
+  if (hasRestartRecoverySourceClaim(entry, runId)) {
+    return {
+      kind: "delivery",
+      delivery: {
+        delivered: false,
+        path: "direct",
+        reason: "requester_turn_pending",
+        disposition: "retryable",
+      },
+    };
+  }
+  if (hasRestartRecoveryTerminalRun(entry, runId)) {
+    return {
+      kind: "delivery",
+      delivery: {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "recovered requester completed without durable final delivery evidence",
+        disposition: "permanent_failure",
+      },
+    };
+  }
+  return undefined;
+}
+
+export function resolvePrivateCompletionDeliveryResult(
+  response: Record<string, unknown> | undefined,
+  origin?: DeliveryContext,
+): SubagentAnnounceDeliveryResult {
+  const outcome = buildAgentRunTerminalOutcomeFromWaitResult(response);
+  if (outcome?.reason === "cancelled" && outcome.stopReason !== "restart") {
+    return {
+      delivered: false,
+      path: "direct",
+      terminal: true,
+      reason: "delivery_suppressed",
+      disposition: "intentional_non_delivery",
+      error: "private requester continuation was cancelled",
+    };
+  }
+  // Successful internal consumption may be silent or start the next child.
+  // Queue acceptance alone is not consumption, and no external receipt is owed.
+  const delivery: SubagentAnnounceDeliveryResult =
+    response?.status === "ok" && response?.inputProcessingCompleted === true
+      ? { delivered: true, path: "direct" }
+      : {
+          delivered: false,
+          path: "direct",
+          reason: "completion_handoff_pending",
+          error: "private requester turn has not completed successfully",
+          disposition: "retryable",
+        };
+  const result = getGatewayAgentResult(response);
+  if (
+    delivery.delivered &&
+    origin?.channel &&
+    origin.to &&
+    result &&
+    result.meta?.yielded !== true &&
+    result.meta?.continuationPending !== true &&
+    hasMessagingToolDeliveryToSource(result, origin, { requireFinalReply: true })
+  ) {
+    delivery.requesterVisibleFinalDelivered = true;
+  }
+  return delivery;
+}
+
+export function buildRequesterCompletionDeliveryResult(
+  finalCommitted: boolean,
+  text: unknown,
+): SubagentAnnounceDeliveryResult {
+  const finalAssistantVisibleText =
+    finalCommitted && typeof text === "string" ? truncateUtf16Safe(text.trim(), 12_000) : "";
+  return {
+    delivered: true,
+    path: "direct",
+    // A canceled partial payload or accepted handoff is not a visible final receipt.
+    ...(finalCommitted ? { requesterVisibleFinalDelivered: true } : {}),
+    ...(finalAssistantVisibleText ? { finalAssistantVisibleText } : {}),
+  };
 }
 
 export function isDirectMessageDeliveryTarget(
@@ -106,31 +279,92 @@ export function isDirectMessageDeliveryTarget(
   return deriveSessionChatTypeFromKey(requesterSessionKey) === "direct";
 }
 
-function resolveTextCompletionDirectFallback(
-  events: readonly AgentInternalEvent[] | undefined,
-  contentKind: "completed_result" | "failed_notice",
-) {
-  if (contentKind === "failed_notice") {
-    return FAILED_COMPLETION_NOTICE;
+type DirectCompletionContent = { content: string; mediaUrls: string[]; audioAsVoice?: boolean };
+
+function collectDirectCompletionContent(params: {
+  agentResult?: { payloads?: unknown };
+  events: readonly AgentInternalEvent[] | undefined;
+  contentKind: "completed_result" | "failed_notice";
+}): DirectCompletionContent | undefined {
+  if (params.contentKind === "failed_notice") {
+    return { content: FAILED_COMPLETION_NOTICE, mediaUrls: [] };
   }
-  for (let index = (events?.length ?? 0) - 1; index >= 0; index -= 1) {
-    const event = events?.[index];
-    if (event?.type !== "task_completion" || event.source !== "subagent") {
-      continue;
+  const collect = (payloads: readonly unknown[]): DirectCompletionContent | undefined => {
+    const textParts: string[] = [];
+    const mediaUrls = new Set<string>();
+    let audioAsVoice = false;
+    for (const record of payloads) {
+      if (!isRecord(record)) {
+        continue;
+      }
+      if (
+        !hasVisibleAgentPayload(
+          { payloads: [record] },
+          {
+            includeErrorPayloads: false,
+            includeReasoningPayloads: false,
+            includeSilentReplyPayloads: false,
+            requireTerminalContent: true,
+          },
+        )
+      ) {
+        continue;
+      }
+      const normalized = normalizeOutboundReplyPayloadCore(record);
+      // Hidden runtime context must not contribute media directives: strip the
+      // protected block before extraction so a MEDIA reference it carries can
+      // never become an attachment; visible directives still deliver.
+      const parsed = splitMediaFromOutput(sanitizePendingFinalDeliveryText(normalized.text ?? ""));
+      if (parsed.audioAsVoice === true || record.audioAsVoice === true) {
+        audioAsVoice = true;
+      }
+      const text = sanitizeAgentRunTerminalReplyText(sanitizePendingFinalDeliveryText(parsed.text));
+      // A result that only reads like the producer's placeholder is still a real
+      // result: absence is recorded on the event fact, never matched here.
+      if (text) {
+        textParts.push(text);
+      }
+      for (const mediaUrl of [
+        ...(normalized.mediaUrl ? [normalized.mediaUrl] : []),
+        ...(normalized.mediaUrls ?? []),
+        ...(parsed.mediaUrls ?? []),
+      ]) {
+        mediaUrls.add(mediaUrl);
+      }
     }
-    if (event.status !== "ok") {
+    return textParts.length > 0 || mediaUrls.size > 0
+      ? {
+          content: textParts.join("\n\n"),
+          mediaUrls: [...mediaUrls],
+          ...(audioAsVoice ? { audioAsVoice: true as const } : {}),
+        }
+      : undefined;
+  };
+
+  const payloadContent = Array.isArray(params.agentResult?.payloads)
+    ? collect(params.agentResult.payloads)
+    : undefined;
+  if (payloadContent && payloadContent.mediaUrls.length > 0) {
+    return payloadContent;
+  }
+  for (let index = (params.events?.length ?? 0) - 1; index >= 0; index -= 1) {
+    const event = params.events?.[index];
+    if (event?.type !== "task_completion" || event.source !== "subagent" || event.status !== "ok") {
       continue;
     }
     // Placeholder copy for an absent child result is not deliverable content.
     if (!hasVisibleCompletionResult(event)) {
       continue;
     }
-    const result =
-      typeof event.result === "string"
-        ? sanitizeAgentRunTerminalReplyText(sanitizePendingFinalDeliveryText(event.result))
-        : "";
-    if (result) {
-      return result;
+    const parsedEvent = collect([{ text: event.result }]);
+    const eventMediaUrls = collectAgentInternalEventMedia([event]).mediaUrls;
+    const mediaUrls = new Set([...(parsedEvent?.mediaUrls ?? []), ...eventMediaUrls]);
+    if (parsedEvent || mediaUrls.size > 0) {
+      return {
+        content: parsedEvent?.content ?? "",
+        mediaUrls: [...mediaUrls],
+        ...(parsedEvent?.audioAsVoice ? { audioAsVoice: true as const } : {}),
+      };
     }
   }
   return undefined;
@@ -151,12 +385,21 @@ export async function deliverCompletionDirect(params: {
   internalEvents?: readonly AgentInternalEvent[];
   contentKind: "completed_result" | "failed_notice";
   signal?: AbortSignal;
-  onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
+  agentResult?: { payloads?: unknown };
+  onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
   isSourceSessionEffectsAllowed?: () => boolean;
 }): Promise<SubagentAnnounceDeliveryResult | undefined> {
-  const content = resolveTextCompletionDirectFallback(params.internalEvents, params.contentKind);
+  const completionContent = collectDirectCompletionContent({
+    agentResult: params.agentResult,
+    events: params.internalEvents,
+    contentKind: params.contentKind,
+  });
+  // A failed completion must not deliver partial child media as its result.
+  const content = completionContent?.content;
+  const mediaUrls = completionContent?.mediaUrls ?? [];
+  const audioAsVoice = completionContent?.audioAsVoice === true;
   if (
-    !content ||
+    (!content && mediaUrls.length === 0) ||
     !params.deliveryTarget.deliver ||
     !params.deliveryTarget.channel ||
     !params.deliveryTarget.to ||
@@ -174,6 +417,13 @@ export async function deliverCompletionDirect(params: {
   }
   const idempotencyKey = `${params.directIdempotencyKey}:text-direct`;
   let committedDelivery: SubagentAnnounceDeliveryResult | undefined;
+  let deliveryResultReported: Promise<void> | undefined;
+  const assertDeliveryCurrent = () => {
+    params.signal?.throwIfAborted();
+    if (params.isSourceSessionEffectsAllowed?.() === false) {
+      throw new SourceOwnerChangedError();
+    }
+  };
   try {
     if (params.isSourceSessionEffectsAllowed?.() === false) {
       return sourceOwnerChangedResult();
@@ -190,24 +440,26 @@ export async function deliverCompletionDirect(params: {
       requesterSessionKey: params.requesterSessionKey,
       agentId,
       conversationType: "direct",
-      content,
+      content: content ?? "",
+      ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
+      ...(audioAsVoice ? { asVoice: true } : {}),
       idempotencyKey,
       skipQueue: true,
       abortSignal: params.signal,
-      onPlatformSendDispatch: async () => {
-        params.signal?.throwIfAborted();
-        if (params.isSourceSessionEffectsAllowed?.() === false) {
-          throw new SourceOwnerChangedError();
-        }
-      },
-      onDeliveryResult: () => {
+      onPlatformSendDispatch: async () => assertDeliveryCurrent(),
+      assertDirectAdapterHandoff: assertDeliveryCurrent,
+      onDeliveredPayload: () => {
         if (committedDelivery) {
           return;
         }
-        // Platform identity is committed before transcript mirroring, which
-        // may wait behind the requester's still-active SQLite writer.
+        // This single payload must finish every chunk and attachment before settling,
+        // still ahead of potentially blocked transcript mirroring.
         committedDelivery = { delivered: true, path: "direct", deliveredAt: Date.now() };
-        params.onDeliveryResult?.(committedDelivery);
+        deliveryResultReported = Promise.resolve(
+          params.onDeliveryResult?.(committedDelivery),
+        ).catch(() => {
+          // Bookkeeping failure cannot make a fully sent result retryable.
+        });
       },
       mirror: {
         sessionKey: params.requesterSessionKey,
@@ -239,6 +491,16 @@ export async function deliverCompletionDirect(params: {
       // retryable failure and send the same completion twice.
       return committedDelivery;
     }
+    if (hasAnnounceSendEvidence(err)) {
+      return {
+        delivered: false,
+        path: "direct",
+        terminal: true,
+        disposition: "permanent_failure",
+        error: `text completion direct delivery was incomplete; automatic retry would duplicate sent chunks: ${summarizeDeliveryError(err)}`,
+        ...(mediaUrls.length > 0 ? { missingMediaUrls: mediaUrls } : {}),
+      };
+    }
     if (err instanceof SourceOwnerChangedError) {
       return sourceOwnerChangedResult();
     }
@@ -250,6 +512,8 @@ export async function deliverCompletionDirect(params: {
       path: "direct",
       error: `text completion direct delivery failed: ${summarizeDeliveryError(err)}`,
     };
+  } finally {
+    await deliveryResultReported;
   }
 }
 

@@ -18,8 +18,8 @@ import { renderLazyViewError } from "../../components/lazy-view-error.ts";
 import { DEBUG_OVERLAY_REQUEST_EVENT } from "../../components/panel-toggle-contract.ts";
 import { t } from "../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-import "../../styles/debug.css";
-import { renderDebugOverlayLoading } from "./debug-overlay-loading.ts";
+import { renderDebugOverlayFrame, renderDebugOverlayLoading } from "./debug-overlay-frame.ts";
+import { shouldCloseDebugOverlay, type DebugOverlayMode } from "./debug-overlay-state.ts";
 
 const DEBUG_OVERLAY_CONTENT = {
   tagName: "openclaw-debug-overlay-content",
@@ -57,15 +57,19 @@ export class DebugOverlay extends OpenClawLightDomElement {
   }
 
   toggle(): void {
-    if (this.mode === "minimized") {
-      this.mode = "expanded";
-      return;
-    }
     if (this.mode === "expanded") {
       this.close();
+    } else {
+      this.open("expanded");
+    }
+  }
+
+  open(mode: DebugOverlayMode): void {
+    if (this.mode !== "closed") {
+      this.mode = mode;
       return;
     }
-    this.mode = "expanded";
+    this.mode = mode;
     this.contentKey += 1;
     document.addEventListener("keydown", this.handleKeydown, true);
     if (!isOptionalElementDefined(DEBUG_OVERLAY_CONTENT)) {
@@ -78,10 +82,7 @@ export class DebugOverlay extends OpenClawLightDomElement {
   }
 
   private readonly handleKeydown = (event: KeyboardEvent): void => {
-    if (event.key !== "Escape" || event.defaultPrevented) {
-      return;
-    }
-    if (this.mode === "minimized" && !event.composedPath().includes(this)) {
+    if (!shouldCloseDebugOverlay(event, this.mode, this)) {
       return;
     }
     event.preventDefault();
@@ -117,11 +118,7 @@ export class DebugOverlay extends OpenClawLightDomElement {
       });
     }
     if (!isOptionalElementDefined(DEBUG_OVERLAY_CONTENT)) {
-      return this.mode === "minimized"
-        ? html`<div class="debug-overlay__compact-loading" role="status">
-            ${t("common.loading")}
-          </div>`
-        : renderDebugOverlayLoading();
+      return renderDebugOverlayLoading(this.mode);
     }
     return keyed(
       this.contentKey,
@@ -136,41 +133,14 @@ export class DebugOverlay extends OpenClawLightDomElement {
     if (this.mode === "closed") {
       return nothing;
     }
-    return html`
-      <aside
-        class="debug-overlay ${this.mode === "minimized" ? "debug-overlay--minimized" : ""}"
-        aria-label=${t("debug.overlay.title")}
-      >
-        <header class="debug-overlay__header">
-          <div>
-            ${this.mode === "minimized" ? nothing : html`<div class="debug-overlay__eyebrow">${t("debug.overlay.eyebrow")}</div>`}
-            <h2>${t("debug.overlay.title")}</h2>
-          </div>
-          <div class="debug-overlay__controls">
-            <button
-              type="button"
-              class="debug-overlay__control"
-              aria-label=${t(this.mode === "minimized" ? "debug.overlay.expand" : "debug.overlay.minimize")}
-              title=${t(this.mode === "minimized" ? "debug.overlay.expand" : "debug.overlay.minimize")}
-              @click=${() => {
-                this.mode = this.mode === "minimized" ? "expanded" : "minimized";
-              }}
-            >
-              <span aria-hidden="true">${this.mode === "minimized" ? "↗" : "↙"}</span>
-            </button>
-            <button
-              type="button"
-              class="debug-overlay__control debug-overlay__close"
-              aria-label=${t("common.close")}
-              @click=${this.close}
-            >
-              ×
-            </button>
-          </div>
-        </header>
-        <div class="debug-overlay__body">${this.renderContent()}</div>
-      </aside>
-    `;
+    return renderDebugOverlayFrame({
+      mode: this.mode,
+      body: this.renderContent(),
+      onToggleMode: () => {
+        this.mode = this.mode === "minimized" ? "expanded" : "minimized";
+      },
+      onClose: this.close,
+    });
   }
 }
 

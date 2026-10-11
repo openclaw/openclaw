@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   hashControlUiTranslationText,
   materializeControlUiLocaleCatalog,
+  materializePreparedControlUiLocaleCatalog,
   mergeControlUiTranslationMaps,
+  prepareControlUiCatalogSource,
 } from "../../scripts/lib/control-ui-i18n-catalog-values.ts";
 import {
   createControlUiLocaleSyncPlan,
@@ -285,102 +287,59 @@ describe("createControlUiLocaleSyncPlan", () => {
     expect(artifacts.translationMemory + artifacts.meta).not.toContain("private-");
   });
 
-  it("reuses grouped segment aliases only while their source text still matches", () => {
-    const sourceFlat = flattenTranslations({ group: { alias: "Shared" } });
-    const grouped = memoryEntry({ segment_ids: ["group.alias"] });
-    const createPlan = (source: ReadonlyMap<string, string>) =>
-      createControlUiLocaleSyncPlan({
-        allowTranslate: false,
-        cacheKeyFor,
-        entry,
-        existingFlat: new Map(),
-        force: false,
-        hashText,
-        previousMeta: localeMeta(),
-        sourceFlat: source,
-        sourceHash: "source",
-        translationMemory: new Map([[grouped.cache_key, grouped]]),
+  describe.each([
+    {
+      name: "prepared",
+      materialize: (
+        source: ReadonlyMap<string, string>,
+        memory: ReadonlyMap<string, TranslationMemoryEntry>,
+      ) => materializePreparedControlUiLocaleCatalog(prepareControlUiCatalogSource(source), memory),
+    },
+  ])("$name materialization", ({ materialize }) => {
+    it("keeps aliases independent, source order, and the last valid write", () => {
+      const abcHash = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+      const grouped = memoryEntry({
+        segment_id: "group.second",
+        segment_ids: ["group.first", "removed", "changed"],
+        text: "Stored text is not the freshness authority",
+        text_hash: abcHash,
+        translated: "Partagé",
       });
-
-    expect(createPlan(sourceFlat).pending).toEqual([]);
-    expect(createPlan(new Map([["group.alias", "Changed"]])).pending).toHaveLength(1);
-  });
-
-  it("materializes grouped aliases in source order and discards stale or retired segments", () => {
-    const grouped = memoryEntry({
-      segment_id: "group.first",
-      segment_ids: ["group.second", "removed"],
-      text_hash: hashControlUiTranslationText("Shared"),
-      translated: "Partagé",
+      const replacement = memoryEntry({
+        cache_key: "replacement",
+        segment_id: "group.first",
+        text_hash: abcHash,
+        translated: "Dernier",
+      });
+      const stale = memoryEntry({
+        cache_key: "stale",
+        segment_id: "group.first",
+        text_hash: "stale",
+        translated: "Obsolète",
+      });
+      const memory = new Map([
+        [grouped.cache_key, grouped],
+        [replacement.cache_key, replacement],
+        [stale.cache_key, stale],
+      ]);
+      const source = flattenTranslations({
+        group: { first: "abc", second: "abc" },
+        changed: "Changed",
+        unused: "abc",
+      });
+      const catalog = materialize(source, memory);
+      expect(catalog).toEqual({ group: { first: "Dernier", second: "Partagé" } });
+      expect([...flattenTranslations(catalog)]).toEqual([
+        ["group.first", "Dernier"],
+        ["group.second", "Partagé"],
+      ]);
+      expect(materialize(new Map([["group.first", "abc"]]), new Map())).toEqual({});
+      expect(materialize(new Map(), memory)).toEqual({});
+      expect(materialize(new Map([["group.first", "Changed"]]), memory)).toEqual({});
+      expect(
+        materialize(new Map([["group.first", "abc"]]), new Map([[grouped.cache_key, grouped]])),
+      ).toEqual({ group: { first: "Partagé" } });
     });
-    const source = flattenTranslations({ group: { first: "Shared", second: "Shared" } });
-
-    expect(
-      materializeControlUiLocaleCatalog(source, new Map([[grouped.cache_key, grouped]])),
-    ).toEqual({
-      group: { first: "Partagé", second: "Partagé" },
-    });
-    expect(
-      materializeControlUiLocaleCatalog(
-        new Map([["group.first", "Changed"]]),
-        new Map([[grouped.cache_key, grouped]]),
-      ),
-    ).toEqual({});
-  });
-
-  it("refreshes recorded fallbacks and records translated replacements", () => {
-    const sourceFlat = flattenTranslations({ title: "New English" });
-    const previousMeta = localeMeta({
-      fallbackKeys: ["title"],
-      sourceHash: "previous-source",
-      totalKeys: 1,
-      translatedKeys: 0,
-    });
-    const plan = createControlUiLocaleSyncPlan({
-      allowTranslate: true,
-      cacheKeyFor,
-      entry,
-      existingFlat: new Map([["title", "Old English"]]),
-      force: true,
-      hashText,
-      previousMeta,
-      sourceFlat,
-      sourceHash: "next-source",
-      translationMemory: new Map(),
-    });
-
-    expect(plan.newFallbackCount).toBe(0);
-    plan.recordTranslations(plan.pending, new Map([["title", "Nouveau"]]), {
-      sourceLocale: "en",
-      updatedAt: () => "2026-02-02T00:00:00.000Z",
-    });
-
-    const artifacts = plan.render({
-      defaultGlossary: [],
-      generatedAt: "2026-03-03T00:00:00.000Z",
-      glossary: [],
-      workflow: 1,
-    });
-
-    expect(artifacts.fallbackCount).toBe(0);
-    expect(artifacts.nextFlat.get("title")).toBe("Nouveau");
-    expect(JSON.parse(artifacts.meta)).toMatchObject({
-      fallbackKeys: [],
-      generatedAt: "2026-03-03T00:00:00.000Z",
-      translatedKeys: 1,
-    });
-    expect(artifacts.translationMemory).toBe(
-      `${JSON.stringify(
-        memoryEntry({
-          cache_key: cacheKeyFor("title", hashText("New English")),
-          segment_id: "title",
-          text: "New English",
-          text_hash: hashText("New English"),
-          translated: "Nouveau",
-          updated_at: "2026-02-02T00:00:00.000Z",
-        }),
-      )}\n`,
-    );
   });
 
   it("refreshes recorded fallback copy when forced without a provider", () => {

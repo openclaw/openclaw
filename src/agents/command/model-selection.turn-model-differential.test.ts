@@ -19,11 +19,10 @@ vi.mock("../agent-scope.js", () => ({
   hasSessionAutoModelFallbackProvenance: () => false,
   resolveAutoFallbackPrimaryProbe: () => undefined,
   resolveAgentConfig: () => undefined,
-  resolveAgentEffectiveModelPrimary: () => undefined,
+  resolveNativeModelPrimary: () => undefined,
 }));
 vi.mock("../../auto-reply/thinking.js", () => ({
   formatThinkingLevels: () => "",
-  isThinkingLevelSupported: () => true,
   normalizeThinkLevel: (value: string | undefined) => value,
 }));
 vi.mock("../../channels/model-overrides.js", () => ({
@@ -87,14 +86,15 @@ vi.mock("../model-selection.js", () => ({
       : { provider: TURN_MODEL_DEFAULT_REF.provider, model: raw };
   },
   resolveModelAliasFromPair: () => null,
-  resolveThinkingDefault: () => "off",
 }));
 vi.mock("../model-thinking-default.js", () => ({
   resolveConfiguredThinkingDefault: () => undefined,
+  resolveThinkingSelection: () => ({ requestedLevel: "off", level: "off", supported: true }),
 }));
 vi.mock("../model-visibility-policy.js", () => ({
   createModelVisibilityPolicy: () => ({
     allowAny: true,
+    catalog: [],
     allowedCatalog: [],
     selectionAliasIndex: { byAlias: new Map(), byKey: new Map() },
     allows: () => true,
@@ -110,11 +110,14 @@ vi.mock("../provider-auth-aliases.js", () => ({
 vi.mock("../session-runtime-compat.js", () => ({
   resolveSessionRuntimeOverrideForProvider: () => undefined,
 }));
-vi.mock("../thinking-runtime.js", () => ({
-  hasResolvedThinkingCatalogEntry: () => false,
-  normalizeThinkingCatalogProviders: (catalog: unknown) => catalog,
-  resolveEffectiveAgentRuntime: () => undefined,
-}));
+vi.mock("../thinking-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../thinking-runtime.js")>();
+  return {
+    ...actual,
+    normalizeThinkingCatalogProviders: (catalog: unknown) => catalog,
+    resolveEffectiveAgentRuntime: () => undefined,
+  };
+});
 vi.mock("../../plugins/runtime.js", () => ({ requireActivePluginRegistry: () => ({}) }));
 vi.mock("../../sessions/agent-harness-session-key.js", () => ({
   isValidAgentHarnessSessionStoreEntry: () => false,
@@ -129,11 +132,7 @@ vi.mock("./attempt-execution.shared.js", () => ({
   persistAgentSession: async ({ entry }: { entry?: SessionEntry }) => entry,
 }));
 vi.mock("./model-ref.js", () => ({
-  normalizeAgentCommandDefaultModelRef: (
-    _cfg: OpenClawConfig,
-    provider: string,
-    model: string,
-  ) => ({ provider, model }),
+  normalizeExplicitOverrideInput: (value: string) => value.trim() || undefined,
   normalizeAgentCommandModelRef: (_cfg: OpenClawConfig, provider: string, model: string) => ({
     provider,
     model,
@@ -149,9 +148,6 @@ vi.mock("./model-ref.js", () => ({
       ? { provider: raw.slice(0, slash), model: raw.slice(slash + 1) }
       : { provider: defaultProvider, model: raw };
   },
-}));
-vi.mock("./prepare.js", () => ({
-  normalizeExplicitOverrideInput: (value: string) => value.trim() || undefined,
 }));
 vi.mock("./runtime-loaders.js", () => ({
   loadTranscriptResolveRuntime: async () => ({

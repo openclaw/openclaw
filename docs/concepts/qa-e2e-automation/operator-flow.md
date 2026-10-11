@@ -25,6 +25,14 @@ the QA Lab page where an operator or automation loop can give the agent a QA
 mission, observe real channel behavior, and record what worked, failed, or
 stayed blocked.
 
+Run QA Lab from a matching current source checkout. Once the lab loads, capture
+requests check for async proxy capture support and report an upgrade error if it
+is missing; unrelated lab operations do not require that capture capability.
+This operation check does not establish full compatibility with older hosts:
+current QA source also requires SDK imports such as `sqlite-runtime-testing`
+that the published 2026.9.6 package excludes, so its QA CLI can fail before the
+capture check runs.
+
 The Runner's Scenarios panel can launch flow, Playwright, Vitest, and script
 catalog entries together. **Profile** uses the taxonomy-owned membership plan;
 checking scenarios creates an explicit override, while **Profile** in the
@@ -191,7 +199,7 @@ Discord also has Mantis-only opt-in scenarios for bug reproduction. Use
 reaction timeline, or `--scenario discord-thread-reply-filepath-attachment`
 to create a real Discord thread and verify that `message.thread-reply`
 preserves a `filePath` attachment. These scenarios stay out of the default
-live Discord lane because they are before/after repro probes rather than
+live Discord lane because they are before/after repro checks rather than
 broad smoke coverage. The thread-attachment Mantis workflow can also add a
 logged-in Discord Web witness video when
 `MANTIS_DISCORD_VIEWER_CHROME_PROFILE_DIR` or

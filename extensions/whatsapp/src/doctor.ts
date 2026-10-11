@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements doctor behavior.
 import type {
   ChannelDoctorAdapter,
   ChannelDoctorConfigMutation,
@@ -34,8 +33,9 @@ function resolveLegacyAckScope(ack: Record<string, unknown>): AckScope | undefin
         : undefined;
 }
 
-function resolveDefaultAgentEmoji(cfg: OpenClawConfig): string | undefined {
-  const entries = asObjectRecord(asObjectRecord(cfg.agents)?.entries);
+function resolveDefaultAgentEmoji(cfg: unknown): string | undefined {
+  // Include-blocked Doctor candidates may retain the legacy marker until their owner repairs it.
+  const entries = asObjectRecord(asObjectRecord(asObjectRecord(cfg)?.agents)?.entries);
   const agents = entries
     ? Object.values(entries).flatMap((value) => {
         const entry = asObjectRecord(value);

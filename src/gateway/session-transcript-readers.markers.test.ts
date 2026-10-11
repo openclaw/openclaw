@@ -1,23 +1,22 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { replaceTranscriptEvents } from "../config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "vitest";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { readSessionMessagesAroundIdWithStatsAsync } from "./session-transcript-anchor-reader.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import { createResetBoundaryTranscriptSource } from "./session-end-transcript-reader.js";
+import { visitSessionMessagesAsync } from "./session-transcript-native.test-support.js";
 import {
   readRecentSessionMessagesWithStatsAsync,
   readSessionMessageByIdAsync,
   readSessionMessageCountAsync,
   readSessionMessagesAsync,
+  readSessionMessagesAroundIdWithStatsAsync,
   readSessionMessagesMatchingIdAsync,
   readSessionMessagesPageWithStatsAsync,
-  visitSessionMessagesAsync,
   type SessionTranscriptReadScope,
 } from "./session-transcript-readers.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-transcript-markers-");
 const timestamp = "2026-08-11T18:00:00.000Z";
 
 function message(id: string, content: string, role: "user" | "assistant" | "toolResult" = "user") {
@@ -32,6 +31,7 @@ function compaction(id: string, firstKeptEntryId: string) {
     summary: `${id} summary`,
     firstKeptEntryId,
     tokensBefore: 100,
+    tokensAfter: 25,
   };
 }
 
@@ -81,14 +81,12 @@ describe("session transcript reader marker projection", () => {
 
   beforeEach(() => {
     envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-    tempDir = tempDirs.make("openclaw-transcript-markers-");
+    tempDir = tempDirs.make();
     storePath = path.join(tempDir, "sessions.json");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
   });
 
   afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
     envSnapshot.restore();
   });
 
@@ -108,6 +106,51 @@ describe("session transcript reader marker projection", () => {
     ]);
     return scope;
   }
+
+  test("pages pre-compaction history and token savings from the transcript without checkpoints", async () => {
+    const scope = await writeTranscript("metrics", [
+      message("before", "Original conversation"),
+      compaction("summary", "before"),
+      message("after", "Continued conversation", "assistant"),
+    ]);
+    const messages = await readSessionMessagesAsync(scope, {
+      mode: "full",
+      reason: "Compaction metrics and retained history regression",
+    });
+    expect(messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ __openclaw: expect.objectContaining({ id: "before" }) }),
+        expect.objectContaining({
+          __openclaw: expect.objectContaining({
+            id: "summary",
+            tokensBefore: 100,
+            tokensAfter: 25,
+          }),
+        }),
+        expect.objectContaining({ __openclaw: expect.objectContaining({ id: "after" }) }),
+      ]),
+    );
+  });
+
+  test("reads a bounded ended window without successor turns after same-ID reset", async () => {
+    const boundaryId = "ended-boundary";
+    const scope = await writeTranscript("ended-window", [
+      message("prior-user", "remember this"),
+      message("prior-assistant", "retained answer", "assistant"),
+      reset(boundaryId),
+      message("successor-user", "new session content"),
+    ]);
+    const source = createResetBoundaryTranscriptSource(scope, boundaryId);
+    if (!source.available) {
+      throw new Error("expected available ended transcript source");
+    }
+
+    const result = await source.readTail({ maxMessages: 10, maxBytes: 2_048 });
+
+    expect(messageIds([...result.messages])).toEqual(["prior-user", "prior-assistant"]);
+    expect(result.totalMessages).toBe(2);
+    expect(result.truncated).toBe(false);
+  });
 
   test.each([
     {

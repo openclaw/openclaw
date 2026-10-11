@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { readLatestAssistantReply } from "../agents/run-wait.js";
-import { subagentRegistryDeps } from "../agents/subagents/registry/subagent-registry-deps.js";
 import { deleteSubagentSessionForCleanup } from "../agents/subagents/registry/subagent-session-cleanup.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
 import { deleteCronSessionViaGateway } from "../cron/isolated-agent/session-cleanup.js";
@@ -25,6 +25,12 @@ import {
   getInProcessGatewayRequestContext,
   withOperatorToolGatewayAuthority,
 } from "./server-plugin-in-process-dispatch.js";
+import { bindGatewayLifecycleRequest } from "./server-recovery-runtime-context.js";
+
+const deleteGatewaySession = vi.hoisted(() =>
+  vi.fn<typeof import("./server-methods/sessions-delete.js").deleteGatewaySession>(),
+);
+vi.mock("./server-methods/sessions-delete.js", () => ({ deleteGatewaySession }));
 
 const socketCall = vi.spyOn(gatewayCall, "callGateway");
 afterAll(() => socketCall.mockRestore());
@@ -73,6 +79,7 @@ function createContext(handlers: GatewayRequestHandlers): GatewayRequestContext 
 describe("hosted lifecycle Gateway dispatch", () => {
   beforeEach(() => {
     socketCall.mockReset().mockRejectedValue(new Error("unexpected Gateway socket"));
+    deleteGatewaySession.mockReset().mockRejectedValue(new Error("unexpected session deletion"));
   });
 
   it("reads cron/subagent history and session ownership without a transport", async () => {
@@ -118,7 +125,7 @@ describe("hosted lifecycle Gateway dispatch", () => {
     );
     const cleanup = () =>
       deleteSubagentSessionForCleanup({
-        callGateway: subagentRegistryDeps.callGateway,
+        callGateway: (request) => bindGatewayLifecycleRequest()(request),
         gatewayBinding: { resolveGatewayContext },
         childSessionKey: "agent:main:subagent:child",
         expectedSessionId: "child-session",
@@ -164,19 +171,18 @@ describe("hosted lifecycle Gateway dispatch", () => {
     const beforeCommit = createDeferredCore();
     const resumeCommit = createDeferredCore();
     const mutate = vi.fn();
-    const context = createContext({
-      "sessions.delete": async ({ sessionMutationCommitGuard, respond }) => {
-        beforeCommit.resolve();
-        await resumeCommit.promise;
-        sessionMutationCommitGuard?.();
-        mutate();
-        respond(true, { deleted: true });
-      },
+    const context = createContext({});
+    deleteGatewaySession.mockImplementation(async ({ params, assertCurrent }) => {
+      beforeCommit.resolve();
+      await resumeCommit.promise;
+      assertCurrent?.();
+      mutate();
+      return { ok: true, result: { ok: true, key: params.key, deleted: true, archived: [] } };
     });
     let current = true;
     const cleanup = () =>
       deleteSubagentSessionForCleanup({
-        callGateway: subagentRegistryDeps.callGateway,
+        callGateway: (request) => bindGatewayLifecycleRequest()(request),
         gatewayBinding: { resolveGatewayContext: () => context },
         childSessionKey: "agent:main:subagent:child",
         expectedSessionId: "child-session",
@@ -199,9 +205,16 @@ describe("hosted lifecycle Gateway dispatch", () => {
       },
     );
     const result = invoke();
-    await beforeCommit.promise;
-    current = false;
-    resumeCommit.resolve();
+    try {
+      await awaitGateBeforeSettlement(
+        beforeCommit.promise,
+        result,
+        "Transferred cleanup settled before reaching the session deletion owner",
+      );
+      current = false;
+    } finally {
+      resumeCommit.resolve();
+    }
     await expect(result).resolves.toBe("failed");
     expect(mutate).not.toHaveBeenCalled();
     expect(socketCall).not.toHaveBeenCalled();

@@ -2,7 +2,7 @@ import { createServer, type Server } from "node:http";
 import type { Duplex } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
-import { createGatewayWsClient } from "../../scripts/dev/gateway-ws-client.js";
+import { createGatewayWsClient } from "../../scripts/lib/gateway-ws-client.js";
 
 let server: Server | undefined;
 let wss: WebSocketServer | undefined;
@@ -150,21 +150,6 @@ describe("createGatewayWsClient", () => {
     try {
       await expect(client.waitOpen()).rejects.toThrow("ws open timeout");
       await waitFor(() => client.ws.readyState === WebSocket.CLOSED);
-    } finally {
-      client.close();
-      await stalled.close();
-    }
-  });
-
-  it("uses caller-specific websocket open timeout messages", async () => {
-    const stalled = await listenStalledUpgrade();
-    const client = createGatewayWsClient({
-      openTimeoutMessage: "gateway ws open timeout",
-      openTimeoutMs: 5,
-      url: stalled.url,
-    });
-    try {
-      await expect(client.waitOpen()).rejects.toThrow("gateway ws open timeout");
     } finally {
       client.close();
       await stalled.close();

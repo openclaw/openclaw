@@ -1,13 +1,14 @@
 import {
+  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   type WorkerAdmissionHandshake,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { WorkerProfile, WorkerSshEndpoint } from "../../plugins/types.js";
 import type { WorkerDispatchEnvironmentService } from "./placement-dispatch-failure.js";
 import type { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
-import {
+import type {
   createWorkerSessionPlacementStore,
-  type WorkerSessionPlacementRecord,
+  WorkerSessionPlacementRecord,
 } from "./placement-store.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 
@@ -15,7 +16,9 @@ type WorkerDispatchRequest = Parameters<
   ReturnType<typeof createWorkerPlacementDispatchService>["dispatch"]
 >[0];
 export type PlacementStore = ReturnType<typeof createWorkerSessionPlacementStore>;
-type DispatchEnvironmentRecord = Awaited<ReturnType<WorkerDispatchEnvironmentService["create"]>>;
+type DispatchEnvironmentRecord = Awaited<
+  ReturnType<WorkerDispatchEnvironmentService["createWithRequest"]>
+>;
 export type DispatchStage =
   | "barrier"
   | "workspace"
@@ -36,12 +39,12 @@ export const REQUEST: WorkerDispatchRequest = {
   executionMode: "worker-turn",
 };
 
-export function seedProvisioningPlacement(
+export async function seedProvisioningPlacement(
   store: PlacementStore,
   environmentId: string,
   executionMode: WorkerDispatchRequest["executionMode"] = REQUEST.executionMode,
-): WorkerSessionPlacementRecord {
-  const requested = store.startDispatch({ ...REQUEST, executionMode });
+): Promise<WorkerSessionPlacementRecord> {
+  const requested = await store.startDispatch({ ...REQUEST, executionMode });
   return store.transition({
     sessionId: REQUEST.sessionId,
     from: "requested",
@@ -51,13 +54,13 @@ export function seedProvisioningPlacement(
   });
 }
 
-export function seedSyncingPlacement(
+export async function seedSyncingPlacement(
   store: PlacementStore,
   environmentId: string,
   executionMode: WorkerDispatchRequest["executionMode"] = REQUEST.executionMode,
-): WorkerSessionPlacementRecord {
-  let current = seedProvisioningPlacement(store, environmentId, executionMode);
-  current = store.transition({
+): Promise<WorkerSessionPlacementRecord> {
+  let current = await seedProvisioningPlacement(store, environmentId, executionMode);
+  current = await store.transition({
     sessionId: REQUEST.sessionId,
     from: "provisioning",
     to: "syncing",
@@ -67,13 +70,13 @@ export function seedSyncingPlacement(
   return current;
 }
 
-export function seedStartingPlacement(
+export async function seedStartingPlacement(
   store: PlacementStore,
   environmentId: string,
   executionMode: WorkerDispatchRequest["executionMode"] = REQUEST.executionMode,
-): WorkerSessionPlacementRecord {
-  let current = seedSyncingPlacement(store, environmentId, executionMode);
-  current = store.transition({
+): Promise<WorkerSessionPlacementRecord> {
+  let current = await seedSyncingPlacement(store, environmentId, executionMode);
+  current = await store.transition({
     sessionId: REQUEST.sessionId,
     from: "syncing",
     to: "starting",
@@ -86,15 +89,15 @@ export function seedStartingPlacement(
   return current;
 }
 
-export function seedActivePlacement(
+export async function seedActivePlacement(
   store: PlacementStore,
   params: {
     environmentId: string;
     ownerEpoch: number;
     executionMode?: WorkerDispatchRequest["executionMode"];
   },
-): WorkerSessionPlacementRecord {
-  const current = seedStartingPlacement(store, params.environmentId, params.executionMode);
+): Promise<WorkerSessionPlacementRecord> {
+  const current = await seedStartingPlacement(store, params.environmentId, params.executionMode);
   return store.transition({
     sessionId: REQUEST.sessionId,
     from: "starting",
@@ -112,7 +115,10 @@ export function createDispatchEnvironmentFixtures(generation = 1) {
   const bootstrapReceipt: WorkerAdmissionHandshake = {
     bundleHash: BUNDLE_HASH,
     openclawVersion: "2026.7.2",
-    protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+    protocolFeatures: [
+      WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+      WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+    ],
   };
   const sshEndpoint: WorkerSshEndpoint = {
     host: "worker.example.test",

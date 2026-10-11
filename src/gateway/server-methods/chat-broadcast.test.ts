@@ -23,7 +23,7 @@ function createContext(seq = 0) {
       agentRunSeq,
       broadcast,
       nodeSendToSession,
-      getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
+      getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
     },
     order,
     deleteSpy,
@@ -64,11 +64,18 @@ describe("chat terminal broadcasts", () => {
       );
 
       broadcastChatFinal({
+        terminalEntry: undefined,
         ...request,
         message: { role: "assistant", content: [{ type: "text", text: "done" }] },
       });
       expect(context.broadcast.mock.calls[2]?.[1]).toMatchObject({ state: "final", seq: 3 });
-      expect(context.broadcast.mock.calls[2]?.[2]?.liveText).toEqual({ group: liveText?.group });
+      expect(context.broadcast.mock.calls[2]?.[2]?.liveText).toEqual({
+        group: liveText?.group,
+        settle: true,
+      });
+      expect(context.nodeSendToSession.mock.calls.at(-1)?.[3]).toBe(
+        context.broadcast.mock.calls[2]?.[2],
+      );
       expect(deleteSpy).toHaveBeenCalledOnce();
 
       current = false;
@@ -95,7 +102,7 @@ describe("chat terminal broadcasts", () => {
     expect(context.broadcast.mock.calls[0]?.[1]).toHaveProperty("deltaText.length", 500_000);
   });
 
-  it("projects global final payloads and fans out one object to both delivery keys", () => {
+  it("projects global final payloads and shares one audience across delivery keys", () => {
     const { context, order, deleteSpy } = createContext(7);
     const message = {
       role: "assistant",
@@ -103,6 +110,7 @@ describe("chat terminal broadcasts", () => {
     };
 
     broadcastChatFinal({
+      terminalEntry: undefined,
       context,
       runId: "run-1",
       sessionKey: "global",
@@ -123,12 +131,10 @@ describe("chat terminal broadcasts", () => {
       sessionKeys: ["agent:main:global", "global"],
     });
     expect(context.nodeSendToSession.mock.calls).toEqual([
-      ["agent:main:global", "chat", payload],
-      ["global", "chat", payload],
+      ["agent:main:global", "chat", payload, context.broadcast.mock.calls[0]?.[2]],
     ]);
     expect(context.nodeSendToSession.mock.calls[0]?.[2]).toBe(payload);
-    expect(context.nodeSendToSession.mock.calls[1]?.[2]).toBe(payload);
-    expect(order).toEqual(["broadcast", "node", "node", "delete"]);
+    expect(order).toEqual(["broadcast", "node", "delete"]);
     expect(deleteSpy).toHaveBeenCalledWith("run-1");
     expect(context.agentRunSeq.has("run-1")).toBe(false);
   });
@@ -137,6 +143,7 @@ describe("chat terminal broadcasts", () => {
     const { context } = createContext(2);
 
     broadcastChatError({
+      terminalEntry: undefined,
       context,
       runId: "run-1",
       sessionKey: "agent:main:main",
@@ -157,7 +164,12 @@ describe("chat terminal broadcasts", () => {
     expect(context.broadcast).toHaveBeenCalledWith("chat", payload, {
       sessionKeys: ["agent:main:main"],
     });
-    expect(context.nodeSendToSession).toHaveBeenCalledWith("agent:main:main", "chat", payload);
+    expect(context.nodeSendToSession).toHaveBeenCalledWith(
+      "agent:main:main",
+      "chat",
+      payload,
+      context.broadcast.mock.calls[0]?.[2],
+    );
     expect(context.nodeSendToSession.mock.calls[0]?.[2]).toBe(payload);
   });
 
@@ -169,6 +181,7 @@ describe("chat terminal broadcasts", () => {
 
     expect(() =>
       broadcastChatFinal({
+        terminalEntry: undefined,
         context,
         runId: "run-1",
         sessionKey: "agent:main:main",
@@ -188,6 +201,7 @@ describe("chat terminal broadcasts", () => {
 
     expect(() =>
       broadcastChatError({
+        terminalEntry: undefined,
         context,
         runId: "run-1",
         sessionKey: "agent:main:main",
@@ -221,6 +235,7 @@ describe("global chat broadcast ownership", () => {
     };
 
     broadcastChatFinal({
+      terminalEntry: undefined,
       context,
       runId: "run-ops-global",
       sessionKey: "global",
@@ -232,9 +247,13 @@ describe("global chat broadcast ownership", () => {
       expect.objectContaining({ agentId: "ops", sessionKey: "global" }),
       { sessionKeys: ["agent:ops:global", "global"] },
     );
-    expect(nodeSendToSession.mock.calls.map(([key]) => key)).toEqual([
-      "agent:ops:global",
-      "global",
+    expect(nodeSendToSession.mock.calls).toEqual([
+      [
+        "agent:ops:global",
+        "chat",
+        broadcast.mock.calls[0]?.[1],
+        { sessionKeys: ["agent:ops:global", "global"] },
+      ],
     ]);
   });
 });

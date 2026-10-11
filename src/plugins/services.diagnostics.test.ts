@@ -7,7 +7,7 @@ import {
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
 import { createEmptyPluginRegistry } from "./registry.js";
-import { startPluginServices } from "./services.js";
+import { startPluginServices } from "./services.test-support.js";
 import type { OpenClawPluginService } from "./types.js";
 
 beforeEach(resetDiagnosticEventsForTest);
@@ -29,7 +29,13 @@ it.each([undefined, false])(
       },
     };
     const registry = createEmptyPluginRegistry();
-    registry.services.push({ pluginId: service.id, origin: "bundled", source: "test", service });
+    registry.services.push({
+      pluginId: service.id,
+      origin: "bundled",
+      source: "test",
+      id: service.id.trim(),
+      service,
+    });
     const handle = await startPluginServices({ registry, config: {} });
     try {
       expect(hasInternalDiagnosticEventInterest("log.record")).toBe(true);

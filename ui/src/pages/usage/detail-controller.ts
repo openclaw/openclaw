@@ -10,6 +10,10 @@ import {
 import { t } from "../../i18n/index.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import {
+  formatMissingOperatorReadScopeMessage,
+  isMissingOperatorReadScopeError,
+} from "../../lib/gateway-errors.ts";
+import {
   requestSessionUsage,
   requestSessionUsageLogs,
   requestSessionUsageTimeSeries,
@@ -17,7 +21,6 @@ import {
   type SessionUsageTarget,
 } from "../../lib/sessions/usage.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
-import { failUsageDetailRefresh } from "./detail-refresh.ts";
 import { createUsageRequest } from "./request.ts";
 import type { SessionLogEntry, UsageSessionEntry } from "./types.ts";
 
@@ -43,7 +46,6 @@ function createUsageDetailRequest<T>(
   let value: { target: UsageDetailTarget; data?: T } | null = null;
   let status = createPanelRefreshStatus();
   let pending: Promise<void> | null = null;
-  let generation = 0;
   const task = createUsageRequest(host, {
     task: async (
       [client, target]: readonly [GatewayBrowserClient, UsageDetailTarget],
@@ -71,11 +73,18 @@ function createUsageDetailRequest<T>(
     },
     onError: (error) => {
       pending = null;
-      const failure = failUsageDetailRefresh(status, error, gateway.snapshot);
-      if (failure.clearData && value) {
+      const clearData = isMissingOperatorReadScopeError(error);
+      status = failPanelRefresh(
+        clearData ? createPanelRefreshStatus() : status,
+        error,
+        gateway.snapshot,
+      );
+      if (clearData && value) {
         delete value.data;
       }
-      status = failure.status;
+      if (clearData && status.error) {
+        status = { ...status, error: formatMissingOperatorReadScopeMessage("usage details") };
+      }
     },
   });
 
@@ -84,7 +93,6 @@ function createUsageDetailRequest<T>(
       status = failPanelRefresh(status, undefined, gateway.snapshot);
     }
     pending = null;
-    generation += 1;
     task.cancel();
   };
   const reset = (target?: UsageDetailTarget) => {
@@ -103,12 +111,11 @@ function createUsageDetailRequest<T>(
       return pending !== null;
     },
     async recover(sessionKey: string, loadInitial = false): Promise<void> {
-      const current = generation;
       const target = resolveTarget(sessionKey);
       await pending;
       if (
-        current === generation &&
-        sameUsageTarget(target, resolveTarget(sessionKey)) &&
+        !pending &&
+        (!value || sameUsageTarget(value.target, target)) &&
         gateway.snapshot &&
         isGatewayAvailable(gateway.snapshot) &&
         (status.awaitingGateway || status.error !== null || (loadInitial && !status.hasLoaded))
@@ -136,7 +143,6 @@ function createUsageDetailRequest<T>(
         return pending ?? Promise.resolve();
       }
       status = beginPanelRefresh(status);
-      generation += 1;
       return (pending = task.run([client, target]));
     },
     cancel,

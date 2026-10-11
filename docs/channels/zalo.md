@@ -47,7 +47,7 @@ Multi-account: add more entries under `channels.zalo.accounts.<id>`, each with i
 
 ## What it is
 
-Zalo is a Vietnam-focused messaging app. Its Bot API lets the Gateway run a bot for both 1:1 conversations and group chats. Routing back to Zalo is deterministic. The model never chooses channels.
+Zalo is a Vietnam-focused messaging app. Its Bot API lets the Gateway run a bot for both 1:1 conversations and group chats. Replies go back to Zalo. The model never chooses channels.
 
 This page covers **Zalo Bot Creator / Marketplace bots**. **Zalo Official Account (OA) bots** are a different product surface and may behave differently. This page does not cover them.
 
@@ -85,7 +85,7 @@ Group chats are supported by the plugin (`chatTypes: ["direct", "group"]`) and g
 
 - `channels.zalo.groupPolicy`: `open` | `allowlist` | `disabled`.
 - `channels.zalo.groupAllowFrom` restricts which sender IDs can trigger the bot in groups. Falls back to `allowFrom` when unset.
-- Default resolution: when `channels.zalo` is configured, an unset `groupPolicy` resolves to `open`. When `channels.zalo` is missing entirely, runtime fails closed to `allowlist`.
+- Default resolution: when `channels.zalo` is configured, an unset `groupPolicy` resolves to `open`. When `channels.zalo` is missing entirely, runtime defaults to `allowlist`.
 - Reported real-world caveat: on some Marketplace-bot setups the bot could not be added to a group at all. If you hit that, verify with your bot's Zalo Bot Platform settings. It is a platform-side constraint, not an OpenClaw policy.
 
 ## Long-polling vs webhook
@@ -104,6 +104,7 @@ Group chats are supported by the plugin (`chatTypes: ["direct", "group"]`) and g
 
 - Text: full support, chunked to 2000 characters.
 - Media: inbound/outbound, capped by `mediaMaxMb`.
+- Photo captions: truncated to fit the 2000-character limit, including polling replies.
 - Reactions, threads, polls, native commands: not supported by the plugin.
 - Streaming: the plugin declares block-streaming capability. Zalo has no dedicated outbound queue/merge-text tuning knobs, unlike some other regional channels. Verify current behavior in your environment if this matters for your use case.
 
