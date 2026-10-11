@@ -213,7 +213,9 @@ async function assertPinnedDirectoryAt(
   directory: string,
   message: string,
 ): Promise<void> {
-  const entry = await fs.lstat(directory);
+  // The pin records exact bigint identities; Windows file IDs can exceed the
+  // safe-integer range, so a number stat would round and never match.
+  const entry = await fs.lstat(directory, { bigint: true });
   if (!entry.isDirectory() || !sameFileIdentity(entry, pin.receipt.identity)) {
     throw new Error(message);
   }
