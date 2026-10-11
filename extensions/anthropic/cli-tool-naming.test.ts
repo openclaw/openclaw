@@ -26,7 +26,7 @@ describe("Claude CLI tool naming guidance", () => {
     const prompt = transformPrompt(TOOLING_PROMPT);
 
     expect(prompt?.startsWith(TOOLING_PROMPT)).toBe(true);
-    expect(prompt).toContain("`message` => `mcp__openclaw__message`");
+    expect(prompt).toContain("`mcp__openclaw__<name>`");
     expect(prompt).toContain("ToolSearch `select:mcp__openclaw__<name>`");
     expect(prompt).toContain("`mcp__openclaw__message(action=send)`");
   });
