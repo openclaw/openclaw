@@ -289,6 +289,9 @@ If an idempotent retry finds that the original admission is still pending, the
 tool returns an error with `sentBeforeError: true` and the existing run ID, without
 installing a watch. Inspect that run before retrying.
 
+Delegated turns write to the target session's transcript, including replies and workspace
+conflict reports from device-hosted workers. The requesting session keeps its own transcript.
+
 Replies come from the completed run's terminal result. When a same-session
 target has already delivered its final reply to the source conversation through
 `message`, OpenClaw skips the duplicate source-channel reply. Progress messages
