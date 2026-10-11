@@ -201,6 +201,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/app-server/thread-lifecycle.assignment-rotation.test.ts",
   "extensions/codex/src/app-server/thread-lifecycle.native.test.ts",
   "extensions/codex/src/app-server/thread-lifecycle.binding.test.ts",
+  "extensions/codex/src/app-server/thread-lifecycle.warm-cleanup.test.ts",
   "extensions/codex/src/app-server/thread-lifecycle.remote-hooks.test.ts",
   "extensions/codex/src/app-server/thread-lifecycle.native-config.test.ts",
   "extensions/codex/src/app-server/thread-shell-environment.native.test.ts",
