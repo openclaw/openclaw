@@ -24,7 +24,7 @@ function fixture() {
         sessionId,
         updatedAt: now,
         incognito: true,
-        origin: { provider: "synthetic" },
+        forkSource: { sessionKey: "agent:main:parent", sessionId: "parent-session" },
         goal: {
           schemaVersion: 1,
           id: "goal-1",
@@ -86,14 +86,14 @@ describe("memory actor Goal receipts", () => {
       throw new Error("Expected edited Goal");
     }
     first.result.goal.objective = "Caller mutation";
-    if (!first.sessionEntry?.goal || !first.previous?.goal || !first.previous.origin) {
+    if (!first.sessionEntry?.goal || !first.previous?.goal || !first.previous.forkSource) {
       throw new Error("Expected committed and previous Goal entries");
     }
     first.sessionEntry.goal.objective = "Changed returned entry";
     first.previous.goal.objective = "Changed returned previous entry";
-    first.previous.origin.provider = "Changed shared origin";
+    first.previous.forkSource.sessionId = "Changed shared source";
     expect(state.hot.entry?.goal?.objective).toBe("First edit");
-    expect(state.hot.entry?.origin?.provider).toBe("synthetic");
+    expect(state.hot.entry?.forkSource?.sessionId).toBe("parent-session");
     goals.mutate({
       ...input,
       operation: { ...input.operation, operationId: "edit-2", objective: "Second edit" },

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionActor, SessionActorAuthority } from "./session-actor-contract.js";
 import { createSessionActorFactory } from "./session-actor-durable.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
+import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
 
 // Architecture contract: factory acquisition and commands need no database or worker.
 vi.mock("node:sqlite", async (importOriginal) => ({
@@ -45,13 +46,14 @@ async function initialize(actor: SessionActor) {
     {
       commandId: "initialize",
       phaseId: "turn",
-      expectedState: {},
+      expectedState: buildRestartRecoveryExpectedState({ sessionId: "session-1", updatedAt: 1 }),
       lifecycle: {},
       turn: {
         agentId: "main",
         sessionKey: actor.target.sessionKey,
         options: {
           expectedSessionId: "session-1",
+          sessionFile: sessionKey,
           initialSessionEntry: { sessionId: "session-1", updatedAt: 1, incognito: true },
           messages: [{ message: { role: "user", content: "Hello" }, eventId: "user-1", now: 1 }],
         },

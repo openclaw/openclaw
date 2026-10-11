@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { SessionActorAuthority, SessionActorOutcome } from "./session-actor-contract.js";
 import { createMemorySessionActorOwner } from "./session-actor-memory.js";
 import type { SessionPendingInputWorkerFacts } from "./session-pending-input.types.js";
+import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
 import type { SessionTurnPlan } from "./session-turn.types.js";
+import type { InternalSessionEntry } from "./types.js";
 
 const sessionKey = "agent:main:dashboard:incognito-transcript-test";
 const sessionId = "session-1";
@@ -37,7 +39,7 @@ function turn(
 }
 
 async function fixture(
-  initialEntry: Partial<NonNullable<SessionTurnPlan["options"]["initialSessionEntry"]>> = {},
+  initialEntry: Partial<InternalSessionEntry> = {},
   cliWriter?: SessionTurnPlan["cliWriter"],
 ) {
   const owner = createMemorySessionActorOwner({ agentId: "main", path });
@@ -51,7 +53,7 @@ async function fixture(
       {
         commandId: "initialize",
         phaseId: "turn",
-        expectedState: {},
+        expectedState: buildRestartRecoveryExpectedState({ sessionId: "session-1", updatedAt: 1 }),
         lifecycle: {},
         turn: {
           ...turn(
@@ -231,7 +233,10 @@ describe("memory actor transcript", () => {
         {
           commandId: "stage",
           phaseId: "turn",
-          expectedState: {},
+          expectedState: buildRestartRecoveryExpectedState({
+            sessionId: "session-1",
+            updatedAt: 1,
+          }),
           lifecycle: {},
           pending: {
             kind: "stage",

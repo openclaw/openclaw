@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionActor, SessionActorAuthority } from "./session-actor-contract.js";
 import { createMemorySessionActorOwner } from "./session-actor-memory.js";
+import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
 import type { SessionTurnPlan } from "./session-turn.types.js";
 
 // A memory actor must not allocate either persistence or database-worker capacity.
@@ -36,7 +37,7 @@ async function fixture() {
     {
       commandId: "accept",
       phaseId: "turn",
-      expectedState: {},
+      expectedState: buildRestartRecoveryExpectedState({ sessionId: "session-1", updatedAt: 1 }),
       lifecycle: {},
       turn: {
         agentId: "main",
@@ -97,7 +98,10 @@ describe("memory session actor", () => {
           commandId: "source",
           phaseId: "recovery",
           sessionId: "session-1",
-          expectedState: {},
+          expectedState: buildRestartRecoveryExpectedState({
+            sessionId: "session-1",
+            updatedAt: 1,
+          }),
           lifecycle: {},
           runId: "recovery-run",
           turn: turn("source-input", {
@@ -122,7 +126,10 @@ describe("memory session actor", () => {
           {
             commandId: "later-input",
             phaseId: "recovery",
-            expectedState: {},
+            expectedState: buildRestartRecoveryExpectedState({
+              sessionId: "session-1",
+              updatedAt: 1,
+            }),
             lifecycle: {},
             turn: turn("later-input", {
               role: "user",
@@ -161,7 +168,10 @@ describe("memory session actor", () => {
         {
           commandId: "recover",
           phaseId: "recovery",
-          expectedState: {},
+          expectedState: buildRestartRecoveryExpectedState({
+            sessionId: "session-1",
+            updatedAt: 1,
+          }),
           lifecycle: {},
           recovery: {
             sources: [],
@@ -221,7 +231,7 @@ describe("memory session actor", () => {
       throw new Error("Expected a committed receipt");
     }
     const retained = actor.snapshot(authority);
-    next.receipt.afterVersion.sequence = 100;
+    Object.assign(next.receipt.afterVersion, { sequence: 100 });
     next.receipt.transcript.after.rawSeq = 100;
     expect(actor.snapshot(authority)).toEqual(retained);
     const stale = await actor.patch(
