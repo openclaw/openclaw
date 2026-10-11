@@ -334,16 +334,17 @@ export function createConversationsSendTool(
         throw error;
       }
       const base = jsonResult(result);
-      // Settle the reservation against the outcome. Only a confirmed "sent" commits;
-      // "queued" (enqueue-only, unconfirmed), "suppressed", and "unknown" have not
-      // reached the peer, so they release the reservation and draw no nudge. This
-      // matches the delivery owner's confirmed-delivery definition and the message
-      // tool (which has no "queued" concept). A `replay` reservation is left unsettled
-      // (the Gateway deduped it to the completed receipt), so it neither re-commits nor
-      // nudges. The soft reminder fires from the second committed send onward unless
-      // turnSendNudge is explicitly disabled.
+      // Settle the reservation against the outcome. Only "suppressed" releases it:
+      // nothing will reach the peer. "queued" means the delivery queue holds durable
+      // custody and recovery still delivers it, and "unknown" may already have landed,
+      // so both commit like "sent". This matches the message tool, which charges every
+      // send that was not suppressed or failed, and keeps sends retried during a
+      // platform outage from all queueing past the cap. A `replay` reservation is left
+      // unsettled (the Gateway deduped it to the completed receipt), so it neither
+      // re-commits nor nudges. The soft reminder fires from the second committed send
+      // onward unless turnSendNudge is explicitly disabled.
       if (reservation?.status === "reserved") {
-        if (result.status !== "sent") {
+        if (result.status === "suppressed") {
           releaseTurnSend(reservation.reservation);
         } else {
           const sendCount = commitTurnSend(reservation.reservation);

@@ -494,56 +494,49 @@ describe("conversations_send per-turn send budget", () => {
     expect(first.details).not.toHaveProperty("turnSendNotice");
   });
 
-  it.each(["suppressed", "queued", "unknown"] as const)(
-    "does not count a %s (unconfirmed) Gateway result",
+  it("does not count a suppressed Gateway result", async () => {
+    const deps = createDeps();
+    deps.callGatewayMock.mockResolvedValueOnce({
+      status: "suppressed",
+      conversationRef: conversation.conversationRef,
+      channel: "reef",
+    } as never);
+    const tool = createConversationsSendTool(budgetOptions, deps);
+    const args = { conversationRef: conversation.conversationRef, message: "hi" };
+    await tool.execute("c1", args);
+    const second = await tool.execute("c2", args);
+    // A suppressed send never reaches the peer, so the following send is the first
+    // counted delivery and draws no nudge.
+    expect(softNotice(second)).toBeUndefined();
+  });
+
+  it.each(["queued", "unknown"] as const)(
+    "charges a %s Gateway result against the hard cap",
     async (status) => {
       const deps = createDeps();
+      // queued: the delivery queue holds custody and recovery still delivers it.
+      // unknown: the send may already have reached the peer.
       deps.callGatewayMock.mockResolvedValueOnce({
         status,
         conversationRef: conversation.conversationRef,
         channel: "reef",
       } as never);
-      const tool = createConversationsSendTool(budgetOptions, deps);
+      const tool = createConversationsSendTool(
+        { ...budgetOptions, config: { tools: { message: { maxMessagesPerTurnPerTarget: 1 } } } },
+        deps,
+      );
       const args = { conversationRef: conversation.conversationRef, message: "hi" };
-      await tool.execute("c1", args);
-      const second = await tool.execute("c2", args);
-      // Only a confirmed "sent" counts. This first send was not confirmed delivered
-      // (queued is enqueue-only; suppressed/unknown never reached the peer), so the
-      // following send is the first success and draws no nudge.
-      expect(softNotice(second)).toBeUndefined();
+      const first = await tool.execute("c1", args);
+      expect(first.details).toMatchObject({ status });
+      expect(softNotice(first)).toBeUndefined();
+      expect(deps.callGatewayMock).toHaveBeenCalledTimes(1);
+      // A distinct follow-up operation is blocked before the Gateway call, so repeated
+      // sends during an outage cannot all queue and later deliver past the cap.
+      const blocked = await tool.execute("c2", args);
+      expectSchemaValidCappedResult(blocked);
+      expect(deps.callGatewayMock).toHaveBeenCalledTimes(1);
     },
   );
-
-  it("counts a queued-then-sent pair as a single first delivery under the hard cap", async () => {
-    const deps = createDeps();
-    // First send is only enqueued (unconfirmed): it must not consume the cap.
-    deps.callGatewayMock.mockResolvedValueOnce({
-      status: "queued",
-      conversationRef: conversation.conversationRef,
-      channel: "reef",
-      queueId: "queue-1",
-    } as never);
-    const tool = createConversationsSendTool(
-      { ...budgetOptions, config: { tools: { message: { maxMessagesPerTurnPerTarget: 1 } } } },
-      deps,
-    );
-    const args = { conversationRef: conversation.conversationRef, message: "hi" };
-    const queued = await tool.execute("c1", args);
-    // Queued does not count, so the cap is untouched and the Gateway was still reached.
-    expect(queued.details).toMatchObject({ status: "queued" });
-    expect(softNotice(queued)).toBeUndefined();
-    expect(deps.callGatewayMock).toHaveBeenCalledTimes(1);
-    // The subsequent confirmed "sent" is the first counted delivery, so it is admitted.
-    const sent = await tool.execute("c2", args);
-    expect(sent.details).toMatchObject({ status: "sent" });
-    expect(softNotice(sent)).toBeUndefined();
-    expect(deps.callGatewayMock).toHaveBeenCalledTimes(2);
-    // With the cap now reached by that one confirmed delivery, a third send is blocked
-    // before the Gateway call.
-    const blocked = await tool.execute("c3", args);
-    expectSchemaValidCappedResult(blocked);
-    expect(deps.callGatewayMock).toHaveBeenCalledTimes(2);
-  });
 
   it("lets an idempotent replay through the cap without double-counting or a fresh nudge", async () => {
     const deps = createDeps();
