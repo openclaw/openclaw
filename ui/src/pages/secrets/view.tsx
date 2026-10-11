@@ -189,60 +189,68 @@ function SecretsTable(props: SecretsStoreViewProps) {
               </thead>
               <tbody>
                 <For each={props.entries} keyed={(entry) => entry.name}>
-                  {(entry) => (
-                    <tr tabindex="0" aria-label={entry().name}>
-                      <td data-label={t("secretsStore.name")}>
-                        <code class="secrets-store__name" title={entry().name}>
-                          {entry().name}
-                        </code>
-                      </td>
-                      <td data-label={t("secretsStore.access")}>
-                        <span class={`secrets-store__mode secrets-store__mode--${entry().kind}`}>
-                          {t(
-                            entry().kind === "secret"
-                              ? "secretsStore.protectedSecret"
-                              : "secretsStore.agentReadable",
-                          )}
-                        </span>
-                      </td>
-                      <td data-label={t("secretsStore.value")}>
-                        <span
-                          class={[
-                            "secrets-store__value",
-                            { "secrets-store__value--secret": entry().kind === "secret" },
-                          ]}
-                          title={entry().kind === "env" ? entry().value : undefined}
+                  {(entry) => {
+                    const value = () => {
+                      const item = entry();
+                      return item.kind === "env" ? item.value : undefined;
+                    };
+                    const hosts = () => {
+                      const item = entry();
+                      return item.kind === "secret" && item.allowedHosts?.length
+                        ? item.allowedHosts.join(", ")
+                        : t("secretsStore.noAllowedHosts");
+                    };
+                    return (
+                      <tr tabindex="0" aria-label={entry().name}>
+                        <td data-label={t("secretsStore.name")}>
+                          <code class="secrets-store__name" title={entry().name}>
+                            {entry().name}
+                          </code>
+                        </td>
+                        <td data-label={t("secretsStore.access")}>
+                          <span class={`secrets-store__mode secrets-store__mode--${entry().kind}`}>
+                            {t(
+                              entry().kind === "secret"
+                                ? "secretsStore.protectedSecret"
+                                : "secretsStore.agentReadable",
+                            )}
+                          </span>
+                        </td>
+                        <td data-label={t("secretsStore.value")}>
+                          <span
+                            class={[
+                              "secrets-store__value",
+                              { "secrets-store__value--secret": entry().kind === "secret" },
+                            ]}
+                            title={value()}
+                          >
+                            {value() ?? SECRET_MASK}
+                          </span>
+                        </td>
+                        <td data-label={t("secretsStore.allowedHosts")}>
+                          <span class="secrets-store__hosts">{hosts()}</span>
+                        </td>
+                        <td data-label={t("secretsStore.updated")}>
+                          <time
+                            class="secrets-store__updated"
+                            datetime={new Date(entry().updatedAtMs).toISOString()}
+                            title={new Intl.DateTimeFormat(getLocale(), {
+                              dateStyle: "medium",
+                              timeStyle: "short",
+                            }).format(new Date(entry().updatedAtMs))}
+                          >
+                            {updatedLabel(entry())}
+                          </time>
+                        </td>
+                        <td
+                          class="secrets-store__actions-cell"
+                          data-label={t("secretsStore.actions")}
                         >
-                          {entry().kind === "env" ? entry().value : SECRET_MASK}
-                        </span>
-                      </td>
-                      <td data-label={t("secretsStore.allowedHosts")}>
-                        <span class="secrets-store__hosts">
-                          {entry().kind === "secret" && (entry().allowedHosts?.length ?? 0) > 0
-                            ? entry().allowedHosts?.join(", ")
-                            : t("secretsStore.noAllowedHosts")}
-                        </span>
-                      </td>
-                      <td data-label={t("secretsStore.updated")}>
-                        <time
-                          class="secrets-store__updated"
-                          datetime={new Date(entry().updatedAtMs).toISOString()}
-                          title={new Intl.DateTimeFormat(getLocale(), {
-                            dateStyle: "medium",
-                            timeStyle: "short",
-                          }).format(new Date(entry().updatedAtMs))}
-                        >
-                          {updatedLabel(entry())}
-                        </time>
-                      </td>
-                      <td
-                        class="secrets-store__actions-cell"
-                        data-label={t("secretsStore.actions")}
-                      >
-                        <EntryMenu view={props} entry={entry()} />
-                      </td>
-                    </tr>
-                  )}
+                          <EntryMenu view={props} entry={entry()} />
+                        </td>
+                      </tr>
+                    );
+                  }}
                 </For>
               </tbody>
             </table>

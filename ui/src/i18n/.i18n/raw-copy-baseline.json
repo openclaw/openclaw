@@ -271,7 +271,7 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/about/view.ts",
+      "path": "ui/src/pages/about/view.tsx",
       "text": "v"
     },
     {
