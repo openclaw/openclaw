@@ -426,8 +426,34 @@ describeLive("OpenAI AgentSession repeated compaction live", () => {
         expect(maximumObservedPromptTokens).toBeGreaterThan(272_000);
       }
 
-      await session.prompt(`Reply with exactly the durable marker I asked you to remember.`);
-      expect(session.getLastAssistantText()?.trim()).toBe(durableMarker);
+      let recallAssistantCompletions = 0;
+      let recallCompletionHasMarker = false;
+      const unsubscribe = session.subscribe((event) => {
+        if (event.type === "message_end" && event.message.role === "assistant") {
+          recallAssistantCompletions += 1;
+          recallCompletionHasMarker =
+            event.message.content
+              .filter((block) => block.type === "text")
+              .map((block) => block.text)
+              .join("")
+              .trim() === durableMarker;
+        }
+      });
+      try {
+        await session.prompt(`Reply with exactly the durable marker I asked you to remember.`);
+      } finally {
+        unsubscribe();
+      }
+      // Keep summary and completion facts when recall fails, without logging their contents.
+      const failureReceipt = JSON.stringify({
+        summaryMarkerRetained: sessionManager
+          .getBranch()
+          .filter((entry) => entry.type === "compaction")
+          .map((entry) => entry.summary.includes(durableMarker)),
+        recallAssistantCompletions,
+        recallCompletionHasMarker,
+      });
+      expect(session.getLastAssistantText()?.trim(), failureReceipt).toBe(durableMarker);
     },
     STRESS_PROFILE.testTimeoutMs,
   );
