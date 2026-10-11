@@ -11,6 +11,7 @@ import {
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -430,6 +431,7 @@ it("keeps pending Worker metadata, membership, and summary facts across optional
         updatedAt: 2,
         label: "Intermediate label",
       });
+      sessionChanges.emit({ ...scope, factsInvalidated: true });
       reading = listSessions({ client, context, request });
       await Promise.race([
         captured.promise,

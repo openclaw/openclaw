@@ -651,7 +651,7 @@ it("stages queued custody without rewriting the active session lifecycle", async
     expect(f.nativeEntry()).toEqual(before.entry);
   });
 });
-it.each(["assistant append", "empty append"] as const)(
+it.each(["assistant append", "empty append", "bookkeeping"] as const)(
   "commits terminal custody and guarded accounting atomically with %s",
   async (mode) => {
     await withActor(async (f) => {
@@ -699,30 +699,42 @@ it.each(["assistant append", "empty append"] as const)(
           commandId: `complete-${expectedModel}`,
           phaseId: "terminal",
           pendingFinalDelivery: pending,
-          turn: {
-            agentId: "main",
-            sessionKey: f.target.sessionKey,
-            options: {
-              expectedSessionId: f.scope.sessionId,
-              expectedWriterRunId: "terminal-run",
-              expectedSessionState: buildRestartRecoveryExpectedState(snapshot.entry!),
-              sessionLifecyclePatch: { status: "done", endedAt: 50 },
-              sessionFile: "synthetic.jsonl",
-              messages:
-                mode === "assistant append"
-                  ? [
-                      {
-                        eventId: "terminal-answer",
-                        message: {
-                          role: "assistant",
-                          content: "final response",
-                          idempotencyKey: "terminal-answer",
-                        },
-                      },
-                    ]
-                  : [],
-            },
-          },
+          ...(mode === "bookkeeping"
+            ? {
+                bookkeeping: {
+                  sessionId: f.scope.sessionId,
+                  lifecycleRevision: snapshot.entry!.lifecycleRevision ?? null,
+                  writerRunId: "terminal-run",
+                  expectedState: buildRestartRecoveryExpectedState(snapshot.entry!),
+                  lifecycle: { status: "done" as const, endedAt: 50 },
+                },
+              }
+            : {
+                turn: {
+                  agentId: "main",
+                  sessionKey: f.target.sessionKey,
+                  options: {
+                    expectedSessionId: f.scope.sessionId,
+                    expectedWriterRunId: "terminal-run",
+                    expectedSessionState: buildRestartRecoveryExpectedState(snapshot.entry!),
+                    sessionLifecyclePatch: { status: "done", endedAt: 50 },
+                    sessionFile: "synthetic.jsonl",
+                    messages:
+                      mode === "assistant append"
+                        ? [
+                            {
+                              eventId: "terminal-answer",
+                              message: {
+                                role: "assistant",
+                                content: "final response",
+                                idempotencyKey: "terminal-answer",
+                              },
+                            },
+                          ]
+                        : [],
+                  },
+                },
+              }),
           reducers: [
             { kind: "activity", updatedAt: 60 },
             {
@@ -734,22 +746,16 @@ it.each(["assistant append", "empty append"] as const)(
           ],
         },
       });
-      const stale = complete(initial, "stale-model");
-      await f.prepare(stale);
-      expect(f.mutate(stale)).toMatchObject({
-        kind: "rolled-back",
-        error: { message: "Session actor model changed before consolidation" },
-      });
-      expect(f.receipt()).toBeUndefined();
-      expect(f.nativeEntry()).toEqual(initial.entry);
-      expect(readTranscriptEventRows(f.database, f.scope.sessionId)).toEqual(originalEvents);
-
       const fresh = f.read();
       const staleOwner = complete(fresh, "fixture-before");
-      staleOwner.input.turn.options.expectedWriterRunId = "superseded-run";
+      if (staleOwner.input.bookkeeping) {
+        staleOwner.input.bookkeeping.writerRunId = "superseded-run";
+      } else {
+        staleOwner.input.turn.options.expectedWriterRunId = "superseded-run";
+      }
       expect(f.mutate(staleOwner)).toMatchObject({
         kind: "rolled-back",
-        error: { message: "Session actor turn was refused by its current owner" },
+        reason: "stale-state",
       });
       expect(f.receipt()).toBeUndefined();
       expect(f.nativeEntry()).toEqual(initial.entry);
@@ -795,10 +801,14 @@ it.each(["assistant append", "empty append"] as const)(
           },
         },
       });
-      expect(committed.value).toMatchObject({
-        kind: "session-turn",
-        result: { sessionEntry: committed.receipt.postimage.entry },
-      });
+      expect(committed.value).toMatchObject(
+        mode === "bookkeeping"
+          ? { kind: "bookkeeping" }
+          : {
+              kind: "session-turn",
+              result: { sessionEntry: committed.receipt.postimage.entry },
+            },
+      );
       const appended = committed.receipt.transcript.appendedMessages;
       if (mode === "assistant append") {
         expect(appended).toMatchObject([
@@ -822,9 +832,203 @@ it.each(["assistant append", "empty append"] as const)(
       expect(readTranscriptEventRows(f.database, f.scope.sessionId)).toHaveLength(
         originalEvents.length + (mode === "assistant append" ? 1 : 0),
       );
+      const mismatch = f.mutate({
+        type: "session.actor.patch",
+        input: {
+          target: f.target,
+          expected: rehydrated.version,
+          commandId: "superseded-model-selection",
+          phaseId: "terminal",
+          reducers: [
+            {
+              kind: "live-model",
+              expected: { modelProvider: "openai", model: "fixture-before" },
+              next: { modelProvider: "openai", model: "must-not-replace-current-selection" },
+              clearPending: true,
+            },
+          ],
+        },
+      });
+      expect(mismatch).toMatchObject({
+        kind: "committed",
+        receipt: { reducers: [{ kind: "live-model", changed: false }] },
+      });
+      expect(f.nativeEntry()?.model).toBe("fixture-after");
     });
   },
 );
+
+it("keeps restart receipt custody across retries and settles only the exact provider claim", async () => {
+  await withActor((f) => {
+    const claim = { sessionId: f.scope.sessionId, sourceTurnId: "source", toolCallId: "tool" };
+    runSqliteImmediateTransactionSync(f.database.db, () => {
+      writeSessionEntry(f.database, f.target.sessionKey, {
+        ...f.nativeEntry()!,
+        restartRecoveryDeliveryRunId: "run",
+        restartRecoveryDeliverySourceRunId: claim.sourceTurnId,
+      });
+    });
+    let sequence = 0;
+    const common = () => ({
+      target: f.target,
+      expected: f.read().version,
+      commandId: `receipt-${++sequence}`,
+      phaseId: "delivery",
+    });
+    const settle = (outcome: "confirmed" | "not-sent", toolCallId = claim.toolCallId) =>
+      f.mutate({
+        type: "session.actor.deliverySettled",
+        input: {
+          ...common(),
+          restart: { claim: { ...claim, toolCallId }, outcome, updatedAt: 20 },
+        },
+      });
+    expect(
+      f.mutate({
+        type: "session.actor.deliveryPending",
+        input: { ...common(), claim, updatedAt: 10 },
+      }),
+    ).toMatchObject({ kind: "committed", value: { disposition: "started" } });
+    expect(f.nativeEntry()).toMatchObject({
+      restartRecoveryDeliveryReceiptState: "terminal-pending",
+      restartRecoveryDeliveryToolCallId: claim.toolCallId,
+    });
+    expect(
+      f.mutate({
+        type: "session.actor.deliveryPending",
+        input: { ...common(), claim, updatedAt: 11 },
+      }),
+    ).toMatchObject({ kind: "committed", value: { disposition: "delivery-ambiguous" } });
+    expect(settle("confirmed", "unrelated-tool")).toMatchObject({ kind: "rolled-back" });
+    expect(f.nativeEntry()?.restartRecoveryDeliveryReceiptState).toBe("terminal-pending");
+    expect(settle("confirmed")).toMatchObject({
+      kind: "committed",
+      value: { disposition: "recorded" },
+    });
+    expect(settle("confirmed")).toMatchObject({
+      kind: "committed",
+      value: { disposition: "recorded" },
+    });
+    expect(settle("not-sent")).toMatchObject({
+      kind: "committed",
+      value: { disposition: "stale" },
+    });
+    expect(f.nativeEntry()?.restartRecoveryDeliveryReceiptState).toBe("delivered-terminal");
+    const nextClaim = { ...claim, sourceTurnId: "next-source" };
+    runSqliteImmediateTransactionSync(f.database.db, () => {
+      writeSessionEntry(f.database, f.target.sessionKey, {
+        ...f.nativeEntry()!,
+        restartRecoveryDeliverySourceRunId: nextClaim.sourceTurnId,
+        restartRecoveryDeliveryReceiptState: "terminal-pending",
+      });
+    });
+    for (const commandId of ["cancel", "cancel-replay"]) {
+      expect(
+        f.mutate({
+          type: "session.actor.deliverySettled",
+          input: {
+            ...common(),
+            commandId,
+            restart: { claim: nextClaim, outcome: "not-sent", updatedAt: 30 },
+          },
+        }),
+      ).toMatchObject({ kind: "committed", value: { disposition: "cleared" } });
+    }
+    expect(f.nativeEntry()?.restartRecoveryDeliveryReceiptState).toBeUndefined();
+    expect(f.nativeEntry()?.restartRecoveryDeliveryToolCallId).toBeUndefined();
+  });
+});
+
+it("publishes actual pending-final state and evidence only after live commit authority", async () => {
+  await withActor((f) => {
+    const claim: HarnessCompletionRecovery = {
+      taskId: "task",
+      taskStatus: "succeeded",
+      taskRunId: "task-run",
+      sourceRunId: "source",
+      requesterSessionKey: f.target.sessionKey,
+      requesterAgentId: "main",
+      sessionId: f.scope.sessionId,
+    };
+    runSqliteImmediateTransactionSync(f.database.db, () => {
+      writeSessionEntry(f.database, f.target.sessionKey, {
+        ...f.nativeEntry()!,
+        abortedLastRun: true,
+        mainRestartRecovery: { cycleId: "cycle", revision: 2, chargedAttempts: 0 },
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: "answer",
+          createdAt: 10,
+          intentId: "intent",
+          context: { channel: "telegram", to: "chat" },
+          deliveries: [{ id: "payload", state: "queued" }],
+        },
+      });
+    });
+    const initial = f.read();
+    const command = {
+      type: "session.actor.deliverySettled",
+      input: {
+        target: f.target,
+        expected: initial.version,
+        commandId: "settle",
+        phaseId: "delivery",
+        settlement: {
+          sessionId: f.scope.sessionId,
+          intentId: "intent",
+          deliveryId: "payload",
+          state: "delivered",
+        },
+        evidence: {
+          claim,
+          result: { channel: "telegram", target: { id: "chat" }, platformMessageId: "message" },
+        },
+      },
+    } satisfies Mutation;
+    f.hooks.admit = (stage) => {
+      if (stage === "commit") {
+        throw new Error("harness claim revoked");
+      }
+    };
+    expect(f.mutate(command)).toMatchObject({ kind: "rolled-back" });
+    expect(f.nativeEntry()).toEqual(initial.entry);
+    delete f.hooks.admit;
+    expect(
+      f.mutate({ ...command, input: { ...command.input, expected: f.read().version } }),
+    ).toMatchObject({
+      kind: "committed",
+      value: { state: "delivered", wakeRecovery: true },
+      receipt: {
+        postimage: {
+          entry: {
+            mainRestartRecovery: { revision: 3 },
+            restartRecoveryTerminalDeliveryEvidence: [
+              {
+                harnessCompletion: claim,
+                durableFinalReceipt: {
+                  intentId: "intent",
+                  deliveryId: "payload",
+                  platformMessageId: "message",
+                },
+              },
+            ],
+          },
+        },
+      },
+    });
+    expect(
+      f.mutate({
+        ...command,
+        input: {
+          ...command.input,
+          expected: f.read().version,
+          commandId: "replay",
+          evidence: undefined,
+        },
+      }),
+    ).toMatchObject({ kind: "committed", value: { state: "delivered", wakeRecovery: false } });
+  });
+});
 
 it("checks recovery provenance in the actor transaction and refuses a later unrelated input", async () => {
   await withActor(async (f) => {

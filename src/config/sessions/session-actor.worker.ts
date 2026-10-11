@@ -30,7 +30,10 @@ import {
   hydrateSessionActorState,
   projectSessionActorHotState,
 } from "./session-actor-hydration.worker.js";
-import { applySessionActorPhase } from "./session-actor-phase.worker.js";
+import {
+  applySessionActorPhase,
+  SessionActorStaleStateError,
+} from "./session-actor-phase.worker.js";
 import {
   cloneSessionActorStoredState,
   withSessionActorTransactionState,
@@ -357,7 +360,13 @@ export function createSessionActorWorker(
           return stale;
         }
         observed.settled("rolled-back");
-        return { kind: "rolled-back", error: errorFacts(error) };
+        return {
+          kind: "rolled-back",
+          error: errorFacts(error),
+          ...(error instanceof SessionActorStaleStateError
+            ? { reason: "stale-state" as const }
+            : {}),
+        };
       }
     },
     close() {

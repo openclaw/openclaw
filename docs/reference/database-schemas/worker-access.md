@@ -480,10 +480,8 @@ completion contract.
 
 ### Session phase actor
 
-The shared session actor serves input acceptance, run adoption, and recovery
-checkpoints for durable and worker-backed incognito sessions. Other turn phases retain their
-existing routes until their cutover. The actor lives inside the canonical agent
-execution worker and shares its physical writer
+The shared session actor contract serves durable and incognito sessions. The actor
+lives inside the canonical agent execution worker and shares its physical writer
 queue; it does not introduce another database, worker service, or writer owner.
 Durable actors bind the physical database identity and session key. Incognito
 actors bind the existing memory database's handle and incarnation.
@@ -495,6 +493,21 @@ the captured memory execution owner. Closing that owner invalidates captured
 targets; acquisition cannot revive its old run authority or create a replacement
 memory database. Follow-on input, turn, and delivery cutovers must honor the
 native decline until P12 selects the worker-backed actor.
+
+Agent attempts retain this actor for SessionManager transcript and tool-result
+appends. Each append captures its exact committed snapshot before fallible
+publication; tool-result acknowledgement follows that durable receipt. Initial
+entry, header, and first event commit together. Cancellation after commit reports
+the committed-error contract, and an unknown outcome fences fallback instead of
+repeating the append. Attempt teardown releases the actor only after accepted
+and nested writes actually drain, including when the consumer's bounded wait ends.
+Released synchronous SDK methods and explicit compaction maintenance keep their
+named compatibility adapters and publish through the existing receipt owners.
+
+These callers consume resident anchor, watermark, and model-context membership
+facts from the actor's replica. Message payload hydration, admitted-user role
+validation, and cold or off-path history retain bounded reads; transcript metadata
+does not stand in for message contents.
 
 A cold actor read hydrates its entry, participants, membership, pending-input
 custody, and transcript metadata in one autocommit statement. A cold phase
@@ -543,6 +556,16 @@ transcript receipts cannot certify complete pending-input and model-context
 facts. Native, SDK, recovery, and maintenance writers keep their existing
 publication and final-authority guards during this incremental cutover.
 
+Phase C entry readers share this bounded MAIN residency. Eligible exact-entry
+and ordered-cohort reads reuse complete actor state or its entry-only projection;
+a cold miss loads the requested entries in one existing worker batch. Complete
+entry commit receipts refresh the entry projection without claiming transcript,
+membership, or pending-input coverage. Missing ancillary facts still use the
+existing reader. Scoped receipt counters keep unrelated session writes from
+evicting resident entries, while a before/after write-token check preserves one
+consistent cohort. Physical-source and live-authority checks remain with the
+caller. Schemas, stored data, and update behavior are unchanged.
+
 Confirmed rollback leaves committed state intact. A lost reply reconciles
 against native commit evidence; an unknown outcome fences further commands and
 disclosure until a read rehydrates the original owner. Neither path replays the
@@ -561,8 +584,9 @@ its memory database.
 
 Actor command diagnostics record phase and settlement without payloads. Census
 consumers count commands, database worker requests, transfer frames, native SQL
-statements, and committed transactions separately. Schemas, stored bytes, durability,
-retention, permissions, released SDK completion contracts, and update behavior
+statements, and committed transactions separately. Unmigrated phase callers keep
+their existing owners. Schemas, stored bytes, durability, retention, permissions,
+released SDK completion contracts, and update behavior
 are unchanged; existing published updaters need no actor migration.
 
 Chat input recorders retain the admitted actor through accepted-work settlement.
@@ -3198,8 +3222,8 @@ binary values and is discarded after settlement or owner closure. Source-file in
 host. Cache pruning uses that same worker for its live count and oldest-row deletion,
 with a transaction recheck before each batch of at most 100 rows. The host releases
 admission and yields between batches; only definite pre-entry lock failures retry.
-Cache and source-hash reads use the retained publication worker, with caller
-authority checked after delivery. Source snapshots use that same publication owner;
+Cache and source-hash reads use the retained publication worker, checking that
+its handle is open at admission. Source snapshots use that same publication owner;
 read-only diagnostics use the retrieval worker. Shadow session publication prepares
 its current tombstone predicate in the original published worker while retaining
 the workspace lock through commit. Ordinary publication checks that predicate only
@@ -3208,12 +3232,12 @@ publication authority. Cold opening remains separate work. Schemas, cache retent
 and stored formats are unchanged.
 
 Session-only lexical searches return hits and recall metadata in one retrieval
-request. Their existing generation owner retains exclusive admission through
-result selection; source mutations and forget retain shared admission through
-settlement. Already-admitted ordinary readers can finish on their shared generation.
-Rebuild and provider recovery release read custody before waiting, then prepare
-fresh results. Forget therefore either precedes the fused read or follows its
-acceptance. Cancellation and close join the accepted read and lock cleanup. Mixed and semantic searches
+request. An in-process reader/writer queue orders retrieval and publication, and
+the workspace queue orders source mutations and Forget through settlement.
+Rebuild and provider recovery release the read slot before waiting, then prepare
+fresh results. Cancellation and close join accepted work. These queues do not
+coordinate foreign processes: CLI and maintenance writers must use the Gateway
+or hold exclusive ownership while it is stopped. Mixed and semantic searches
 retain their final asynchronous metadata reader. No schema, retention, durability,
 SDK, or update migration changes.
 
@@ -4471,17 +4495,28 @@ history worker, with foreground priority and row-generation checks before
 publication. The host evaluates fallback notices using its current runtime plugin
 aliases; configuration and model policy do not travel to the read worker.
 
+Targeted Memory transcript notifications queue session identities directly. The
+indexing owner resolves their corpus and forgetting tombstones once when the
+queued sync runs, then uses that same snapshot for archive selection and indexing.
+An append or forgetting operation committed while the notification waits is
+therefore included without an earlier duplicate corpus read. Full startup scans,
+custom-store selection, archive cleanup, and forgetting semantics are unchanged.
+
 List pages wait for current selection metadata, then materialize their selected
 rows. Concurrent pages share bounded exact-row preparation; an admitted background
 batch may finish, and the remaining display drain resumes after those requests
 release their priority. Catalog-only replacement
 reuses complete accepted database facts for live resident rows while rebuilding
 their selected model presentation, without another worker transfer. Stored-data, configuration,
-physical-store, and lifecycle invalidations revoke those facts. Transcript updates
-revoke watermarks immediately even inside a coalesced presentation window. Cold
-archives retain no complete snapshot; exact archive reads remain bounded by the
-existing materialization cache. Schema, persisted data, and update behavior are
-unchanged.
+physical-store, and lifecycle invalidations revoke those facts. Entry-only receipts
+retain Board and transcript facts for the same session lifecycle; ACP and workspace
+facts remain reusable while their bindings are unchanged. Canonical transcript
+receipts replace the retained watermark before observers run, so summary freshness
+does not require another row read. Unmatched transcript notifications invalidate
+the watermark and use the existing bounded refresh. Summary-free streams keep
+their coalesced presentation window. Cold archives retain no complete snapshot;
+exact archive reads remain bounded by the existing materialization cache. Schema,
+persisted data, and update behavior are unchanged.
 
 Durable keyed RPCs prepare only their selected dirty or archived rows through the
 worker before synchronous presentation; placement waits recheck that preparation.

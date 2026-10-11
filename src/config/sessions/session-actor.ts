@@ -109,6 +109,7 @@ export function createSessionActor(params: {
   let fenced = false;
   const assertAccepted = () => params.lifetime.assertCurrent();
   const assertReadable = () => {
+    params.lifetime.assertAdmission?.();
     params.lifetime.assertReadable();
     if (closing) {
       throw new Error("Session actor is released");
@@ -127,6 +128,7 @@ export function createSessionActor(params: {
         throw new Error("Session actor phase is settled");
       }
     } else {
+      params.lifetime.assertAdmission?.();
       assertCurrent();
     }
     const retained = Promise.withResolvers<T>();

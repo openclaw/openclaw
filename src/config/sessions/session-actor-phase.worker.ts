@@ -1,6 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
+import {
+  hasActiveRestartRecoveryDeliveryClaim,
+  hasExactRestartRecoveryDeliveryClaim,
+  projectRestartRecoveryDeliverySettlement,
+  resolveRestartRecoveryTerminalDeliveryDisposition,
+} from "./restart-recovery-receipt-state.js";
 import { mergeRestartRecoveryTerminalRunIds } from "./restart-recovery-state.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { applySessionActorAppend } from "./session-actor-append.worker.js";
@@ -32,6 +38,8 @@ type Mutation = Exclude<
   { type: "session.actor.read" }
 >;
 
+export class SessionActorStaleStateError extends Error {}
+
 /** The actor lends one transaction; nested kernels retain admission without opening savepoints. */
 export function applySessionActorPhase(
   command: Mutation,
@@ -42,6 +50,7 @@ export function applySessionActorPhase(
   const sessionKey = state.hot.target.sessionKey;
   const incarnation =
     state.hot.target.database.kind !== "file" ? state.hot.target.database.incarnation : undefined;
+  let entryUpdate: SessionEntry | undefined;
   const requireEntry = () => {
     const entry = state.hot.entry;
     if (!entry) {
@@ -60,6 +69,8 @@ export function applySessionActorPhase(
     sessionId: string,
     expectedState: SessionTranscriptTurnExpectedState,
     patch: SessionTranscriptTurnLifecyclePatch & Pick<SessionEntry, "activeWriterRunId">,
+    expectedLifecycleRevision?: string | null,
+    defer = false,
   ) => {
     const entry = requireEntry();
     if (
@@ -69,15 +80,15 @@ export function applySessionActorPhase(
           expectedSessionId: sessionId,
           expectedSessionState: expectedState,
           expectedWriterRunId: expectedState.expectedWriterRunId,
+          expectedLifecycleRevision,
         },
       )
     ) {
-      throw new Error("Session actor lifecycle changed before its durable phase");
+      throw new SessionActorStaleStateError(
+        "Session actor lifecycle changed before its durable phase",
+      );
     }
-    if (Object.keys(patch).length === 0) {
-      return;
-    }
-    writeEntry({
+    const next = {
       ...entry,
       ...patch,
       ...(patch.restartRecoveryTerminalRunIds
@@ -88,7 +99,14 @@ export function applySessionActorPhase(
             ),
           }
         : {}),
-    });
+    };
+    if (!isDeepStrictEqual(entry, next)) {
+      if (defer) {
+        entryUpdate = next;
+      } else {
+        writeEntry(next);
+      }
+    }
   };
   const turn = (input: SessionTurnPlan) => {
     if (
@@ -106,7 +124,7 @@ export function applySessionActorPhase(
       incarnation,
     );
     if (committed.result.rejectedReason || committed.result.predicateSkipped) {
-      throw new Error("Session actor turn was refused by its current owner");
+      throw new SessionActorStaleStateError("Session actor turn was refused by its current owner");
     }
     return committed;
   };
@@ -211,9 +229,31 @@ export function applySessionActorPhase(
       }
       break;
     }
-    case "session.actor.deliveryPending":
-      lifecycle(command.input.sessionId, command.input.expectedState, command.input.lifecycle);
+    case "session.actor.deliveryPending": {
+      const input = command.input;
+      if (input.claim) {
+        const entry = state.hot.entry;
+        if (!entry) {
+          result = { disposition: "stale" };
+          break;
+        }
+        const disposition = resolveRestartRecoveryTerminalDeliveryDisposition(entry, input.claim);
+        if (disposition === "startable") {
+          entryUpdate = {
+            ...entry,
+            restartRecoveryDeliveryReceiptState: "terminal-pending",
+            restartRecoveryDeliveryToolCallId: input.claim.toolCallId,
+            updatedAt: input.updatedAt,
+          };
+          result = { disposition: "started" };
+        } else {
+          result = { disposition };
+        }
+      } else {
+        lifecycle(input.sessionId, input.expectedState, input.lifecycle, undefined, true);
+      }
       break;
+    }
     case "session.actor.appendToolResult":
       result = command.input.append
         ? applySessionActorAppend(command.input.append, state, context)
@@ -255,41 +295,57 @@ export function applySessionActorPhase(
       break;
     }
     case "session.actor.completeTurn": {
-      const { pendingFinalDelivery, turn: input } = command.input;
-      result = turn(
-        pendingFinalDelivery
-          ? {
-              ...input,
-              options: {
-                ...input.options,
-                sessionLifecyclePatch: {
-                  ...input.options.sessionLifecyclePatch,
-                  pendingFinalDelivery,
-                },
-              },
-            }
-          : input,
-      );
-      const terminal = input.options.messages.length
-        ? undefined
-        : input.options.sessionLifecyclePatch;
-      if (terminal || pendingFinalDelivery) {
-        const entry = requireEntry();
-        const next = {
-          ...entry,
-          ...terminal,
-          ...(terminal?.restartRecoveryTerminalRunIds
+      const { pendingFinalDelivery, turn: input, bookkeeping } = command.input;
+      if (bookkeeping) {
+        if (requireEntry().activeWriterRunId !== bookkeeping.writerRunId) {
+          throw new SessionActorStaleStateError(
+            "Session actor completion writer changed before its durable phase",
+          );
+        }
+        lifecycle(
+          bookkeeping.sessionId,
+          bookkeeping.expectedState,
+          { ...bookkeeping.lifecycle, ...(pendingFinalDelivery ? { pendingFinalDelivery } : {}) },
+          bookkeeping.lifecycleRevision,
+          true,
+        );
+        result = { kind: "bookkeeping" };
+      } else {
+        result = turn(
+          pendingFinalDelivery
             ? {
-                restartRecoveryTerminalRunIds: mergeRestartRecoveryTerminalRunIds(
-                  entry.restartRecoveryTerminalRunIds,
-                  terminal.restartRecoveryTerminalRunIds,
-                ),
+                ...input,
+                options: {
+                  ...input.options,
+                  sessionLifecyclePatch: {
+                    ...input.options.sessionLifecyclePatch,
+                    pendingFinalDelivery,
+                  },
+                },
               }
-            : {}),
-          ...(pendingFinalDelivery ? { pendingFinalDelivery } : {}),
-        };
-        if (!isDeepStrictEqual(entry, next)) {
-          writeEntry(next);
+            : input,
+        );
+        const terminal = input.options.messages.length
+          ? undefined
+          : input.options.sessionLifecyclePatch;
+        if (terminal || pendingFinalDelivery) {
+          const entry = requireEntry();
+          const next = {
+            ...entry,
+            ...terminal,
+            ...(terminal?.restartRecoveryTerminalRunIds
+              ? {
+                  restartRecoveryTerminalRunIds: mergeRestartRecoveryTerminalRunIds(
+                    entry.restartRecoveryTerminalRunIds,
+                    terminal.restartRecoveryTerminalRunIds,
+                  ),
+                }
+              : {}),
+            ...(pendingFinalDelivery ? { pendingFinalDelivery } : {}),
+          };
+          if (!isDeepStrictEqual(entry, next)) {
+            entryUpdate = next;
+          }
         }
       }
       const completion = command.input.completion;
@@ -305,12 +361,49 @@ export function applySessionActorPhase(
       break;
     }
     case "session.actor.deliverySettled": {
-      const entry = requireEntry();
-      const settlement = projectPendingFinalDeliverySettlement(entry, command.input.settlement);
-      if (settlement.patch) {
-        writeEntry({ ...entry, ...settlement.patch });
+      const input = command.input;
+      const entry = state.hot.entry;
+      if (!entry) {
+        result = input.restart ? { disposition: "stale" } : { state: "stale", wakeRecovery: false };
+        break;
       }
-      result = { state: settlement.state };
+      if (input.restart) {
+        const { claim, outcome, updatedAt } = input.restart;
+        const patch = projectRestartRecoveryDeliverySettlement(entry, claim, outcome, updatedAt);
+        if (patch) {
+          entryUpdate = { ...entry, ...patch };
+          result = { disposition: outcome === "confirmed" ? "recorded" : "cleared" };
+        } else if (!hasActiveRestartRecoveryDeliveryClaim(entry, claim)) {
+          result = { disposition: "stale" };
+        } else if (
+          hasExactRestartRecoveryDeliveryClaim(entry, claim) &&
+          entry.restartRecoveryDeliveryReceiptState === "delivered-terminal"
+        ) {
+          result = { disposition: outcome === "confirmed" ? "recorded" : "stale" };
+        } else if (
+          outcome === "not-sent" &&
+          !entry.restartRecoveryDeliveryReceiptState &&
+          !entry.restartRecoveryDeliveryToolCallId
+        ) {
+          result = { disposition: "cleared" };
+        } else {
+          throw new Error(
+            outcome === "confirmed"
+              ? "failed to persist terminal delivery completion"
+              : "failed to clear terminal delivery intent",
+          );
+        }
+        break;
+      }
+      const settlement = projectPendingFinalDeliverySettlement(
+        entry,
+        input.settlement,
+        input.evidence,
+      );
+      if (settlement.patch) {
+        entryUpdate = { ...entry, ...settlement.patch };
+      }
+      result = { state: settlement.state, wakeRecovery: settlement.wakeRecovery };
       break;
     }
     case "session.actor.patch":
@@ -318,15 +411,35 @@ export function applySessionActorPhase(
   }
   const reducers: SessionActorReducerOutcome[] = [];
   if (command.input.reducers?.length) {
-    let entry = requireEntry();
+    let entry = entryUpdate ?? requireEntry();
     for (const [index, reducer] of command.input.reducers.entries()) {
-      const next = reduceSessionActorEntry(entry, [reducer]);
+      let next: SessionEntry;
+      try {
+        next = reduceSessionActorEntry(entry, [reducer]);
+      } catch (error) {
+        if (reducer.kind !== "usage") {
+          throw error;
+        }
+        reducers.push({
+          index,
+          kind: reducer.kind,
+          changed: false,
+          failure:
+            error instanceof Error
+              ? { name: error.name, message: error.message }
+              : { name: "Error", message: "Session usage reduction failed" },
+        });
+        continue;
+      }
       reducers.push({ index, kind: reducer.kind, changed: !isDeepStrictEqual(entry, next) });
       entry = next;
     }
     if (reducers.some(({ changed }) => changed)) {
-      writeEntry(entry);
+      entryUpdate = entry;
     }
+  }
+  if (entryUpdate) {
+    writeEntry(entryUpdate);
   }
   const committedTurn =
     result && "kind" in result && result.kind === "session-turn"
