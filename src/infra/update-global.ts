@@ -7,6 +7,7 @@ import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { valid as validSemver } from "semver";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
 import { pathExists } from "../utils.js";
 import { resolveBunGlobalInstallOwner } from "./detect-package-manager.js";
@@ -61,6 +62,7 @@ export type ResolvedGlobalInstallTarget = ResolvedGlobalInstallCommand & {
   };
 };
 
+const log = createSubsystemLogger("update");
 const PRIMARY_PACKAGE_NAME = "openclaw";
 /** npm-compatible spec used when the user asks to install the moving main branch. */
 const OPENCLAW_MAIN_PACKAGE_SPEC = "github:openclaw/openclaw#main";
@@ -1046,9 +1048,6 @@ export async function resolveGlobalInstallTarget(params: {
       ? (pnpmIsolatedPackage?.packageRoot ??
         (verifiedPnpmIsolatedGlobalRoot && params.pkgRoot ? params.pkgRoot : fallbackPackageRoot))
       : fallbackPackageRoot;
-  if (process.platform === "freebsd" && !packageRoot) {
-    throw new SystemPackageOwnershipError("ownership-unavailable", "paths");
-  }
   // Manager discovery can outlive the planning snapshot. The selected
   // destination starts a fresh inspection before its runtime is selected.
   await createSystemPackageOwnershipInspection(params.timeoutMs).assertUnowned(packageRoot);
@@ -1262,7 +1261,16 @@ export async function cleanupGlobalRenameDirs(params: {
       if (remainingMs <= 0) {
         break;
       }
-      await createSystemPackageOwnershipInspection(remainingMs).assertUnowned(target);
+      let warning: string | undefined;
+      await createSystemPackageOwnershipInspection(remainingMs, {
+        onWarning: (message) => {
+          warning = message;
+        },
+      }).assertUnowned(target);
+      if (warning) {
+        log.warn(warning);
+        break;
+      }
       const current = await fs.lstat(target);
       if (!current.isDirectory() || !sameFileIdentity(stat, current)) {
         continue;

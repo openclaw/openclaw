@@ -80,11 +80,20 @@ export async function captureLegacyPackageBackupRetirement(
           );
           break;
         }
-        const inspection = createSystemPackageOwnershipInspection(remainingMs);
+        let warning: string | undefined;
+        const inspection = createSystemPackageOwnershipInspection(remainingMs, {
+          onWarning: (message) => {
+            warning = message;
+          },
+        });
         if (entry.identity.isSymbolicLink()) {
           await inspection.assertEntryUnowned(entry.path);
         } else {
           await inspection.assertUnowned(entry.path);
+        }
+        if (warning) {
+          messages.push(`Historical package backups retained in ${root}: ${warning}`);
+          break;
         }
         const message = await discardPackageUpdateBackup(
           entry.path,

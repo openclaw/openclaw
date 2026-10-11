@@ -10,6 +10,7 @@ import { writePackageRoot } from "../../infra/package-update-steps.test-support.
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { pkgQueryResult } from "../../infra/update-freebsd-pkg-ownership.test-support.js";
 import * as updateRunner from "../../infra/update-runner-git.js";
+import { createSystemPackageOwnershipInspection } from "../../infra/update-system-package-ownership.js";
 import * as exec from "../../process/exec.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -94,23 +95,30 @@ describe("FreeBSD pkg update admission", () => {
           killed: false,
           termination: "exit",
         });
-        vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(
-          pkgQueryResult(
-            ownership === "owned" ? `${root}/package.json\n` : "",
-            ownership === "unknown" ? { code: 1 } : {},
-          ),
-        );
+        const runCommand = vi
+          .fn<typeof exec.runCommandBuffered>()
+          .mockResolvedValue(
+            pkgQueryResult(
+              ownership === "owned" ? `${root}/package.json\n` : "",
+              ownership === "unknown" ? { code: 1 } : {},
+            ),
+          );
+        const onWarning = vi.fn();
         const admission = shared.resolveGlobalManager({
           root,
           installKind: "package",
           timeoutMs: 1000,
+          pkgOwnership: createSystemPackageOwnershipInspection(1000, { runCommand, onWarning }),
         });
-        if (ownership === "unowned") {
+        if (ownership !== "owned") {
           await expect(admission).resolves.toBe("npm");
           expect(command).toHaveBeenCalled();
+          expect(onWarning).toHaveBeenCalledTimes(ownership === "unknown" ? 1 : 0);
         } else {
+          await expect(admission).rejects.toBeInstanceOf(shared.UpdatePreMutationError);
           await expect(admission).rejects.toMatchObject({
-            reason: `${manager}-${ownership === "owned" ? "owned-install" : "ownership-unavailable"}`,
+            name: "UpdatePreMutationError",
+            reason: `${manager}-owned-install`,
           });
           expect(command).not.toHaveBeenCalled();
         }

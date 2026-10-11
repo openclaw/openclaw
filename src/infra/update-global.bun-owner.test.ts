@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi, afterEach } from "vitest";
+import { describe, expect, it, vi, afterEach, beforeEach } from "vitest";
 import * as exec from "../process/exec.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -23,6 +23,16 @@ import {
 import { resolvePnpmGlobalDirFromGlobalRoot } from "./update-native-package-owner.js";
 import { resolveUpdateInstallSurface } from "./update-runner-install-surface.js";
 import { createGatewayUpdateCheck } from "./update-startup.js";
+
+const runHostCommandBuffered = exec.runCommandBuffered;
+beforeEach(() => {
+  vi.spyOn(exec, "runCommandBuffered").mockImplementation((argv, options) =>
+    argv[0] === "pacman" || argv[0] === "/usr/sbin/pkg"
+      ? Promise.resolve(pkgQueryResult())
+      : runHostCommandBuffered(argv, options),
+  );
+});
+afterEach(() => vi.restoreAllMocks());
 
 async function writeGlobalPackageJson(packageRoot: string, version: string): Promise<void> {
   await fs.writeFile(
@@ -379,16 +389,12 @@ describe("pnpm isolated global install discovery", () => {
         timeoutMs: 1000,
         pkgRoot,
       });
-      if (!probeSucceeds && process.platform === "freebsd") {
-        await expect(resolution).rejects.toMatchObject({ reason: "pkg-ownership-unavailable" });
-      } else {
-        await expect(resolution).resolves.toEqual({
-          manager: "pnpm",
-          command: pnpmCommand,
-          globalRoot: probeSucceeds ? defaultPnpmRoot : null,
-          packageRoot: probeSucceeds ? path.join(defaultPnpmRoot, "openclaw") : null,
-        });
-      }
+      await expect(resolution).resolves.toEqual({
+        manager: "pnpm",
+        command: pnpmCommand,
+        globalRoot: probeSucceeds ? defaultPnpmRoot : null,
+        packageRoot: probeSucceeds ? path.join(defaultPnpmRoot, "openclaw") : null,
+      });
       expect(runCommand.mock.calls.map(([argv]) => argv)).toEqual([[pnpmCommand, "root", "-g"]]);
     });
   });

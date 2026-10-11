@@ -185,9 +185,6 @@ export async function runGlobalPackageUpdateSteps(params: {
     if (admission) {
       return await packageUpdateFailure(admission);
     }
-    if (process.platform === "freebsd" && !params.installTarget.packageRoot) {
-      throw new SystemPackageOwnershipError("ownership-unavailable", "paths");
-    }
     const inspection = createSystemPackageOwnershipInspection(params.timeoutMs);
     await inspection.assertUnowned(params.packageRoot);
     await inspection.assertUnowned(params.installTarget.packageRoot);

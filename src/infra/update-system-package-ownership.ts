@@ -4,11 +4,13 @@ import path from "node:path";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { normalizeSupportDiagnosticErrorCode } from "../logging/diagnostic-support-redaction.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { isPathInside } from "./fs-safe.js";
 import { hasNodeErrorCode } from "./path-guards.js";
+import { UpdatePreMutationError } from "./update-pre-mutation-error.js";
 
 export const PKG_INSPECTION_TIMEOUT_MS = 30_000;
 
@@ -41,8 +43,7 @@ type InspectionDiagnostic = { operation: InspectionOperation } & (
   | { budgetMs: number }
 );
 
-export class SystemPackageOwnershipError extends Error {
-  readonly reason: string;
+export class SystemPackageOwnershipError extends UpdatePreMutationError {
   readonly owned: boolean;
   constructor(
     kind: "owned-install" | "ownership-unavailable",
@@ -61,6 +62,7 @@ export class SystemPackageOwnershipError extends Error {
         ? `${owner.label} inspection exhausted its shared ${diagnostic.budgetMs} ms budget during ${diagnostic.operation}. `
         : `${owner.label} inspection failed during ${diagnostic.operation}${code ? ` (${code})` : ""}. `;
     super(
+      `${owner.manager}-${kind}`,
       prefix +
         (kind === "owned-install"
           ? `This installation contains files installed by ${owner.label}. ${owner.guidance}; openclaw update will not replace package-owned files.`
@@ -68,8 +70,6 @@ export class SystemPackageOwnershipError extends Error {
             ? `${owner.label} paths could not be inspected completely. Check access to the registered package directories and installation paths, and resolve any inspection timeout before retrying.`
             : `${owner.label} ownership could not be verified. Restore access to the active ${owner.manager} database and configuration, then retry.`),
     );
-    this.name = "SystemPackageOwnershipError";
-    this.reason = `${owner.manager}-${kind}`;
     this.owned = kind === "owned-install";
   }
 }
@@ -81,18 +81,15 @@ export type SystemPackageOwnershipInspection = ReturnType<
 async function readPackageFiles(
   owner: NonNullable<ReturnType<typeof packageOwner>>,
   timeoutMs: number,
+  runCommand: typeof runCommandBuffered,
 ): Promise<string[]> {
   // -N prevents the base-system pkg launcher from bootstrapping. Pin the builtin
   // query: pkg expands aliases once, and plugin initialization precedes dispatch.
-  const result = await runCommandBuffered([...owner.command], {
+  const result = await runCommand([...owner.command], {
     timeoutMs,
     env: owner.env,
     maxOutputBytes: { stdout: 16 * 1024 * 1024, stderr: 64 * 1024 },
   });
-  // Most Linux installations do not use pacman. Only a missing executable is optional.
-  if (owner.manager === "pacman" && extractErrorCode(result.error) === "ENOENT") {
-    return [];
-  }
   // pkg may emit a config error with exit 0; only complete, silent output is authoritative.
   const output = result.stdout.toString("utf8");
   const files = output === "" ? [] : output.slice(0, -1).split("\n");
@@ -116,9 +113,18 @@ async function readPackageFiles(
 }
 
 /** One planning snapshot; create a fresh inspection before installation effects. */
-export function createSystemPackageOwnershipInspection(timeoutMs = PKG_INSPECTION_TIMEOUT_MS) {
+const log = createSubsystemLogger("update");
+
+export function createSystemPackageOwnershipInspection(
+  timeoutMs = PKG_INSPECTION_TIMEOUT_MS,
+  options: {
+    runCommand?: typeof runCommandBuffered;
+    onWarning?: (message: string) => void;
+  } = {},
+) {
   const owner = packageOwner();
   let files: Promise<string[]> | undefined;
+  let unavailable = false;
   const directories = new Map<string, Promise<string>>();
   const assertions = new Map<string, Promise<void>>();
   const budget = Number.isFinite(timeoutMs)
@@ -189,7 +195,7 @@ export function createSystemPackageOwnershipInspection(timeoutMs = PKG_INSPECTIO
     const inventory = await read(
       "database",
       `${owner.manager} query`,
-      () => (files ??= readPackageFiles(owner, budget)),
+      () => (files ??= readPackageFiles(owner, budget, options.runCommand ?? runCommandBuffered)),
     );
     const matches = (candidate: string, file: string) =>
       entryOnly ? candidate === file : isPathInside(candidate, file);
@@ -210,7 +216,7 @@ export function createSystemPackageOwnershipInspection(timeoutMs = PKG_INSPECTIO
     }
   };
   const inspect = (root: string | null | undefined, entryOnly = false) => {
-    if (!owner || !root) {
+    if (!owner || !root || unavailable) {
       return Promise.resolve();
     }
     const resolvedRoot = path.resolve(root);
@@ -223,6 +229,16 @@ export function createSystemPackageOwnershipInspection(timeoutMs = PKG_INSPECTIO
         });
       }
       return assertUnowned(resolvedRoot, entryOnly);
+    }).catch((error: unknown) => {
+      if (!(error instanceof SystemPackageOwnershipError) || error.owned) {
+        throw error;
+      }
+      if (unavailable) {
+        return;
+      }
+      unavailable = true;
+      const warn = options.onWarning ?? ((message: string) => log.warn(message));
+      warn(`${error.message} Continuing without verified system-package ownership.`);
     });
   };
   return {
