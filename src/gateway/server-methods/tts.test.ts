@@ -66,6 +66,7 @@ vi.mock("../../tts/provider-registry.js", () => ({
   listSpeechProviders: mocks.listSpeechProviders,
 }));
 
+// mock-isolation: TTS RPCs supply preference settings without reading the host machine's SQLite preference path.
 vi.mock("../../tts/tts-preferences.js", () => ({
   prepareTtsPreferences: async () => ({}),
 }));

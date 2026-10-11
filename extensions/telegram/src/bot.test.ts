@@ -20,6 +20,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import {
+  getSessionEntryAsync,
   listSessionEntries,
   normalizeSessionDeliveryState,
   upsertSessionEntry,
@@ -1731,6 +1732,9 @@ describe("createTelegramBot", () => {
   });
 
   it("keeps hot-reloaded model pins on the next assembled turn", async () => {
+    using _sessionReader = vi
+      .spyOn(telegramBotDepsForTest, "getSessionEntryAsync")
+      .mockImplementation(getSessionEntryAsync);
     const storePath = createTelegramTestStorePath("model-fresh-cfg");
     const debounceMs = 4321;
     const startupConfig = makeModelPickerConfig(storePath, {

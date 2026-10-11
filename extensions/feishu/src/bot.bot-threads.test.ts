@@ -36,6 +36,7 @@ vi.mock("./reply-dispatcher.js", () => ({
     ensureNoVisibleReplyFallback: vi.fn(),
   })),
 }));
+// mock-isolation: thread admission keeps previews disabled without reading persisted session reasoning settings.
 vi.mock("./reasoning-preview.js", () => ({
   resolveFeishuReasoningPreviewEnabled: vi.fn(async () => false),
 }));
