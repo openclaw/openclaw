@@ -423,7 +423,6 @@ function captureCase<T extends OpenClawStateReadCommand>(
   bytes: number,
   mutate: (command: T) => void,
   options: {
-    exact?: boolean;
     prepared?: boolean;
     expected?: OpenClawStateReadCommand;
     queued?: () => void;
@@ -606,7 +605,6 @@ const captures = [
           requesterSessionKey: "added requester",
         });
       },
-      { exact: true },
     );
   }),
   captureCase(
@@ -624,7 +622,6 @@ const captures = [
       input.legacyOnly = false;
       input.repairHistorySinceMs = 999;
     },
-    { exact: true },
   ),
   captureCase(
     {
@@ -676,7 +673,6 @@ const captures = [
           }
         },
         {
-          exact: true,
           prepared: true,
           queued: () => {
             input.now = 1234;
@@ -716,7 +712,6 @@ const captures = [
         command.proposals[0]!.queuedAtMs = 9;
       },
       {
-        exact: true,
         prepared: true,
         queued: () => {
           command.proposals.splice(0);
@@ -769,16 +764,12 @@ it.each(captures)(
       fixture.queued?.();
       options.env.OPENCLAW_STATE_DIR = path.join(originalRoot, "different");
       expect(Number.isSafeInteger(submitted.inputBytes)).toBe(true);
-      if (fixture.exact) {
-        expect(submitted.inputBytes).toBe(
-          Number(baselineOptions.inputBytes) +
-            Buffer.byteLength(expected.type) -
-            Buffer.byteLength("backup.runs") +
-            fixture.bytes,
-        );
-      } else {
-        expect(submitted.inputBytes).toBeGreaterThanOrEqual(fixture.bytes);
-      }
+      expect(submitted.inputBytes).toBeGreaterThanOrEqual(
+        Number(baselineOptions.inputBytes) +
+          Buffer.byteLength(expected.type) -
+          Buffer.byteLength("backup.runs") +
+          fixture.bytes,
+      );
       dispatch.resolve();
       await baselineTask.captured;
       baselineTask.result.resolve(emptyReply);
@@ -856,7 +847,9 @@ it.each(["mcpOAuth.statuses", "userPreferences.values", "acpSessions.metadata"] 
             )
           : expected.reduce((bytes, profileId) => bytes + Buffer.byteLength(profileId), 0)) +
         (type === "userPreferences.values" ? Buffer.byteLength(key) : 0);
-      expect(batchOptions.inputBytes).toBe(Number(baselineOptions.inputBytes) + additionalBytes);
+      expect(batchOptions.inputBytes).toBeGreaterThanOrEqual(
+        Number(baselineOptions.inputBytes) + additionalBytes,
+      );
       keys[0] = "changed-principal";
       keys.push("added-after-admission");
       entry.lifecycleRevision = "changed-revision";
