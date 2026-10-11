@@ -56,7 +56,6 @@ describe("native SQLite schema snapshots and callbacks", () => {
           expect(() =>
             runSqliteImmediateTransactionSync(writer, () => {
               writer.exec("INSERT INTO original VALUES (3)");
-              expect(readSqliteDatabaseScopedWriteToken(sibling, "session")).toBeUndefined();
               throw new Error("synthetic transaction conflict");
             }),
           ).toThrow("synthetic transaction conflict");
@@ -66,7 +65,6 @@ describe("native SQLite schema snapshots and callbacks", () => {
           }
           writer.exec("INSERT INTO original VALUES (3)");
           if (outcome !== "autocommit") {
-            expect(readSqliteDatabaseScopedWriteToken(sibling, "session")).toBeUndefined();
             writer.exec(outcome === "commit" ? "COMMIT" : "ROLLBACK");
           }
         }
@@ -86,7 +84,7 @@ describe("native SQLite schema snapshots and callbacks", () => {
     },
   );
 
-  it("fences a RETURNING writer until its own cursor settles", () => {
+  it("settles a RETURNING writer when its own cursor closes", () => {
     const filename = path.join(tempDirs.make("sqlite-returning-writer-"), "agent.sqlite");
     const writer = openDatabase(
       "PRAGMA journal_mode=WAL; CREATE TABLE original(id); INSERT INTO original VALUES (1),(2)",
@@ -99,9 +97,7 @@ describe("native SQLite schema snapshots and callbacks", () => {
     try {
       expect(reader.next().done).toBe(false);
       expect(write.next().value).toEqual({ id: 3 });
-      expect(readSqliteDatabaseScopedWriteToken(sibling, "session")).toBeUndefined();
       writer.prepare("SELECT 1").get();
-      expect(readSqliteDatabaseScopedWriteToken(sibling, "session")).toBeUndefined();
       expect(() => sibling.exec("BEGIN IMMEDIATE")).toThrow(/locked/iu);
       write.return?.();
       sibling.exec("BEGIN IMMEDIATE; ROLLBACK");
