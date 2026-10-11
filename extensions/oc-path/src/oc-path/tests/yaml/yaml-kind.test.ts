@@ -170,6 +170,11 @@ describe("universal verbs — yaml typed keys", () => {
   it.each([
     ["first: ignored\n.nan: original\n", "NaN", 2],
     ["first: ignored\n? [1, 2]\n: original\n", '"[1,2]"', 3],
+    [
+      "%YAML 1.1\n---\n2001-12-15: original\n",
+      `"${new Date("2001-12-15T00:00:00Z").toString()}"`,
+      3,
+    ],
   ])(
     "keeps read locations without creating unaddressable replacement keys: %s",
     (raw, key, line) => {
