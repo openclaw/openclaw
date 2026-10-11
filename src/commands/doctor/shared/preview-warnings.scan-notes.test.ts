@@ -51,6 +51,7 @@ vi.mock("./bundled-plugin-load-paths.js", () => ({
     ),
 }));
 
+// mock-isolation: The real scanner reads host auth-store state; tests script deterministic warning output instead.
 vi.mock("./stale-oauth-profile-shadows.js", () => ({
   scanStaleOAuthProfileShadows: () => ({
     hits: staleOAuthShadowState.warnings.map((warning, index) => ({
