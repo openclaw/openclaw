@@ -388,6 +388,35 @@ function createMcpNamespaceModel(
 
 const SWARM_AGENTS_API_CONTENT = `type AgentJsonSchema = Record<string, unknown>;
 
+type BoundedLaunchBoundary = "isolated" | "artifact-only" | "evidence-only" | "summary-only";
+type BoundedLaunchRequirement = "optional" | "required";
+
+interface BoundedLaunchHandoff {
+  candidateDigest?: string;
+  artifactRefs?: string[];
+  evidenceRefs?: string[];
+  summary?: string;
+}
+
+interface BoundedLaunchCandidateBinding {
+  version: 1;
+  candidateDigest: string;
+  sourceDigest: string;
+  recipeDigest: string;
+  policyDigest: string;
+}
+
+interface BoundedLaunchOptions {
+  boundary: BoundedLaunchBoundary;
+  requirements?: {
+    sandbox?: "inherit" | "require";
+    candidateDigest?: BoundedLaunchRequirement;
+    artifactRefs?: BoundedLaunchRequirement;
+  };
+  handoff?: BoundedLaunchHandoff;
+  candidateBinding?: BoundedLaunchCandidateBinding;
+}
+
 interface AgentRunOptions {
   label?: string;
   model?: string;
@@ -396,6 +425,7 @@ interface AgentRunOptions {
   agentId?: string;
   schema?: AgentJsonSchema;
   phase?: string;
+  boundedLaunch?: BoundedLaunchOptions;
 }
 
 interface AgentsApi {
