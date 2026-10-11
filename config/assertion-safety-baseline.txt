@@ -2752,7 +2752,6 @@ ui/src/lit/stream-auto-follow-controller.ts	1
 ui/src/lit/subscriptions-controller.ts	1
 ui/src/local-storage.ts	2
 ui/src/main.ts	1
-ui/src/pages/activity/view.ts	2
 ui/src/pages/agents/model-config.ts	2
 ui/src/pages/agents/panels-overview.ts	2
 ui/src/pages/agents/panels-status-files.ts	1
@@ -2844,7 +2843,4 @@ ui/src/pages/profile/identity-section.ts	2
 ui/src/pages/secrets/view.ts	3
 ui/src/pages/sessions/view.ts	6
 ui/src/pages/skills/view.ts	2
-ui/src/pages/usage/view-details.ts	4
-ui/src/pages/usage/view-overview.ts	2
-ui/src/pages/usage/view.ts	5
 ui/src/pages/worktrees/worktrees-page.ts	2
