@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { render } from "lit";
 import { afterEach, beforeEach, expect, it } from "vitest";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { renderChatThread } from "./chat-thread.ts";
 import {
@@ -50,7 +51,7 @@ it("keeps streaming text and open status details stable behind the dot preview",
   transcript.hostDisconnected();
 });
 
-it("hides tool previews until the dots are clicked, without hiding the answer", () => {
+it("hides tool previews until the dots are clicked, without hiding the answer", async () => {
   const container = document.body.appendChild(document.createElement("div"));
   const transcript = createTestTranscript();
   const props = {
@@ -97,7 +98,7 @@ it("hides tool previews until the dots are clicked, without hiding the answer", 
   );
   expect(tool).not.toBeNull();
   tool!.click();
-  expect(container.textContent).toContain("Detailed file contents.");
+  await waitForSolid(() => expect(container.textContent).toContain("Detailed file contents."));
   expect(container.textContent).toContain("The answer keeps streaming.");
   transcript.hostDisconnected();
 });

@@ -2,15 +2,18 @@
 
 import { render } from "lit";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
+import { createInitializationContext } from "../chat-pane.test-support.ts";
 import { renderMessageGroup } from "./chat-message-group.ts";
 import {
   createAssistantCanvasBlock,
   createAssistantMessage,
   createMessageGroup,
 } from "./chat-message.test-support.ts";
+import { renderToolFixture, settleToolBridges } from "./chat-tool-render.test-support.ts";
 
 it("keeps MCP App raw details reachable from its widget menu", async () => {
-  const container = document.createElement("div");
+  const container = createApplicationContextProvider(createInitializationContext());
   onTestFinished(async () => {
     await vi.dynamicImportSettled();
     render(null, container);
@@ -23,7 +26,7 @@ it("keeps MCP App raw details reachable from its widget menu", async () => {
     ),
     "assistant",
   );
-  render(
+  await renderToolFixture(
     renderMessageGroup(group, {
       showReasoning: true,
       showToolCalls: true,
@@ -35,6 +38,7 @@ it("keeps MCP App raw details reachable from its widget menu", async () => {
   );
   await vi.dynamicImportSettled();
   expect(customElements.get("mcp-app-view")).toBeDefined();
+  await settleToolBridges(container);
 
   const dropdown = container.querySelector("wa-dropdown");
   expect(dropdown).toBeInstanceOf(HTMLElement);

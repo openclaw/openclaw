@@ -9,6 +9,7 @@ import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 
 type ModalDialogAttributes = SolidJSX.HTMLAttributes<HTMLElement> & {
   label: string;
+  manual?: boolean;
   description?: string;
   "onModal-cancel"?: (event: Event) => void;
 };
