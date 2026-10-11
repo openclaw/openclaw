@@ -18,6 +18,7 @@ import {
   formatCronLookupMiss,
   handleCronCliError,
   parseCronIntegerOption,
+  parseCronStringOption,
   printCronJson,
   printCronShow,
   requireCronJobId,
@@ -208,6 +209,34 @@ export function registerCronSimpleCommands(cron: Command) {
             ...(offset !== undefined ? { offset } : {}),
             ...(typeof opts.sort === "string" ? { sortDir: opts.sort } : {}),
             limit,
+          });
+          printCronJson(res);
+        } catch (err) {
+          handleCronCliError(err);
+        }
+      }),
+  );
+
+  addGatewayClientOptions(
+    createCronOutputCommand(cron, "history")
+      .description("Read a retained automation run transcript")
+      .argument("<id>", "Job id")
+      .requiredOption("--run-id <runId>", "Recorded cron run id")
+      .option("--cursor <cursor>", "Opaque nextCursor from the previous page")
+      .option("--limit <n>", "Max messages (Gateway default 100, maximum 200)")
+      .action(async (idArg, opts) => {
+        try {
+          const id = requireCronJobId(idArg);
+          const runId = parseCronStringOption(opts.runId, "--run-id");
+          const limit = parseCronIntegerOption(opts.limit, "--limit");
+          // Reject blank cursors without normalizing the server-owned opaque token.
+          // Cursor binding and pagination limits remain the Gateway's responsibility.
+          parseCronStringOption(opts.cursor, "--cursor");
+          const res = await callGatewayFromCli("cron.history", opts, {
+            id,
+            runId,
+            ...(opts.cursor !== undefined ? { cursor: opts.cursor } : {}),
+            ...(limit !== undefined ? { limit } : {}),
           });
           printCronJson(res);
         } catch (err) {

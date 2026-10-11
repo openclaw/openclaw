@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import { defaultRuntime } from "../../runtime.js";
 import { ExpectedCliError, formatCliJsonFailure } from "../failure-output.js";
 import { isCommandJsonOutputMode } from "../program/json-mode.js";
@@ -212,6 +213,96 @@ it.each([undefined, { enabled: false }])(
     }
   },
 );
+
+describe("cron history", () => {
+  it("returns the selected transcript page as JSON without changing its messages", async () => {
+    const historyPage = {
+      messages: [{ role: "assistant", content: [{ type: "text", text: "report".repeat(1_000) }] }],
+      activity: [{ kind: "compaction", id: "activity-1" }],
+      nextCursor: "opaque-bound-cursor+/=:%20",
+    };
+    callGatewayFromCli.mockResolvedValueOnce(historyPage);
+    await run(["history", "job-1", "--run-id", "run-1"]);
+    expect(callGatewayFromCli).toHaveBeenCalledExactlyOnceWith("cron.history", expect.anything(), {
+      id: "job-1",
+      runId: "run-1",
+    });
+    expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(historyPage);
+  });
+
+  it("forwards an opaque cursor unchanged and leaves page limits to the Gateway", async () => {
+    const cursor = " opaque-bound-cursor+/=:%20 ";
+    await run(["history", "job-1", "--run-id", "run-1", "--cursor", cursor, "--limit", "201"]);
+    expect(callGatewayFromCli).toHaveBeenCalledExactlyOnceWith("cron.history", expect.anything(), {
+      id: "job-1",
+      runId: "run-1",
+      cursor,
+      limit: 201,
+    });
+  });
+
+  it("inherits the automations alias, parent connection options, and JSON mode", async () => {
+    const program = new Command().name("openclaw").exitOverride();
+    registerCronCli(program);
+    const argv = [
+      "node",
+      "openclaw",
+      "automations",
+      "--port",
+      "18789",
+      "--token",
+      "test-token",
+      "history",
+      "job-1",
+      "--run-id",
+      "run-1",
+    ];
+    program.hook("preAction", (_parent, command) => {
+      expect(isCommandJsonOutputMode(command, argv)).toBe(true);
+    });
+    await program.parseAsync(argv);
+    expect(callGatewayFromCli).toHaveBeenCalledExactlyOnceWith(
+      "cron.history",
+      expect.objectContaining({ port: "18789", token: "test-token" }),
+      { id: "job-1", runId: "run-1" },
+    );
+  });
+
+  it.each([
+    { args: ["--run-id", "run-1"], error: /missing required argument/ },
+    { args: ["job-1"], error: /required option/ },
+    { args: ["  ", "--run-id", "run-1"], error: /exit 1/ },
+    { args: ["job-1", "--run-id", "  "], error: /exit 1/ },
+    { args: ["job-1", "--run-id", "run-1", "--cursor", "  "], error: /exit 1/ },
+    { args: ["job-1", "--run-id", "run-1", "--limit", "0"], error: /exit 1/ },
+    { args: ["job-1", "--run-id", "run-1", "--limit", "2x"], error: /exit 1/ },
+  ])("rejects invalid selection or paging before RPC: $args", async ({ args, error }) => {
+    await expect(run(["history", ...args])).rejects.toThrow(error);
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
+  });
+
+  it("uses the existing structured JSON failure for an unavailable transcript", async () => {
+    callGatewayFromCli.mockRejectedValueOnce(
+      new GatewayClientRequestError({
+        code: "UNAVAILABLE",
+        message: "Cron history is unavailable",
+      }),
+    );
+    const argv = process.argv;
+    process.argv = [...argv.slice(0, 2), "cron", "history", "job-1", "--run-id", "run-1", "--json"];
+    try {
+      const error = await run(process.argv.slice(3)).catch((caughtError: unknown) => caughtError);
+      expect(error).toBeInstanceOf(ExpectedCliError);
+      expect(formatCliJsonFailure(error)).toEqual({
+        ok: false,
+        error: { type: "cli_error", message: "Cron history is unavailable" },
+      });
+      expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    } finally {
+      process.argv = argv;
+    }
+  });
+});
 
 describe("cron runs", () => {
   it("queries all visible automations without a job selector", async () => {

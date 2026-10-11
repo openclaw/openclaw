@@ -439,7 +439,7 @@ Existing main-session jobs can still be renamed, disabled, or rescheduled after 
 
 An unresolved owner does not stop the scheduler: that job is skipped with an explanation in `state.lastError`, while other jobs continue. Run `openclaw doctor --fix` to repair unresolved multi-agent legacy ownership, set `agents.defaults.systemAgent.agentId`, or use `openclaw cron edit <job-id> --agent <id>` to repair the job. Sole-agent rosters and legacy default markers honored by the runtime already resolve an owner and need no owner migration. The explanation stays on the job. No agent run-history entry is created, because no agent run starts.
 
-`--json` always requests JSON output. Commands whose product is already a machine-readable result emit JSON results by default: `add`/`create`, `status`, `enable`, `disable`, `rm`/`remove`/`delete`, `run`, `edit`, `get`, and `runs`. They accept `--json` as the explicit machine-output spelling. `openclaw automations get <job-id>` returns the stored job JSON directly. Use `automations show <job-id>` when you want the human-readable view with delivery-route preview.
+`--json` always requests JSON output. Commands whose product is already a machine-readable result emit JSON results by default: `add`/`create`, `status`, `enable`, `disable`, `rm`/`remove`/`delete`, `run`, `edit`, `get`, `runs`, and `history`. They accept `--json` as the explicit machine-output spelling. `openclaw automations get <job-id>` returns the stored job JSON directly. Use `automations show <job-id>` when you want the human-readable view with delivery-route preview.
 
 `list` and `show` use human-readable output by default and switch to JSON with `--json`. `scratch` reads raw scratch content by default. With `--json` it prints the scratch plus revision metadata. Scratch writes return the revision result as JSON by default, and accept `--json` as the explicit machine-output spelling.
 
@@ -488,6 +488,32 @@ openclaw automations edit <job-id> --best-effort-deliver
 openclaw automations edit <job-id> --no-best-effort-deliver
 openclaw automations edit <job-id> --no-deliver
 ```
+
+### Read a retained run transcript
+
+Use `history` to inspect a recorded run's retained conversation without rerunning
+the job. Find its `runId` with `automations runs <job-id>`, then select that run:
+
+```bash
+openclaw automations history <job-id> --run-id <run-id>
+openclaw automations history <job-id> --run-id <run-id> --limit 50
+openclaw automations history <job-id> --run-id <run-id> --cursor '<nextCursor>' --limit 50
+```
+
+Both the job ID and `--run-id` are required. Results are JSON by default, with
+`messages`, optional `activity`, and an optional `nextCursor`. To read another
+page, pass the returned cursor unchanged with the same job and run selectors.
+The Gateway defaults to 100 messages per page and accepts `--limit` from 1 to 200;
+its response-size limit can return fewer messages. Missing or blank selectors,
+blank cursors, and invalid integer limits fail before a request is sent. Gateway
+errors, including an unavailable transcript or a cursor bound to another run,
+exit non-zero with the existing cron JSON failure envelope.
+
+This reads what the Gateway retains; it does not recover deleted or unrecorded
+output. A run that used a shared custom session can include later messages from
+that session. Retention and access rules are unchanged. The existing
+`openclaw gateway call cron.history --params '{"id":"<job-id>","runId":"<run-id>"}' --json`
+remains available for direct RPC access.
 
 ### History across automations
 
