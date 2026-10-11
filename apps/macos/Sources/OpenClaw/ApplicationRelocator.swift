@@ -38,6 +38,11 @@ enum ApplicationRelocator {
 
     enum LaunchDisposition: Equatable, Sendable {
         case continueLaunch(startUpdater: Bool)
+        /// A self-install is running in the background. The caller must not start
+        /// gateway, menu, onboarding, or other services from the transient bundle;
+        /// the app relaunches from the installed location once the copy finishes.
+        /// If the copy fails, the caller resumes that skipped startup instead of quitting.
+        case installing
         case terminating
     }
 
@@ -249,22 +254,53 @@ enum ApplicationRelocator {
         case let .handOff(destination):
             return relaunchAndTerminate(at: destination)
         case let .offerInstall(destination, replacing):
+            // presentAlert runs this completion before returning when activation is
+            // allowed (runModal). A --no-activate launch presents the alert later,
+            // after handleLaunch has already returned .continueLaunch.
             var disposition = LaunchDisposition.continueLaunch(startUpdater: false)
+            var confirmationReturned = false
             confirmInstall(replacing: replacing) { approved in
+                let ownsLaunch = !confirmationReturned
                 guard approved else { return }
-                do {
-                    try install(
-                        source: environment.bundleURL,
-                        destination: destination,
-                        replacing: replacing,
-                        fileManager: fileManager)
-                    disposition = relaunchAndTerminate(at: destination)
-                } catch {
-                    self.logger.error("Could not install app: \(error.localizedDescription, privacy: .public)")
-                    showFailure(
-                        "OpenClaw couldn’t be installed in Applications. Move it there manually, then open that copy.")
+                if ownsLaunch {
+                    disposition = .installing
+                }
+                // A multi-gigabyte copy on the main thread blocks
+                // applicationDidFinishLaunching and ignores SIGTERM inside write()
+                // (issue #134736). .installing tells the caller to skip startup.
+                let progressWindow = makeInstallProgressWindow(replacing: replacing)
+                AppActivation.shared.makeKeyAndOrderFront(window: progressWindow)
+                Task { @MainActor in
+                    defer { progressWindow.close() }
+                    do {
+                        try await install(
+                            source: environment.bundleURL,
+                            destination: destination,
+                            replacing: replacing,
+                            fileManager: fileManager)
+                        let relaunchDisposition = relaunchAndTerminate(at: destination)
+                        // The Applications copy exists. Spawn failure already asked the
+                        // user to open it. Quitting avoids a headless transient process
+                        // beside that installed app; a deferred session stays running.
+                        if ownsLaunch, case .continueLaunch = relaunchDisposition {
+                            AppDelegate.requestTermination()
+                        }
+                    } catch {
+                        self.logger.error(
+                            "Could not install app: \(error.localizedDescription, privacy: .public)")
+                        progressWindow.close()
+                        showFailure(
+                            "OpenClaw couldn’t be installed in Applications. Move it there manually, then open that copy.")
+                        // Same contract as .cannotInstall: show the alert, then keep this
+                        // temporary copy usable. .installing skipped startup, so resume it.
+                        // A deferred confirmation already continued launch.
+                        if ownsLaunch {
+                            AppDelegate.resumeLaunchAfterFailedInstall()
+                        }
+                    }
                 }
             }
+            confirmationReturned = true
             return disposition
         case .cannotInstall:
             let message =
@@ -881,23 +917,42 @@ extension ApplicationRelocator {
         source: URL,
         destination: URL,
         replacing: Bool,
-        fileManager: FileManager) throws
+        fileManager: FileManager) async throws
     {
         let parent = destination.deletingLastPathComponent()
         try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
         let staging = parent.appendingPathComponent(".\(destination.lastPathComponent).installing-\(UUID().uuidString)")
-        defer { try? fileManager.removeItem(at: staging) }
-        try fileManager.copyItem(at: source, to: staging)
 
-        if replacing {
-            let backupName = ".\(destination.lastPathComponent).backup-\(UUID().uuidString)"
-            _ = try fileManager.replaceItemAt(
-                destination,
-                withItemAt: staging,
-                backupItemName: backupName)
-            try? fileManager.removeItem(at: parent.appendingPathComponent(backupName))
-        } else {
-            try fileManager.moveItem(at: staging, to: destination)
+        // The bundle can exceed 2 GB. Copying it on the main thread blocks
+        // applicationDidFinishLaunching and leaves SIGTERM stuck in write().
+        do {
+            try await Task.detached(priority: .userInitiated) {
+                try FileManager().copyItem(at: source, to: staging)
+            }.value
+        } catch {
+            // Await the partial-copy delete. The failure path quits shortly after
+            // the alert, which would abandon a fire-and-forget multi-GB cleanup.
+            try? await Task.detached { try? FileManager().removeItem(at: staging) }.value
+            throw error
+        }
+
+        do {
+            if replacing {
+                let backupName = ".\(destination.lastPathComponent).backup-\(UUID().uuidString)"
+                let backupURL = parent.appendingPathComponent(backupName)
+                _ = try fileManager.replaceItemAt(
+                    destination,
+                    withItemAt: staging,
+                    backupItemName: backupName)
+                // The backup is the previous installed bundle. Remove it off the
+                // main thread and await it so relaunch does not abandon the delete.
+                try? await Task.detached { try? FileManager().removeItem(at: backupURL) }.value
+            } else {
+                try fileManager.moveItem(at: staging, to: destination)
+            }
+        } catch {
+            try? await Task.detached { try? FileManager().removeItem(at: staging) }.value
+            throw error
         }
     }
 
@@ -1235,6 +1290,44 @@ extension ApplicationRelocator {
     private nonisolated static func reapProcess(_ processIdentifier: pid_t) {
         var processStatus: Int32 = 0
         while waitpid(processIdentifier, &processStatus, 0) == -1, errno == EINTR {}
+    }
+
+    /// Shown while the app copies itself to Applications. The caller closes it
+    /// once install succeeds or fails.
+    private static func makeInstallProgressWindow(replacing: Bool) -> NSWindow {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 360, height: 120),
+            styleMask: [.titled, .fullSizeContentView],
+            backing: .buffered,
+            defer: false)
+        window.title = "OpenClaw"
+        window.level = .floating
+        window.isReleasedWhenClosed = false
+        window.center()
+
+        let container = NSView(frame: window.contentLayoutRect)
+        container.autoresizingMask = [.width, .height]
+
+        let spinner = NSProgressIndicator(frame: NSRect(x: 20, y: 40, width: 32, height: 32))
+        spinner.style = .spinning
+        spinner.controlSize = .regular
+        spinner.startAnimation(nil)
+        spinner.autoresizingMask = [.maxXMargin, .maxYMargin]
+        container.addSubview(spinner)
+
+        let text = NSTextField(frame: NSRect(x: 64, y: 44, width: 280, height: 32))
+        text.stringValue = replacing
+            ? String(localized: "Replacing OpenClaw in Applications…")
+            : String(localized: "Copying OpenClaw to Applications…")
+        text.isBezeled = false
+        text.isEditable = false
+        text.drawsBackground = false
+        text.font = .systemFont(ofSize: 13)
+        text.autoresizingMask = [.width, .maxYMargin]
+        container.addSubview(text)
+
+        window.contentView = container
+        return window
     }
 
     private static func showFailure(_ message: String) {

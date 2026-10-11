@@ -297,7 +297,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let launchPlan = AppLaunchRuntimePlan.current
         if !AppProfile.current.isActive, !launchPlan.isElevationHost {
             switch ApplicationRelocator.handleLaunch() {
-            case .terminating:
+            case .terminating, .installing:
+                // .terminating hands off to an installed copy. .installing copies in
+                // the background and relaunches from Applications, so services stay
+                // off until then. Install failure resumes them below.
                 return
             case let .continueLaunch(startUpdater):
                 if startUpdater, launchPlan.allowsUpdater {
@@ -309,6 +312,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+        self.startServicesAfterRelocation(launchPlan: launchPlan)
+    }
+
+    /// Services skipped while `.installing` owns this launch. Install failure calls
+    /// this so the temporary bundle still gets a menu, dock, and gateway.
+    static func resumeLaunchAfterFailedInstall() {
+        guard let delegate = NSApp.delegate as? AppDelegate else {
+            Logger(subsystem: "ai.openclaw", category: "app-relocation").error(
+                "Install failed before the app delegate could resume launch")
+            return
+        }
+        delegate.startServicesAfterRelocation(launchPlan: AppLaunchRuntimePlan.current)
+    }
+
+    private func startServicesAfterRelocation(launchPlan: AppLaunchRuntimePlan) {
         // Remote startup can spawn an SSH child. Admit tunnel work only after the
         // singleton check so a short-lived handoff process cannot orphan that child.
         GatewayEndpointStore.admitPrimaryAppLaunch()
