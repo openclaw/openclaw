@@ -239,8 +239,11 @@ api.registerProvider({
               await Promise.race([
                 started.promise,
                 pending.then((result) => {
+                  const failure = fs.existsSync(refreshFailure)
+                    ? `; OAuth resolution failed: ${fs.readFileSync(refreshFailure, "utf8")}`
+                    : "";
                   throw new Error(
-                    `catalog completed without refreshing OAuth: ${JSON.stringify(result)}`,
+                    `catalog completed without refreshing OAuth: ${JSON.stringify(result)}${failure}`,
                   );
                 }),
               ]);

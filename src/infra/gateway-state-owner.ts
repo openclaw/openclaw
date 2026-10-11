@@ -599,7 +599,6 @@ export function captureGatewayStateOwner(databasePath: string) {
       owners.get(pathname) !== owner ||
       !owner.accepting ||
       resolveGatewayStateOwnerPath(databasePath) !== pathname ||
-      !hasPhysicalOwnership(owner) ||
       (owner.getProjection && !owner.getProjection()?.verifyStillHeld())
     ) {
       throw new GatewayStateOwnerContentionError(databasePath);
@@ -615,10 +614,13 @@ export function captureGatewayStateOwner(databasePath: string) {
   };
 }
 
-/** Reads reuse process-owned admission; mutations still verify the physical lock. */
-export function assertStateDatabaseReadAllowed(databasePath: string): void {
+/** Reads within an admission reuse process custody; the next admission verifies the lock. */
+export function assertStateDatabaseReadAllowed(
+  databasePath: string,
+  captured?: Parameters<typeof assertStateDatabaseAccessAllowed>[1],
+): void {
   if (owners.size === 0) {
-    assertStateDatabaseAccessAllowed(databasePath);
+    assertStateDatabaseAccessAllowed(databasePath, captured);
     return;
   }
   const key = path.resolve(databasePath);
@@ -637,7 +639,7 @@ export function assertStateDatabaseReadAllowed(databasePath: string): void {
     (role !== "gateway" && role !== "agent-embedded")
   ) {
     // Maintenance/schema authority and foreign owners keep their existing fresh checks.
-    assertStateDatabaseAccessAllowed(databasePath);
+    assertStateDatabaseAccessAllowed(databasePath, captured);
     return;
   }
   if (
