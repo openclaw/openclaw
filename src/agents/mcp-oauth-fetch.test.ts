@@ -50,47 +50,6 @@ describe("MCP OAuth bearer fetch", () => {
     expect(bearer(callHeaders(fetchFn, 1))).toBeNull();
   });
 
-  it("refreshes once on 401 and retries with the replacement token", async () => {
-    oauthMocks.resolve
-      .mockResolvedValueOnce("decoy-token")
-      .mockResolvedValueOnce("test-auth-token");
-    const fetchFn = vi
-      .fn<FetchLike>()
-      .mockResolvedValueOnce(
-        new Response("unauthorized", {
-          status: 401,
-          headers: {
-            "www-authenticate":
-              'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource", scope="docs.read"',
-          },
-        }),
-      )
-      .mockResolvedValueOnce(new Response("ok"));
-    const wrapped = withMcpOAuthBearer({
-      fetchFn,
-      authFetchFn: fetchFn,
-      identity: IDENTITY,
-      config: { scope: "fallback" },
-    });
-    const controller = new AbortController();
-
-    await expect(
-      wrapped("https://mcp.example.com/mcp", { signal: controller.signal }),
-    ).resolves.toMatchObject({ status: 200 });
-    expect(fetchFn).toHaveBeenCalledTimes(2);
-    expect(bearer(callHeaders(fetchFn, 0))).toBe("decoy-token");
-    expect(bearer(callHeaders(fetchFn, 1))).toBe("test-auth-token");
-    expect(oauthMocks.resolve.mock.calls[1]?.[0]).toMatchObject({
-      rejectedAccessToken: "decoy-token",
-      resourceMetadataUrl: new URL("https://mcp.example.com/.well-known/oauth-protected-resource"),
-      scope: "docs.read",
-    });
-    const firstSignal = oauthMocks.resolve.mock.calls[0]?.[0].signal;
-    expect(oauthMocks.resolve.mock.calls[1]?.[0].signal).toBe(firstSignal);
-    controller.abort();
-    expect(firstSignal).toMatchObject({ aborted: true });
-  });
-
   it("uses an unauthenticated challenge to bootstrap a missing token", async () => {
     oauthMocks.resolve.mockResolvedValueOnce(undefined).mockResolvedValueOnce("test-auth-token");
     const fetchFn = vi

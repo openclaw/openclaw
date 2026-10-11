@@ -18,7 +18,12 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import {
+  acquireOpenClawStateLeaseInTransaction,
+  releaseOpenClawStateLeaseInTransaction,
+} from "../../state/openclaw-state-lease-store.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import type { WorkerTurnClaimInput } from "./placement-record.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
@@ -29,6 +34,7 @@ import {
 } from "./placement-test-fixtures.js";
 import { ActiveTurnClaimError, createPlacementTurnClaimOps } from "./placement-turn-claims.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
+import { PERSONAL_SCOPE } from "./placement-workspace-reservation.kernel.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 import { executeLocalTurn } from "./worker-turn-admission.js";
 
@@ -482,6 +488,53 @@ it("replays the same local claim without replacing its identity or a successor",
   expect(placements.get(requested.sessionId)?.turnClaim?.claimId).toBe("successor");
   await placements.releaseTurn(successor);
 });
+
+it.each(["new local", "existing local", "worker"] as const)(
+  "checks live publication exclusion in the %s claim write",
+  async (kind) => {
+    let requested: WorkerTurnClaimInput = input(
+      `publication-exclusion-${kind.replaceAll(" ", "-")}`,
+    );
+    if (kind === "existing local") {
+      await placements.releaseTurn(await placements.claimTurn(requested));
+    } else if (kind === "worker") {
+      const active = await advancePlacementFixtureToActive(placements, database, requested, {
+        environmentId: "publication-exclusion-environment",
+      });
+      requested = {
+        ...requested,
+        owner: {
+          kind: "worker",
+          environmentId: active.environmentId,
+          ownerEpoch: active.activeOwnerEpoch,
+        },
+      };
+    }
+    const lease = { scope: PERSONAL_SCOPE, key: requested.sessionId, owner: "publisher" };
+    runOpenClawStateWriteTransaction(
+      ({ db }) => acquireOpenClawStateLeaseInTransaction(db, lease, 60_000),
+      { database },
+    );
+    await expect(placements.claimTurn(requested)).rejects.toThrow(
+      "The session workspace is being published",
+    );
+    expect(placements.get(requested.sessionId)?.turnClaim ?? null).toBeNull();
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        releaseOpenClawStateLeaseInTransaction(db, lease);
+        acquireOpenClawStateLeaseInTransaction(db, lease, 60_000, null, Date.now() - 120_000);
+      },
+      { database },
+    );
+    const claimed = await placements.claimTurn(requested);
+    expect(claimed.claimId).toBe(requested.claimId);
+    await placements.releaseTurn(claimed);
+    runOpenClawStateWriteTransaction(
+      ({ db }) => releaseOpenClawStateLeaseInTransaction(db, lease),
+      { database },
+    );
+  },
+);
 
 it("preserves same-session FIFO and cannot conditionally release a successor", async () => {
   const first = input("fifo");

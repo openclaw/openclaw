@@ -76,6 +76,7 @@ export function applySessionMetadataAppendInTransaction(
           input.scope.sessionId,
           event.parentId,
           input.view?.admission?.entryId,
+          input.view?.questionAnswers,
         )
       ) {
         throw new SqliteTranscriptMutationConflictError(input.scope.sessionId);

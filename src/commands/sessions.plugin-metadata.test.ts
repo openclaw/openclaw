@@ -72,7 +72,7 @@ describe("sessions plugin metadata preparation", () => {
     );
     const store = await writeStore(entries, "sessions-plugin-metadata");
     const readAcpMetadata = vi.spyOn(sessionMeta, "readAcpSessionMetaBatch");
-    const resolveRuntime = vi.spyOn(runtimeMetadata, "resolveModelAgentRuntimeMetadata");
+    const resolveRuntime = vi.spyOn(runtimeMetadata, "resolveCurrentSessionAgentRuntimeMetadata");
 
     const payload = await runSessionsJson<{
       count: number;

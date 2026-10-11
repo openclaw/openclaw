@@ -4,7 +4,7 @@ import type {
   ThemeWorkingIndicator,
 } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import { icons } from "../../../components/icons.ts";
-import "../../../components/elapsed-time.ts";
+import "../../../components/elapsed-time.tsx";
 import "../../../components/working-phrase.ts";
 import { currentThemeBranding } from "../../../components/neutral-mark.ts";
 import { renderThemeBrandIcon } from "../../../components/theme-brand-icon.ts";

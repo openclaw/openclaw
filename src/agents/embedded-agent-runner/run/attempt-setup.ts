@@ -360,7 +360,11 @@ export function installEmbeddedAttemptContextGuards(input: {
     checkMidTurnPrecheck: (
       request: Pick<Parameters<typeof checkMidTurnPrecheck>[0], "context" | "previousRequest">,
     ) => {
-      if (attempt.config?.agents?.defaults?.compaction?.midTurnPrecheck?.enabled !== true) {
+      // Compaction ownership does not waive host admission at the provider boundary.
+      if (
+        !activeContextEngine?.info.ownsCompaction &&
+        attempt.config?.agents?.defaults?.compaction?.midTurnPrecheck?.enabled !== true
+      ) {
         return;
       }
       checkMidTurnPrecheck({

@@ -270,10 +270,13 @@ describe("recoverEmbeddedRunOverflow", () => {
     mocks.warn.mockReset();
   });
 
-  it("uses the canonical assistant classifier when the text heuristic misses", async () => {
+  it.each([
+    "400 Your input exceeds the context window of this model",
+    '400 " Trying to keep the first 15857 tokens when context the overflows. However, the model is loaded with context length of only 4096 tokens, which is not enough. Try to load the model with a larger context length, or provide a shorter input. Error Data: n/a, Additional Data: n/a"',
+  ])("compacts and retries the classified assistant overflow: %s", async (errorMessage) => {
     const assistantOverflowCandidate = makeAssistantMessage({
       stopReason: "error",
-      errorMessage: "400 Your input exceeds the context window of this model",
+      errorMessage,
     });
     const result = await recoverEmbeddedRunOverflow(
       makeInput({ promptError: null, assistantOverflowCandidate }),
@@ -282,6 +285,21 @@ describe("recoverEmbeddedRunOverflow", () => {
     expect(result).toEqual({ action: "retry" });
     expect(mocks.compact).toHaveBeenCalledOnce();
     expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining("source=assistantError"));
+  });
+
+  it.each([
+    "400 Invalid 'reasoning_effort' value: 'off'. Supported values: none, minimal, low, medium, high, xhigh.",
+    "400 Failed to apply prompt template. The model is loaded with context length of only 4096 tokens.",
+  ])("does not compact an unrelated local-server rejection: %s", async (errorMessage) => {
+    const input = makeInput({
+      promptError: null,
+      assistantOverflowCandidate: makeAssistantMessage({ stopReason: "error", errorMessage }),
+      assistantErrorText: errorMessage,
+    });
+
+    expect(await recoverEmbeddedRunOverflow(input)).toEqual({ action: "none" });
+    expect(mocks.compact).not.toHaveBeenCalled();
+    expect(mocks.markProviderPromptRejected).not.toHaveBeenCalled();
   });
 
   it("does not compact a validation rejection naming context_length_exceeded", async () => {
@@ -506,7 +524,6 @@ describe("recoverEmbeddedRunOverflow", () => {
         sessionFile: "unused",
       },
       compactionReplayEnabled: false,
-      contextEngineAssemblySucceeded: false,
       contextEnginePromptAuthority: "assembled",
       contextTokenBudget: contextWindow,
       hookMessagesForCurrentPrompt: manager.buildSessionContext().messages,

@@ -6,7 +6,7 @@ import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blo
 import { handleMarkdownTableInteraction } from "../../components/markdown-tables.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelRefreshStatus } from "../../components/solid/panel-refresh-status.tsx";
-import "../../components/option-card.ts";
+import "../../components/option-card.tsx";
 import "../../components/openclaw-mascot.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";

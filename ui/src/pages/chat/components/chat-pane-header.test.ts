@@ -9,6 +9,7 @@ import {
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
   type ShellNavDrawerToggleDetail,
 } from "../../../components/command-palette-contract.ts";
+import type { WorkspaceIconElement } from "../../../components/workspace-icon.ts";
 import { resolveSessionWorkspace } from "../../../lib/sessions/workspace.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import {
@@ -806,9 +807,7 @@ describe("chat pane workspace chip icon", () => {
   });
   async function mountChip(workspaceIcon: ChatPaneHeaderProps["workspaceIcon"]) {
     const { container } = mountHeader({ workspaceIcon });
-    const element = container.querySelector("openclaw-workspace-icon") as
-      | (HTMLElement & { updateComplete: Promise<unknown>; requestUpdate(): void })
-      | null;
+    const element = container.querySelector<WorkspaceIconElement>("openclaw-workspace-icon");
     await element?.updateComplete;
     return { container, element };
   }
@@ -845,7 +844,9 @@ describe("chat pane workspace chip icon", () => {
     });
     await Promise.resolve();
     expect(fetchSpy).toHaveBeenCalledOnce();
-    element?.requestUpdate();
+    if (element) {
+      element.authTokens = [...element.authTokens];
+    }
     container.remove();
     await element?.updateComplete;
     await vi.advanceTimersByTimeAsync(1_000);
@@ -905,7 +906,7 @@ describe("chat pane workspace chip icon", () => {
   });
 
   it("recovers the workspace icon after a transient 503 without remounting", async () => {
-    // A previous header can disconnect with a Lit render still queued. Its
+    // A previous header can disconnect with a property update still queued. Its
     // released retry must not consume the replacement header's response.
     mockWorkspaceIconFetch().mockResolvedValue({
       ok: false,
@@ -917,7 +918,9 @@ describe("chat pane workspace chip icon", () => {
       authTokens: ["token"],
       authReady: true,
     });
-    previous.element?.requestUpdate();
+    if (previous.element) {
+      previous.element.authTokens = [...previous.element.authTokens];
+    }
     previous.container.remove();
     await previous.element?.updateComplete;
     const png = new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" });

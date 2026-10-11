@@ -18,6 +18,7 @@ declare module "@solidjs/web" {
         Properties<ChatPane> & {
           "prop:agentId"?: ChatPane["agentId"];
           "prop:mcpAppLaunch"?: ChatPane["mcpAppLaunch"];
+          "prop:workContext"?: ChatPane["workContext"];
           "prop:onBackToSubagents"?: ChatPane["onBackToSubagents"];
           "prop:onPaneSessionChange"?: ChatPane["onPaneSessionChange"];
         };

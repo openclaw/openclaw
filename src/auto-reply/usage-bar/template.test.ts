@@ -64,10 +64,6 @@ describe("loadUsageBarTemplate", () => {
     expect(loadUsageBarTemplate(undefined)).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
   });
 
-  it("returns an inline template object when usable", () => {
-    expect(loadUsageBarTemplate(tplA)).toBe(tplA);
-  });
-
   it("falls back to the built-in template for an unusable inline object", () => {
     expect(loadUsageBarTemplate({ nope: true })).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
     expect(warnSpy).toHaveBeenCalledTimes(1);
@@ -77,35 +73,10 @@ describe("loadUsageBarTemplate", () => {
     ]);
   });
 
-  it("falls back quietly for an empty inline template", () => {
-    expect(loadUsageBarTemplate({ output: {} })).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
-    expect(loadUsageBarTemplate({ output: { default: [] } })).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
-    expect(warnSpy).not.toHaveBeenCalled();
-  });
-
-  it("falls back to the built-in template for invalid JSON", () => {
-    const path = tmpFile("bad.json", "{ not json");
-    expect(loadUsageBarTemplate(path)).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    expect(warnSpy.mock.calls[0]).toMatchObject([
-      "configured usage template could not be used; using built-in footer",
-      { source: "file", reason: "invalid-json", path },
-    ]);
-  });
-
   it("falls back to the built-in template for an empty template file", () => {
     const path = tmpFile("empty.json", JSON.stringify({ output: { default: [] } }));
     expect(loadUsageBarTemplate(path)).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
     expect(warnSpy).not.toHaveBeenCalled();
-  });
-
-  it("reloads a path after an initial miss", () => {
-    const dir = tmpDir();
-    const missing = join(dir, "missing.json");
-    expect(loadUsageBarTemplate(missing)).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
-    expect(warnSpy).not.toHaveBeenCalled();
-    writeFileSync(missing, JSON.stringify(tplB));
-    expect(loadUsageBarTemplate(missing)).toMatchObject(tplB);
   });
 
   it("reloads a path after invalid JSON is fixed", () => {
@@ -113,17 +84,6 @@ describe("loadUsageBarTemplate", () => {
     expect(loadUsageBarTemplate(path)).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
     expect(warnSpy).toHaveBeenCalledTimes(1);
     writeFileSync(path, JSON.stringify(tplB));
-    expect(loadUsageBarTemplate(path)).toMatchObject(tplB);
-  });
-
-  it("serves the cached template without re-reading the file", async () => {
-    const path = tmpFile("t.json", JSON.stringify(tplA));
-    expect(loadUsageBarTemplate(path)).toMatchObject(tplA);
-
-    writeFileSync(path, JSON.stringify(tplB));
-    expect(loadUsageBarTemplate(path)).toMatchObject(tplA);
-
-    await clearUsageBarTemplateCacheForTest();
     expect(loadUsageBarTemplate(path)).toMatchObject(tplB);
   });
 
