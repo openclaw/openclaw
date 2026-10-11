@@ -10,7 +10,7 @@ import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-brid
 
 registerEnglishCatalog(registerSettingsEnglish);
 
-export type ModelAccountUsageProps = {
+type ModelAccountUsageProps = {
   client: GatewayBrowserClient | null;
   agentId: string;
   profileId: string;
@@ -133,18 +133,19 @@ function AccountUsage(props: ModelAccountUsageProps, host: ModelAccountUsageElem
   );
 }
 
-export const ModelAccountUsage = defineSolidBridge<
-  ModelAccountUsageProps,
-  ModelAccountUsageMethods
->("openclaw-model-account-usage", (props, host) => AccountUsage(props, host), {
-  properties: {
-    client: { default: null, attribute: false },
-    agentId: { default: "" },
-    profileId: { default: "" },
-  },
-  methods: {
-    refreshUsage: (host) => {
-      host.dispatchEvent(new Event("model-account-usage-refresh"));
+defineSolidBridge<ModelAccountUsageProps, ModelAccountUsageMethods>(
+  "openclaw-model-account-usage",
+  (props, host) => AccountUsage(props, host),
+  {
+    properties: {
+      client: { default: null, attribute: false },
+      agentId: { default: "" },
+      profileId: { default: "" },
+    },
+    methods: {
+      refreshUsage: (host) => {
+        host.dispatchEvent(new Event("model-account-usage-refresh"));
+      },
     },
   },
-});
+);
