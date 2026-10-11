@@ -60,7 +60,7 @@ const publications = resolveGlobalSingleton(
     registerOpenClawStateDatabaseAsyncResource({
       phase: "after-resources",
       async close(identity) {
-        for (const [path, publication] of state) {
+        for (const [, publication] of state) {
           if (
             !identity ||
             publication.identity === identity.key ||
