@@ -287,21 +287,34 @@ export function register(api) {
       env: fixture.env,
     },
   });
+  const request = (revision: number, workspaceDir?: string, rejectDiscovery = false) =>
+    pool.run(
+      {
+        value: input(revision, workspaceDir),
+        request: {
+          kind: "catalog",
+          syntheticAuth: [],
+          clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: fixture.env }),
+        },
+      },
+      {
+        timeoutMs: 30_000,
+        ...(rejectDiscovery ? { onRequest: async () => ({ input: false }) } : {}),
+      },
+    );
   return {
     workspaceDir: fixture.workspaceDir,
     close: () => pool.close(),
+    async rejectRefresh(revision: number) {
+      const result = await request(revision, undefined, true);
+      expect(result.status).toBe("failed");
+      if (result.status !== "failed") {
+        throw new Error(JSON.stringify(result));
+      }
+      expect(result.error).toBe("prepared model catalog request retired before discovery");
+    },
     async run(revision: number, workspaceDir?: string) {
-      const result = await pool.run(
-        {
-          value: input(revision, workspaceDir),
-          request: {
-            kind: "catalog",
-            syntheticAuth: [],
-            clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: fixture.env }),
-          },
-        },
-        { timeoutMs: 30_000 },
-      );
+      const result = await request(revision, workspaceDir);
       if (result.status !== "ok" || result.kind !== "catalog") {
         throw new Error(JSON.stringify(result));
       }
@@ -342,6 +355,23 @@ retained[0] = 7;`,
     NATIVE_ESM_BUFFER_BYTES,
   );
 }, 180_000);
+
+it("re-registers the requested config after a rejected native ESM refresh", async () => {
+  const fixture = await createNativeCatalogFixture({
+    catalog: 'modelId = "revision-" + latestApi.pluginConfig.revision;',
+  });
+  try {
+    const first = await fixture.run(0);
+    await fixture.rejectRefresh(1);
+    const recovered = await fixture.run(0);
+    expect(recovered.modelId).toBe("revision-0");
+    expect(recovered.registrations).toBe(3);
+    expect(recovered.evaluations).toBe(1);
+    expect(recovered.url).toBe(first.url);
+  } finally {
+    await fixture.close();
+  }
+}, 60_000);
 
 it("isolates retained native ESM state between workspaces sharing an installed entry", async () => {
   const fixture = await createNativeCatalogFixture({});
