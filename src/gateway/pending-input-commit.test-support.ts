@@ -11,15 +11,20 @@ export function refusePendingInputCommit(params: {
 }) {
   return probe.admission(workerAdmission, (request, grant, callback) => {
     const facts = request.facts;
+    const publication =
+      isRecord(facts) && isRecord(facts.publication)
+        ? facts.publication.kind === "session-actor-admission"
+          ? facts.publication.publication
+          : facts.publication
+        : undefined;
     if (
       request.stage === "commit" &&
-      isRecord(facts) &&
-      isRecord(facts.publication) &&
-      facts.publication.kind === "pending-input-settlement-custody" &&
-      isRecord(facts.publication.receipt) &&
-      facts.publication.receipt.operation === params.operation &&
-      facts.publication.receipt.sessionId === params.sessionId &&
-      facts.publication.receipt.runId === params.runId
+      isRecord(publication) &&
+      publication.kind === "pending-input-settlement-custody" &&
+      isRecord(publication.receipt) &&
+      publication.receipt.operation === params.operation &&
+      publication.receipt.sessionId === params.sessionId &&
+      publication.receipt.runId === params.runId
     ) {
       throw new Error(params.message);
     }

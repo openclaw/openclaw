@@ -88,11 +88,13 @@ function modelConfig(store: string, agents: NonNullable<OpenClawConfig["agents"]
         openai: {
           api: model.api,
           baseUrl: model.baseUrl,
-          models: [model].map(({ provider: _provider, ...definition }) => definition),
+          models: [model, { ...model, id: "gpt-5.5", name: "GPT-5.5" }].map(
+            ({ provider: _provider, ...definition }) => definition,
+          ),
         },
       },
     },
-    agents: { defaults: { model: "openai/gpt-5.6-sol" }, ...agents },
+    agents: { defaults: { model: "openai/gpt-5.5" }, ...agents },
     session: { store },
   };
   expect(validateConfigObject(cfg)).toMatchObject({ ok: true });
