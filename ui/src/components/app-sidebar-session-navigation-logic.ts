@@ -21,7 +21,6 @@ import {
   resolveSessionNavigation,
   sessionMatchesVisibleSessionScope,
 } from "../lib/sessions/index.ts";
-import type { SessionListSnapshot } from "../lib/sessions/session-capability.ts";
 import {
   buildAgentMainSessionKey,
   isAcpSessionKey,
@@ -557,7 +556,6 @@ export function projectSidebarVisibleMainSession(
       agentId: string,
     ): SidebarRecentSession & { metadataVisible: boolean };
     selectedAgentMainSessionKey(agentId: string): string;
-    readonly effectiveNavigationScope: "mine" | "all";
     readonly sessionOwnerFilterActive: boolean;
     readonly sessionInvolvingMeFilterActive: boolean;
     readonly sessionsStatusFilter: SidebarSessionStatusFilter;
@@ -576,7 +574,6 @@ export function projectSidebarVisibleMainSession(
   }
   const key = host.selectedAgentMainSessionKey(agentId);
   if (
-    host.effectiveNavigationScope === "mine" ||
     host.sessionOwnerFilterActive ||
     host.sessionInvolvingMeFilterActive ||
     (host.sessionsStatusFilter !== "active" && host.sessionsStatusFilter !== "all") ||
@@ -602,24 +599,4 @@ export function projectSidebarVisibleMainSession(
     outboxAttentionCount: 0,
     hasComposerDraft: false,
   };
-}
-
-export function navigationScopesEquivalent(
-  snapshot: SessionListSnapshot | undefined,
-  viewerId: string,
-): boolean {
-  const result = snapshot?.result;
-  const counts = result?.ownerSessionCounts;
-  const ownCount = counts?.find((entry) => entry.profileId === viewerId)?.open ?? 0;
-  return Boolean(
-    snapshot &&
-    !snapshot.loading &&
-    !snapshot.startupPending &&
-    snapshot.readSucceeded !== false &&
-    !snapshot.error &&
-    counts &&
-    result?.totalCount !== undefined &&
-    result.totalCount === ownCount &&
-    counts.every((entry) => entry.profileId === viewerId),
-  );
 }

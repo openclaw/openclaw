@@ -26,12 +26,12 @@ import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
 import { renderAppSidebarOnline, sidebarOnlineOrder } from "./app-sidebar-online.tsx";
 import { hidePersonalSidebarCatalog } from "./app-sidebar-personal-navigation.ts";
-import { renderSidebarRail, renderSidebarPages, renderSidebarScope } from "./app-sidebar-rail.tsx";
-import { renderAppSidebarBrand } from "./app-sidebar-render.tsx";
+import { renderSidebarRail, renderSidebarPages } from "./app-sidebar-rail.tsx";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
 import "../styles/app-sidebar.css";
 import "../styles/sidebar-rail.css";
 import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
+import { renderSessionListToolbar } from "./app-sidebar-session-filter-summary.tsx";
 import { renderSessionList } from "./app-sidebar-session-list-render.tsx";
 import type {
   SidebarNarrationSyncInput,
@@ -92,7 +92,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   restoreSidebarSnapshot(model: SidebarSnapshotModel): void {
     this.sidebarSnapshot = model;
     this.navigationView = model.navigationView;
-    this.navigationScope = model.navigationScope;
     this.sessionOrganizer.collapsedSessionSections = new Set(model.collapsedSections);
     const rows = [...model.sessions, ...model.sections.flatMap((section) => section.rows)];
     for (const row of rows) {
@@ -630,7 +629,9 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   renderSidebar(Sessions: () => JSX.Element): JSX.Element {
     const SidebarFrame = () => {
       const NewSessionMenu = dynamic(() => this.rosterRenderer?.SidebarNewSessionMenu);
-      const brand = renderAppSidebarBrand(
+      const rail = renderSidebarRail(this);
+      const pages = renderSidebarPages(this);
+      const toolbar = renderSessionListToolbar(
         this,
         <NewSessionMenu
           host={this}
@@ -638,9 +639,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
           access={this.readNewSessionAccess()}
         />,
       );
-      const rail = renderSidebarRail(this);
-      const pages = renderSidebarPages(this);
-      const scope = renderSidebarScope(this);
       const online = renderAppSidebarOnline(this);
       const menus = this.sidebarMenus.render();
       return (
@@ -661,7 +659,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
         >
           {rail}
           <div class="sidebar-shell" onMouseDown={beginNativeWindowDragFromTopInset}>
-            {brand}
             <div class="sidebar-shell__content">
               <div
                 class={`sidebar-shell__body sidebar-shell__body--scroll-${this.sessionData.sessionsScrollState}`}
@@ -674,7 +671,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                       when={this.navigationView === "online"}
                       fallback={
                         <>
-                          {scope}
+                          {toolbar}
                           <div
                             class="sidebar-session-content"
                             hidden={Boolean(this.contextualSidebar)}

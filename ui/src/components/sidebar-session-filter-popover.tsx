@@ -154,7 +154,7 @@ export const SidebarSessionFilterPopover = defineSolidBridge<SidebarSessionFilte
       anchor: { default: null, attribute: false },
       label: { default: "", attribute: false },
       initialFocusSelector: {
-        default: '#sidebar-sessions-owner, #sidebar-sessions-status input[type="radio"]:checked',
+        default: '#sidebar-sessions-status input[type="radio"]:checked',
         attribute: false,
       },
       content: { default: null, attribute: false },

@@ -4,6 +4,7 @@ import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import { serializeSidebarEntry, type SidebarZoneEntry } from "../app-navigation.ts";
 import { isRouteId, pluginTabLocation } from "../app-route-paths.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
+import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import type { NativeGateway, NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
 import { isHomePanelAvailable } from "../app/panel-availability.ts";
 import { currentThemeBranding } from "../app/theme-branding.ts";
@@ -15,12 +16,12 @@ import {
   formatKeyboardShortcutCombo,
   KEYBOARD_SHORTCUT_COMBOS,
 } from "../lib/keyboard-shortcut-contract.ts";
+import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import { pluginTabKey } from "../pages/plugin/route.ts";
 import { renderSidebarNavLink } from "./app-sidebar-nav-menus.tsx";
-import { renderSidebarSessionFilter } from "./app-sidebar-session-filter-summary.tsx";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { iconData, type IconName } from "./icon-data.ts";
@@ -32,7 +33,6 @@ import { SidebarAttention } from "./sidebar-attention.tsx";
 import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
 import { renderGatewayStatus } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
-import { renderNewSessionLink } from "./solid/new-session-link.tsx";
 import { renderSessionLeadingState, SessionRowBadges } from "./solid/session-presentation.tsx";
 import "./theme-brand-icon.ts";
 
@@ -49,7 +49,7 @@ function readSidebarNativeGateway(host: AppSidebarRenderHost): NativeGateway | n
   return snapshot?.gateways.find((gateway) => gateway.id === snapshot.currentId) ?? null;
 }
 
-function renderSidebarAgentCard(host: AppSidebarRenderHost): JSX.Element {
+export function renderSidebarAgentCard(host: AppSidebarRenderHost): JSX.Element {
   const chipAgent = createMemo(() => host.activeChipAgent()),
     cardAgentId = () => chipAgent().activeId,
     rosterAgent = () => chipAgent().agent,
@@ -96,44 +96,50 @@ function renderSidebarAgentCard(host: AppSidebarRenderHost): JSX.Element {
     ),
   );
   return (
-    <Show when={cardAgent() || cached()} fallback={renderSidebarWorkspaceHeader(host)}>
-      <SidebarAgentCard
-        agentName={cardName()}
-        agentId={cardAgentId()}
-        avatarUrl={
-          cached()
-            ? cached()!.avatar
-            : cardAgent()
-              ? resolveAgentAvatarUrl(cardAgent()!, cardIdentity())
-              : null
-        }
-        avatarAuthReady={avatarAuthReady()}
-        avatarText={
-          cached()
-            ? (cached()!.textAvatar ?? null)
-            : cardAgent()
-              ? resolveAgentTextAvatar(cardAgent()!, cardIdentity())
-              : null
-        }
-        environment={host.sessionDataContext?.config?.current?.environment ?? null}
-        menuOpen={host.sidebarMenus.agentMenuPosition !== null}
-        menuUnread={menuUnread()}
-        switcherAvailable={cardAgents().length > 1}
-        onToggleMenu={(trigger: HTMLElement) => host.sidebarMenus.toggleAgentMenu(trigger)}
-        onMenuPointerMove={(trigger: HTMLElement, event: PointerEvent) =>
-          host.sidebarMenus.scheduleAgentMenuHoverOpen(trigger, event)
-        }
-        onMenuPointerLeave={() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
-        onContextMenu={(event) => {
-          event.preventDefault();
-          if (host.sidebarMenus.agentMenuPosition !== null) {
-            return;
+    <Show
+      when={host.sidebarAgentsMode !== "roster" && (cardAgent() || cached())}
+      fallback={renderSidebarWorkspaceHeader(host)}
+    >
+      <openclaw-tooltip prop:content={cardName()}>
+        <SidebarAgentCard
+          compact={true}
+          agentName={cardName()}
+          agentId={cardAgentId()}
+          avatarUrl={
+            cached()
+              ? cached()!.avatar
+              : cardAgent()
+                ? resolveAgentAvatarUrl(cardAgent()!, cardIdentity())
+                : null
           }
-          const card = event.currentTarget;
-          const trigger = card.querySelector<HTMLElement>(".sidebar-agent-card__main") ?? card;
-          host.sidebarMenus.toggleAgentMenu(trigger);
-        }}
-      />
+          avatarAuthReady={avatarAuthReady()}
+          avatarText={
+            cached()
+              ? (cached()!.textAvatar ?? null)
+              : cardAgent()
+                ? resolveAgentTextAvatar(cardAgent()!, cardIdentity())
+                : null
+          }
+          environment={host.sessionDataContext?.config?.current?.environment ?? null}
+          menuOpen={host.sidebarMenus.agentMenuPosition !== null}
+          menuUnread={menuUnread()}
+          switcherAvailable={cardAgents().length > 1}
+          onToggleMenu={(trigger: HTMLElement) => host.sidebarMenus.toggleAgentMenu(trigger)}
+          onMenuPointerMove={(trigger: HTMLElement, event: PointerEvent) =>
+            host.sidebarMenus.scheduleAgentMenuHoverOpen(trigger, event)
+          }
+          onMenuPointerLeave={() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            if (host.sidebarMenus.agentMenuPosition !== null) {
+              return;
+            }
+            const card = event.currentTarget;
+            const trigger = card.querySelector<HTMLElement>(".sidebar-agent-card__main") ?? card;
+            host.sidebarMenus.toggleAgentMenu(trigger);
+          }}
+        />
+      </openclaw-tooltip>
     </Show>
   );
 }
@@ -183,144 +189,72 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): JSX.Element {
   const name = () => brand().name;
   const menuOpen = () => host.sidebarMenus.agentMenuPosition !== null;
   return (
-    <div class="sidebar-workspace-header">
-      <button
-        type="button"
-        class="sidebar-workspace-header__main"
-        aria-haspopup="menu"
-        aria-expanded={menuOpen() ? "true" : "false"}
-        aria-label={`${name()} · ${t("agentChip.workspaceMenuLabel")}`}
-        onPointerMove={(event: PointerEvent) => {
-          if (event.currentTarget instanceof HTMLElement) {
-            host.sidebarMenus.scheduleAgentMenuHoverOpen(event.currentTarget, event);
-          }
-        }}
-        onPointerLeave={() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
-        onPointerDown={(event: PointerEvent) => event.stopPropagation()}
-        onClick={(event: MouseEvent) => {
-          event.stopPropagation();
-          if (event.currentTarget instanceof HTMLElement) {
-            host.sidebarMenus.toggleAgentMenu(event.currentTarget);
-          }
-        }}
-        onContextMenu={(event: MouseEvent) => {
-          event.preventDefault();
-          if (!menuOpen() && event.currentTarget instanceof HTMLElement) {
-            host.sidebarMenus.toggleAgentMenu(event.currentTarget);
-          }
-        }}
-      >
-        {branding().brandIcon !== "claw" ? (
-          <span
-            class="sidebar-workspace-header__mark sidebar-workspace-header__mark--neutral"
-            aria-hidden="true"
-          >
-            {branding().brandIcon === "claw" ? (
-              <Icon name="lobster" />
-            ) : branding().brandIcon === "mark" ? (
-              <Icon name="mark" />
-            ) : (
-              <openclaw-theme-brand-icon prop:branding={branding()} aria-hidden="true" />
-            )}
-          </span>
-        ) : (
-          <span class="sidebar-workspace-header__mark" aria-hidden="true">
-            <Icon name="lobster" />
-          </span>
-        )}
-        <span class="sidebar-agent-card__text">
-          <span class="sidebar-agent-card__name">
-            {renderHoverMarquee(name(), "sidebar-agent-card__name-text", {
-              loop: true,
-              delay: 300,
-              speed: 35,
-            })}
-            <span class="sidebar-agent-card__chevron" aria-hidden="true">
-              <Icon name="chevronsUpDown" />
+    <openclaw-tooltip prop:content={name()}>
+      <div class="sidebar-workspace-header sidebar-workspace-header--rail">
+        <button
+          type="button"
+          class="sidebar-workspace-header__main"
+          aria-haspopup="menu"
+          aria-expanded={menuOpen() ? "true" : "false"}
+          aria-label={`${name()} · ${t("agentChip.workspaceMenuLabel")}`}
+          onPointerMove={(event: PointerEvent) => {
+            if (event.currentTarget instanceof HTMLElement) {
+              host.sidebarMenus.scheduleAgentMenuHoverOpen(event.currentTarget, event);
+            }
+          }}
+          onPointerLeave={() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
+          onPointerDown={(event: PointerEvent) => event.stopPropagation()}
+          onClick={(event: MouseEvent) => {
+            event.stopPropagation();
+            if (event.currentTarget instanceof HTMLElement) {
+              host.sidebarMenus.toggleAgentMenu(event.currentTarget);
+            }
+          }}
+          onContextMenu={(event: MouseEvent) => {
+            event.preventDefault();
+            if (!menuOpen() && event.currentTarget instanceof HTMLElement) {
+              host.sidebarMenus.toggleAgentMenu(event.currentTarget);
+            }
+          }}
+        >
+          {branding().brandIcon !== "claw" ? (
+            <span
+              class="sidebar-workspace-header__mark sidebar-workspace-header__mark--neutral"
+              aria-hidden="true"
+            >
+              {branding().brandIcon === "claw" ? (
+                <Icon name="lobster" />
+              ) : branding().brandIcon === "mark" ? (
+                <Icon name="mark" />
+              ) : (
+                <openclaw-theme-brand-icon prop:branding={branding()} aria-hidden="true" />
+              )}
             </span>
+          ) : (
+            <span class="sidebar-workspace-header__mark" aria-hidden="true">
+              <Icon name="lobster" />
+            </span>
+          )}
+          <span class="sidebar-agent-card__text">
+            <span class="sidebar-agent-card__name">
+              {renderHoverMarquee(name(), "sidebar-agent-card__name-text", {
+                loop: true,
+                delay: 300,
+                speed: 35,
+              })}
+              <span class="sidebar-agent-card__chevron" aria-hidden="true">
+                <Icon name="chevronsUpDown" />
+              </span>
+            </span>
+            {host.sessionDataContext?.config.current.environment ? (
+              <span class="control-ui-environment-pill">
+                {host.sessionDataContext.config.current.environment.label}
+              </span>
+            ) : undefined}
           </span>
-          {brand().environment ? (
-            <span class="control-ui-environment-pill">{brand().environment}</span>
-          ) : undefined}
-        </span>
-      </button>
-    </div>
-  );
-}
-
-export function renderAppSidebarBrand(
-  host: AppSidebarRenderHost,
-  teamNewSession?: JSX.Element,
-): JSX.Element {
-  const newSessionAccess = () => host.readNewSessionAccess();
-  const collapseLabel = () => t("nav.collapse");
-  return (
-    <div class="sidebar-brand">
-      {host.sidebarAgentsMode === "roster"
-        ? renderSidebarWorkspaceHeader(host)
-        : renderSidebarAgentCard(host)}
-      <div class="sidebar-brand__actions">
-        <openclaw-tooltip
-          prop:content={`${collapseLabel()} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)})`}
-          prop:contentTemplate={renderShortcutHint(
-            collapseLabel(),
-            KEYBOARD_SHORTCUT_COMBOS.toggleSidebar,
-          )}
-        >
-          <button
-            type="button"
-            class="sidebar-brand__icon sidebar-brand__header-control sidebar-brand__desktop-control sidebar-brand__collapse"
-            aria-label={collapseLabel()}
-            aria-expanded="true"
-            disabled={!host.onToggleSidebar}
-            onClick={() => host.onToggleSidebar?.()}
-          >
-            <Icon name="panelLeftClose" />
-          </button>
-        </openclaw-tooltip>
-        <openclaw-tooltip
-          prop:content={`${t("chat.openCommandPalette")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette)})`}
-          prop:contentTemplate={renderShortcutHint(
-            t("chat.openCommandPalette"),
-            KEYBOARD_SHORTCUT_COMBOS.commandPalette,
-          )}
-        >
-          <button
-            type="button"
-            class="sidebar-brand__icon sidebar-brand__header-control sidebar-brand__desktop-control sidebar-brand__search"
-            aria-label={t("chat.openCommandPalette")}
-            disabled={!host.onOpenPalette}
-            onClick={() => host.onOpenPalette?.()}
-          >
-            <Icon name="search" />
-          </button>
-        </openclaw-tooltip>
-        {host.sidebarAgentsMode === "roster"
-          ? renderSidebarSessionFilter(host, "sidebar-brand__icon sidebar-brand__header-control")
-          : undefined}
-        {host.sidebarAgentsMode === "roster"
-          ? teamNewSession
-          : renderNewSessionLink({
-              get basePath() {
-                return host.basePath;
-              },
-              get agentId() {
-                return host.expandedAgentId();
-              },
-              className:
-                "sidebar-brand__icon sidebar-brand__header-control sidebar-brand__new-thread",
-              get label() {
-                return t("agentChip.newConversation");
-              },
-              showShortcut: true,
-              get disabledReason() {
-                const access = newSessionAccess();
-                return access.allowed ? undefined : access.reason;
-              },
-              onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
-            })}
+        </button>
       </div>
-    </div>
+    </openclaw-tooltip>
   );
 }
 
@@ -373,9 +307,15 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Eleme
             class="sidebar-brand__icon sidebar-footer-bar__home"
             aria-label={t("assistantPanel.toggle")}
             disabled={!isHomePanelAvailable(host.sessionDataContext?.gateway)}
-            onClick={() => {
-              host.personalNavigationEpoch += 1;
+            onClick={(event) => {
               window.dispatchEvent(new CustomEvent(HOME_PANEL_TOGGLE_EVENT));
+              if (
+                !isMobileNavLayout() &&
+                !host.navigationCollapsed &&
+                shouldHandleNavigationClick(event)
+              ) {
+                host.onToggleSidebar?.();
+              }
             }}
           >
             <Show when={home()} fallback={<Icon name="home" />}>

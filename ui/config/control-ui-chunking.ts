@@ -75,6 +75,8 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/plugins/plugins-page.ts":
     case "ui/src/pages/plugins/plugins-page.tsx":
       return "plugins-page";
+    case "ui/src/components/markdown-parser.ts":
+      return "markdown-runtime";
     case "ui/src/pages/chat/session-snapshot-database.ts":
       // Warm boot reads while the Gateway connects; the chat boot group made it wait for the whole route.
       return "session-snapshot-database";
@@ -172,7 +174,7 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 includeDependenciesRecursively: true,
                 // Keep shared chunks together without exceeding the compressed-size budget.
                 minSize: 16 * 1024,
-                maxSize: 1408 * 1024,
+                maxSize: (route === "shared" ? 1440 : 1408) * 1024,
               };
             }),
             ...(["shared", "new", "chat"] as const).map((route) => {

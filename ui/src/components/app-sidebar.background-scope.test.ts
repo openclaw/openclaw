@@ -302,17 +302,17 @@ describe("AppSidebar automatic list scope replacement", () => {
 
 describe("AppSidebar initial managed-list hydration", () => {
   it.each([
-    { name: "ordinary overlap", holdSecondSlot: false, invalidate: false, filter: "mine" },
-    { name: "queued initial fill", holdSecondSlot: true, invalidate: false, filter: "mine" },
+    { name: "ordinary overlap", holdSecondSlot: false, invalidate: false, filter: "self" },
+    { name: "queued initial fill", holdSecondSlot: true, invalidate: false, filter: "self" },
     {
       name: "queued initial fill with a later event",
       holdSecondSlot: true,
       invalidate: true,
-      filter: "mine",
+      filter: "self",
     },
-    { name: "saved All owner", holdSecondSlot: true, invalidate: false, filter: "owner" },
+    { name: "saved owner", holdSecondSlot: true, invalidate: false, filter: "owner" },
     {
-      name: "saved All involving me",
+      name: "saved involving me",
       holdSecondSlot: true,
       invalidate: false,
       filter: "involving-me",
@@ -415,8 +415,7 @@ describe("AppSidebar initial managed-list hydration", () => {
       : Promise.resolve();
     const provider = createApplicationContextProvider(context);
     const sidebar = await createSidebarElement();
-    sidebar.navigationScope = filter === "mine" ? "mine" : "all";
-    if (filter !== "mine") {
+    if (filter !== "self") {
       storeSidebarSessionOwnerFilter(gateway.gateway.connection.gatewayUrl, "synthetic-operator", {
         ownerId: filter === "owner" ? "synthetic-operator" : null,
         involvingMe: filter === "involving-me",

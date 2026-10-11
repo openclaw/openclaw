@@ -34,9 +34,6 @@ export function isSidebarSnapshotSettled(
   if (!host.connected || !context) {
     return false;
   }
-  if (context.gateway.snapshot.selfUser?.id && !host.navigationCatalog.scopesReady) {
-    return false;
-  }
   if (host.navigationView === "pages" && host.navigationCatalog.dashboards?.loading !== false) {
     return false;
   }
@@ -111,8 +108,6 @@ export function captureSidebarSnapshotModel(
     roster: bootRoster,
     mode: host.sidebarAgentsMode,
     navigationView: host.navigationView,
-    navigationScope: host.navigationScope,
-    scopesEquivalent: host.navigationCatalog.scopesEquivalent,
     pages: snapshotSessions(
       (host.navigationCatalog.dashboards?.result?.sessions ?? []).map((row) =>
         host.getSessionNavigationState().toSidebarSession(row),

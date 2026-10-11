@@ -10,6 +10,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI plugin tab slugs" });
 const pluginId = "reports-fixture";
@@ -66,10 +67,7 @@ async function expectReports(page: Page, pathname = "/reports") {
       id: element.tabId,
     })),
   ).toEqual({ pluginId, id: tabId });
-  await page
-    .locator("openclaw-app-sidebar")
-    .getByRole("button", { name: "Pages", exact: true })
-    .click();
+  await openSidebarPages(page);
   const sidebarEntry = page.locator(
     `.sidebar-pages [data-sidebar-entry="plugin:${pluginId}/${tabId}"] a`,
   );

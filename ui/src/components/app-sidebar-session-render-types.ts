@@ -33,7 +33,6 @@ import type {
   SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import type { CatalogSessionMenu } from "./catalog-session-menu.ts";
-import type { ApprovalCountdown } from "./exec-approval-card.ts";
 import "./mcp-app-catalog.tsx";
 import "./menu-surface.ts";
 import type { RelativeTime } from "./relative-time.ts";
@@ -243,8 +242,6 @@ declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
       "openclaw-agent-avatar": BridgeAttributes<AgentAvatarProps>;
-      "openclaw-approval-countdown": HTMLAttributes<ApprovalCountdown> &
-        Properties<ApprovalCountdown>;
       "openclaw-catalog-session-menu": HTMLAttributes<CatalogSessionMenu> &
         Properties<CatalogSessionMenu> & {
           "prop:onAction"?: CatalogSessionMenu["onAction"];

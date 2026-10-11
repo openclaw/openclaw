@@ -2,10 +2,6 @@ import { For, Show, createMemo } from "solid-js";
 import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/index.js";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
-import {
-  compactApprovalCommand,
-  summarizeApprovalScopeLabel,
-} from "../app/approval-presentation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { ScopeUpgradeState } from "../app/device-scope-upgrade-availability.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
@@ -15,16 +11,9 @@ import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type { PresenceViewer } from "../lib/presence-users.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
-import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
-import {
-  approvalRemainingLabel,
-  approvalDecisionLabel,
-  approvalTitle,
-  resolveApprovalDecisions,
-  type SidebarApprovalRowProps,
-} from "./exec-approval-card.ts";
+import { SidebarApprovalRow } from "./exec-approval-card-solid.tsx";
 import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
 import { SidebarDismissButton, SidebarNotificationCard } from "./sidebar-notification-card.tsx";
 import { SidebarUpdateCard } from "./sidebar-update-card.tsx";
@@ -140,37 +129,41 @@ export function renderSidebarApprovalItem(params: {
       ? sessionNavigationTarget({ context: params.context, face: "chat", sessionKey: key })
       : null;
   });
-  return renderSidebarApprovalRow({
-    get approval() {
-      return params.approval;
-    },
-    get busy() {
-      return snapshot().approvalBusy;
-    },
-    get canGrant() {
-      return snapshot().approvalCanGrant;
-    },
-    get error() {
-      return snapshot().approvalErrors.get(params.approval.id) ?? null;
-    },
-    get openSessionHref() {
-      return sessionTarget()?.href;
-    },
-    get sessionTitle() {
-      return session()?.displayName?.trim() || session()?.label?.trim();
-    },
-    onDecision: (event, approvalId, decision) => params.onDecision(event, approvalId, decision),
-    onOpenSession: (event) => {
-      if (!shouldHandleNavigationClick(event)) {
-        return;
-      }
-      event.preventDefault();
-      const target = sessionTarget();
-      if (target) {
-        params.onNavigate("chat", target.options);
-      }
-    },
-  });
+  return (
+    <SidebarApprovalRow
+      props={{
+        get approval() {
+          return params.approval;
+        },
+        get busy() {
+          return snapshot().approvalBusy;
+        },
+        get canGrant() {
+          return snapshot().approvalCanGrant;
+        },
+        get error() {
+          return snapshot().approvalErrors.get(params.approval.id) ?? null;
+        },
+        get openSessionHref() {
+          return sessionTarget()?.href;
+        },
+        get sessionTitle() {
+          return session()?.displayName?.trim() || session()?.label?.trim();
+        },
+        onDecision: (event, approvalId, decision) => params.onDecision(event, approvalId, decision),
+        onOpenSession: (event) => {
+          if (!shouldHandleNavigationClick(event)) {
+            return;
+          }
+          event.preventDefault();
+          const target = sessionTarget();
+          if (target) {
+            params.onNavigate("chat", target.options);
+          }
+        },
+      }}
+    />
+  );
 }
 
 export function renderSidebarUpdateSurface(params: {
@@ -471,113 +464,4 @@ export function renderSidebarIssueItem(
   handlers: SidebarIssueItemHandlers,
 ) {
   return <SidebarIssueItem item={item} handlers={handlers} />;
-}
-
-export function renderSidebarApprovalRow(props: SidebarApprovalRowProps) {
-  const expired = () => props.approval.expiresAtMs <= Date.now();
-  const command = createMemo(() => compactApprovalCommand(props.approval.request.command));
-  const sessionTitle = createMemo(() => {
-    const sessionKey = props.approval.request.sessionKey?.trim();
-    return (
-      props.sessionTitle ??
-      (sessionKey ? resolveSessionDisplayName(sessionKey) : approvalTitle(props.approval))
-    );
-  });
-  const expiryLabel = () => approvalRemainingLabel(props.approval.expiresAtMs, Date.now());
-  const reviewOnlyMessage = () => t("execApproval.reviewOnly");
-  const grantError = () => !props.canGrant && props.error === reviewOnlyMessage();
-  return (
-    <article
-      class="sidebar-approval-row sidebar-issues-panel__details--warning"
-      data-attention-kind="pendingApproval"
-      data-approval-id={props.approval.id}
-    >
-      <span class="sidebar-issues-panel__icon sidebar-approval-row__icon" aria-hidden="true">
-        <Icon name="shieldQuestion" />
-      </span>
-      <div class="sidebar-approval-row__content">
-        <div class="sidebar-approval-row__header" data-issue-row-focus tabindex="-1">
-          <span class="sidebar-issues-panel__entity" title={sessionTitle()}>
-            {sessionTitle()}
-          </span>
-          <openclaw-approval-countdown
-            class={[
-              "sidebar-approval-row__timer",
-              {
-                "sidebar-approval-row__timer--urgent":
-                  expired() || props.approval.expiresAtMs - Date.now() < 2 * 60_000,
-              },
-            ]}
-            role="timer"
-            aria-label={expiryLabel()}
-            title={expiryLabel()}
-            prop:expiresAtMs={props.approval.expiresAtMs}
-            prop:compact={true}
-          />
-        </div>
-        <div class="sidebar-approval-row__command mono" title={props.approval.request.command}>
-          <span aria-hidden="true">$ </span>
-          {command()}
-        </div>
-        {props.approval.request.scope ? (
-          <div class="exec-approval-scope">
-            {summarizeApprovalScopeLabel(props.approval.request.scope)}
-          </div>
-        ) : null}
-        <div
-          class="sidebar-approval-row__actions"
-          role="group"
-          aria-label={t("approvalPage.actionsLabel")}
-        >
-          <For each={resolveApprovalDecisions(props.approval)}>
-            {(decision) => {
-              const label = () => approvalDecisionLabel(decision, props.approval);
-              return (
-                <button
-                  type="button"
-                  class={[
-                    "btn btn--xs sidebar-approval-row__action",
-                    `sidebar-approval-row__action--${decision}`,
-                    { "btn--ghost": decision === "deny" },
-                  ]}
-                  aria-label={t("execApproval.decisionRequest", {
-                    decision: label(),
-                    command: command(),
-                  })}
-                  disabled={props.busy || !props.canGrant || expired()}
-                  onClick={(event) => props.onDecision(event, props.approval.id, decision)}
-                >
-                  {label()}
-                </button>
-              );
-            }}
-          </For>
-          {props.openSessionHref && props.onOpenSession ? (
-            <a
-              class="sidebar-approval-row__open-session"
-              href={props.openSessionHref}
-              aria-label={t("sessionsView.openSession")}
-              title={t("sessionsView.openSession")}
-              onClick={(event) => props.onOpenSession?.(event)}
-            >
-              <Icon name="arrowUpRight" />
-            </a>
-          ) : null}
-        </div>
-        {!props.canGrant ? (
-          <div class="sidebar-approval-row__message" role={grantError() ? "alert" : "note"}>
-            {reviewOnlyMessage()}
-          </div>
-        ) : null}
-        {props.error && !grantError() ? (
-          <div
-            class="sidebar-approval-row__message sidebar-approval-row__message--error"
-            role="alert"
-          >
-            {props.error}
-          </div>
-        ) : null}
-      </div>
-    </article>
-  );
 }

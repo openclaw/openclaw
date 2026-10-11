@@ -1,6 +1,5 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Show } from "solid-js";
-import { DEFAULT_SIDEBAR_ENTRIES, serializeSidebarEntry } from "../app-navigation.ts";
 import { togglePinnedAgent } from "../app/bootstrap-navigation-preferences.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
@@ -10,6 +9,7 @@ import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { openEditor } from "../lib/editor-links.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
+import { t } from "../lib/reactive/i18n.ts";
 import { categoryClearReturnsToGroups } from "../lib/sessions/grouping.ts";
 import {
   canArchiveSessionRow,
@@ -28,10 +28,7 @@ import {
 } from "../plugins/control-ui-actions.ts";
 import { renderSidebarAgentMenu as SidebarAgentMenu } from "./app-sidebar-agent-menu.tsx";
 import { renderSidebarIdentityMenu as SidebarIdentityMenu } from "./app-sidebar-identity-menu.tsx";
-import {
-  renderSidebarCustomizeMenu as SidebarCustomizeMenu,
-  renderSidebarMoreMenu as SidebarMoreMenu,
-} from "./app-sidebar-nav-menus.tsx";
+import { SidebarDropdown, renderSidebarMenuAction } from "./app-sidebar-nav-menus.tsx";
 import { formatSidebarTimestamp } from "./app-sidebar-session-catalogs.ts";
 import { canRetryGatewayStatus } from "./gateway-status.ts";
 import "../styles/sidebar-menus.css";
@@ -55,47 +52,54 @@ export {
 export { renderSidebarPluginNavigationMenuForController } from "./app-sidebar-plugin-navigation-menu.tsx";
 export { renderSidebarPeopleFilterMenuForController } from "./app-sidebar-people-filter-menu.tsx";
 
-export function renderSidebarCustomizeMenuForController(
+export function renderSidebarRailPinMenuForController(
   controller: SidebarMenusController,
 ): JSX.Element {
   const { host } = controller;
-  const position = controller.customizeMenuPosition;
+  const position = controller.railPinMenuPosition;
   if (!position) {
     return undefined;
   }
-  const toggleEntry = (entry: string) => {
-    const canonical = host.reconciledSidebarZone().sidebarEntries;
-    host.onUpdateSidebarEntries?.(
-      canonical.includes(entry)
-        ? canonical.filter((candidate) => candidate !== entry)
-        : [...canonical, entry],
-    );
-  };
+  const entries = [...host.querySelectorAll<HTMLElement>(".sidebar-rail__pin")].map(
+    (pin) => pin.dataset.sidebarEntry!,
+  );
+  const index = entries.indexOf(position.entry);
+  const before = index >= 0 ? entries[index - 1] : undefined;
+  const after = index >= 0 ? entries[index + 1] : undefined;
+  const trigger = controller.railPinMenuTrigger;
   return (
-    <SidebarCustomizeMenu
-      {...{
-        position,
-        sidebarEntries: host.sidebarEntries,
-        preferencesBrowserOnly: host.preferencesBrowserOnly,
-        isRouteEnabled: (routeId) => controller.isRouteEnabled(routeId),
-        pluginNavigation: host.pluginNavigation(),
-        ...controller.positionedMenuHandlers("customize"),
-        onToggleRoute: (routeId) =>
-          toggleEntry(serializeSidebarEntry({ type: "route", route: routeId })),
-        onTogglePlugin: (key) => toggleEntry(serializeSidebarEntry({ type: "plugin", key })),
-        onReset: () => {
-          // Canonical list, not the render list: unknown-state session slots
-          // (other agents, still-loading caches) must survive a route reset.
-          const sessions = host
-            .reconciledSidebarZone()
-            .sidebarEntries.filter(
-              (entry) => entry.startsWith("session:") || entry.startsWith("person:"),
-            );
-          host.onUpdateSidebarEntries?.([...DEFAULT_SIDEBAR_ENTRIES, ...sessions]);
-          controller.closePositionedMenu("customize", { restoreFocus: true });
-        },
-      }}
-    />
+    <Show when={host.sidebarEntries.includes(position.entry)}>
+      <SidebarDropdown
+        position={position}
+        class="sidebar-customize-menu sidebar-rail-pin-menu"
+        label={t("chat.sidebar.reorderItem", { item: position.label })}
+        {...controller.positionedMenuHandlers("railPin")}
+        onSelect={(item) => {
+          const value = item.getAttribute("value");
+          controller.closePositionedMenu("railPin");
+          if (value === "remove") {
+            host.sessionOrganizer.removeSidebarEntry(position.entry);
+          } else if (value === "before" || value === "after") {
+            const target = value === "before" ? before : after;
+            if (target) {
+              host.sessionOrganizer.writeSidebarEntryAt(position.entry, target, value);
+              void host.updateComplete.then(() => trigger?.isConnected && trigger.focus());
+            }
+          }
+        }}
+        content={
+          <>
+            {renderSidebarMenuAction("before", t("chat.sidebar.moveUp"), "arrowUp", {
+              disabled: !before,
+            })}
+            {renderSidebarMenuAction("after", t("chat.sidebar.moveDown"), "arrowDown", {
+              disabled: !after,
+            })}
+            {renderSidebarMenuAction("remove", t("nav.unpin"), "pin")}
+          </>
+        }
+      />
+    </Show>
   );
 }
 
@@ -535,44 +539,5 @@ export function renderSidebarSessionMenuForController(
         />
       )}
     </Show>
-  );
-}
-
-export function renderSidebarMoreMenuForController(
-  controller: SidebarMenusController,
-): JSX.Element {
-  const { host } = controller;
-  const position = controller.moreMenuPosition;
-  if (!position) {
-    return undefined;
-  }
-  return (
-    <SidebarMoreMenu
-      {...{
-        position,
-        basePath: host.basePath,
-        activeRouteId: host.activeRouteId,
-        sidebarEntries: host.sidebarEntries,
-        isRouteEnabled: (routeId) => controller.isRouteEnabled(routeId),
-        ...controller.positionedMenuHandlers("more"),
-        onNavigateRoute: (routeId) => {
-          controller.closePositionedMenu("more", { restoreFocus: true });
-          host.onNavigate?.(routeId);
-        },
-        onPreloadRoute: (routeId, event) => controller.preloadRoute(routeId, event),
-        onCancelPreload: (event) => controller.cancelPreload(event),
-        onEditPinnedItems: () => {
-          const customizePosition = controller.moreMenuPosition;
-          const customizeTrigger = controller.moreMenuTrigger;
-          if (customizePosition) {
-            controller.openCustomizeMenu(
-              customizePosition.x,
-              customizePosition.y,
-              customizeTrigger,
-            );
-          }
-        },
-      }}
-    />
   );
 }

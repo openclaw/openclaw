@@ -139,7 +139,6 @@ export function applySessionActorAppend(
         : undefined,
       () =>
         runWithMetadataMessageAdmission(messageContext, input.message, (authorize, beforeFresh) => {
-          authorize("transaction");
           const value = applySessionMetadataAppendInTransaction(database, scoped, beforeFresh);
           authorize("commit");
           value.pendingInputReceipt = readSessionPendingInputWorkerReceipt(database);
@@ -195,7 +194,6 @@ export function applySessionActorAppend(
       : undefined,
     () =>
       runWithMetadataMessageAdmission(messageContext, input, (authorize, beforeFresh) => {
-        authorize("transaction");
         const value = applySessionDirectMessageInTransaction(database, input, beforeFresh);
         authorize("commit");
         value.pendingInputReceipt = readSessionPendingInputWorkerReceipt(database);

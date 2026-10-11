@@ -1,101 +1,89 @@
-import { createMemo, For, Show } from "solid-js";
-import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
+import type { JSX } from "@solidjs/web";
+import { createMemo, Show, untrack } from "solid-js";
+import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
+import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
-import { sessionSelfOwner } from "./session-owner-chip.ts";
+import { renderSessionOwnerAvatar } from "./session-owner-chip.ts";
 import { Icon } from "./solid/icon.tsx";
 import { renderNewSessionLink } from "./solid/new-session-link.tsx";
-import { renderSessionOwnerAvatar } from "./solid/session-presentation.tsx";
+import { Picker } from "./solid/select-picker.tsx";
 
-/**
- * Quiet toolbar summary of the active sidebar filters. The whole control clears
- * them; its lead glyph (owner avatar, or an archive mark for status-only
- * filters) turns into the clear icon on hover so the row spends no width on a
- * second affordance.
- */
-function renderSessionFilterSummary(host: SessionListHost) {
-  const ownerId = createMemo(() =>
-    host.sessionOwnerFilterActive ? host.sessionOwnerFilterId : null,
-  );
-  const owner = createMemo(() => {
-    const ownerIdValue = ownerId();
-    return ownerIdValue
-      ? host.sessionOwnerOptions.find((option) => option.id === ownerIdValue)
-      : host.sessionInvolvingMeFilterActive
-        ? sessionSelfOwner(
-            resolveCurrentSelfUser({
-              snapshotUser: host.sessionDataContext?.gateway.snapshot.selfUser,
-              presenceEntries: readPresenceEntries(host.sessionData.presencePayload),
-              presenceInstanceId: host.sessionData.presenceInstanceId,
-            }),
-          )
-        : undefined;
-  });
-  const parts = createMemo(() => {
-    const ownerIdValue = ownerId();
-    const ownerValue = owner();
-    return [
-      ...(ownerIdValue ? [ownerValue?.label ?? ownerIdValue] : []),
-      ...(host.sessionInvolvingMeFilterActive ? [t("sessionsView.involvingMe")] : []),
-      ...(host.sessionsStatusFilter === "active"
-        ? []
-        : [t(`sessionsView.${host.sessionsStatusFilter}`)]),
-    ];
-  });
-  const summaryText = createMemo(() => parts().join(" · "));
-  const showAll = createMemo(() => t("chat.sidebar.showAllSessions"));
+type SessionFilterHost = Pick<SessionListHost, "sessionsStatusFilter">;
+
+/** The Sessions title owns the sidebar owner choice. */
+function SidebarOwnerPicker(props: { host: SessionListHost }) {
+  const owners = () =>
+    props.host.sessionOwnershipVisibility.filters ? props.host.sessionOwnerOptions : [];
+  const ownerId = () => props.host.sessionOwnerFilterId;
+  const selfId = () =>
+    props.host.sidebarSnapshot?.footer?.id ??
+    (props.host.sessionDataContext
+      ? gatewayPresentationScope(props.host.sessionDataContext.gateway).displayUser?.id
+      : undefined);
+  const label = () =>
+    props.host.sessionInvolvingMeFilterActive
+      ? t("sessionsView.involvingMe")
+      : ownerId() && ownerId() === selfId()
+        ? t("chat.sidebar.mySessions")
+        : ownerId()
+          ? (owners().find((entry) => entry.id === ownerId())?.label ?? ownerId()!)
+          : t("sessionsView.allOwners");
+  const options = () => [
+    { value: "all", label: t("sessionsView.allOwners") },
+    { value: "involving-me", label: t("sessionsView.involvingMe") },
+    ...owners().map((entry) => ({
+      value: `owner:${entry.id}`,
+      label: entry.id === selfId() ? t("chat.sidebar.mySessions") : (entry.label ?? entry.id),
+    })),
+    ...(ownerId() && !owners().some((entry) => entry.id === ownerId())
+      ? [{ value: `owner:${ownerId()}`, label: label() }]
+      : []),
+  ];
   return (
-    <button
-      type="button"
-      class="sidebar-session-filter-summary"
-      title={showAll()}
-      aria-label={`${summaryText()} · ${showAll()}`}
-      onClick={() => {
-        host.setSessionOwnerFilter(null);
-        if (host.sessionsStatusFilter !== "active") {
-          host.sessionOrganizer.setSessionsStatusFilter("active");
-        }
-      }}
+    <Show
+      when={owners().length > 0 || ownerId() !== null || props.host.sessionInvolvingMeFilterActive}
+      fallback={
+        <span class="sidebar-recent-sessions__label-text">{t("chat.sidebar.threads")}</span>
+      }
     >
-      <span class="sidebar-session-filter-summary__lead" aria-hidden="true">
-        <span class="sidebar-session-filter-summary__glyph">
-          <Show when={owner()} fallback={<Icon name="archive" />}>
-            {(value) => renderSessionOwnerAvatar(value())}
-          </Show>
-        </span>
-        <span class="sidebar-session-filter-summary__clear">
-          <Icon name="x" />
-        </span>
-      </span>
-      <span class="sidebar-session-filter-summary__label">
-        <For each={parts()} keyed={false}>
-          {(part, index) => (
-            <>
-              {index > 0 ? (
-                <span class="sidebar-session-filter-summary__sep" aria-hidden="true">
-                  ·
-                </span>
-              ) : undefined}
-              {part()}
-            </>
-          )}
-        </For>
-      </span>
-    </button>
+      <Picker
+        id="sidebar-session-owner-title"
+        class="sidebar-session-owner-filter"
+        label={t("sessionsView.owners")}
+        value={
+          props.host.sessionInvolvingMeFilterActive
+            ? "involving-me"
+            : ownerId()
+              ? `owner:${ownerId()}`
+              : "all"
+        }
+        disabled={Boolean(props.host.sidebarSnapshot)}
+        searchable="always"
+        sheet={isMobileNavLayout()}
+        showOptionTooltips={false}
+        renderLeading={(option) => {
+          const owner = untrack(owners).find((entry) => `owner:${entry.id}` === option.value);
+          // The unported picker owns this callback's Lit content.
+          return owner ? renderSessionOwnerAvatar(owner) : undefined;
+        }}
+        options={options()}
+        onChange={(value) =>
+          props.host.setSessionOwnerFilter(
+            value.startsWith("owner:") ? value.slice("owner:".length) : null,
+            value === "involving-me",
+          )
+        }
+      />
+    </Show>
   );
 }
-type SessionFilterHost = Pick<
-  SessionListHost,
-  "sessionOwnerFilterActive" | "sessionInvolvingMeFilterActive" | "sessionsStatusFilter"
->;
 
-/** Only Owners and Status filter sessions; the other panel rows are display choices. */
+/** Only the panel's Status choice contributes to its filter indicator. */
 export function countSidebarSessionFilters(host: SessionFilterHost) {
-  return (
-    Number(host.sessionOwnerFilterActive || host.sessionInvolvingMeFilterActive) +
-    Number(host.sessionsStatusFilter !== "active")
-  );
+  return Number(host.sessionsStatusFilter !== "active");
 }
+
 export function renderSidebarSessionFilter(
   host: SessionFilterHost & Pick<SessionListHost, "sidebarMenus">,
   className: string,
@@ -104,7 +92,7 @@ export function renderSidebarSessionFilter(
   return (
     <button
       type="button"
-      class={`${className} sidebar-session-sort ${count() > 0 ? "sidebar-session-sort--filtered" : ""}`}
+      class={[className, "sidebar-session-sort", { "sidebar-session-sort--filtered": count() > 0 }]}
       title={t("chat.sidebar.sortSessions")}
       aria-label={t("chat.sidebar.sortSessions")}
       aria-description={
@@ -126,37 +114,35 @@ export function renderSidebarSessionFilter(
     </button>
   );
 }
-export function renderSessionListToolbar(host: SessionListHost) {
+export function renderSessionListToolbar(host: SessionListHost, teamNewSession?: JSX.Element) {
   const newSessionAccess = createMemo(() => host.readNewSessionAccess());
   return (
     <div class="sidebar-session-toolbar">
-      <span class="sidebar-recent-sessions__label-text">{t("chat.sidebar.threads")}</span>
-      {countSidebarSessionFilters(host) > 0 ? renderSessionFilterSummary(host) : undefined}
+      <SidebarOwnerPicker host={host} />
       {renderSidebarSessionFilter(host, "sidebar-session-toolbar__button")}
-      {renderNewSessionLink({
-        get basePath() {
-          return host.basePath;
-        },
-        get agentId() {
-          return host.expandedAgentId();
-        },
-        get className() {
-          return "sidebar-session-toolbar__button sidebar-new-session";
-        },
-        get label() {
-          return t("agentChip.newConversation");
-        },
-        get showShortcut() {
-          return true;
-        },
-        get disabledReason() {
-          return (() => {
+      <Show
+        when={host.sidebarAgentsMode === "roster"}
+        fallback={renderNewSessionLink({
+          get basePath() {
+            return host.basePath;
+          },
+          get agentId() {
+            return host.expandedAgentId();
+          },
+          className: "sidebar-session-toolbar__button sidebar-new-session",
+          get label() {
+            return t("agentChip.newConversation");
+          },
+          showShortcut: true,
+          get disabledReason() {
             const access = newSessionAccess();
             return access.allowed ? undefined : access.reason;
-          })();
-        },
-        onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
-      })}
+          },
+          onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
+        })}
+      >
+        {teamNewSession}
+      </Show>
     </div>
   );
 }

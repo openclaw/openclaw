@@ -34,14 +34,11 @@ export type AppSidebarProps = {
   terminalAvailable: boolean;
   catalogOpenTarget: CatalogOpenTarget;
   canPairDevice: boolean;
-  preferencesBrowserOnly: boolean;
   sessionKey: string;
   sidebarEntries: readonly string[];
   navigationVisible: boolean;
   navigationView: "pages" | "sessions" | "online";
-  navigationScope: "mine" | "all";
   navigationCollapsed: boolean;
-  onUpdateNavigationScope: ((scope: "mine" | "all") => void) | undefined;
   sidebarAgentsMode: "chip" | "roster";
   sidebarLiveActivity: boolean;
   pinnedAgentIds: readonly string[];
@@ -74,14 +71,11 @@ export const appSidebarProperties = {
   terminalAvailable: { default: false, attribute: false },
   catalogOpenTarget: { default: "viewer", attribute: false },
   canPairDevice: { default: false, attribute: false },
-  preferencesBrowserOnly: { default: false, attribute: false },
   sessionKey: { default: "", attribute: false },
   sidebarEntries: { default: DEFAULT_SIDEBAR_ENTRIES, attribute: false },
   navigationVisible: { default: true, attribute: false },
   navigationView: { default: "sessions", attribute: false },
-  navigationScope: { default: "all", attribute: false },
   navigationCollapsed: { default: false, type: Boolean },
-  onUpdateNavigationScope: { default: undefined, attribute: false },
   sidebarAgentsMode: { default: "chip", attribute: false },
   sidebarLiveActivity: { default: true, attribute: false },
   pinnedAgentIds: { default: [], attribute: false },
@@ -119,14 +113,11 @@ export abstract class AppSidebarBase {
   declare terminalAvailable: AppSidebarProps["terminalAvailable"];
   declare catalogOpenTarget: AppSidebarProps["catalogOpenTarget"];
   declare canPairDevice: AppSidebarProps["canPairDevice"];
-  declare preferencesBrowserOnly: AppSidebarProps["preferencesBrowserOnly"];
   declare sessionKey: AppSidebarProps["sessionKey"];
   declare sidebarEntries: AppSidebarProps["sidebarEntries"];
   declare navigationVisible: AppSidebarProps["navigationVisible"];
   declare navigationView: AppSidebarProps["navigationView"];
-  declare navigationScope: AppSidebarProps["navigationScope"];
   declare navigationCollapsed: AppSidebarProps["navigationCollapsed"];
-  declare onUpdateNavigationScope: AppSidebarProps["onUpdateNavigationScope"];
   declare sidebarAgentsMode: AppSidebarProps["sidebarAgentsMode"];
   declare sidebarLiveActivity: AppSidebarProps["sidebarLiveActivity"];
   declare pinnedAgentIds: AppSidebarProps["pinnedAgentIds"];
@@ -157,7 +148,6 @@ export abstract class AppSidebarBase {
   private complete: Promise<boolean> = Promise.resolve(true);
   private finishUpdate: ((value: boolean) => void) | undefined;
   contextualSidebar: ContextualSidebar | undefined;
-  personalNavigationEpoch = 0;
   sidebarSnapshot: SidebarSnapshotModel | null = null;
   sidebarPluginSnapshot: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null = null;
 
@@ -267,24 +257,13 @@ export abstract class AppSidebarBase {
   protected willUpdate(): void {}
   protected updated(): void {}
 
+  get sessionInvolvingMeFilterActive(): boolean {
+    return this.sidebarSnapshot?.involvingMe ?? this.sessionOwnerFilter.involvingMe;
+  }
+
   abstract readonly sessionOwnerFilter: SessionOwnerFilterController;
 
-  get effectiveNavigationScope(): "mine" | "all" {
-    const snapshot = this.context?.gateway.snapshot;
-    // The Gateway retains resolved profileless identity only within the same connection scope.
-    // Pending and retired identities stay private, including while reconnecting.
-    return snapshot?.selfUser === null ? "all" : this.navigationScope;
-  }
-
-  setNavigationScope(scope: "mine" | "all"): void {
-    this.navigationScope = scope;
-    this.sessionOwnerFilter.markUserIntent();
-    this.onUpdateNavigationScope?.(scope);
-  }
-
   setSessionOwnerFilter = (ownerId: string | null, involvingMe = false) => {
-    this.navigationScope = "all";
-    this.onUpdateNavigationScope?.("all");
     this.sessionOwnerFilter.set(ownerId, involvingMe);
   };
 

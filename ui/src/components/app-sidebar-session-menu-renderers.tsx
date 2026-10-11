@@ -14,7 +14,6 @@ import {
   SIDEBAR_SESSION_SORT_OPTIONS,
   SIDEBAR_SESSION_STATUS_OPTIONS,
 } from "./app-sidebar-session-types.ts";
-import { renderSessionOwnerAvatar as renderPickerOwnerAvatar } from "./session-owner-chip.ts";
 import type { SidebarFilterMenuView, SidebarMenusController } from "./sidebar-menus-controller.tsx";
 import { SidebarSessionFilterPopover } from "./sidebar-session-filter-popover.tsx";
 import { Icon } from "./solid/icon.tsx";
@@ -274,21 +273,8 @@ export function renderSidebarSessionSortMenuForController(
   const sessionSources = SETTINGS_ROUTE_TARGETS.sessionSources;
   const rosterMode = () => host.sidebarAgentsMode === "roster";
   const grouping = () => host.effectiveSessionsGrouping();
-  const ownerFilterId = () => (host.sessionOwnerFilterActive ? host.sessionOwnerFilterId : null);
-  const owners = () =>
-    host.sessionOwnerOptions.filter(
-      (owner) => host.sessionOwnershipVisibility.filters || owner.id === ownerFilterId(),
-    );
-  const unavailableOwner = createMemo(() => {
-    const id = ownerFilterId();
-    return id !== null && !owners().some((owner) => owner.id === id)
-      ? [{ value: `owner:${id}`, label: id }]
-      : [];
-  });
-  const involvingMe = () => host.sessionInvolvingMeFilterActive;
-  const selfOwnerId = () => host.sessionDataContext?.gateway.snapshot.selfUser?.id ?? null;
   const peopleSortAvailable = () => host.sessionPeopleSortAvailable();
-  // Reset covers the panel; the toolbar dot still counts only Owners and Status.
+  // Reset covers the panel; the toolbar dot counts only Status.
   const settingsChanged = createMemo(
     () =>
       countSidebarSessionFilters(host) > 0 ||
@@ -299,13 +285,8 @@ export function renderSidebarSessionSortMenuForController(
       (!rosterMode() &&
         (grouping() !== "category" || host.sessionsEmptyGroupsMode !== "filtering")),
   );
-  const ownerVisible = createMemo(
-    () => owners().length > 0 || ownerFilterId() !== null || involvingMe(),
-  );
   // The mobile sheet has no hover or room for flyouts: choices open as sheet pages.
   const sheet = () => isMobileNavLayout();
-  const ownerValue = () =>
-    involvingMe() ? "involving-me" : ownerFilterId() !== null ? `owner:${ownerFilterId()}` : "all";
   const segmented = <T extends string>(
     id: string,
     label: () => string,
@@ -378,7 +359,6 @@ export function renderSidebarSessionSortMenuForController(
                             '#sidebar-sessions-status input[type="radio"][value="active"]',
                           )
                           ?.focus();
-                        host.setSessionOwnerFilter(null);
                         host.sessionOrganizer.setSessionsStatusFilter("active");
                         host.sessionOrganizer.setSessionsShowCron(false);
                         host.sessionOrganizer.setSessionsShowSystem(false);
@@ -397,44 +377,6 @@ export function renderSidebarSessionSortMenuForController(
                     </button>
                   ) : undefined}
                 </div>
-                {ownerVisible() ? (
-                  <div class="sidebar-session-menu-row">
-                    <label for="sidebar-sessions-owner">{t("sessionsView.owners")}</label>
-                    <Picker
-                      id="sidebar-sessions-owner"
-                      label={t("sessionsView.owners")}
-                      value={ownerValue()}
-                      searchable="always"
-                      sheet={sheet()}
-                      showOptionTooltips={false}
-                      renderLeading={(option) => {
-                        const owner = owners().find(
-                          (entry) => `owner:${entry.id}` === option.value,
-                        );
-                        // The unported picker consumes this callback as Lit content.
-                        return owner ? renderPickerOwnerAvatar(owner) : undefined;
-                      }}
-                      options={[
-                        { value: "all", label: t("sessionsView.allOwners") },
-                        { value: "involving-me", label: t("sessionsView.involvingMe") },
-                        ...owners().map((owner) => ({
-                          value: `owner:${owner.id}`,
-                          label:
-                            owner.id === selfOwnerId()
-                              ? t("sessionsView.ownerYou", { name: owner.label ?? owner.id })
-                              : (owner.label ?? owner.id),
-                        })),
-                        ...unavailableOwner(),
-                      ]}
-                      onChange={(value) =>
-                        host.setSessionOwnerFilter(
-                          value.startsWith("owner:") ? value.slice("owner:".length) : null,
-                          value === "involving-me",
-                        )
-                      }
-                    />
-                  </div>
-                ) : undefined}
                 {segmented(
                   "sidebar-sessions-status",
                   () => t("sessionsView.status"),

@@ -9,7 +9,7 @@ import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { renderAppSidebarOnline } from "./app-sidebar-online.tsx";
-import { renderAppSidebarBrand } from "./app-sidebar-render.tsx";
+import { renderSidebarAgentCard } from "./app-sidebar-render.tsx";
 import { projectSidebarSession } from "./app-sidebar-session-navigation.test-support.ts";
 import { renderRecentSession } from "./app-sidebar-session-row-render.tsx";
 import { AppSidebarOwner, type AppSidebarElement } from "./app-sidebar.tsx";
@@ -26,8 +26,6 @@ const emptySnapshot: SidebarSnapshotModel = {
   roster: null,
   mode: "chip",
   navigationView: "sessions",
-  navigationScope: "all",
-  scopesEquivalent: false,
   pages: [],
   pageScopeId: null,
   pinnedSessions: [],
@@ -91,12 +89,14 @@ it("renders the saved chip identity before agent discovery without reviving anot
     ...emptySnapshot,
     brand: { ...emptySnapshot.brand, agentId: "main", name: "Harbor", textAvatar: "⚓" },
   });
-  const update = mountObservedHost(host, container, renderAppSidebarBrand);
+  const update = mountObservedHost(host, container, renderSidebarAgentCard);
   const card = container.querySelector("openclaw-sidebar-agent-card");
   expect(card).not.toBeNull();
   await waitForSolid(() => {
     expect(container.querySelector(".sidebar-workspace-header")).toBeNull();
-    expect(card!.querySelector(".sidebar-agent-card__name")?.textContent).toContain("Harbor");
+    expect(card!.querySelector(".sidebar-agent-card__main")?.getAttribute("aria-label")).toContain(
+      "Harbor",
+    );
     expect(card!.querySelector("[data-avatar='⚓']")).not.toBeNull();
   });
   host.sessionKey = "agent:other:thread";

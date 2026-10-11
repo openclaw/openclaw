@@ -11,6 +11,7 @@ import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
     agent menu (switcher + utilities) — the conversation itself lives on the
     Home page row, so this row carries profile semantics only. */
 export type SidebarAgentCardProps = {
+  compact?: boolean;
   agentId: string;
   agentName: string;
   avatarUrl: string | null;
@@ -46,7 +47,12 @@ function SidebarAgentCardContent(props: SidebarAgentCardProps, host: HTMLElement
   const menuLabel = () =>
     props.switcherAvailable ? t("agentChip.switchAgent") : t("agentChip.menuLabel");
   return (
-    <div class={["sidebar-agent-card", { "sidebar-agent-card--open": props.menuOpen }]}>
+    <div
+      class={[
+        "sidebar-agent-card",
+        { "sidebar-agent-card--open": props.menuOpen, "sidebar-agent-card--rail": props.compact },
+      ]}
+    >
       <button
         type="button"
         class="sidebar-agent-card__main"
@@ -121,6 +127,7 @@ export const SidebarAgentCard = defineSolidBridge<SidebarAgentCardProps>(
   SidebarAgentCardContent,
   {
     properties: {
+      compact: { default: false },
       agentId: { default: "", attribute: false },
       agentName: { default: "", attribute: false },
       avatarUrl: { default: null, attribute: false },

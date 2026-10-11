@@ -209,14 +209,12 @@ function renderIdentityMenuHelpSubmenu(): JSX.Element {
           class="sidebar-customize-menu__item"
           value={`${LINK_VALUE_PREFIX}${encodeURIComponent(link.href)}`}
           data-new-tab-action
-          onClick={(event: MouseEvent) => {
-            if (
-              event.target instanceof Element &&
-              event.target.closest("a") &&
-              event.currentTarget instanceof Element
-            ) {
-              event.currentTarget.setAttribute("data-native-navigation", "");
-            }
+          ref={(item) => {
+            item.addEventListener("click", (event) => {
+              if (event.target instanceof Element && event.target.closest("a")) {
+                item.setAttribute("data-native-navigation", "");
+              }
+            });
           }}
         >
           <a

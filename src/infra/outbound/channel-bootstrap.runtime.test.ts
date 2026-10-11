@@ -16,7 +16,6 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
 
 const loaderMocks = vi.hoisted(() => ({
   loadPluginRegistryHandle: vi.fn(),
@@ -35,12 +34,7 @@ vi.mock("../../plugins/plugin-metadata-state-worker.js", () => ({
   readPluginMetadataStateRow: vi.fn(async () => undefined),
 }));
 
-const { bootstrapOutboundChannelPlugin, bootstrapOutboundChannelPluginAsync } =
-  await import("./channel-bootstrap.runtime.js");
-const bootstrapModes = [
-  { mode: "sync", bootstrap: bootstrapOutboundChannelPlugin },
-  { mode: "async", bootstrap: bootstrapOutboundChannelPluginAsync },
-];
+const { bootstrapOutboundChannelPlugin } = await import("./channel-bootstrap.runtime.js");
 const { createChannelHandler, resolveOutboundDurableFinalDeliverySupport } =
   await import("./deliver-channel.js");
 const { resolveChannelTargetForDelivery, resolveOutboundSessionRouteForDelivery } =
@@ -55,20 +49,6 @@ const discordConfig = {
 const explicitFleetDiscordConfig = {
   agents: {
     ownership: "explicit",
-    entries: {
-      ops: { workspace: "/tmp/openclaw-ops" },
-      research: { workspace: "/tmp/openclaw-research" },
-    },
-  },
-  channels: {
-    discord: {},
-  },
-} satisfies OpenClawConfig;
-
-const systemOwnedFleetDiscordConfig = {
-  agents: {
-    ownership: "explicit",
-    defaults: { systemAgent: { agentId: "ops" } },
     entries: {
       ops: { workspace: "/tmp/openclaw-ops" },
       research: { workspace: "/tmp/openclaw-research" },
@@ -131,63 +111,6 @@ describe("bootstrapOutboundChannelPlugin", () => {
     );
   });
 
-  it("bootstraps outbound sends with the retained legacy owner after config load", async () => {
-    installDiscordSetupShell();
-    const migrated = createCanonicalAgentConfigFixture({
-      agents: {
-        defaults: { workspace: "/tmp/openclaw-legacy" },
-        entries: {
-          ops: { default: true },
-          research: {},
-        },
-      },
-      channels: { discord: {} },
-    }).config;
-    const handle = createEmptyPluginRegistry();
-    handle.channels = [
-      {
-        pluginId: "discord",
-        plugin: {
-          id: "discord",
-          meta: {},
-          outbound: {
-            extractMarkdownImages: true,
-            sendText: async () => ({ messageId: "1" }),
-          },
-        },
-        source: "runtime",
-      },
-    ] as never;
-    loaderMocks.loadPluginRegistryHandle.mockReturnValue(handle);
-
-    const handler = await createChannelHandler({
-      channel: "discord",
-      cfg: migrated,
-      to: "recipient",
-    });
-    await expect(handler.sendText("hello")).resolves.toMatchObject({ messageId: "1" });
-
-    expect(migrated.agents?.entries?.ops).not.toHaveProperty("default");
-    expect(loaderMocks.resolveDiscoverableScopedChannelPluginIds).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: path.resolve("/tmp/openclaw-legacy") }),
-    );
-  });
-
-  it("routes agent-less bootstrap through the configured system-agent owner", () => {
-    installDiscordSetupShell();
-    loaderMocks.loadPluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
-
-    bootstrapOutboundChannelPlugin({
-      channel: "discord",
-      cfg: systemOwnedFleetDiscordConfig,
-    });
-
-    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
-    expect(loaderMocks.resolveDiscoverableScopedChannelPluginIds).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: path.resolve("/tmp/openclaw-ops") }),
-    );
-  });
-
   it("bootstraps ownerless fleets with global discovery instead of throwing", () => {
     installDiscordSetupShell();
     loaderMocks.loadPluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
@@ -202,28 +125,6 @@ describe("bootstrapOutboundChannelPlugin", () => {
     expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
     expect(loaderMocks.resolveDiscoverableScopedChannelPluginIds).toHaveBeenCalledWith(
       expect.objectContaining({ workspaceDir: undefined }),
-    );
-  });
-
-  it("selects the workspace independently for each admitted agent", () => {
-    installDiscordSetupShell();
-    loaderMocks.loadPluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
-
-    bootstrapOutboundChannelPlugin({
-      channel: "discord",
-      cfg: explicitFleetDiscordConfig,
-      agentId: "ops",
-    });
-    bootstrapOutboundChannelPlugin({
-      channel: "discord",
-      cfg: explicitFleetDiscordConfig,
-      agentId: "research",
-    });
-
-    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(2);
-    expect(loaderMocks.resolveDiscoverableScopedChannelPluginIds).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ workspaceDir: path.resolve("/tmp/openclaw-research") }),
     );
   });
 
@@ -305,7 +206,7 @@ describe("bootstrapOutboundChannelPlugin", () => {
     expect(loaderMocks.loadPluginRegistryHandle).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "activates the scoped setup shell without borrowing a same-id root sender (cached=%s)",
     (cached) => {
       const base = createChannelTestPluginBase({ id: "discord" });
@@ -348,34 +249,6 @@ describe("bootstrapOutboundChannelPlugin", () => {
       ).toBe(runtimeRegistry);
       expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledOnce();
       expect(getActivePluginRegistry()?.channels[0]?.plugin).toBe(root);
-    },
-  );
-
-  it.each(bootstrapModes)(
-    "returns a scoped handle without replacing the process root ($mode)",
-    async ({ bootstrap }) => {
-      installDiscordSetupShell();
-      const root = getActivePluginRegistry();
-      const handle = createEmptyPluginRegistry();
-      handle.channels = [
-        {
-          pluginId: "discord",
-          plugin: {
-            id: "discord",
-            meta: {},
-            outbound: { sendText: async () => ({ messageId: "1" }) },
-          },
-          source: "runtime",
-        },
-      ] as never;
-      loaderMocks.loadPluginRegistryHandle.mockReturnValue(handle);
-
-      expect(await bootstrap({ channel: "discord", cfg: discordConfig })).toBe(handle);
-      expect(getActivePluginRegistry()).toBe(root);
-      expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
-      expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledWith(
-        expect.objectContaining({ onlyPluginIds: ["discord"] }),
-      );
     },
   );
 

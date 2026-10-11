@@ -1,5 +1,9 @@
+import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { flush } from "solid-js";
 import { afterEach, beforeEach, onTestFinished, vi } from "vitest";
+import type { AgentsListResult } from "../api/types.ts";
+import type { ApplicationGateway } from "../app/context.ts";
+import { storeSidebarSessionOwnerFilter } from "../components/app-sidebar-session-types.ts";
 import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import { disposeSidebarContextLifecycles } from "./app-sidebar-context-lifecycle.ts";
 import { settleLitElements } from "./lit-settle.ts";
@@ -116,3 +120,24 @@ export async function selectSidebarView(
   button.click();
   await sidebar.updateComplete;
 }
+
+// General sidebar cases exercise all rows; default-owner regressions mount directly.
+export function seedSidebarEveryonePreference(gateway: ApplicationGateway): void {
+  const selfUserId = gateway.snapshot.selfUser?.id;
+  if (!selfUserId) {
+    return;
+  }
+  const gatewayUrl = gateway.connection.gatewayUrl;
+  const key = `openclaw.control.sidebarSessionOwnerFilter.v1:${gatewayOriginScope(gatewayUrl)}:${encodeURIComponent(selfUserId)}`;
+  if (localStorage.getItem(key) === null) {
+    storeSidebarSessionOwnerFilter(gatewayUrl, selfUserId, { ownerId: null, involvingMe: false });
+  }
+}
+
+export const manyAgents = (count: number) =>
+  ({
+    defaultId: "agent-1",
+    mainKey: "main",
+    scope: "per-sender",
+    agents: Array.from({ length: count }, (_, index) => ({ id: `agent-${index + 1}` })),
+  }) as AgentsListResult;

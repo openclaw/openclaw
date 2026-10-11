@@ -276,10 +276,9 @@ describe("DockLayoutController inline columns", () => {
     controller.hostConnected();
 
     render(controller.renderResizer("test", "Resize panel"), container);
-    let separator = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-      '[role="separator"]',
-    )!;
+    let separator = container.querySelector("resizable-divider")!;
     await separator.updateComplete;
+    expect(separator.getAttribute("role")).toBe("separator");
     expect(separator.getAttribute("tabindex")).toBe("0");
     expect(separator.getAttribute("aria-orientation")).toBe("vertical");
 
@@ -290,9 +289,7 @@ describe("DockLayoutController inline columns", () => {
 
     controller.setDock("bottom", false);
     render(controller.renderResizer("test", "Resize panel"), container);
-    separator = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-      '[role="separator"]',
-    )!;
+    separator = container.querySelector("resizable-divider")!;
     await separator.updateComplete;
     expect(separator.getAttribute("aria-orientation")).toBe("horizontal");
 

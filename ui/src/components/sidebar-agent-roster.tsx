@@ -450,7 +450,7 @@ function SidebarNewSessionMenuContent(
         <button
           slot="trigger"
           type="button"
-          class="sidebar-brand__icon sidebar-brand__header-control sidebar-brand__new-thread"
+          class="sidebar-session-toolbar__button sidebar-new-session"
           aria-label={t("agentChip.newConversation")}
           title={props.access.allowed ? t("agentChip.newConversation") : props.access.reason}
           disabled={!access().allowed || roster.cards().length === 0}
@@ -461,12 +461,15 @@ function SidebarNewSessionMenuContent(
           {(card) => (
             <wa-dropdown-item
               value={card().id}
-              onClick={(event: MouseEvent) => {
-                if (shouldHandleNavigationClick(event)) {
-                  event.preventDefault();
-                } else if (event.currentTarget instanceof HTMLElement) {
-                  event.currentTarget.setAttribute("data-native-navigation", "");
-                }
+              ref={(item) => {
+                // Run before Web Awesome synchronously emits its selection event.
+                item.addEventListener("click", (event) => {
+                  if (shouldHandleNavigationClick(event)) {
+                    event.preventDefault();
+                  } else {
+                    item.setAttribute("data-native-navigation", "");
+                  }
+                });
               }}
             >
               <a

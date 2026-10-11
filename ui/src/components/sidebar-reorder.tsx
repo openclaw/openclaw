@@ -6,18 +6,15 @@ import "./web-awesome.ts";
 type ReorderPosition = "before" | "after";
 export function renderSidebarReorderMenu(params: {
   label: string;
-  kind: "entry" | "section";
-  onRemove?: () => void;
   onMove: (target: string, position: ReorderPosition) => void | Promise<void>;
 }) {
-  const attribute = params.kind === "entry" ? "data-sidebar-entry" : "data-session-section";
+  const attribute = "data-session-section";
   const adjacent = (menu: HTMLElement, position: ReorderPosition): string | null => {
     const row = menu.closest(`[${attribute}]`);
     const siblings = [...(row?.parentElement?.children ?? [])].filter(
       (element) =>
         element.hasAttribute(attribute) &&
-        (params.kind === "entry" ||
-          element.querySelector('.sidebar-recent-sessions__head[draggable="true"]')),
+        element.querySelector('.sidebar-recent-sessions__head[draggable="true"]'),
     );
     const index = row ? siblings.indexOf(row) : -1;
     return index < 0
@@ -44,10 +41,6 @@ export function renderSidebarReorderMenu(params: {
       onWa-select={(event: WaSelectEvent) => {
         void (async () => {
           const position = event.detail.item.getAttribute("value");
-          if (position === "remove") {
-            params.onRemove?.();
-            return;
-          }
           if (position !== "before" && position !== "after") {
             return;
           }
@@ -90,14 +83,6 @@ export function renderSidebarReorderMenu(params: {
         </span>
         {t("chat.sidebar.moveDown")}
       </wa-dropdown-item>
-      {params.onRemove && (
-        <wa-dropdown-item value="remove">
-          <span slot="icon" aria-hidden="true">
-            <Icon name="pin" />
-          </span>
-          {t("nav.unpin")}
-        </wa-dropdown-item>
-      )}
     </wa-dropdown>
   );
 }

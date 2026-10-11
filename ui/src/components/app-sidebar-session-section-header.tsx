@@ -65,12 +65,7 @@ export function renderSidebarSessionSectionHeader(params: {
     >
       <span class="sidebar-session-group-drag-handle" aria-hidden="true" />
       {params.content}
-      {draggable() && params.reorder
-        ? renderSidebarReorderMenu({
-            ...params.reorder,
-            kind: "section",
-          })
-        : undefined}
+      {draggable() && params.reorder ? renderSidebarReorderMenu(params.reorder) : undefined}
       {params.status ? (
         <button
           type="button"
