@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import type { SqliteWorkerStore } from "openclaw/plugin-sdk/sqlite-runtime";
+import { MemoryIndexRevisionConflictError } from "./manager-db-kernel.js";
 import type {
   MemoryEmbeddingCacheMutation,
   MemoryPublicationOperations,
@@ -20,6 +22,32 @@ type PublicationRetry = <T>(
   run: () => Promise<MemoryPublicationResult<T>>,
   prepare: () => Promise<boolean>,
 ) => Promise<T | undefined>;
+
+export async function retryMemoryPublication<T>(
+  run: () => Promise<MemoryPublicationResult<T>>,
+  busyTimeoutMs: number,
+  prepare: () => Promise<boolean> = async () => true,
+): Promise<T | undefined> {
+  const deadline = performance.now() + busyTimeoutMs;
+  while (await prepare()) {
+    const result = await run();
+    if (result.ok) {
+      return result.value;
+    }
+    const code = result.error.errcode === undefined ? undefined : result.error.errcode & 0xff;
+    if (result.entered || (code !== 5 && code !== 6) || performance.now() >= deadline) {
+      throw Object.assign(
+        result.error.name === "MemoryIndexRevisionConflictError"
+          ? new MemoryIndexRevisionConflictError(result.error.message)
+          : new Error(result.error.message),
+        result.error,
+        { entered: result.entered, committed: result.committed },
+      );
+    }
+    await delay(Math.min(25, Math.max(0, deadline - performance.now())));
+  }
+  return undefined;
+}
 
 /** Small publications use one request; larger inputs retain their bounded transfer scope. */
 export async function publishMemorySource(params: {

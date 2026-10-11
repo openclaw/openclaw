@@ -1,7 +1,6 @@
 // Owns the published index state and the isolated lifetime of shadow reindex work.
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
-import { setTimeout as delay } from "node:timers/promises";
 import {
   createSubsystemLogger,
   resolveStateDir,
@@ -25,10 +24,7 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import { runMemorySourceState } from "./manager-cpu-worker-runtime.js";
-import {
-  memoryDatabaseTableExists,
-  MemoryIndexRevisionConflictError,
-} from "./manager-db-kernel.js";
+import { memoryDatabaseTableExists } from "./manager-db-kernel.js";
 import { closeMemoryDatabase, openMemoryDatabaseReadOnlyAtPath } from "./manager-db.js";
 import { withMemoryIndexGeneration } from "./manager-index-generation-lease.js";
 import type {
@@ -38,7 +34,11 @@ import type {
   MemoryPublicationState,
 } from "./manager-publication-task.js";
 import { memoryEmbeddingCacheFitsInline } from "./manager-publication-transfer.js";
-import { publishMemoryEmbeddingCache, publishMemorySource } from "./manager-publication.js";
+import {
+  publishMemoryEmbeddingCache,
+  publishMemorySource,
+  retryMemoryPublication,
+} from "./manager-publication.js";
 import {
   assertMemoryShadowIdentity,
   readMemoryShadowIdentity,
@@ -56,32 +56,6 @@ type PublicationWorker = {
   >;
   busyTimeoutMs: number;
 };
-
-async function retryMemoryPublication<T>(
-  run: () => Promise<MemoryPublicationResult<T>>,
-  busyTimeoutMs: number,
-  prepare: () => Promise<boolean> = async () => true,
-): Promise<T | undefined> {
-  const deadline = performance.now() + busyTimeoutMs;
-  while (await prepare()) {
-    const result = await run();
-    if (result.ok) {
-      return result.value;
-    }
-    const code = result.error.errcode === undefined ? undefined : result.error.errcode & 0xff;
-    if (result.entered || (code !== 5 && code !== 6) || performance.now() >= deadline) {
-      throw Object.assign(
-        result.error.name === "MemoryIndexRevisionConflictError"
-          ? new MemoryIndexRevisionConflictError(result.error.message)
-          : new Error(result.error.message),
-        result.error,
-        { entered: result.entered, committed: result.committed },
-      );
-    }
-    await delay(Math.min(25, Math.max(0, deadline - performance.now())));
-  }
-  return undefined;
-}
 
 async function initializePublishedMemory(
   options: Parameters<typeof openOpenClawAgentSqliteWorkerStoreV2>[0],

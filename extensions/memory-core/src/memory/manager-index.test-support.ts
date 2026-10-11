@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import type {
   EmbeddingInput,
   EmbeddingProviderCallOptions,
@@ -653,6 +653,21 @@ export function memoryIndexFixtureWriter(manager: MemoryIndexManager): DatabaseS
     throw new Error("Memory index fixture has no database path");
   }
   return openOpenClawAgentDatabase({ agentId: "main", path: databasePath }).db;
+}
+
+export function countMemoryIndexFtsMatches(databasePath: string, marker: string): number {
+  const observer = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    return (
+      observer
+        .prepare(
+          "SELECT COUNT(*) AS count FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?",
+        )
+        .get(`"${marker}"`) as { count: number }
+    ).count;
+  } finally {
+    observer.close();
+  }
 }
 
 export function readPublishedSessionIndex(

@@ -22,6 +22,7 @@ import { describe, expect, it, vi } from "vitest";
 import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import { writeMemoryIndexArchiveTranscript } from "./index-archive.test-support.js";
 import {
+  countMemoryIndexFtsMatches,
   createManagerIndexFixture,
   memoryIndexFixtureWriter,
 } from "./manager-index.test-support.js";
@@ -664,23 +665,8 @@ describe("memory index", () => {
       }
       fault.disable();
 
-      const ftsMatchCount = (marker: string): number => {
-        const observer = new DatabaseSync(dbPath, { readOnly: true });
-        try {
-          return (
-            observer
-              .prepare(
-                "SELECT COUNT(*) AS count FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?",
-              )
-              .get(`"${marker}"`) as { count: number }
-          ).count;
-        } finally {
-          observer.close();
-        }
-      };
-
-      expect(ftsMatchCount(markers.retained)).toBe(0);
-      expect(ftsMatchCount(markers.trigger)).toBe(0);
+      expect(countMemoryIndexFtsMatches(dbPath, markers.retained)).toBe(0);
+      expect(countMemoryIndexFtsMatches(dbPath, markers.trigger)).toBe(0);
       // Hand ordinary dirty state to maintenance so recovery must use the retained queue.
       manager.takeReindexRetryStateForMaintenance();
       const recoveryState = manager as unknown as {
@@ -706,8 +692,8 @@ describe("memory index", () => {
       const recoveryResults = await Promise.allSettled([recovery, competingFullSync]);
       expect(recoveryResults.map((result) => result.status)).toEqual(["fulfilled", "fulfilled"]);
 
-      expect(ftsMatchCount(markers.retained)).toBeGreaterThan(0);
-      expect(ftsMatchCount(markers.trigger)).toBeGreaterThan(0);
+      expect(countMemoryIndexFtsMatches(dbPath, markers.retained)).toBeGreaterThan(0);
+      expect(countMemoryIndexFtsMatches(dbPath, markers.trigger)).toBeGreaterThan(0);
       expect(recoveryState.sessionSyncQueue.sessions.size).toBe(0);
       expect(recoveryProgress).toHaveBeenCalled();
     } finally {
