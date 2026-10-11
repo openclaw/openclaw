@@ -169,6 +169,42 @@ describe("sessions.dispatch device targets", () => {
       vi.restoreAllMocks();
     });
 
+    it.each(["unpaired", "reconnected"] as const)(
+      "reports live %s refusal instead of stale full capacity",
+      async (reason) => {
+        useDeviceSession();
+        const node = connectedNode("unavailable", 0);
+        vi.spyOn(environmentMethods, "listGatewayEnvironments").mockResolvedValue(
+          deviceEnvironments([node]),
+        );
+        const dispatch = vi.fn();
+        const context = makeDispatchTestContext({
+          nodeRegistry: { get: () => node } as never,
+          workerPlacementDispatchService: { dispatch },
+          workerSessionPlacementService: { getMany: () => new Map() },
+        });
+        bindDeviceWorkerAvailability(context.workerEnvironmentService!, async () =>
+          reason === "unpaired"
+            ? { available: false, unavailableReason: "unpaired" }
+            : { available: true, node: { ...node, connId: "replacement-connection" } },
+        );
+
+        const respond = await invokeSessionDispatch(context, { autoDevice: true });
+
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: ErrorCodes.INVALID_REQUEST,
+            message: expect.stringContaining(
+              reason === "unpaired" ? "not a paired" : "not connected",
+            ),
+          }),
+        );
+      },
+    );
+
     it("dispatches to a capacity-one host whose occupied slot is reclaimable idle", async () => {
       useDeviceSession();
       const node = connectedNode("idle-host", 0);
@@ -382,7 +418,7 @@ describe("sessions.dispatch device targets", () => {
       },
     );
 
-    it("redispatches to the next host when the first disappears at the inner eligibility fence", async () => {
+    it("redispatches to the next host when the first disappears after dispatch starts", async () => {
       const root = tempDirs.make("openclaw-session-auto-device-");
       try {
         const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
@@ -393,9 +429,15 @@ describe("sessions.dispatch device targets", () => {
         vi.spyOn(environmentMethods, "listGatewayEnvironments").mockResolvedValue(
           deviceEnvironments(nodes),
         );
-        const firstChecks = { count: 0 };
+        let dispatchStarted = false;
+        const startDispatch = placements.startDispatch.bind(placements);
+        vi.spyOn(placements, "startDispatch").mockImplementation(async (...args) => {
+          const placement = await startDispatch(...args);
+          dispatchStarted = true;
+          return placement;
+        });
         bindDeviceWorkerAvailability(harness.environments, async (deviceId) => {
-          if (deviceId === "first" && ++firstChecks.count >= 4) {
+          if (deviceId === "first" && dispatchStarted) {
             return { available: false, unavailableReason: "disconnected" };
           }
           return { available: true, node: nodes.find((node) => node.nodeId === deviceId) };

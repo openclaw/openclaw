@@ -305,18 +305,7 @@ export async function resolveUserProfileGitHubAttribution(
   if (profileIds.length === 0) {
     return new Map();
   }
-  const reply = await executeExistingOpenClawStateRead(
-    options,
-    { type: "userProfiles.githubAttribution.resolve", profileIds },
-    { current: true },
-  );
-  if (!reply) {
-    return new Map();
-  }
-  if (!reply.ok || reply.type !== "userProfiles.githubAttribution.resolve") {
-    throw new Error("GitHub attribution reader returned an unexpected result");
-  }
-  return reply.identities;
+  return (await prepareUserProfileGitHubAttribution(profileIds, options)).identities;
 }
 
 function resolveUserProfileGitHubAttributionInDatabase(
@@ -357,13 +346,26 @@ function resolveUserProfileGitHubAttributionInDatabase(
   };
 }
 
+type PreparedGitHubAttribution = {
+  identities: UserProfileGitHubAttribution;
+  isCurrent: () => boolean;
+};
+
+const preparedGitHubAttributions = new Map<string, PreparedGitHubAttribution>();
+
 /** Bind public credit to its live profile owner before any later publication awaits. */
 export async function prepareUserProfileGitHubAttribution(
   profileIds: readonly string[],
   options: OpenClawStateDatabaseOptions = {},
-): Promise<{ identities: UserProfileGitHubAttribution; isCurrent: () => boolean }> {
+): Promise<PreparedGitHubAttribution> {
   const selectedProfileIds = [...profileIds];
   const context = captureOpenClawStateWorkerContext(options);
+  const key = JSON.stringify([context.admission.identity.key, selectedProfileIds]);
+  const cached = preparedGitHubAttributions.get(key);
+  if (cached?.isCurrent()) {
+    return { identities: structuredClone(cached.identities), isCurrent: cached.isCurrent };
+  }
+  preparedGitHubAttributions.delete(key);
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const authority = await captureUserProfileAuthorityRead(context.admission);
     const reply = await executeExistingOpenClawStateRead(
@@ -380,7 +382,18 @@ export async function prepareUserProfileGitHubAttribution(
       ...(reply?.canonicalProfileIds ?? []),
     ]);
     if (isCurrent) {
-      return { identities: reply?.identities ?? new Map(), isCurrent };
+      const identities: UserProfileGitHubAttribution = reply?.identities ?? new Map();
+      // Absent profiles have no owner publication to invalidate a later first creation.
+      if (selectedProfileIds.every((profileId) => identities.has(profileId))) {
+        preparedGitHubAttributions.set(key, {
+          identities: structuredClone(identities),
+          isCurrent,
+        });
+        while (preparedGitHubAttributions.size > 64) {
+          preparedGitHubAttributions.delete(preparedGitHubAttributions.keys().next().value!);
+        }
+      }
+      return { identities, isCurrent };
     }
   }
   throw new Error("Git co-author credit changed while preparing attribution");

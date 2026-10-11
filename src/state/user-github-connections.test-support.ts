@@ -26,3 +26,38 @@ export function updateUserGitHubConnection(
     { operationLabel: "users.github.fixture" },
   );
 }
+
+export function expireUserGitHubAuthorization(owner: string): void {
+  updateUserGitHubConnection(
+    owner,
+    (current) => {
+      if (current?.pending?.kind !== "device") {
+        throw new Error("Expected pending device authorization");
+      }
+      const expiresAtMs = Date.now() - 1;
+      return {
+        ...current,
+        pending: {
+          ...current.pending,
+          createdAtMs: expiresAtMs - 900000,
+          expiresAtMs,
+          nextPollAtMs: expiresAtMs,
+        },
+      };
+    },
+    () => {},
+  );
+}
+
+export function expireUserGitHubAccessToken(owner: string): void {
+  updateUserGitHubConnection(
+    owner,
+    (current) => {
+      if (current?.selection.kind !== "connected") {
+        throw new Error("Expected connection");
+      }
+      return { ...current, selection: { ...current.selection, accessExpiresAtMs: Date.now() - 1 } };
+    },
+    () => {},
+  );
+}

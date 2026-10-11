@@ -1,10 +1,12 @@
 import { AGENT_HARNESS_COMPAT_RECORDS } from "./agent-harness-records.js";
 import { AGENT_LIST_RUNTIME_PROJECTION_COMPAT_RECORDS } from "./agent-list-runtime-projection-records.js";
+import { BINDING_PERSISTENCE_COMPAT_RECORDS } from "./binding-persistence-records.js";
 import { CHANNEL_PAIRING_COMPAT_RECORD } from "./channel-pairing-record.js";
 import { DEPRECATION_MARKING_COMPAT_RECORDS } from "./deprecation-marking.js";
 import { MEDIA_LEGACY_PROJECTION_COMPAT_RECORD } from "./media-legacy-projection.js";
 import { MENTION_INBOX_COMPAT_RECORD } from "./mention-inbox-record.js";
 import { MODEL_ACCOUNT_CONNECT_COMPAT_RECORD } from "./model-account-connect-record.js";
+import { NATIVE_EXEC_APPROVAL_COMPAT_RECORD } from "./native-exec-approval-record.js";
 import { PLUGIN_SDK_REMOVED_EXPORT_RECORDS } from "./plugin-sdk-removed-export-records.js";
 import {
   BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS,
@@ -30,11 +32,13 @@ const ACTIVATION_HINT_METADATA = {
 export const PLUGIN_COMPAT_RECORDS = [
   ...PLUGIN_SDK_REMOVED_EXPORT_RECORDS,
   ...AGENT_HARNESS_COMPAT_RECORDS,
+  ...BINDING_PERSISTENCE_COMPAT_RECORDS,
   CHANNEL_PAIRING_COMPAT_RECORD,
   MENTION_INBOX_COMPAT_RECORD,
   MODEL_ACCOUNT_CONNECT_COMPAT_RECORD,
   WORKSPACE_MUTATION_GUARD_COMPAT_RECORD,
   ...SESSION_PERSISTENCE_COMPAT_RECORDS,
+  NATIVE_EXEC_APPROVAL_COMPAT_RECORD,
   TTS_PREFERENCES_COMPAT_RECORD,
   ...AGENT_LIST_RUNTIME_PROJECTION_COMPAT_RECORDS,
   WATCHED_SESSIONS_COMPAT_RECORD,
@@ -54,6 +58,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     surfaces: [
       "GatewayRequestHandlerOptions.context.workerSessionPlacementService.getMany",
       "GatewayRequestHandlerOptions.context.workerSessionPlacementService.retireSessionPlacement",
+      "GatewayRequestHandlerOptions.context.workerSessionPlacementService.clearLocalTurnClaimsAfterRestart",
       "GatewayRequestHandlerOptions.context.workerPlacementDispatchService.getAdmittedDeviceSessionCounts",
       "GatewayRequestHandlerOptions.context.placementStandingGrants.resolveBinding",
       "GatewayRequestHandlerOptions.context.placementStandingGrants.retain",
@@ -64,11 +69,12 @@ export const PLUGIN_COMPAT_RECORDS = [
       "getPluginRuntimeGatewayRequestScope().context",
     ],
     diagnostics: [
-      "TypeScript @deprecated annotations and migration documentation; no runtime warnings",
+      "TypeScript @deprecated annotations and migration documentation; placement retirement and restart clearing warn once per plugin and capability family on legacy use",
     ],
     tests: [
       "src/plugin-sdk/gateway-placement-compat.test.ts",
       "src/gateway/worker-environments/placement-store.test.ts",
+      "src/gateway/worker-environments/placement-turn-claims.worker.test.ts",
       "src/gateway/operator-approval-placement-grants.test.ts",
       "src/gateway/worker-environments/device-placement-demand.test.ts",
       "src/gateway/github-publication-boundaries.test.ts",
@@ -200,7 +206,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     warningStarts: "2026-09-11",
     removalGate: "next-plugin-sdk-major",
     replacement:
-      "`api.runtime.state.openKeyedStore` and `PluginStateKeyedStore`; await operations while keeping transactional callbacks synchronous. Retain the sync adapter until a supported external-plugin migration and explicit breaking-release approval.",
+      "Use api.runtime.state.openKeyedStoreV2 or createPluginStateKeyedStoreV2, await data-only operations, and replace update/deleteIf closures with observe/compareAndApply. Synchronous methods retain commit-before-return until they are removed in the next Plugin SDK major and explicit breaking-release approval.",
     docsPath: "/plugins/sdk-runtime/state-and-system#synchronous-keyed-store-migration",
     surfaces: [
       "api.runtime.state.openSyncKeyedStore",
@@ -221,7 +227,7 @@ export const PLUGIN_COMPAT_RECORDS = [
       "src/plugins/loader.runtime-registry.test.ts",
     ],
     releaseNote:
-      "Synchronous plugin keyed stores remain supported through the next Plugin SDK major while plugins migrate to awaited keyed-store operations; trust eligibility and transactional callbacks are unchanged.",
+      "Bundled plugins use worker-owned keyed-state operations and conditional prepared writes. Released synchronous stores and opaque callbacks retain their timing with a bounded migration warning; schemas, retention, and update behavior are unchanged.",
   },
   {
     code: "memory-read-result-statusless-success",

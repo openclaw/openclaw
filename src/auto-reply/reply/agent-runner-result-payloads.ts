@@ -684,14 +684,16 @@ export async function prepareReplyAgentPayloads(state: {
   // Refresh inherited verbosity even when it started off: session preferences
   // and plugin diagnostics may change while the model runs.
   if (followupRun.run.verboseLevelOverride !== "off" || followupRun.run.traceAuthorized === true) {
-    activeSessionEntry = await refreshSessionEntryFromStore({
-      storePath,
-      sessionKey,
-      fallbackEntry: activeSessionEntry,
-      activeSessionStore,
-      expectedGeneration: accounting.expectedSession,
-      reader: getReplyOperationSessionReader(replyOperation),
-    });
+    activeSessionEntry = context.completion
+      ? await context.completion.refresh()
+      : await refreshSessionEntryFromStore({
+          storePath,
+          sessionKey,
+          fallbackEntry: activeSessionEntry,
+          activeSessionStore,
+          expectedGeneration: accounting.expectedSession,
+          reader: getReplyOperationSessionReader(replyOperation),
+        });
   }
 
   return {

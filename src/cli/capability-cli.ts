@@ -35,7 +35,7 @@ const capabilityCommandGroups = [
 function registerCapabilityListAndInspect(capability: Command): void {
   capability
     .command("list")
-    .description("List canonical capability ids and supported transports")
+    .description("List capability IDs and supported transports")
     .option("--json", "Output JSON", false)
     .action((opts) =>
       runCapabilityCommand(opts.json, providerSummaryText, () =>
@@ -49,7 +49,7 @@ function registerCapabilityListAndInspect(capability: Command): void {
 
   capability
     .command("inspect")
-    .description("Inspect one canonical capability id")
+    .description("Inspect one capability ID")
     .requiredOption("--name <capability>", "Capability id")
     .option("--json", "Output JSON", false)
     .action((opts) =>

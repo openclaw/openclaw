@@ -26,7 +26,7 @@ import type { ReplyPreviewLookup } from "./chat-reply-preview.types.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { syncToolDisclosureOverflow } from "./chat-tool-cards.ts";
 import { renderToolOutcomeSummary } from "./chat-tool-outcome-summary.ts";
-import { renderChatWorkingIndicator } from "./chat-working-indicator.ts";
+import { renderChatBubbleDots, renderChatWorkingIndicator } from "./chat-working-indicator.ts";
 
 /** A contiguous run of in-flight streaming items rendered under one assistant group. */
 export type StreamGroupPart = Extract<
@@ -67,6 +67,7 @@ type StreamMessageOptions = Pick<
 export type StreamGroupOptions = StreamMessageOptions & {
   resolveReplyPreview?: ReplyPreviewLookup;
   branding?: ThemeBranding;
+  bubbleMode?: boolean;
   entryRefFor?: (key: string) => ((element?: Element) => void) | undefined;
   onReply?: (target: ChatReplyTarget) => void;
   onOpenSidebar?: (content: SidebarContent) => void;
@@ -121,6 +122,7 @@ export function renderStreamGroupPart(
 ) {
   if (part.kind === "reading-indicator") {
     return renderChatWorkingIndicator(part, {
+      bubbleMode: opts.bubbleMode,
       mascot: opts.branding?.mascot,
       workingIndicator: opts.branding?.workingIndicator,
       workingPhrases: opts.branding?.workingPhrases,
@@ -141,7 +143,10 @@ export function renderStreamGroupPart(
   }
   const source = prepareChatMessageRender({
     role: "assistant",
-    content: [{ type: "text", text: part.text }],
+    content: [
+      ...(part.thinking ? [{ type: "thinking", thinking: part.thinking }] : []),
+      { type: "text", text: part.text },
+    ],
     timestamp: part.startedAt,
   });
   return renderGroupedMessage(
@@ -151,7 +156,7 @@ export function renderStreamGroupPart(
       ...opts,
       isStreaming: part.isStreaming,
       entryRef: opts.entryRefFor?.(part.key),
-      showReasoning: false,
+      showReasoning: Boolean(part.thinking),
       // Settled segments can be replied to without transcript IDs or footer actions.
       messageActions: resolveMessageActionDetails(source, {
         messageId: part.key,
@@ -232,8 +237,10 @@ export function renderWorkGroupSummary(
     onToggle: () => void;
     presentation?: "standalone" | "continuation";
     browserTabPreviews?: unknown;
+    bubbleMode?: boolean;
   },
 ) {
+  const compact = opts.bubbleMode && !opts.expanded;
   const duration = formatDurationLong(item.durationMs);
   const entries = item.groups.flatMap((group) =>
     group.messages.map(({ message }) => ({
@@ -283,36 +290,45 @@ export function renderWorkGroupSummary(
   const outcomes = summary.outcomes.filter(({ kind }) => kind !== "failed" && kind !== "skipped");
   const toolOutcomes = renderToolOutcomeSummary(cards, true, activity);
   const content = html`
-    <div class="chat-activity-group chat-work-group ${opts.expanded ? "is-open" : ""}">
+    <div
+      class="chat-activity-group chat-work-group ${opts.expanded ? "is-open" : ""} ${compact ? "chat-activity-group--bubble" : ""}"
+    >
       <button
         class="chat-inline-disclosure chat-activity-group__summary"
         type="button"
         aria-expanded=${String(opts.expanded)}
+        aria-label=${compact ? t("chat.view.activityDetails") : nothing}
         @pointerenter=${syncToolDisclosureOverflow}
         @focus=${syncToolDisclosureOverflow}
         @click=${opts.onToggle}
       >
-        <span class="chat-tool-disclosure__content">
-          <span class="chat-activity-group__label">${label}</span>
-        </span>
         ${
-          opts.expanded && total > 0
-            ? html`<span class="chat-work-group__total"
-                >·
-                ${t(`chat.workRun.toolCalls${total === 1 ? "One" : "Many"}`, { count: String(total) })}</span
-              >`
-            : nothing
+          compact
+            ? renderChatBubbleDots()
+            : html`<span class="chat-tool-disclosure__content">
+                  <span class="chat-activity-group__label">${label}</span>
+                </span>
+                ${
+                  opts.expanded && total > 0
+                    ? html`<span class="chat-work-group__total"
+                        >·
+                        ${t(`chat.workRun.toolCalls${total === 1 ? "One" : "Many"}`, { count: String(total) })}</span
+                      >`
+                    : nothing
+                }
+                ${outcomes.map((outcome) => html`<span class="chat-activity-group__outcome muted">· ${outcome.label}</span>`)}
+                ${
+                  toolOutcomes === nothing
+                    ? nothing
+                    : html`<span class="chat-work-group__outcomes">· ${toolOutcomes}</span>`
+                }
+                <span class="chat-tool-row__chevron" aria-hidden="true"
+                  >${icons.chevronRight}</span
+                >`
         }
-        ${outcomes.map((outcome) => html`<span class="chat-activity-group__outcome muted">· ${outcome.label}</span>`)}
-        ${
-          toolOutcomes === nothing
-            ? nothing
-            : html`<span class="chat-work-group__outcomes">· ${toolOutcomes}</span>`
-        }
-        <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
       </button>
       <div class="chat-work-group__separator" aria-hidden="true"></div>
-      ${opts.expanded ? nothing : (opts.browserTabPreviews ?? nothing)}
+      ${opts.expanded || opts.bubbleMode ? nothing : (opts.browserTabPreviews ?? nothing)}
     </div>
   `;
   return opts.presentation === "continuation"

@@ -171,33 +171,61 @@ async function fixture(name: string, source = authority) {
   return { scope, entry };
 }
 
-it("rereads non-mutating actor delivery receipts without native SQL or replay", async () => {
-  const { scope, entry } = await fixture("delivery-receipt");
-  await withIncognitoSessionActor(actor, async () => {
-    await replaceSessionEntry(scope, {
-      ...entry,
-      restartRecoveryDeliveryRunId: "recovery",
-      restartRecoveryDeliverySourceRunId: "source",
-    });
-    const delivery = {
-      ...scope,
-      sessionId: entry.sessionId,
-      sourceTurnId: "source",
-      toolCallId: "tool",
+it.each(["worker", "native"] as const)(
+  "rereads non-mutating %s incognito delivery receipts without replay",
+  async (owner) => {
+    const agentId = "native-receipt";
+    const nativePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId, env });
+    const { scope, entry } =
+      owner === "worker"
+        ? await fixture("delivery-receipt")
+        : {
+            scope: {
+              agentId,
+              storePath: nativePath,
+              sessionKey: `agent:${agentId}:dashboard:incognito-receipt`,
+              env,
+            },
+            entry: { sessionId: "native-receipt", updatedAt: 1, incognito: true as const },
+          };
+    const exercise = async () => {
+      await replaceSessionEntry(scope, {
+        ...entry,
+        restartRecoveryDeliveryRunId: "recovery",
+        restartRecoveryDeliverySourceRunId: "source",
+      });
+      const delivery = {
+        ...scope,
+        sessionId: entry.sessionId,
+        sourceTurnId: "source",
+        toolCallId: "tool",
+      };
+      const sql = owner === "worker" ? observeMainThreadSql() : undefined;
+      try {
+        expect(await beginRestartRecoveryTerminalDelivery(delivery)).toBe("started");
+        expect(await beginRestartRecoveryTerminalDelivery(delivery)).toBe("delivery-ambiguous");
+        expect(await completeRestartRecoveryTerminalDelivery(delivery)).toBe("recorded");
+        expect(await completeRestartRecoveryTerminalDelivery(delivery)).toBe("recorded");
+        expect(await cancelRestartRecoveryTerminalDelivery(delivery)).toBe("stale");
+        sql?.expectIdle();
+      } finally {
+        sql?.restore();
+      }
     };
-    const sql = observeMainThreadSql();
-    try {
-      expect(await beginRestartRecoveryTerminalDelivery(delivery)).toBe("started");
-      expect(await beginRestartRecoveryTerminalDelivery(delivery)).toBe("delivery-ambiguous");
-      expect(await completeRestartRecoveryTerminalDelivery(delivery)).toBe("recorded");
-      expect(await completeRestartRecoveryTerminalDelivery(delivery)).toBe("recorded");
-      expect(await cancelRestartRecoveryTerminalDelivery(delivery)).toBe("stale");
-      sql.expectIdle();
-    } finally {
-      sql.restore();
+    if (owner === "worker") {
+      await withIncognitoSessionActor(actor, exercise);
+    } else {
+      vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+      try {
+        await exercise();
+        expect(existsSync(nativePath)).toBe(false);
+      } finally {
+        vi.unstubAllEnvs();
+        await closeOpenClawAgentDatabaseByPathAsync(nativePath, agentId);
+      }
     }
-  });
-});
+  },
+);
 
 it("composes sharing, delivery, steering and presence from current actor facts without host SQL", async () => {
   const { scope, entry: initial } = await fixture("authority-composition");

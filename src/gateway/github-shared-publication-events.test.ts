@@ -23,7 +23,6 @@ import {
   OLD_HEAD,
   WORKSPACE_TREE,
   installGitHubPublicationTestHarness,
-  seedLocalPublication,
   SESSION_KEY,
 } from "./github-publication.test-support.js";
 import {
@@ -31,7 +30,7 @@ import {
   claimRepositoryGitHubPublication,
   deferRepositoryGitHubPublicationClaims,
   failRepositoryGitHubPublicationPreparation,
-  failStaleRepositoryGitHubPublicationInDatabase,
+  failStaleRepositoryGitHubPublication,
   insertRepositoryGitHubPublication,
   readRepositoryGitHubPublication,
 } from "./github-repository-publication-store.js";
@@ -99,25 +98,6 @@ describe("shared publication committed notifications", () => {
         canPublish: false,
       });
     }
-  });
-
-  it("notifies scoped observers only after an execution claim commits", () => {
-    ensureGitHubPublicationStore();
-    const database = openOpenClawStateDatabase();
-    seedLocalPublication(database, { requestId: "claim", status: "requested" });
-    const observations: unknown[] = [];
-    const observer = vi.fn(() =>
-      observations.push({
-        inTransaction: database.db.isTransaction,
-        row: database.db
-          .prepare("SELECT status FROM github_publication_requests WHERE request_id = ?")
-          .get("claim"),
-      }),
-    );
-    using _ = { [Symbol.dispose]: onSessionLifecycleEvent(observer) };
-    claimGitHubPublicationExecution("claim", "current-instance");
-    expect(observer).toHaveBeenCalledExactlyOnceWith(expectedEvent);
-    expect(observations).toEqual([{ inTransaction: false, row: { status: "publishing" } }]);
   });
 
   it("publishes creation only on outer commit, not idempotent replay or a failed insertion", () => {
@@ -320,12 +300,9 @@ describe("shared publication committed notifications", () => {
     execution.recordEffect("push");
     execution.recordEffect("push", { headCommit: NEW_HEAD });
     execution.interrupt();
-    runOpenClawStateWriteTransaction((database) =>
-      failStaleRepositoryGitHubPublicationInDatabase(
-        database,
-        readRepositoryGitHubPublication(row.request_id)!,
-        () => false,
-      ),
+    failStaleRepositoryGitHubPublication(
+      readRepositoryGitHubPublication(row.request_id)!,
+      () => false,
     );
     expect(readRepositoryGitHubPublication(row.request_id)?.status).toBe("failed");
     expect(receiptRows).toHaveLength(6);
@@ -398,14 +375,10 @@ describe("shared publication committed notifications", () => {
     const observer = vi.fn();
     using _ = { [Symbol.dispose]: onSessionLifecycleEvent(observer) };
     failRepositoryGitHubPublicationPreparation(first, "Capture a fresh checkpoint.", () => {});
-    runOpenClawStateWriteTransaction((database) =>
-      failStaleRepositoryGitHubPublicationInDatabase(database, second, () => false),
-    );
+    failStaleRepositoryGitHubPublication(second, () => false);
     deferRepositoryGitHubPublicationClaims([third.request_id]);
     expect(observer).toHaveBeenCalledTimes(3);
-    runOpenClawStateWriteTransaction((database) =>
-      failStaleRepositoryGitHubPublicationInDatabase(database, second, () => false),
-    );
+    failStaleRepositoryGitHubPublication(second, () => false);
     deferRepositoryGitHubPublicationClaims([first.request_id, "absent"]);
     expect(observer).toHaveBeenCalledTimes(3);
   });

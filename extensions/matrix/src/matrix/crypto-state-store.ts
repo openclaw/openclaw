@@ -43,7 +43,7 @@ type MatrixIdbSnapshotChunk = {
 
 type MatrixIdbSnapshotRecord = MatrixIdbSnapshotMeta | MatrixIdbSnapshotChunk;
 
-export type MatrixSnapshotStateRuntime = Pick<PluginRuntime["state"], "openKeyedStore">;
+export type MatrixSnapshotStateRuntime = Pick<PluginRuntime["state"], "openKeyedStoreV2">;
 
 export function openMatrixRecoveryKeyStoreOptions(storageRootDir: string) {
   return {
@@ -73,7 +73,7 @@ export async function readMatrixRecoveryKeyStateForPathAsync(
   recoveryKeyPath: string,
   stateRuntime: MatrixSnapshotStateRuntime,
 ): Promise<MatrixStoredRecoveryKey | null> {
-  const store = stateRuntime.openKeyedStore<MatrixStoredRecoveryKey>(
+  const store = stateRuntime.openKeyedStoreV2<MatrixStoredRecoveryKey>(
     openMatrixRecoveryKeyStoreOptions(path.dirname(recoveryKeyPath)),
   );
   return normalizeMatrixStoredRecoveryKey(
@@ -91,7 +91,7 @@ export async function writeMatrixRecoveryKeyStateForPathAsync(params: {
   if (!payload) {
     throw new Error("Invalid Matrix recovery key state");
   }
-  const store = params.stateRuntime.openKeyedStore<MatrixStoredRecoveryKey>(
+  const store = params.stateRuntime.openKeyedStoreV2<MatrixStoredRecoveryKey>(
     openMatrixRecoveryKeyStoreOptions(path.dirname(params.recoveryKeyPath)),
   );
   const key = resolveRecoveryKeyStateKeyForPath(params.recoveryKeyPath);
@@ -101,13 +101,7 @@ export async function writeMatrixRecoveryKeyStateForPathAsync(params: {
         ...payload,
         encodedPrivateKey: normalizeMatrixStoredRecoveryKey(current)?.encodedPrivateKey,
       }) ?? undefined;
-    await updateMatrixKeyedState(store, key, update, async () => {
-      // The published >=2026.9.4 host floor supplies callback updates, before data-only CAS.
-      if (!store.update) {
-        throw new Error("Matrix recovery key store does not support atomic updates");
-      }
-      return await store.update(key, update);
-    });
+    await updateMatrixKeyedState(store, key, update);
     return;
   }
   await store.register(key, payload);
@@ -117,7 +111,7 @@ export async function readMatrixIdbSnapshotJson(
   storageRootDir: string,
   stateRuntime: MatrixSnapshotStateRuntime = getMatrixRuntime().state,
 ): Promise<string | null> {
-  const store = stateRuntime.openKeyedStore<MatrixIdbSnapshotRecord>(
+  const store = stateRuntime.openKeyedStoreV2<MatrixIdbSnapshotRecord>(
     openMatrixIdbSnapshotStoreOptions(storageRootDir),
   );
   const meta = await store.lookup(idbMetaKey());
@@ -139,7 +133,7 @@ export async function readMatrixIdbSnapshotJson(
 async function hasMatrixIdbSnapshotState(storageRootDir: string): Promise<boolean> {
   return isIdbSnapshotMeta(
     await getMatrixRuntime()
-      .state.openKeyedStore<MatrixIdbSnapshotRecord>(
+      .state.openKeyedStoreV2<MatrixIdbSnapshotRecord>(
         openMatrixIdbSnapshotStoreOptions(storageRootDir),
       )
       .lookup(idbMetaKey()),
@@ -154,7 +148,7 @@ export async function writeMatrixIdbSnapshotJson(params: {
 }): Promise<void> {
   const store = (
     params.stateRuntime ?? getMatrixRuntime().state
-  ).openKeyedStore<MatrixIdbSnapshotRecord>(
+  ).openKeyedStoreV2<MatrixIdbSnapshotRecord>(
     openMatrixIdbSnapshotStoreOptions(params.storageRootDir),
   );
   const rows = buildIdbSnapshotRows(params.snapshotJson, params.databaseCount);
@@ -168,7 +162,7 @@ export async function scoreMatrixCryptoStateInStore(storageRootDir: string): Pro
   let score = 0;
   try {
     const migration = await getMatrixRuntime()
-      .state.openKeyedStore(openMatrixLegacyCryptoMigrationStoreOptions(storageRootDir))
+      .state.openKeyedStoreV2(openMatrixLegacyCryptoMigrationStoreOptions(storageRootDir))
       .lookup(STATE_KEY);
     if (
       isRecord(migration) &&

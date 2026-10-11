@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE } from "../../packages/agent-core/src/errors.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isCronTerminalAbortReasonText } from "../cron/service/execution-errors.js";
+import { renewAgentRunDeadline } from "../infra/agent-run-deadline.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { isCommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { findAgentRunTerminalOutcome } from "./agent-run-terminal-error.js";
@@ -51,6 +52,7 @@ import {
 } from "./session-suspension.js";
 
 type FailoverAttribution = {
+  runId?: string;
   sessionId?: string;
   lane?: string;
 };
@@ -303,6 +305,8 @@ export async function runFallbackAttempt<T>(
   // Only the initial attempt may own a result after caller cancellation.
   if (params.attempt > 1) {
     params.abortSignal?.throwIfAborted();
+    // Give the next candidate its own budget without replacing parent cancellation.
+    renewAgentRunDeadline(params.attribution?.runId);
   }
   const runResult = await runFallbackCandidate(params);
   const classification = runResult.ok
@@ -327,6 +331,11 @@ export async function runFallbackAttempt<T>(
   if (!runResult.ok) {
     return { error: runResult.error };
   }
+  const buildClassifiedResult = () => ({
+    result: runResult.result,
+    provider: params.provider,
+    model: params.model,
+  });
   if (!attemptError) {
     const stopReason =
       classification && "stopReason" in classification ? classification.stopReason : undefined;
@@ -342,9 +351,7 @@ export async function runFallbackAttempt<T>(
       ...(stopReason ? { stopped: true as const } : {}),
       success: {
         outcome: "completed",
-        result: runResult.result,
-        provider: params.provider,
-        model: params.model,
+        ...buildClassifiedResult(),
         attempts: params.attempts,
       },
     };
@@ -355,17 +362,11 @@ export async function runFallbackAttempt<T>(
     classification.preserveResultOnExhaustion === true;
   return {
     error: attemptError,
-    classifiedResult: {
-      result: runResult.result,
-      provider: params.provider,
-      model: params.model,
-    },
+    classifiedResult: buildClassifiedResult(),
     ...(preserveResultOnExhaustion
       ? {
           exhaustionResult: {
-            result: runResult.result,
-            provider: params.provider,
-            model: params.model,
+            ...buildClassifiedResult(),
             priority:
               typeof classification.preserveResultPriority === "number" &&
               Number.isFinite(classification.preserveResultPriority)

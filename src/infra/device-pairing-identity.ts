@@ -1,15 +1,17 @@
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
-import type { NodePairingGeneration, NodePairingState } from "./device-pairing-core.types.js";
+import type {
+  NodePairingGeneration,
+  NodePairingState,
+  PairedDeviceTokenIdentity,
+} from "./device-pairing-core.types.js";
 import {
   mergeDevicePairingRoles,
   normalizeDevicePairingRole,
 } from "./device-pairing-state.kernel.js";
 import type { DeviceAuthToken, PairedDevice } from "./device-pairing.types.js";
 export type { NodePairingGeneration, NodePairingState } from "./device-pairing-core.types.js";
-
-export type PairedDeviceTokenIdentity = { deviceId: string; key: string };
 
 /** Use the same persisted approval ceiling for token verification and retained authority. */
 export function resolveApprovedDeviceScopeBaseline(device: PairedDevice): string[] | null {

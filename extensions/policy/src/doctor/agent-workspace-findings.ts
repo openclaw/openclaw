@@ -1,13 +1,10 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PolicyAgentWorkspaceEvidence, PolicyEvidence } from "../policy-state.js";
-import { getPolicyPath } from "../policy-value.js";
 import { CHECK_IDS } from "./check-ids.js";
 import { policyEvidenceFinding } from "./policy-evidence-finding.js";
-import { agentScopedPolicyTargets, scopedAgentEvidenceMatches } from "./policy-scope.js";
-import { posturePolicyShapeFinding } from "./posture-shapes.js";
-import { hasValidScopedPolicy } from "./scoped-policy-shape.js";
-import { ocPathSegment, readStringList } from "./utils.js";
+import { scopedAgentEvidenceMatches } from "./policy-scope.js";
+import { policySectionTargets } from "./policy-section-targets.js";
+import { readStringList } from "./utils.js";
 
 export function agentWorkspaceFindings(
   policy: unknown,
@@ -15,34 +12,27 @@ export function agentWorkspaceFindings(
   policyDocName: string,
   evidence: PolicyEvidence,
 ): readonly HealthFinding[] {
-  if (
-    posturePolicyShapeFinding("agents", isRecord(policy) ? policy.agents : undefined, {
-      policyDocName,
-      policyPath,
-    }) !== undefined
-  ) {
-    return [];
-  }
   const entries = evidence.agentWorkspace ?? [];
-  const findings = workspaceFindings(
-    getPolicyPath(policy, ["agents", "workspace"]),
+  const findings: HealthFinding[] = [];
+  for (const target of policySectionTargets(
+    policy,
+    policyPath,
     policyDocName,
     "agents/workspace",
-    entries,
-  );
-  if (hasValidScopedPolicy(policy, policyPath, policyDocName)) {
-    for (const target of agentScopedPolicyTargets(policy)) {
-      findings.push(
-        ...workspaceFindings(
-          getPolicyPath(target.overlay, ["agents", "workspace"]),
-          policyDocName,
-          `scopes/${ocPathSegment(target.scopeName)}/agents/workspace`,
-          entries.filter((entry) =>
-            scopedAgentEvidenceMatches(entry, target.agentId, entries, entry.scope === "defaults"),
-          ),
-        ),
-      );
-    }
+  )) {
+    const agentId = target.selectorId;
+    findings.push(
+      ...workspaceFindings(
+        target.policy,
+        policyDocName,
+        target.requirementBase,
+        agentId === undefined
+          ? entries
+          : entries.filter((entry) =>
+              scopedAgentEvidenceMatches(entry, agentId, entries, entry.scope === "defaults"),
+            ),
+      ),
+    );
   }
   return findings;
 }

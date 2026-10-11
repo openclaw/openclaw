@@ -74,10 +74,10 @@ export function requiresChatInputConsumption(item: ChatQueueItem): boolean {
   return !item.intent && !item.localCommandName && !item.text.trimStart().startsWith("/");
 }
 
-export function chatSendHoldReason(
+/** Local queue admission does not require the initial turn to have settled. */
+export function chatSendAdmissionHoldReason(
   host: ChatHost,
   sessionKey: string,
-  initialTurnPending = false,
   agentId?: string,
 ): string | null {
   if (isExpiredIncognitoSession(host, sessionKey)) {
@@ -87,7 +87,25 @@ export function chatSendHoldReason(
   if (sendDisabledReason) {
     return sendDisabledReason;
   }
-  return chatSendPendingReason(host, sessionKey, initialTurnPending);
+  return chatConnectionPendingReason(host);
+}
+
+export function chatSendHoldReason(
+  host: ChatHost,
+  sessionKey: string,
+  initialTurnPending = false,
+  agentId?: string,
+): string | null {
+  return (
+    chatSendAdmissionHoldReason(host, sessionKey, agentId) ??
+    chatSendPendingReason(host, sessionKey, initialTurnPending)
+  );
+}
+
+function chatConnectionPendingReason(host: Pick<ChatHost, "client" | "connected">): string | null {
+  return host.connected && host.client && !host.client.recoveryScopeReady
+    ? t("chat.queue.connectionPending")
+    : null;
 }
 
 // Hello permits RPCs before account recovery has claimed any retained first turn.
@@ -97,12 +115,12 @@ export function chatSendPendingReason(
   sessionKey: string,
   initialTurnPending = false,
 ): string | null {
-  if (host.connected && host.client && !host.client.recoveryScopeReady) {
-    return t("chat.queue.connectionPending");
-  }
-  return initialTurnPending || host.hasPendingInitialTurn?.(sessionKey)
-    ? t("chat.queue.initialTurnPending")
-    : null;
+  return (
+    chatConnectionPendingReason(host) ??
+    (initialTurnPending || host.hasPendingInitialTurn?.(sessionKey)
+      ? t("chat.queue.initialTurnPending")
+      : null)
+  );
 }
 
 export function formatTerminalChatSendAckError(

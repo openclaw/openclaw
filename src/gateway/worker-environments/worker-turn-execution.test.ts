@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
@@ -30,9 +30,10 @@ import {
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import {
-  completeWorkerLaunchDescriptor,
+  parseWorkerLaunchDescriptor,
   parseWorkerLaunchPlan,
   type WorkerLaunchPlan,
 } from "../../worker/launch-descriptor.js";
@@ -62,9 +63,11 @@ import {
   type WorkerTurnEnvironmentService,
 } from "./worker-turn-launcher.test-support.js";
 
+afterAll(closeStateDatabaseForTest);
+
 describe("worker turn execution", () => {
   beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(cleanupWorkerTurnLauncherTest);
+  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
   afterEach(resetGlobalHookRunner);
 
   it.each([
@@ -771,9 +774,12 @@ describe("worker turn execution", () => {
       let descriptor: WorkerLaunchPlan | undefined;
       const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async ({ plan }) => {
         descriptor = roundTripWorkerLaunchDescriptor(
-          completeWorkerLaunchDescriptor(plan, {
-            kind: "unix",
-            socketPath: "/tmp/worker-approval.sock",
+          parseWorkerLaunchDescriptor({
+            ...plan,
+            connectionEndpoint: {
+              kind: "unix",
+              socketPath: "/tmp/worker-approval.sock",
+            },
           }),
         );
         throw new WorkerRunnerCapacityError();

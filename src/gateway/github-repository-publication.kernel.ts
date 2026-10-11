@@ -104,7 +104,7 @@ export type RepositoryGitHubPublicationStatusRow = ReturnType<
   typeof projectRepositoryGitHubPublicationStatus
 >;
 
-export type RepositoryGitHubPublicationFilter = {
+type RepositoryGitHubPublicationFilter = {
   sessionId?: string;
   sessionKey?: string;
   agentId?: string;

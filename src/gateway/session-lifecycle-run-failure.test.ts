@@ -23,9 +23,9 @@ import {
   loadTranscriptEvents,
   patchSessionEntryCore,
   resolveSessionTranscriptRuntimeTarget,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import {
   runWithoutOwnedSessionTranscriptWrites,
   SessionTranscriptWriterClaimReboundError,
@@ -34,7 +34,7 @@ import {
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import {
-  captureAgentRunTerminalWriteContext,
+  captureAgentRunTerminalPersistence,
   clearAgentRunTerminalWriteContext,
   drainAgentRunTerminalWrites,
 } from "../infra/agent-run-terminal-writes.js";
@@ -655,7 +655,7 @@ async function createCliHistoryFixture() {
   const scheduler = createTestGatewayScheduler();
   onTestFinished(() => scheduler.stop());
   const owner = createSessionLifecyclePersistenceOwner(scheduler);
-  const captured = captureAgentRunTerminalWriteContext(cliRunId);
+  const captured = captureAgentRunTerminalPersistence(cliRunId).writeContext;
   if (!captured) {
     throw new Error("Expected the admitted runtime's terminal write context");
   }

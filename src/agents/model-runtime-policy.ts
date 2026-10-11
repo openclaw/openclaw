@@ -211,10 +211,16 @@ function resolveModelConfig(params: {
   if (!modelId || !Array.isArray(params.providerConfig?.models)) {
     return undefined;
   }
-  return params.providerConfig.models.find(
-    (entry) =>
-      modelEntryMatchKind({ entryId: entry.id, provider: params.provider, modelId }) === "exact",
-  );
+  // Catalog projection resolves every row against its provider's authored rows, so this scan
+  // runs rows² times. An exact match ends with the model id; skip parsing rows that cannot match.
+  return params.providerConfig.models.find((entry) => {
+    const entryId = entry.id.trim();
+    return (
+      entryId === modelId ||
+      (entryId.endsWith(modelId) &&
+        modelEntryMatchKind({ entryId, provider: params.provider, modelId }) === "exact")
+    );
+  });
 }
 
 /** Resolves the effective runtime policy for an agent/model/provider selection. */
@@ -296,30 +302,36 @@ export function resolveModelRouteIntent(
     resolveProfileAuthFlow?: (profileId: string) => string | undefined;
   },
 ): ProviderResolveModelRoutesContext["routeIntent"] {
+  const resolveIntent = (
+    provider: string | undefined,
+    profile: string | undefined,
+    runtimeId: string | undefined,
+    source: "explicit" | "inherited",
+  ): ProviderResolveModelRoutesContext["routeIntent"] => {
+    const authRequirement =
+      profile && provider
+        ? resolveProviderModelAuthPolicy({
+            provider,
+            mode:
+              params.config?.auth?.profiles?.[profile]?.mode ??
+              params.resolveProfileAuthMode?.(profile),
+            authFlow: params.resolveProfileAuthFlow?.(profile),
+          }).authRequirement
+        : undefined;
+    const runtime = runtimeId && !isDefaultAgentRuntimeId(runtimeId) ? runtimeId : undefined;
+    if (authRequirement) {
+      return { ...(runtime ? { runtimeId: runtime } : {}), authRequirement, source };
+    }
+    return runtime ? { runtimeId: runtime, source } : undefined;
+  };
   const selected = splitTrailingAuthProfile(params.modelId ?? "");
   const provider = resolveEffectiveProvider(params.provider, selected.model);
   const configured =
     params.runtimePolicy ?? resolveModelRuntimePolicy({ ...params, modelId: selected.model });
   const runtimeId = normalizeOptionalAgentRuntimeId(configured.policy?.id);
-  const selectedRequirement =
-    selected.profile && provider
-      ? resolveProviderModelAuthPolicy({
-          provider,
-          mode:
-            params.config?.auth?.profiles?.[selected.profile]?.mode ??
-            params.resolveProfileAuthMode?.(selected.profile),
-          authFlow: params.resolveProfileAuthFlow?.(selected.profile),
-        }).authRequirement
-      : undefined;
-  if (selectedRequirement) {
-    return {
-      ...(runtimeId && !isDefaultAgentRuntimeId(runtimeId) ? { runtimeId } : {}),
-      authRequirement: selectedRequirement,
-      source: "explicit",
-    };
-  }
-  if (runtimeId && !isDefaultAgentRuntimeId(runtimeId)) {
-    return { runtimeId, source: "explicit" };
+  const explicit = resolveIntent(provider, selected.profile, runtimeId, "explicit");
+  if (explicit) {
+    return explicit;
   }
   if (!params.config) {
     return undefined;
@@ -346,25 +358,10 @@ export function resolveModelRouteIntent(
     modelId: primaryRef.modelId,
   });
   const inheritedRuntimeId = normalizeOptionalAgentRuntimeId(inheritedPolicy.policy?.id);
-  const primaryRequirement = primarySelection?.profile
-    ? resolveProviderModelAuthPolicy({
-        provider: primaryRef.provider,
-        mode:
-          params.config.auth?.profiles?.[primarySelection.profile]?.mode ??
-          params.resolveProfileAuthMode?.(primarySelection.profile),
-        authFlow: params.resolveProfileAuthFlow?.(primarySelection.profile),
-      }).authRequirement
-    : undefined;
-  if (primaryRequirement) {
-    return {
-      ...(inheritedRuntimeId && !isDefaultAgentRuntimeId(inheritedRuntimeId)
-        ? { runtimeId: inheritedRuntimeId }
-        : {}),
-      authRequirement: primaryRequirement,
-      source: "inherited",
-    };
-  }
-  return inheritedRuntimeId && !isDefaultAgentRuntimeId(inheritedRuntimeId)
-    ? { runtimeId: inheritedRuntimeId, source: "inherited" }
-    : undefined;
+  return resolveIntent(
+    primaryRef.provider,
+    primarySelection?.profile,
+    inheritedRuntimeId,
+    "inherited",
+  );
 }

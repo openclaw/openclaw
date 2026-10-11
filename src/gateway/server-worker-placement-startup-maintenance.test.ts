@@ -200,7 +200,7 @@ async function preservedSessionKeys() {
 
 describe("worker placement session maintenance ownership", () => {
   it.each(["claim", "release"] as const)(
-    "refreshes unpublished maintenance inventory during a concurrent worker %s",
+    "rejects unpublished maintenance inventory during a concurrent worker %s",
     async (publication) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const database = openOpenClawStateDatabase();
@@ -277,14 +277,12 @@ describe("worker placement session maintenance ownership", () => {
                 maxDiskBytes: false,
               }),
             }),
-          ).resolves.toMatchObject({ afterCount: 2 });
-          expect(preservationReads).toBe(2);
+          ).rejects.toThrow("Worker placement inventory changed");
+          expect(preservationReads).toBe(1);
           expect(loadSessionEntryReadOnly({ ...identity, env: state.env, storePath })).toEqual(
             preservedSnapshot,
           );
-          expect(loadSessionEntryReadOnly(trigger)?.sessionId).toBe(
-            "concurrent-maintenance-trigger",
-          );
+          expect(loadSessionEntryReadOnly(trigger)).toBeUndefined();
         } finally {
           interleave.mockRestore();
           if (claim) {
@@ -524,7 +522,7 @@ describe("worker placement session maintenance ownership", () => {
           .spyOn(reclamationRun, "runSqliteSessionReclamation")
           .mockImplementation(async (params) => {
             const result = await reclaim(params);
-            if (params.plan.kind === "maintenance-age" && params.plan.expected === undefined) {
+            if (params.plan.kind === "maintenance-age") {
               agePublished.resolve();
             }
             return result;

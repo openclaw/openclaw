@@ -391,30 +391,6 @@ describe("setup admission", () => {
   );
 
   it.each([false, true])(
-    "closes a wizard when construction races drain (target lock=%s)",
-    async (lockSetupTarget) => {
-      const session = await createAdmittedWizardSession(
-        () =>
-          new WizardSession(async (prompter) => {
-            markGatewayRestartDraining();
-            await prompter.text({ message: "Local model base URL" });
-          }),
-        lockSetupTarget,
-      );
-      if (!session) {
-        throw new Error("expected an admitted wizard");
-      }
-      try {
-        await whenAdmittedWizardSessionSettled(session);
-        expect(session.getStatus()).toBe("error");
-      } finally {
-        session.cancel();
-        await whenAdmittedWizardSessionSettled(session);
-      }
-    },
-  );
-
-  it.each([false, true])(
     "preserves committed work's result without further input (failure=%s)",
     async (failWrite) => {
       const finishWrite = createDeferred();

@@ -8,6 +8,7 @@ import {
 } from "../config/model-provider-config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ProviderModelRouteSource } from "../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
@@ -168,6 +169,25 @@ export function createModelCatalogView(params: {
       );
     },
   };
+}
+
+/** The picker's view of a catalog snapshot; entries stand in when no route variants exist. */
+export function createModelCatalogSnapshotView(
+  cfg: OpenClawConfig,
+  snapshot: ModelCatalogSnapshot,
+) {
+  return createModelCatalogView({
+    cfg,
+    catalog: snapshot.entries,
+    routeVariants: snapshot.routeVariants.length > 0 ? snapshot.routeVariants : snapshot.entries,
+  });
+}
+
+/** Transports a logical model was listed on; availability and run auth plan from the same rows. */
+export function listModelCatalogObservedRoutes(
+  variants: readonly Pick<ModelCatalogEntry, "api" | "baseUrl">[],
+): ProviderModelRouteSource[] {
+  return variants.map(({ api, baseUrl }) => ({ api, baseUrl }));
 }
 
 export type ModelCatalogViewFacts = {
@@ -372,8 +392,11 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
         authMode = undefined;
       }
       // A native catalog owner without an observation is unknown, not missing host API auth.
-      const availability =
-        ready && !harness?.readModelCatalogReadiness && !observedNative ? undefined : ready;
+      const availability = observedNative
+        ? ready
+        : ready && harness?.readModelCatalogReadiness
+          ? true
+          : undefined;
       return {
         availability,
         availabilityAuthoritative: true,
@@ -569,15 +592,12 @@ export async function loadPreparedModelCatalogView(
     catalog = catalog.filter((entry) => !deprecatedKeys.has(keyOf(entry)));
     configured = configured.filter((entry) => !staticKeys.has(keyOf(entry)));
   }
-  const entries = [...catalog];
-  const seen = new Set(catalog.map((entry) => pickerModelKey(entry.provider, entry.id)));
-  for (const entry of configured) {
-    const key = pickerModelKey(entry.provider, entry.id);
-    if (!seen.has(key)) {
-      seen.add(key);
-      entries.push(entry);
-    }
-  }
+  const keyOf = (entry: ModelCatalogEntry) => pickerModelKey(entry.provider, entry.id);
+  const seen = new Set(catalog.map(keyOf));
+  const entries = [
+    ...catalog,
+    ...dedupeByKey(configured, keyOf).filter((entry) => !seen.has(keyOf(entry))),
+  ];
   return {
     snapshot: {
       ...view.snapshot,

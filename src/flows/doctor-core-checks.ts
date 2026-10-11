@@ -541,7 +541,7 @@ const codexSessionRoutesCheck: CoreHealthCheck = {
 
 const telegramGeneralTopicConversationsCheck: CoreHealthCheck = {
   id: TELEGRAM_GENERAL_TOPIC_CONVERSATIONS_CHECK_ID,
-  description: "Telegram General-topic conversation bindings use the canonical chat target.",
+  description: "Telegram General-topic conversation bindings use the chat target.",
   async detect(ctx) {
     const { detectTelegramGeneralTopicConversationRepairs } =
       await import("../commands/doctor-telegram-general-topic-conversations.js");
@@ -554,7 +554,7 @@ const telegramGeneralTopicConversationsCheck: CoreHealthCheck = {
       severity: "warning" as const,
       message: `Agent ${repair.agentId} has a stale Telegram General-topic conversation identity.`,
       target: repair.agentId,
-      requirement: "One canonical chat-scoped conversation binding for Telegram General topic.",
+      requirement: "One chat-scoped conversation binding for Telegram General topic.",
       fixHint: "Run `openclaw doctor --fix` to merge the stale topic-qualified identity.",
     }));
   },

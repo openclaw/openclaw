@@ -71,7 +71,7 @@ export function readPersonalGitHubPublication(
   return readPersonalGitHubPublicationInDatabase(openOpenClawStateDatabase().db, owner, request);
 }
 
-export function readPersonalGitHubPublicationInDatabase(
+function readPersonalGitHubPublicationInDatabase(
   db: DatabaseSync,
   owner: string,
   request: PersonalPublicationSelector,
@@ -118,7 +118,7 @@ export function insertPersonalGitHubPublication(
   );
 }
 
-export function insertPersonalGitHubPublicationInDatabase(
+function insertPersonalGitHubPublicationInDatabase(
   database: OpenClawStateDatabase,
   row: PersonalGitHubPublicationRow,
   lifecycleRevision: string | null,
@@ -138,7 +138,7 @@ export function insertPersonalGitHubPublicationInDatabase(
   return row;
 }
 
-export function claimPersonalGitHubPublicationInDatabase(
+function claimPersonalGitHubPublicationInDatabase(
   database: OpenClawStateDatabase,
   row: PersonalGitHubPublicationRow,
   instanceId: string,
@@ -234,7 +234,7 @@ export function claimPersonalGitHubPublication(
   };
 }
 
-export function writePersonalGitHubPublicationInDatabase(
+function writePersonalGitHubPublicationInDatabase(
   database: OpenClawStateDatabase,
   row: PersonalGitHubPublicationRow,
   instanceId: string,
@@ -281,36 +281,11 @@ export function writePersonalGitHubPublicationInDatabase(
   return updated;
 }
 
-export function requirePersonalGitHubPublicationConfirmationInDatabase(
-  database: OpenClawStateDatabase,
-  instanceId: string,
-): PersonalGitHubPublicationRow[] {
-  if (!tableExists(database.db, table)) {
-    return [];
-  }
-  const { db } = database;
-  const rows = executeSqliteQuerySync(
-    db,
-    query(db)
-      .updateTable(table)
-      .set({ status: "needs_confirmation", updated_at_ms: Date.now() })
-      .where("status", "in", ["requested", "publishing"])
-      .where((eb) =>
-        eb.or([eb("gateway_instance_id", "is", null), eb("gateway_instance_id", "!=", instanceId)]),
-      )
-      .returningAll(),
-  ).rows;
-  for (const row of rows) {
-    githubPublicationReceipts.stageRow(db, "personal", row);
-  }
-  return rows;
-}
-
 export function listUnreportedPersonalGitHubPublications() {
   return listUnreportedPersonalGitHubPublicationsInDatabase(openOpenClawStateDatabase().db);
 }
 
-export function listUnreportedPersonalGitHubPublicationsInDatabase(db: DatabaseSync) {
+function listUnreportedPersonalGitHubPublicationsInDatabase(db: DatabaseSync) {
   if (!tableExists(db, table)) {
     return [];
   }
@@ -335,29 +310,6 @@ export function listUnreportedPersonalGitHubPublicationsInDatabase(db: DatabaseS
       result: projectGitHubPublicationResult(row),
     };
   });
-}
-
-export function markPersonalGitHubPublicationReportedInDatabase(
-  database: OpenClawStateDatabase,
-  requestId: string,
-): PersonalGitHubPublicationRow | undefined {
-  if (!tableExists(database.db, table)) {
-    return undefined;
-  }
-  const { db } = database;
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    query(db)
-      .updateTable(table)
-      .set({ reported_at_ms: Date.now() })
-      .where("request_id", "=", requestId)
-      .where("status", "in", ["published", "failed"])
-      .returningAll(),
-  );
-  if (row) {
-    githubPublicationReceipts.stageRow(db, "personal", row);
-  }
-  return row;
 }
 
 export function requirePersonalGitHubPublicationConfirmation(instanceId: string): void {

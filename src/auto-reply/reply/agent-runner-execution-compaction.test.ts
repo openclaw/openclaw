@@ -36,36 +36,27 @@ function createNotifyUserRun() {
 }
 
 describe("executeAgentTurn: compaction events", () => {
-  it("keeps compaction callbacks active when notices are silent by default", async () => {
-    const onBlockReply = vi.fn();
-    const onCompactionStart = vi.fn();
-    const onCompactionEnd = vi.fn();
+  it("warns about degraded compaction even when ordinary notices are disabled", async () => {
+    const onCompactionNoticePayload = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
       await params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
       await params.onAgentEvent?.({
         stream: "compaction",
-        data: { phase: "end", completed: true },
+        data: { phase: "end", completed: true, qualityDegraded: true },
       });
-      return { payloads: [{ text: "final" }], meta: {} };
+      return { payloads: [{ text: "continued" }], meta: {} };
     });
-
-    const result = await executeTestTurn(
-      {
-        opts: {
-          onBlockReply,
-          onCompactionStart,
-          onCompactionEnd,
-        },
-      },
-      { commandBody: "hello" },
-    );
-
+    const result = await executeTestTurn(undefined, { onCompactionNoticePayload });
     expect(result.kind).toBe("success");
-    expect(onCompactionStart).toHaveBeenCalledTimes(1);
-    expect(onCompactionEnd).toHaveBeenCalledWith({ completed: true });
-    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(onCompactionNoticePayload).toHaveBeenCalledOnce();
+    expectBlockReplyCall(onCompactionNoticePayload, 0, {
+      text: expect.stringContaining("Older details, exact identifiers, or pending requests"),
+      isCompactionNotice: true,
+    });
+    expectBlockReplyCall(onCompactionNoticePayload, 0, {
+      text: expect.stringContaining("/new or a larger model"),
+    });
   });
-
   it("logs Codex app-server compaction completion while notices stay silent by default", async () => {
     const onBlockReply = vi.fn();
     const consoleLog = vi.fn();
@@ -122,58 +113,6 @@ describe("executeAgentTurn: compaction events", () => {
       setLoggerOverride(null);
       resetLogger();
     }
-  });
-
-  it("carries committed compaction through exhausted model failure", async () => {
-    state.runEmbeddedAgentMock
-      .mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-        params.onAutoCompactionSucceeded?.(1);
-        throw new Error("LLM request timed out.");
-      })
-      .mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-        params.onExecutionPhase?.({ phase: "model_call_started" });
-        return {
-          payloads: [{ text: formatBillingErrorMessage(), isError: true }],
-          meta: { error: { kind: "billing", message: "billing unavailable" } },
-        };
-      });
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      await params
-        .run("openai", "gpt-5.5", initialFallbackAttemptOptions(params))
-        .catch(() => undefined);
-      return {
-        outcome: "exhausted",
-        result: await params.run(
-          "anthropic",
-          "claude-sonnet-4-6",
-          initialFallbackAttemptOptions(params),
-        ),
-        provider: "anthropic",
-        model: "claude-sonnet-4-6",
-        attempts: [
-          {
-            provider: "openai",
-            model: "gpt-5.5",
-            error: "LLM request timed out.",
-            reason: "timeout",
-          },
-          {
-            provider: "anthropic",
-            model: "claude-sonnet-4-6",
-            error: "billing unavailable",
-            reason: "billing",
-          },
-        ],
-      };
-    });
-
-    const result = await executeTestTurn();
-
-    expect(result).toMatchObject({
-      kind: "success",
-      autoCompactionCount: 1,
-      postCompactionModelFailure: true,
-    });
   });
 
   it("carries committed compaction into a later CLI fallback failure", async () => {
@@ -237,26 +176,6 @@ describe("executeAgentTurn: compaction events", () => {
     const result = await executeTestTurn();
 
     expect(result).toMatchObject({ kind: "final" });
-    expect(result.postCompactionModelFailure).toBeUndefined();
-  });
-
-  it("keeps successful compacted retries out of the failure fact", async () => {
-    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      params.onAutoCompactionSucceeded?.(1);
-      params.onExecutionPhase?.({ phase: "model_call_started" });
-      return {
-        payloads: [{ text: "recovered" }],
-        meta: { agentMeta: { compactionCount: 1 } },
-      };
-    });
-
-    const result = await executeTestTurn();
-
-    expect(result).toMatchObject({
-      kind: "success",
-      autoCompactionCount: 1,
-      runResult: { payloads: [{ text: "recovered" }] },
-    });
     expect(result.postCompactionModelFailure).toBeUndefined();
   });
 

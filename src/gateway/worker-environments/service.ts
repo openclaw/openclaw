@@ -1,7 +1,6 @@
 import { onSessionIdentityMutation } from "../../config/sessions/session-accessor.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { withTimeout } from "../../infra/fs-safe.js";
-import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { WorkerExecutionMode } from "../../plugins/types.js";
 import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
@@ -39,11 +38,12 @@ import type {
 } from "./service.types.js";
 import { createWorkerEnvironmentSessionAttachments } from "./session-attachment-service.js";
 import type { WorkerEnvironmentState } from "./state.js";
+import { WorkerEnvironmentInventoryClosedError } from "./store-errors.js";
 import type {
   WorkerEnvironmentRecord,
   WorkerEnvironmentTransitionPatch as TransitionPatch,
 } from "./store.js";
-import { joinWorkerTunnelStops } from "./tunnel-contract.js";
+import { joinWorkerTunnelStops, WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
 import { createWorkerTurnRpc } from "./worker-turn-rpc.js";
 
 export function createWorkerEnvironmentService(options: WorkerEnvironmentServiceOptions) {
@@ -304,25 +304,18 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     try {
       await operation;
     } finally {
-      if (guardedReconcileInFlight.get(environmentId) === operation) {
-        guardedReconcileInFlight.delete(environmentId);
-      }
+      guardedReconcileInFlight.delete(environmentId);
     }
   };
 
-  const closeReconcileEnvironmentGuard = async (expected?: WorkerEnvironmentReconcileGuard) => {
-    const guard = reconcileEnvironmentGuard;
-    if (!guard || (expected && guard !== expected)) {
+  const closeReconcileEnvironmentGuard = async () => {
+    if (!reconcileEnvironmentGuard) {
       return;
     }
     reconcileEnvironmentGuardClosing = true;
-    while (guardedReconcileInFlight.size > 0) {
-      await Promise.allSettled(guardedReconcileInFlight.values());
-    }
-    if (reconcileEnvironmentGuard === guard) {
-      reconcileEnvironmentGuard = undefined;
-      reconcileEnvironmentGuardClosing = false;
-    }
+    await Promise.allSettled(guardedReconcileInFlight.values());
+    reconcileEnvironmentGuard = undefined;
+    reconcileEnvironmentGuardClosing = false;
   };
 
   const installReconcileEnvironmentGuard = (guard: WorkerEnvironmentReconcileGuard) => {
@@ -331,11 +324,21 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     }
     reconcileEnvironmentGuard = guard;
     reconcileEnvironmentGuardClosing = false;
-    return async () => await closeReconcileEnvironmentGuard(guard);
+    return closeReconcileEnvironmentGuard;
   };
 
   const reconcilePass = async (environmentId?: string) => {
-    await store.ready();
+    try {
+      await store.ready();
+    } catch (error) {
+      if (stopping && error instanceof WorkerEnvironmentInventoryClosedError) {
+        return;
+      }
+      throw error;
+    }
+    if (stopping) {
+      return;
+    }
     if (environmentId === undefined) {
       await sessionAttachments.reconcileSessionAttachments();
     }
@@ -355,15 +358,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     if (environmentId !== undefined) {
       return;
     }
-    try {
-      await store.pruneTerminalEnvironments({ canPruneDemand: preparedPool.canPruneDemand });
-    } catch (error) {
-      // Pruning is opportunistic and retries on the next sweep; lock contention must not
-      // turn a healthy worker reconciliation into a startup or periodic-reconcile failure.
-      if (!isSqliteLockError(error)) {
-        throw error;
-      }
-    }
+    await store.pruneTerminalEnvironments({ canPruneDemand: preparedPool.canPruneDemand });
   };
 
   const reconcileOnce = (environmentId?: string) => {
@@ -464,7 +459,13 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         options.nodePortalCarrier?.stopAll(),
       ]);
     } catch (error) {
-      failures.push(error);
+      if (error instanceof WorkerTunnelOwnerDisconnectedError) {
+        // An unreachable machine cannot be stopped now; its durable attachment keeps the
+        // physical stop for reconnect or provider teardown, so restart must not fail on it.
+        warn(`Worker environment stop deferred during Gateway shutdown: ${error.message}`);
+      } else {
+        failures.push(error);
+      }
     } finally {
       // Tunnel failures cannot release shutdown before admitted owner-bound operations drain.
       const reconciliation = reconcileInFlight;

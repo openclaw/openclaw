@@ -99,6 +99,16 @@ for provider and per-agent model settings.
 
 ### 3. Start a conversation and try a task
 
+In the Control UI, open **New session → Environments** and select
+**OpenAI (Agents API)** under **Hosted workspaces**. The option uses the Gateway’s
+configured model/runtime choices and API-key availability. If another runtime
+should remain your default, add `pickerRuntimes: ["agentsapi"]` to the exact
+model entry instead of changing its `agentRuntime`. See
+[model runtime choices](/concepts/models#choose-the-same-model-with-different-runtimes).
+The hosted choice does not copy your selected local folder, project, or worktree;
+send input files as chat attachments. Switching back restores your local draft
+choices and requires an available compatible host runtime.
+
 Apply the configuration through your usual Gateway workflow. In your chat
 channel, send `/new`, then try:
 
@@ -116,6 +126,15 @@ generated files in [Work with files and tools](/plugins/agentsapi#work-with-file
 Follow-up messages use the same Agents API session. Ask the agent to revise its
 answer, work with another attachment, or take the next step. A message sent while
 the agent is working can redirect it; stopping the task cancels its remote turn.
+
+Saved sessions from `v2026.9.9` are upgraded on their first continuation without
+changing the remote session ID. Keep the original API key and configuration
+until that continuation succeeds. If they no longer match, the plugin retains
+the binding and explains how to restore them or explicitly reset with a key
+that can settle the original native session. A failed upgrade never silently
+creates a replacement conversation. See the [saved-session upgrade
+notes](https://github.com/openclaw/openclaw/blob/main/extensions/agentsapi/README.md#upgrading-saved-sessions)
+for key rotation and rollback.
 
 New sessions receive your OpenClaw instructions and persona, including
 `AGENTS.md`, `SOUL.md`, and your user context. After editing those instructions,
@@ -288,7 +307,7 @@ requires a reset. It does not migrate files between hosts.
 4. Finishing or interrupting a turn leaves the executor available. Gateway
    disposal also retains its saved binding and executor. A running executor
    handles native reconnection; an outstanding connection action can ask the
-   controller to ensure the same session again.
+   controller to prepare the same session again.
 5. Reset, session deletion, or confirmed terminal native-session failure attempts
    `retire(binding, context)` after native work settles. It stops only that
    binding's executor. If native work cannot be confirmed settled, reset or
@@ -307,8 +326,8 @@ codex exec-server \
   --environment-id "<binding.environmentId>"
 ```
 
-Use a separate managed process for each native session and make repeated
-`ensure` calls idempotent. Reconnection does not guarantee an interrupted command
+Use a separate managed process for each native session and make
+`ensure` calls safe to repeat. Reconnection does not guarantee an interrupted command
 survives. Check the original turn's outcome before repeating work that might
 already have changed files or called a service. Input submission has a 60-second
 HTTP deadline, including connection wait, so prepare hosts to connect promptly.

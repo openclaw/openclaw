@@ -2,6 +2,7 @@
 
 export type { Generated, Selectable } from "kysely";
 export { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
+export { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
 export {
   openSqliteWorkerStore,
   runSqliteWorkerStoreOperation,
@@ -13,6 +14,7 @@ export {
   type SqliteWorkerStore,
 } from "../infra/sqlite-worker-store.js";
 export { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+export { readSqliteDatabaseWriteTokenForPath } from "../infra/sqlite-database-admission.js";
 export {
   openOpenClawAgentSqliteWorkerStore,
   type OpenClawAgentSqliteWorkerStore,

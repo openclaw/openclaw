@@ -7,11 +7,13 @@ import type {
   ThinkingLevelChangeEntry,
 } from "../../agents/sessions/session-manager-types.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
+import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { getCliHistoryWriter, runWithCliHistoryWriter } from "./cli-history-boundary.js";
 import type {
   SessionTranscriptContextVersion,
   SessionTranscriptWriteScope,
 } from "./session-accessor.sqlite-contract.js";
+import type { SessionActor } from "./session-actor-contract.js";
 import {
   assertSessionEntryCohortScope,
   matchSessionEntryCohortScope,
@@ -24,6 +26,10 @@ import {
   type SessionSourceAssertion,
 } from "./session-source-authority.js";
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
+import type {
+  InitialSessionTranscriptWriter,
+  SessionTranscriptWriterFence,
+} from "./session-transcript-writer.types.js";
 import {
   captureSessionTranscriptStorageEnvironment,
   captureSessionTranscriptTargetBinding,
@@ -34,6 +40,10 @@ import {
 import type { SessionEntry } from "./types.js";
 
 export { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
+export type {
+  InitialSessionTranscriptWriter,
+  SessionTranscriptWriterFence,
+} from "./session-transcript-writer.types.js";
 
 export type SessionMetadataChange =
   | Pick<ModelChangeEntry, "type" | "provider" | "modelId">
@@ -57,20 +67,6 @@ type MetadataPublication = {
   publish: (commit: SessionMetadataCommit) => undefined;
 };
 
-export type SessionTranscriptWriterFence = Readonly<{
-  expectedLifecycleRevision: string | undefined;
-  expectedWriterRunId: string;
-}>;
-
-/** A first-insert lease, bound to the original admission rather than its run id. */
-export type InitialSessionTranscriptWriter = Readonly<{
-  writerRunId: string;
-  committedFence: SessionTranscriptWriterFence | undefined;
-  assertActive: SessionSourceAssertion;
-  recordCommitted: (fence: SessionTranscriptWriterFence) => void;
-  withTranscriptWrite: <T>(run: () => Promise<T> | T) => Promise<T>;
-}>;
-
 type SessionTranscriptWriteTarget = {
   agentId?: string;
   sessionId?: string;
@@ -88,6 +84,11 @@ export type OwnedSessionTranscriptWriteContext = {
   sessionTarget?: SessionTranscriptWriteTarget;
   initialWriter?: InitialSessionTranscriptWriter;
   sessionReader?: SessionEntryCohortReader;
+  sessionActor?: {
+    actor: SessionActor;
+    /** Retain the physical database owner, independently of the logical session agent. */
+    database: Readonly<OpenClawAgentDatabaseOptions & { agentId: string; path: string }>;
+  };
   /** Revalidate the captured owner, including an absent writer, inside each commit. */
   assertCommitAllowed?: SessionSourceAssertion;
   withTranscriptWrite: <T>(run: () => Promise<T> | T) => Promise<T>;
@@ -176,6 +177,27 @@ export function getOwnedSessionTranscriptReader(scope: SessionTranscriptWriteTar
   });
   context.assertCommitAllowed?.();
   return reader;
+}
+
+/** Borrow only the actor retained for this exact admitted transcript. */
+export function getOwnedSessionTranscriptActor(
+  scope: SessionTranscriptWriteTarget,
+): OwnedSessionTranscriptWriteContext["sessionActor"] {
+  const context = ownedTranscriptWriteContext.getStore();
+  const actor = context?.sessionActor;
+  if (!actor) {
+    return undefined;
+  }
+  if (
+    !contextMatches({ context, sessionTarget: captureWriteTarget(scope) }) ||
+    context.sessionTarget?.sessionId !== scope.sessionId ||
+    context.sessionTarget?.agentId !== scope.agentId
+  ) {
+    throw new SessionTranscriptWriterClaimReboundError();
+  }
+  context.assertCommitAllowed?.();
+  actor.actor.assertCurrent();
+  return actor;
 }
 
 function captureWriteTarget(target: SessionTranscriptWriteTarget): SessionTranscriptWriteTarget {

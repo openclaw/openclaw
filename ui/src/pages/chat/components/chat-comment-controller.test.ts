@@ -6,6 +6,7 @@ import {
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayload,
 } from "../attachment-payload-store.ts";
+import { createComposerContainer } from "../chat-composer.test-support.ts";
 import { createChatProps } from "../chat-view.test-helpers.ts";
 import { renderChat } from "../chat-view.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
@@ -97,7 +98,7 @@ async function mountComments(additional: ChatAttachment[] = []) {
 
 describe("comment actions outside the transcript", () => {
   it("keeps the controller idle across unchanged chat renders and updates when composition is disabled", async () => {
-    const container = document.createElement("div");
+    const container = createComposerContainer();
     onTestFinished(() => {
       render(nothing, container);
     });
