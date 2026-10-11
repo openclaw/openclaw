@@ -1,5 +1,34 @@
+import { parseSlashCommandOrNull } from "../../auto-reply/reply/commands-slash-parse.js";
+import { parseConfigCommand } from "../../auto-reply/reply/config-commands.js";
+import { parseDebugCommand } from "../../auto-reply/reply/debug-commands.js";
 import { logVerbose } from "../../globals.js";
+import { getConfigValueAtPath, parseConfigPath, setConfigValueAtPath } from "../config-paths.js";
+import { REDACTED_SENTINEL } from "../redact-sentinel.js";
 import { appendAssistantMessageToSessionTranscript } from "./transcript.js";
+
+async function redactConfigCommandInput(text: string): Promise<string> {
+  const name = parseSlashCommandOrNull(text, "/config") ? "/config" : "/debug";
+  const action = parseSlashCommandOrNull(text, name);
+  if (action?.action !== "set") {
+    return text;
+  }
+  const command = name === "/config" ? parseConfigCommand(text) : parseDebugCommand(text);
+  if (command?.action !== "set") {
+    return `${name} set ${REDACTED_SENTINEL}`;
+  }
+  const path = parseConfigPath(command.path);
+  if (!path.ok) {
+    return `${name} set ${REDACTED_SENTINEL}`;
+  }
+  const [{ redactConfigObject }, { loadGatewayRuntimeConfigSchema }] = await Promise.all([
+    import("../redact-snapshot.js"),
+    import("../runtime-schema.js"),
+  ]);
+  const preview: Record<string, unknown> = {};
+  setConfigValueAtPath(preview, path.path, command.value);
+  const redacted = redactConfigObject(preview, loadGatewayRuntimeConfigSchema().uiHints);
+  return `${name} set ${command.path}=${JSON.stringify(getConfigValueAtPath(redacted, path.path))}`;
+}
 
 /** Records only settled command output; callers must first confirm delivery. */
 export async function recordDeliveredCommandExchange(
@@ -45,7 +74,7 @@ export async function recordDeliveredCommandExchange(
       ...params,
       text: redact(params.replyText),
       command: {
-        text: redact(commandText),
+        text: redact(await redactConfigCommandInput(commandText)),
         idempotencyKey: `command-input:${params.commandId}`,
       },
       idempotencyKey: `command-reply:${params.commandId}:${params.replyId}`,

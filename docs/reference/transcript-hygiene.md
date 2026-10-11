@@ -40,8 +40,9 @@ Slash commands and their delivered replies from the shared dispatcher are ordina
 conversation messages, not runtime-only prompt context. Telegram native command
 menus, button selections, and directive acknowledgements are also retained;
 other channels' native direct-send adapters are not covered. Login device codes,
-pairing codes, and login URLs are redacted before appending the exchange. These
-rows remain available to later provider requests and chat history without rewriting earlier
+pairing codes, login URLs, and sensitive `/config set` or `/debug set` values
+(including nested object assignments) are redacted before appending the exchange.
+These rows remain available to later provider requests and chat history without rewriting earlier
 rows. `/btw` and `/side` remain ephemeral.
 
 ## Failed attempts and recovery

@@ -281,6 +281,40 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(JSON.stringify(events)).not.toContain(testCase.replyText);
   });
 
+  it.each([
+    [
+      '/debug set gateway.auth.token="synthetic-private-token"',
+      '/debug set gateway.auth.token="__OPEN…ED__"',
+    ],
+    [
+      '/config set gateway.auth={"mode":"token","token":"synthetic-private-token"}',
+      '/config set gateway.auth={"mode":"token","token":"__OPEN…ED__"}',
+    ],
+    [
+      "/debug set channels.telegram.botToken=synthetic-private-token",
+      '/debug set channels.telegram.botToken="__OPENCLAW_REDACTED__"',
+    ],
+    ['/debug set logging.level="debug"', '/debug set logging.level="debug"'],
+  ])("redacts configuration input %s before recording", async (commandText, expected) => {
+    await writeTranscriptStore();
+    const result = await recordDeliveredCommandExchange({
+      sessionKey,
+      storePath: fixture.storePath(),
+      config: { logging: { redactSensitive: "off" } },
+      commandText,
+      replyText: "Configuration updated.",
+      commandId: "config-command",
+      replyId: "reply",
+    });
+    expect(result.ok).toBe(true);
+    const events = await loadFixtureMessages();
+    expect(events.at(-2)?.message).toMatchObject({
+      role: "user",
+      content: [{ type: "text", text: expected }],
+    });
+    expect(JSON.stringify(events)).not.toContain("synthetic-private-token");
+  });
+
   it.each(["/btw hello", "/side hello"])("keeps %s ephemeral", async (commandText) => {
     await writeTranscriptStore();
     const before = await loadFixtureMessages();
