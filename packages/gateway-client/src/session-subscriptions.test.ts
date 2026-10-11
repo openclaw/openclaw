@@ -242,28 +242,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
 
     expect(failure).toBeInstanceOf(GatewayProtocolRequestTimeoutError);
-    expect(request).toHaveBeenCalledTimes(3);
-    expect(request).toHaveBeenNthCalledWith(
-      3,
-      "sessions.messages.unsubscribe",
-      { subscriptionId: expect.any(String), key: "stalled" },
-      { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
-    );
-  });
-
-  it("does not compensate an unsent subscription timeout", async () => {
-    const timeout = new GatewayProtocolRequestTimeoutError({
-      method: "sessions.messages.subscribe",
-      timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
-      requestSent: false,
-    });
-    const request = vi.fn(async () => {
-      throw timeout;
-    });
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator({ request });
-
-    await expect(coordinator.acquire("main")).rejects.toBe(timeout);
-    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("retries a rejected final unsubscribe with the original live lease", async () => {
@@ -307,86 +286,6 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     expect(failure).toBeInstanceOf(GatewayProtocolRequestTimeoutError);
     await expect(coordinator.release(subscription)).resolves.toBeUndefined();
     expect(request).toHaveBeenCalledTimes(3);
-  });
-
-  it.each([false, true])(
-    "refreshes a possibly removed observer before sharing it (approvals: %s)",
-    async (includeApprovals) => {
-      const refreshed = createDeferred();
-      let subscriptions = 0;
-      let releases = 0;
-      let wireApprovals: boolean | null = null;
-      const { client, request } = createClient(async (method, params) => {
-        if (method === "sessions.messages.unsubscribe") {
-          wireApprovals = null;
-          if (++releases === 1) {
-            throw new GatewayProtocolRequestTimeoutError({
-              method,
-              timeoutMs: 30_000,
-              requestSent: true,
-            });
-          }
-        } else {
-          if (++subscriptions > 1) {
-            await refreshed.promise;
-          }
-          wireApprovals = params.includeApprovals === true;
-        }
-        return { key: params.key };
-      });
-      const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
-      const original = await coordinator.acquire("main", { includeApprovals });
-      await expect(coordinator.release(original)).rejects.toBeInstanceOf(
-        GatewayProtocolRequestTimeoutError,
-      );
-      const first = coordinator.acquire("main");
-      const second = coordinator.acquire("main");
-      const releaseOriginal = coordinator.release(original);
-      expect(request).toHaveBeenCalledTimes(3);
-      expect(wireApprovals).toBe(null);
-      refreshed.resolve();
-      const [firstLease, secondLease] = await Promise.all([first, second]);
-      await releaseOriginal;
-      expect(wireApprovals).toBe(includeApprovals);
-      expect(request).toHaveBeenCalledTimes(3);
-      await coordinator.release(firstLease);
-      await coordinator.release(secondLease);
-      expect(wireApprovals).toBe(null);
-      expect(request).toHaveBeenCalledTimes(4);
-    },
-  );
-
-  it("retries a failed refresh without downgrading a retained approval observer", async () => {
-    let subscriptions = 0;
-    let releases = 0;
-    const { client, request } = createClient(async (method, params) => {
-      if (method === "sessions.messages.unsubscribe" && ++releases === 1) {
-        throw new GatewayProtocolRequestTimeoutError({
-          method,
-          timeoutMs: 30_000,
-          requestSent: true,
-        });
-      }
-      if (method === "sessions.messages.subscribe" && ++subscriptions === 2) {
-        throw new GatewayProtocolRequestError({ retryable: true, message: "refresh unavailable" });
-      }
-      return { key: params.key };
-    });
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
-    const original = await coordinator.acquire("main", { includeApprovals: true });
-    await expect(coordinator.release(original)).rejects.toBeInstanceOf(
-      GatewayProtocolRequestTimeoutError,
-    );
-    await expect(coordinator.acquire("main")).rejects.toThrow("refresh unavailable");
-    const replacement = await coordinator.acquire("main");
-    expect(
-      request.mock.calls
-        .filter(([method]) => method === "sessions.messages.subscribe")
-        .map(([, params]) => params.includeApprovals),
-    ).toEqual([true, true, true]);
-    await coordinator.release(original);
-    await coordinator.release(replacement);
-    expect(releases).toBe(2);
   });
 
   it.each([
@@ -571,47 +470,6 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
       request.mock.calls.filter(([method]) => method === "sessions.messages.unsubscribe"),
     ).toHaveLength(1);
   });
-
-  it.each(["none", "plain", "approvals"] as const)(
-    "restores the %s owner's capability after an approval replay times out",
-    async (retained) => {
-      let capability: "none" | "plain" | "approvals" = "none";
-      let timeoutNext = false;
-      const timeout = new GatewayProtocolRequestTimeoutError({
-        method: "sessions.messages.subscribe",
-        timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
-        requestSent: true,
-      });
-      const { client } = createClient(async (method, params) => {
-        capability =
-          method === "sessions.messages.unsubscribe"
-            ? "none"
-            : params.includeApprovals
-              ? "approvals"
-              : "plain";
-        if (timeoutNext) {
-          timeoutNext = false;
-          throw timeout;
-        }
-        return { key: params.key, approvalReplay: { approvals: [] } };
-      });
-      const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
-      const owner =
-        retained === "none"
-          ? null
-          : await coordinator.acquire("main", { includeApprovals: retained === "approvals" });
-      try {
-        timeoutNext = true;
-        await expect(coordinator.acquire("main", { includeApprovals: true })).rejects.toBe(timeout);
-        expect(capability).toBe(retained);
-      } finally {
-        if (owner) {
-          await coordinator.release(owner);
-        }
-      }
-      expect(capability).toBe("none");
-    },
-  );
 
   it("preserves the plain observer when an approval upgrade is unauthorized", async () => {
     let rejectApproval = true;

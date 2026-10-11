@@ -246,34 +246,17 @@ export async function resolveRuntimeConversationBindingRouteAsync(
       : routeInput.route;
     return inspectRuntimeConversationBindingRoute({ route, inspection });
   };
-  let result = await inspect();
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    if (!result.bindingRecord || params.touchBinding === false) {
-      return result;
-    }
-    const { bindingId, boundAt, targetSessionKey, targetKind } = result.bindingRecord;
-    const scope = {
-      channel: result.bindingRecord.conversation.channel,
-      accountId: result.bindingRecord.conversation.accountId,
-    };
-    await service.touchAsync(bindingId, undefined, scope);
-    result = await inspect();
-    if (
-      !result.bindingRecord ||
-      (result.bindingRecord.bindingId === bindingId &&
-        result.bindingRecord.boundAt === boundAt &&
-        result.bindingRecord.targetSessionKey === targetSessionKey &&
-        result.bindingRecord.targetKind === targetKind &&
-        result.bindingRecord.conversation.channel === scope.channel &&
-        result.bindingRecord.conversation.accountId === scope.accountId)
-    ) {
-      return result;
-    }
-    // IDs can survive rebinding; a new binding incarnation needs its own activity update.
+  const result = await inspect();
+  if (!result.bindingRecord || params.touchBinding === false) {
+    return result;
   }
-  throw new Error(
-    "Conversation binding changed repeatedly while recording activity. Retry the message.",
+  await service.touchAsync(
+    result.bindingRecord.bindingId,
+    undefined,
+    result.bindingRecord.conversation,
   );
+  // Activity is best effort if an operator rebinds during the write; routing still uses a fresh read.
+  return inspect();
 }
 
 /** @deprecated Use resolveRuntimeConversationBindingRouteAsync; removed in the next Plugin SDK major. */

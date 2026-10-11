@@ -448,6 +448,16 @@ describe("google-interactions provider", () => {
       expected: { thinking_level: "low", thinking_summaries: "auto" },
     },
     {
+      modelId: "gemini-2.5-flash",
+      reasoning: "xhigh" as const,
+      expected: { thinking_level: "high", thinking_summaries: "auto" },
+    },
+    {
+      modelId: "gemini-2.5-flash",
+      reasoning: "max" as const,
+      expected: { thinking_level: "high", thinking_summaries: "auto" },
+    },
+    {
       modelId: "gemini-3-flash-preview",
       reasoning: "off" as const,
       expected: { thinking_level: "minimal", thinking_summaries: "none" },
@@ -473,7 +483,12 @@ describe("google-interactions provider", () => {
       );
 
       await streamSimpleGoogleInteractions(
-        { ...makeInteractionsModel(), id: modelId, reasoning: true },
+        {
+          ...makeInteractionsModel(),
+          id: modelId,
+          reasoning: true,
+          thinkingLevelMap: { xhigh: "high", max: "high" },
+        },
         basicContext,
         { apiKey: "test-api-key", reasoning },
       ).result();
