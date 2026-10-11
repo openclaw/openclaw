@@ -49,7 +49,7 @@ import {
   type SecretOwnerRefState,
 } from "./runtime-degraded-state.js";
 import type { SecretResolverWarning } from "./runtime-shared.js";
-import { createSecretsRuntimeDisplaySnapshot } from "./runtime-source-contract.js";
+import { isSecretsRuntimeDisplayChange } from "./runtime-source-contract.js";
 import {
   clearActiveRuntimeWebToolsMetadata,
   setActiveRuntimeWebToolsMetadata,
@@ -1011,8 +1011,8 @@ export function getActiveSecretsRuntimeSnapshotState(): PreparedSecretsRuntimeSn
 /** Reuse resolved owners when only Control UI presentation changed. */
 export function prepareSecretsRuntimeDisplaySnapshot(
   params: Omit<
-    Parameters<typeof createSecretsRuntimeDisplaySnapshot>[0],
-    "activeSnapshot" | "refreshContext" | "cloneSnapshot"
+    Parameters<typeof isSecretsRuntimeDisplayChange>[0],
+    "sourceConfig" | "refreshContext"
   >,
 ): PreparedSecretsRuntimeSnapshot | null {
   if (
@@ -1024,12 +1024,28 @@ export function prepareSecretsRuntimeDisplaySnapshot(
   ) {
     return null;
   }
-  return createSecretsRuntimeDisplaySnapshot({
-    ...params,
-    activeSnapshot,
-    refreshContext: activeRefreshContext,
-    cloneSnapshot: () => getActiveSecretsRuntimeSnapshotState()!,
-  });
+  if (
+    !isSecretsRuntimeDisplayChange({
+      ...params,
+      sourceConfig: activeSnapshot.sourceConfig,
+      refreshContext: activeRefreshContext,
+    })
+  ) {
+    return null;
+  }
+  const snapshot = getActiveSecretsRuntimeSnapshotState()!;
+  snapshot.sourceConfig = cloneConfigWithResolutionFacts(params.config);
+  if (params.config.ui === undefined) {
+    delete snapshot.config.ui;
+  } else {
+    snapshot.config.ui = structuredClone(params.config.ui);
+  }
+  if (params.config.meta === undefined) {
+    delete snapshot.config.meta;
+  } else {
+    snapshot.config.meta = structuredClone(params.config.meta);
+  }
+  return snapshot;
 }
 
 /** Stable token for compare-and-activate ownership across cloned snapshot reads. */

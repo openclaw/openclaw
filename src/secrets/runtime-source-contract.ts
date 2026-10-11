@@ -1,17 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  cloneConfigWithResolutionFacts,
-  serializeConfigResolutionFacts,
-} from "../config/resolution-facts.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import { serializeConfigResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseSecretRef, type SecretRef } from "../config/types.secrets.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { secretRefKey } from "./ref-contract.js";
-import type {
-  PreparedSecretsRuntimeSnapshot,
-  SecretsRuntimeRefreshContext,
-} from "./runtime-state.js";
 
 type LocatedSecretRef = {
   path: Array<string | number>;
@@ -45,7 +39,10 @@ function listLocatedSecretRefs(
 
 /** Canonical store refs across config and auth profiles for one mutated team entry. */
 export function collectSecretStoreRefKeysInSnapshot(
-  snapshot: Pick<PreparedSecretsRuntimeSnapshot, "sourceConfig" | "authStores">,
+  snapshot: {
+    sourceConfig: OpenClawConfig;
+    authStores: ReadonlyArray<{ store: AuthProfileStore }>;
+  },
   name: string,
 ): Set<string> {
   const sources = [snapshot.sourceConfig, ...snapshot.authStores.map(({ store }) => store)];
@@ -66,51 +63,38 @@ export function hasSameSecretReloadContract(left: OpenClawConfig, right: OpenCla
   return isDeepStrictEqual(contract(left), contract(right));
 }
 
-/** Prepare display-only bytes after the state owner verifies its live credential revisions. */
-export function createSecretsRuntimeDisplaySnapshot(params: {
+/** Compare display inputs after the state owner verifies its live credential revisions. */
+export function isSecretsRuntimeDisplayChange(params: {
   config: OpenClawConfig;
   env?: Record<string, string | undefined>;
   includeAuthStoreRefs?: boolean;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-  activeSnapshot: PreparedSecretsRuntimeSnapshot;
-  refreshContext: SecretsRuntimeRefreshContext;
-  cloneSnapshot: () => PreparedSecretsRuntimeSnapshot;
-}): PreparedSecretsRuntimeSnapshot | null {
-  const { activeSnapshot, refreshContext } = params;
+  sourceConfig: OpenClawConfig;
+  refreshContext: {
+    env: Record<string, string | undefined>;
+    includeConfigRefs?: boolean;
+    includeAuthStoreRefs: boolean;
+    manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  };
+}): boolean {
+  const { sourceConfig, refreshContext } = params;
   if (
     !refreshContext.includeConfigRefs ||
     (params.includeAuthStoreRefs === true && !refreshContext.includeAuthStoreRefs) ||
-    isDeepStrictEqual(activeSnapshot.sourceConfig.ui, params.config.ui) ||
+    isDeepStrictEqual(sourceConfig.ui, params.config.ui) ||
     (params.env && !isDeepStrictEqual(refreshContext.env, params.env)) ||
     (params.manifestRegistry &&
       !isDeepStrictEqual(refreshContext.manifestRegistry, params.manifestRegistry)) ||
     !isDeepStrictEqual(
-      serializeConfigResolutionFacts(activeSnapshot.sourceConfig),
+      serializeConfigResolutionFacts(sourceConfig),
       serializeConfigResolutionFacts(params.config),
     )
   ) {
-    return null;
+    return false;
   }
   const runtimeInputs = ({ ui: _ui, meta, ...config }: OpenClawConfig) => {
     const { lastTouchedVersion: _lastTouchedVersion, ...runtimeMeta } = meta ?? {};
     return { ...config, meta: runtimeMeta };
   };
-  if (
-    !isDeepStrictEqual(runtimeInputs(activeSnapshot.sourceConfig), runtimeInputs(params.config))
-  ) {
-    return null;
-  }
-  const snapshot = params.cloneSnapshot();
-  snapshot.sourceConfig = cloneConfigWithResolutionFacts(params.config);
-  if (params.config.ui === undefined) {
-    delete snapshot.config.ui;
-  } else {
-    snapshot.config.ui = structuredClone(params.config.ui);
-  }
-  if (params.config.meta === undefined) {
-    delete snapshot.config.meta;
-  } else {
-    snapshot.config.meta = structuredClone(params.config.meta);
-  }
-  return snapshot;
+  return isDeepStrictEqual(runtimeInputs(sourceConfig), runtimeInputs(params.config));
 }
