@@ -89,7 +89,6 @@ describe("resolveAgentToolSurfacePlan", () => {
         tools,
         config,
         ...plan,
-        forceDirectMessageTool: false,
         catalogRef: createToolSearchCatalogRef(),
       });
       expect(plan.toolSearchControlsEnabled).toBe(false);
@@ -258,7 +257,6 @@ describe("resolveAgentToolSurfacePlan", () => {
       toolSearchRuntimeConfig: plan.toolSearchRuntimeConfig,
       codeModeControlsEnabled: plan.codeModeControlsEnabled,
       toolSearchConfig: plan.toolSearchConfig,
-      forceDirectMessageTool: true,
       catalogRef: createToolSearchCatalogRef(),
     });
 
@@ -322,6 +320,48 @@ describe("resolveAgentToolSurfacePlan", () => {
 describe("applyAgentToolSurfaceCatalog", () => {
   const executeTool: ToolSearchCatalogToolExecutor = async () => ({ content: [], details: {} });
 
+  it.each(["code", "tools", "directory"] as const)(
+    "keeps the %s provider tool prefix across source reply delivery modes",
+    (mode) => {
+      const config: OpenClawConfig = {
+        tools: {
+          codeMode: mode === "code",
+          toolSearch: { enabled: true, mode: mode === "directory" ? "directory" : "tools" },
+        },
+      };
+      const surfaces = [false, true, false].map((forceMessageTool) => {
+        const runtime = createAgentHarnessToolSurfaceRuntimeCore({
+          config,
+          modelToolsEnabled: true,
+          sessionKey: "agent:main:reply-mode-stability",
+          forceMessageTool,
+          executeTool,
+        });
+        try {
+          const result = runtime.compactTools(
+            ["message", "read", "hidden_target"].map(createStubTool),
+          );
+          expect(result.tools.some((tool) => tool.name === "message")).toBe(true);
+          const descriptors = result.tools.map(({ name, description, parameters }) => ({
+            name,
+            description,
+            parameters,
+          }));
+          expect(
+            runtime
+              .compactTools([createStubTool("read")])
+              .tools.some((tool) => tool.name === "message"),
+          ).toBe(false);
+          return descriptors;
+        } finally {
+          runtime.cleanup();
+        }
+      });
+      expect(surfaces[1]).toEqual(surfaces[0]);
+      expect(surfaces[2]).toEqual(surfaces[0]);
+    },
+  );
+
   it("compacts an unconfigured hosted run behind structured controls", () => {
     const config: OpenClawConfig = {};
     const plan = resolveAgentToolSurfacePlan({
@@ -337,7 +377,6 @@ describe("applyAgentToolSurfaceCatalog", () => {
       ],
       config,
       ...plan,
-      forceDirectMessageTool: false,
       catalogRef,
     });
 
@@ -367,7 +406,6 @@ describe("applyAgentToolSurfaceCatalog", () => {
       toolSearchRuntimeConfig: plan.toolSearchRuntimeConfig,
       codeModeControlsEnabled: plan.codeModeControlsEnabled,
       toolSearchConfig: plan.toolSearchConfig,
-      forceDirectMessageTool: false,
       catalogRef,
     });
 
@@ -394,7 +432,6 @@ describe("applyAgentToolSurfaceCatalog", () => {
       toolSearchRuntimeConfig: plan.toolSearchRuntimeConfig,
       codeModeControlsEnabled: plan.codeModeControlsEnabled,
       toolSearchConfig: plan.toolSearchConfig,
-      forceDirectMessageTool: false,
       catalogRef,
     });
 
@@ -427,7 +464,6 @@ describe("applyAgentToolSurfaceCatalog", () => {
       toolSearchRuntimeConfig: plan.toolSearchRuntimeConfig,
       codeModeControlsEnabled: plan.codeModeControlsEnabled,
       toolSearchConfig: plan.toolSearchConfig,
-      forceDirectMessageTool: false,
       catalogRef: createToolSearchCatalogRef(),
     });
 
@@ -448,7 +484,6 @@ describe("applyAgentToolSurfaceCatalog", () => {
       toolSearchRuntimeConfig: plan.toolSearchRuntimeConfig,
       codeModeControlsEnabled: plan.codeModeControlsEnabled,
       toolSearchConfig: plan.toolSearchConfig,
-      forceDirectMessageTool: false,
       catalogRef: createToolSearchCatalogRef(),
     });
 

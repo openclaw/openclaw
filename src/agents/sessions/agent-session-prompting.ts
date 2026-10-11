@@ -668,6 +668,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
         message.content,
         message.display,
         message.details,
+        message.timestamp,
       );
       this.agent.state.messages.push(message);
     });
