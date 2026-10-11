@@ -1,5 +1,5 @@
 import { toErrorObject } from "@openclaw/normalization-core";
-import { createEffect, createRenderEffect, onCleanup } from "solid-js";
+import { createEffect, onCleanup } from "solid-js";
 import { localEditorFilePath } from "../../../app/native-editor-locality.runtime.ts";
 import { nativeGatewaysCapability } from "../../../app/native-gateways.runtime.ts";
 import {
@@ -43,13 +43,11 @@ registerEnglishCatalog(registerFilePreviewEnglish);
 
 function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatDetailPanelProps>) {
   let disposed = false;
-  const invalidate = () => lifecycle.invalidate();
+  let invalidateRender = () => {};
+  const invalidate = () => invalidateRender();
   const afterCommit = () =>
     new Promise<void>((resolve) => {
-      lifecycle.afterCommit((complete) => {
-        resolve();
-        complete();
-      }, resolve);
+      lifecycle.afterCommit(() => resolve(), resolve);
     });
   const updatingHost = {
     get isConnected() {
@@ -604,7 +602,31 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
 
   const handlePanelKeyDown = (event: KeyboardEvent) => handleSidebarKeydown(event, props);
 
+  let previousContent: ChatDetailPanelContent | null | undefined;
+  let previousNavigation: FileSidebarNavigation | null | undefined;
+  let previousRuntime: AttachmentSidebarRuntime | undefined;
+  let navigate = false;
   function renderPanel() {
+    const content = props.content;
+    const navigation = props.fileNavigation;
+    const runtime = props.attachmentRuntime;
+    const contentChanged = content !== previousContent;
+    const navigationChanged = navigation !== previousNavigation;
+    if (contentChanged || navigationChanged || runtime !== previousRuntime) {
+      navigate ||= contentChanged || navigationChanged;
+      updateSelection(
+        contentChanged,
+        navigationChanged,
+        previousRuntime,
+        content,
+        navigation,
+        runtime,
+      );
+      previousContent = content;
+      previousNavigation = navigation;
+      previousRuntime = runtime;
+    }
+
     // The retained Lit render helpers do not subscribe to Solid's locale projection yet.
     t("common.loading");
     const file = htmlPreview.file;
@@ -679,37 +701,18 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
     presented: () => true,
     read: renderPanel,
   });
-  let previousContent: ChatDetailPanelContent | null | undefined;
-  let previousNavigation: FileSidebarNavigation | null | undefined;
-  let previousRuntime: AttachmentSidebarRuntime | undefined;
-  let navigate = false;
-  createRenderEffect(
-    () => [props.content, props.fileNavigation, props.attachmentRuntime] as const,
-    ([content, navigation, runtime]) => {
-      const contentChanged = content !== previousContent;
-      const navigationChanged = navigation !== previousNavigation;
-      if (contentChanged || navigationChanged || runtime !== previousRuntime) {
-        navigate ||= contentChanged || navigationChanged;
-        updateSelection(
-          contentChanged,
-          navigationChanged,
-          previousRuntime,
-          content,
-          navigation,
-          runtime,
-        );
-        invalidate();
-      }
-      previousContent = content;
-      previousNavigation = navigation;
-      previousRuntime = runtime;
-    },
-  );
+  invalidateRender = lifecycle.invalidate;
   createEffect(
     () => lifecycle.snapshot(),
     () => {
-      updateEditor(navigate);
+      const scrollToNavigation = navigate;
       navigate = false;
+      // LitContent commits in its own effect; mount CodeMirror after that effect finishes.
+      queueMicrotask(() => {
+        if (!disposed) {
+          updateEditor(scrollToNavigation);
+        }
+      });
     },
   );
   const unsubscribeNativeGateway = nativeGatewaysCapability()?.subscribe(invalidate);

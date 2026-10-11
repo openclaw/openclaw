@@ -20,7 +20,7 @@ import {
 } from "../test-helpers/application-context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush, waitForSolid as waitForFast } from "../test-helpers/solid-settle.ts";
-import "./mcp-servers-card.ts";
+import "./mcp-servers-card.tsx";
 
 type McpServersCard = HTMLElementTagNameMap["openclaw-mcp-servers-card"];
 type ConfigPatchBuilder = Parameters<RuntimeConfigCapability["patchFromSnapshot"]>[0];

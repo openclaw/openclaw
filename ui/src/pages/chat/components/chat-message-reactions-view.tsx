@@ -10,23 +10,6 @@ import "./chat-message-reactions.css";
 
 export type MessageReactionPlacement = "bottom-start" | "bottom-end";
 
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "wa-popover": HTMLAttributes<WaPopover> & {
-        for?: string;
-        placement?: MessageReactionPlacement;
-        distance?: string;
-        "without-arrow"?: boolean;
-        "onWa-show"?: () => void;
-        "onWa-after-show"?: () => void;
-        "onWa-hide"?: () => void;
-        "onWa-after-hide"?: () => void;
-      };
-    }
-  }
-}
-
 const QUICK_REACTIONS = ["👍", "❤️", "🎉", "👀", "🚀", "😂"] as const;
 let nextPickerId = 0;
 

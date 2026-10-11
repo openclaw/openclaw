@@ -5,10 +5,6 @@ import { createContext, Script, type Context } from "node:vm";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { serveWorkerTasks, type WorkerTaskChannel } from "../infra/worker-task-server.js";
 import { CODE_MODE_CONTROLLER_SOURCE } from "./code-mode-controller-source.js";
-import type {
-  CodeModeExecutorStartInput,
-  CodeModeExecutorResumeInput,
-} from "./code-mode-executor-types.js";
 import {
   boundCodeModeError,
   captureCodeModeOutput,
@@ -25,6 +21,7 @@ import {
 import { prepareSource } from "./code-mode-source.js";
 import type {
   CodeModeConfig,
+  CodeModeNodeInput,
   CodeModeWorkerContinuation,
   CodeModeWorkerThreadResult,
   PendingBridgeRequest,
@@ -32,10 +29,7 @@ import type {
 } from "./code-mode-worker-types.js";
 import { ToolInputError } from "./tool-input-error.js";
 
-type NodeInput = (CodeModeExecutorStartInput | CodeModeExecutorResumeInput) & {
-  progress: SharedArrayBuffer;
-  inlineHost: boolean;
-};
+type NodeInput = CodeModeNodeInput;
 type NodeResult = CodeModeWorkerThreadResult<undefined>;
 
 type GuestOutcome = { ok: boolean; json: string };
@@ -120,6 +114,8 @@ const initializeScript = compileController(
 
     Object.assign(globalThis, JSON.parse(__openclawNodeInit));
     delete globalThis.__openclawNodeInit;
+    globalThis.__openclawMaxPendingToolCalls = __openclawNodeMaxPending;
+    delete globalThis.__openclawNodeMaxPending;
     ${CODE_MODE_CONTROLLER_SOURCE}
 
     (() => {
@@ -291,13 +287,8 @@ function createCell(
     current.progress.observeNetworkContent();
   };
   context["__openclawHostOutput"] = (json: string) => current.progress.append(json);
-  context["__openclawNodeInit"] = JSON.stringify({
-    __openclawCatalog: input.catalog,
-    __openclawNamespaces: input.namespaces,
-    __openclawApiFiles: input.apiFiles ?? [],
-    __openclawSwarmEnabled: input.swarmEnabled === true,
-    __openclawMaxPendingToolCalls: input.config.maxPendingToolCalls,
-  });
+  context["__openclawNodeInit"] = new TextDecoder().decode(input.initialization);
+  context["__openclawNodeMaxPending"] = input.config.maxPendingToolCalls;
   context["__openclawNodeFinish"] = (ok: boolean, json: string) => {
     current.outcome = { ok, json };
   };

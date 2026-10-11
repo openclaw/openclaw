@@ -98,9 +98,9 @@ suite.define(() => {
         await page.evaluate(() => {
           window.editorInitMaySucceed = true;
           const panel = document.querySelector("openclaw-chat-detail-panel") as HTMLElement & {
-            requestUpdate(): void;
+            basePath: string;
           };
-          panel.requestUpdate();
+          panel.basePath = "/incidental-redraw";
         });
         await page.evaluate(
           () =>

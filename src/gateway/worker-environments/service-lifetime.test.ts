@@ -308,7 +308,7 @@ describe("worker environment service", () => {
     expect(prune).toHaveBeenCalledOnce();
   });
 
-  it("propagates non-lock terminal cleanup failures", async () => {
+  it("propagates terminal cleanup failures", async () => {
     const error = Object.assign(new Error("disk I/O error"), { code: "SQLITE_IOERR" });
     const prune = vi
       .spyOn(support.testState.store, "pruneTerminalEnvironments")

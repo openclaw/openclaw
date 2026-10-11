@@ -1,4 +1,4 @@
-import { Show } from "solid-js";
+import { Show, onCleanup } from "solid-js";
 import { renderSessionProgressCard } from "../../../components/session-progress-card.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/web-awesome.ts";
@@ -18,16 +18,18 @@ export const ChatDetailsProgress = defineSolidBridge<Props>(
   "openclaw-chat-details-progress",
   (props) => {
     let menu!: HTMLElement;
+    const stopSummaryToggle = (event: MouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+    };
     <wa-dropdown
       ref={(element) => {
         menu = element;
+        // Lit inserts this menu into a summary outside Solid's delegated event tree.
+        menu.addEventListener("click", stopSummaryToggle);
       }}
       class="chat-details-progress__menu"
       placement="bottom-end"
-      onClick={(event: MouseEvent) => {
-        event.preventDefault();
-        event.stopPropagation();
-      }}
       onWa-select={(event: CustomEvent<{ item: { value?: string } }>) => {
         if (!props.presented) {
           return;
@@ -74,6 +76,7 @@ export const ChatDetailsProgress = defineSolidBridge<Props>(
         <wa-dropdown-item value="clear">{t("sessionProgressCard.clearSaved")}</wa-dropdown-item>
       )}
     </wa-dropdown>;
+    onCleanup(() => menu.removeEventListener("click", stopSummaryToggle));
     const card = () => {
       t("chat.sessionDetails.title");
       const current = props.props;

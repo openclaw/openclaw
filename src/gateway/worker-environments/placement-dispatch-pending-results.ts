@@ -297,11 +297,8 @@ export async function recoverPendingWorkspaceResults(
                 !reclaimResult
               );
             };
-            const currentPreservesEnvironment = () => {
-              const current = placements.readCurrentMoveAuthority(pending.sessionId);
-              return canPreserveEnvironment(current.placement, current.move ?? null);
-            };
-            const preserveEnvironment = !finishBlockedMove && currentPreservesEnvironment();
+            const preserveEnvironment =
+              !finishBlockedMove && canPreserveEnvironment(active, blockedMove ?? null);
             const currentCheck: PlacementTurnClaimCurrentCheck = {
               assertPlacementCurrent(current, move) {
                 if (
@@ -316,7 +313,7 @@ export async function recoverPendingWorkspaceResults(
               recovery.assertCurrent();
               if (
                 preserveEnvironment &&
-                (!currentPreservesEnvironment() ||
+                (!canPreserveEnvironment(active, blockedMove ?? null) ||
                   !placements.validateWorkspaceResultClaim(turnClaim))
               ) {
                 throw new Error("Recovered workspace result lost its active environment owner");
