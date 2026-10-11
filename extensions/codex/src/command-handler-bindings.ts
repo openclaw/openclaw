@@ -302,16 +302,15 @@ export async function buildCodexCliSessions(
   if (parsed.help || !parsed.host) {
     return "Usage: /codex sessions --host <node> [filter] [--limit <n>] [--search-all]";
   }
-  return formatCodexCliSessions(
-    await deps.listCodexCliSessionsOnNode({
-      requestedNode: parsed.host,
-      filter: parsed.filter,
-      limit: parsed.limit,
-      // Only forwarded when asked for, so a node that predates the flag sees the same params it
-      // always did rather than an unknown key.
-      ...(parsed.searchAll ? { searchAll: true } : {}),
-    }),
-  );
+  const listing = await deps.listCodexCliSessionsOnNode({
+    requestedNode: parsed.host,
+    filter: parsed.filter,
+    limit: parsed.limit,
+    // Only forwarded when asked for, so a node that predates the flag sees the same params it
+    // always did rather than an unknown key.
+    ...(parsed.searchAll ? { searchAll: true } : {}),
+  });
+  return formatCodexCliSessions({ ...listing, filtered: parsed.filter.length > 0 });
 }
 
 export async function resumeThread(

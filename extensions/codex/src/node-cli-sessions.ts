@@ -54,9 +54,10 @@ type CodexCliSessionsListResult = {
   /** Rollouts present under the codex-home, whether or not they were opened. */
   sessionFileCount?: number;
   /**
-   * Set when a filtered listing did not search the whole corpus — either rollouts were never
+   * Set when the listing may be missing a session it should show. Filtered: rollouts were never
    * opened, or an opened rollout was too large to read whole and the part that went unread could
-   * have matched. An unfiltered listing is a newest-first page by construction and never sets this.
+   * have matched. Unfiltered: the scan budget ran out while an unread rollout was still modified more
+   * recently than the oldest session on the page, so a newer session may be missing from it.
    */
   searchTruncated?: boolean;
   /**
@@ -142,10 +143,11 @@ export async function listCodexCliSessionsOnNode(params: {
   limit?: number;
   /**
    * Opt out of the bounded scan: open every rollout under the codex-home and read each one whole.
-   * This is what a user reruns with after the bounded search reported it stopped short, so a
+   * This is what a user reruns with after the bounded listing reported it stopped short, so a
    * directory or preview match past the candidate ceiling — or inside a span the read windows
-   * skipped — stays reachable instead of being permanently dropped. It applies to a filtered
-   * request only; an unfiltered listing is a newest-first page, not a search.
+   * skipped — stays reachable instead of being permanently dropped. An unfiltered request honors it
+   * too: it ranks every rollout by its records rather than by file mtime, which recovers the newest
+   * session after a copied or restored codex-home rewrote the mtimes.
    */
   searchAll?: boolean;
 }): Promise<{ node: CodexCliSessionNodeInfo; result: CodexCliSessionsListResult }> {
@@ -288,8 +290,12 @@ export async function resumeCodexCliSessionOnNode(params: {
 export function formatCodexCliSessions(params: {
   node: CodexCliSessionNodeInfo;
   result: CodexCliSessionsListResult;
+  /** Whether the request carried a filter; the two kinds of listing are cut for different reasons. */
+  filtered: boolean;
 }): string {
-  const truncation = formatSessionSearchTruncation(params.result);
+  const truncation = params.filtered
+    ? formatSessionSearchTruncation(params.result)
+    : formatSessionPageTruncation(params.result);
   if (params.result.sessions.length === 0) {
     // The empty answer is the one most likely to be read as "no such session exists", so a cut
     // search has to say so here too — returning early before the notice hid it exactly where it
@@ -360,6 +366,26 @@ function formatSessionSearchTruncation(result: CodexCliSessionsListResult): stri
   // the ones that ran out of candidates.
   sentences.push("Add --search-all to read every rollout on this node in full instead.");
   return [sentences.join(" ")];
+}
+
+/**
+ * An unfiltered page is cut only when the node ran out of budget while an unread rollout was still
+ * modified more recently than the oldest session shown — the shape a copied, restored, or touched
+ * codex-home leaves behind. The page is otherwise exact, so this stays silent on an ordinary listing.
+ */
+function formatSessionPageTruncation(result: CodexCliSessionsListResult): string[] {
+  if (!result.searchTruncated) {
+    return [];
+  }
+  const scanned = result.scannedFileCount;
+  const total = result.sessionFileCount;
+  const read =
+    scanned === undefined || total === undefined
+      ? "Not every rollout on this node was read"
+      : `Read ${String(scanned)} of ${String(total)} rollouts`;
+  return [
+    `${read}, and some unread ones were modified more recently than the oldest session shown (as after copying, restoring, or touching a codex-home), so a more recent session may be missing from this list. Add --search-all to read every rollout on this node in full instead.`,
+  ];
 }
 
 async function listLocalCodexCliSessions(paramsJSON?: string | null): Promise<string> {

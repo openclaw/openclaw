@@ -52,10 +52,14 @@ const SESSION_FILE_SCAN_HEADROOM = 20;
  * `session_meta`, and the tail window). It bounds *this* scan only. `readHistorySessions` and
  * `hydrateSessionFiles` run before it and read outside it, so this is not a cap on what the whole
  * list command reads.
+ *
+ * The unfiltered page spends the same budget when it has to read past its recency prefix — see
+ * `hydrateRecencyPage` — so neither kind of listing can turn a copied codex-home into an unbounded
+ * default read.
  */
-const FILTERED_SESSION_SCAN_BUDGET_BYTES = 256 * 1024 * 1024;
+const SESSION_SCAN_BUDGET_BYTES = 256 * 1024 * 1024;
 /** Companion ceiling to the byte budget, so a home full of tiny rollouts cannot spend it on syscalls. */
-const FILTERED_SESSION_FILE_SCAN_CAP = 2_000;
+const SESSION_FILE_SCAN_CAP = 2_000;
 
 export type CodexCliSessionSummary = {
   sessionId: string;
@@ -175,34 +179,168 @@ export async function hydrateSessionFiles(
 }
 
 /**
- * Pick the rollouts worth hydrating. The listing is sorted newest-first and sliced to `limit`, so
- * scanning every rollout only to discard all but a handful makes list cost scale with total bytes
- * on disk.
- *
- * mtime is a heuristic proxy for recency, not a proof of it: rollouts are append-only, but a copy,
- * restore, or `touch` rewrites mtime without changing the records, so the candidate order can
- * differ from the order by last record `timestamp`. `SESSION_FILE_SCAN_HEADROOM` absorbs small
- * skew; a wholesale mtime rewrite can still hide a session from an unfiltered listing. Filtering by
- * session id stays reliable regardless, because ids appear in the filename and sort first.
- *
- * A filtered request gets every rollout as a candidate, in filename-match-then-recency order, up to
- * the file ceiling; the caller decides how far down that list it actually reads. `searchAll` drops
- * that ceiling so an explicitly complete search can open a rollout the bounded one left behind.
+ * Order the rollouts a filtered search may open: every rollout, filename matches first and then by
+ * recency, up to the file ceiling; the caller decides how far down that list it actually reads.
+ * Filtering by session id stays reliable on any codex-home because ids appear in the filename and
+ * sort first. `searchAll` drops the ceiling so an explicitly complete search can open a rollout the
+ * bounded one left behind. The unfiltered page has its own walk, `hydrateRecencyPage`.
  */
-function selectSessionFilesToScan(
+function selectFilteredSessionFiles(
   files: CodexCliSessionFile[],
   filter: string,
-  limit: number,
   searchAll: boolean,
 ): CodexCliSessionFile[] {
   const byRecency = files.toSorted((a, b) => b.mtimeMs - a.mtimeMs);
-  if (!filter) {
-    return byRecency.slice(0, limit + SESSION_FILE_SCAN_HEADROOM);
-  }
   const named = byRecency.filter((entry) => entry.basename.toLowerCase().includes(filter));
   const rest = byRecency.filter((entry) => !entry.basename.toLowerCase().includes(filter));
   const candidates = [...named, ...rest];
-  return searchAll ? candidates : candidates.slice(0, FILTERED_SESSION_FILE_SCAN_CAP);
+  return searchAll ? candidates : candidates.slice(0, SESSION_FILE_SCAN_CAP);
+}
+
+/**
+ * Merge one rollout read into the listing. History-derived fields win, but `messageCount` and its
+ * partial marker describe one scan, so both are taken from the same source.
+ */
+function mergeSessionFileSummary(
+  summaries: Map<string, CodexCliSessionSummary>,
+  summary: CodexCliSessionSummary,
+): { merged: CodexCliSessionSummary; previousUpdatedAt: string | undefined } {
+  const existing = summaries.get(summary.sessionId);
+  const counted = existing ?? summary;
+  const merged: CodexCliSessionSummary = {
+    ...summary,
+    ...existing,
+    cwd: existing?.cwd ?? summary.cwd,
+    sessionFile: existing?.sessionFile ?? summary.sessionFile,
+    updatedAt: existing?.updatedAt ?? summary.updatedAt,
+    lastMessage: existing?.lastMessage ?? summary.lastMessage,
+    messageCount: counted.messageCount,
+    partialScan: counted.partialScan,
+  };
+  summaries.set(summary.sessionId, merged);
+  return { merged, previousUpdatedAt: existing?.updatedAt };
+}
+
+function readUpdatedAtMs(updatedAt: string | undefined): number {
+  const parsed = updatedAt === undefined ? Number.NaN : Date.parse(updatedAt);
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+}
+
+/**
+ * The `limit` newest `updatedAt` values in the listing, kept sorted descending so the page floor —
+ * the value a row must beat to appear on the page — is the last element. `limit` is at most 50, so
+ * a sorted insert is cheaper than re-sorting every summary after each read.
+ */
+class PageFloor {
+  private readonly newest: number[] = [];
+
+  constructor(private readonly limit: number) {}
+
+  add(updatedAtMs: number): void {
+    if (!Number.isFinite(updatedAtMs)) {
+      return;
+    }
+    if (this.newest.length >= this.limit && updatedAtMs <= this.floorMs()) {
+      return;
+    }
+    const index = this.newest.findIndex((value) => value < updatedAtMs);
+    this.newest.splice(index === -1 ? this.newest.length : index, 0, updatedAtMs);
+    if (this.newest.length > this.limit) {
+      this.newest.pop();
+    }
+  }
+
+  /** Below this, a row cannot reach the page. Until the page is full, nothing is excluded. */
+  floorMs(): number {
+    return this.newest.length < this.limit
+      ? Number.NEGATIVE_INFINITY
+      : (this.newest.at(-1) ?? Number.NEGATIVE_INFINITY);
+  }
+}
+
+/**
+ * Hydrate the unfiltered, newest-first page.
+ *
+ * The page is finally sorted by the `updatedAt` recovered from records, but the only ordering
+ * available without opening a rollout is its mtime. The two agree on an untouched codex-home, so the
+ * read starts with the `limit + SESSION_FILE_SCAN_HEADROOM` most recently modified rollouts — the
+ * measured case, which stays one prefix read.
+ *
+ * A copy, restore, or `touch` rewrites mtime without changing the records, so that prefix alone is
+ * not proof that nothing newer was left unread: a wholesale mtime rewrite used to drop the active
+ * session from an apparently complete page. What does hold is the append-only invariant — a
+ * rollout's last write happens no earlier than its last record, and copying or touching it only
+ * moves mtime later — so an unread rollout can never carry a record newer than its own mtime. That
+ * gives an exact stopping rule: keep reading past the prefix, newest mtime first, until the next
+ * unread rollout's mtime is no newer than the page's oldest row. Every rollout left unread after
+ * that point is provably below the page. On an untouched home the rule is already met at the end of
+ * the prefix, so the extra reads cost nothing there.
+ *
+ * Rollouts already attached to a `history.jsonl` row are skipped by the rule: that session is listed
+ * with its history-derived fields whatever this read finds, so leaving its rollout unread hides
+ * nothing.
+ *
+ * The continuation spends the same byte budget and file ceiling as a filtered search. A home whose
+ * mtimes were all rewritten can exhaust them before the rule is met; the page then reports
+ * `searchTruncated` so the reply says a newer session may be missing and offers `searchAll`, which
+ * reads every rollout whole instead. A rollout whose mtime was moved *earlier* than its records is
+ * the one case the rule cannot see without reading it; that takes an explicit back-dating, and
+ * `searchAll` covers it too.
+ */
+async function hydrateRecencyPage(
+  summaries: Map<string, CodexCliSessionSummary>,
+  files: CodexCliSessionFile[],
+  limit: number,
+  searchAll: boolean,
+): Promise<SessionFileScanOutcome> {
+  const byRecency = files.toSorted((a, b) => b.mtimeMs - a.mtimeMs);
+  if (searchAll) {
+    for (const file of byRecency) {
+      const read = await readWholeSessionFileSummary(file);
+      if (read.summary) {
+        mergeSessionFileSummary(summaries, read.summary);
+      }
+    }
+    return { scannedFileCount: byRecency.length, unreadSpanCount: 0, searchTruncated: false };
+  }
+  const prefixLength = limit + SESSION_FILE_SCAN_HEADROOM;
+  const attachedToHistory = new Set(
+    [...summaries.values()].flatMap((summary) =>
+      summary.sessionFile ? [summary.sessionFile] : [],
+    ),
+  );
+  const page = new PageFloor(limit);
+  for (const summary of summaries.values()) {
+    page.add(readUpdatedAtMs(summary.updatedAt));
+  }
+  let scannedFileCount = 0;
+  let spentBytes = 0;
+  for (const [index, file] of byRecency.entries()) {
+    if (index >= prefixLength) {
+      if (attachedToHistory.has(file.file)) {
+        continue;
+      }
+      // Sorted by mtime, so once this rollout cannot reach the page, none after it can either.
+      if (file.mtimeMs <= page.floorMs()) {
+        break;
+      }
+      if (spentBytes >= SESSION_SCAN_BUDGET_BYTES || scannedFileCount >= SESSION_FILE_SCAN_CAP) {
+        return { scannedFileCount, unreadSpanCount: 0, searchTruncated: true };
+      }
+    }
+    scannedFileCount += 1;
+    const read = await readSessionFileSummary(file);
+    spentBytes += read.bytesRead;
+    if (!read.summary) {
+      continue;
+    }
+    const { merged, previousUpdatedAt } = mergeSessionFileSummary(summaries, read.summary);
+    // History-derived `updatedAt` wins the merge, so a row only gains a value it did not have.
+    if (previousUpdatedAt === undefined) {
+      page.add(readUpdatedAtMs(merged.updatedAt));
+    }
+  }
+  return { scannedFileCount, unreadSpanCount: 0, searchTruncated: false };
 }
 
 export type SessionFileScanOutcome = {
@@ -219,11 +357,11 @@ export type SessionFileScanOutcome = {
 /**
  * Hydrate rollouts in candidate order, stopping as early as the request allows.
  *
- * Unfiltered, the stop is the recency page `selectSessionFilesToScan` already hands back. Filtered,
- * the stop is the first of: enough matches to fill the page, the scan budget, or the candidate list
- * running out. Only the last of those searched the whole corpus, so anything else reports
- * `searchTruncated` — the caller is told its search was cut rather than left to read a short list as
- * an exhaustive one.
+ * Unfiltered, `hydrateRecencyPage` reads until no unread rollout can reach the page, or reports
+ * `searchTruncated` when the budget ran out first. Filtered, the stop is the first of: enough matches
+ * to fill the page, the scan budget, or the candidate list running out. Only the last of those
+ * searched the whole corpus, so anything else reports `searchTruncated` — the caller is told its
+ * search was cut rather than left to read a short list as an exhaustive one.
  *
  * The match early-out is a heuristic, not a proof that nothing better was left unread. Candidates
  * are ordered by filename match and then mtime, while the listing is finally sorted by the
@@ -254,17 +392,18 @@ export async function hydrateSessionsFromSessionFiles(
   options?: { searchAll?: boolean },
 ): Promise<SessionFileScanOutcome> {
   const searchAll = options?.searchAll === true;
-  const candidates = selectSessionFilesToScan(files, filter, limit, searchAll);
+  if (!filter) {
+    return hydrateRecencyPage(summaries, files, limit, searchAll);
+  }
+  const candidates = selectFilteredSessionFiles(files, filter, searchAll);
   // The page is `limit` long; the headroom is the same allowance for mtime vs. record-`timestamp`
   // skew that `SESSION_FILE_SCAN_HEADROOM` exists for, and bounds the skew it covers, not the skew
   // that can occur.
   const enoughMatches = limit + SESSION_FILE_SCAN_HEADROOM;
   const matched = new Set<string>();
-  if (filter) {
-    for (const [sessionId, summary] of summaries) {
-      if (matchesSessionFilter(summary, filter)) {
-        matched.add(sessionId);
-      }
+  for (const [sessionId, summary] of summaries) {
+    if (matchesSessionFilter(summary, filter)) {
+      matched.add(sessionId);
     }
   }
   let scannedFileCount = 0;
@@ -282,10 +421,10 @@ export async function hydrateSessionsFromSessionFiles(
   const finish = (filesLeftUnopened: boolean): SessionFileScanOutcome => ({
     scannedFileCount,
     unreadSpanCount,
-    searchTruncated: filter ? filesLeftUnopened || unreadSpanCount > 0 : false,
+    searchTruncated: filesLeftUnopened || unreadSpanCount > 0,
   });
   for (const file of candidates) {
-    if (filter && !searchAll) {
+    if (!searchAll) {
       if (matched.size >= enoughMatches) {
         return finish(scannedFileCount < files.length);
       }
@@ -293,7 +432,7 @@ export async function hydrateSessionsFromSessionFiles(
       // head+tail)` estimate silently undercounts the 4 MiB `session_meta` escalation by more than
       // six times, so a home full of oversized metadata records used to run gigabytes past a budget
       // stated in hundreds of megabytes. Checking between files keeps the overshoot to one file.
-      if (scannedFileCount > 0 && spentBytes >= FILTERED_SESSION_SCAN_BUDGET_BYTES) {
+      if (scannedFileCount > 0 && spentBytes >= SESSION_SCAN_BUDGET_BYTES) {
         return finish(true);
       }
     }
@@ -309,31 +448,16 @@ export async function hydrateSessionsFromSessionFiles(
     if (summary.partialScan === true) {
       unreadSpanSessions.add(summary.sessionId);
     }
-    const existing = summaries.get(summary.sessionId);
-    // `messageCount` and its partial marker describe one scan, so take both from the same source.
-    const counted = existing ?? summary;
-    const merged: CodexCliSessionSummary = {
-      ...summary,
-      ...existing,
-      cwd: existing?.cwd ?? summary.cwd,
-      sessionFile: existing?.sessionFile ?? summary.sessionFile,
-      updatedAt: existing?.updatedAt ?? summary.updatedAt,
-      lastMessage: existing?.lastMessage ?? summary.lastMessage,
-      messageCount: counted.messageCount,
-      partialScan: counted.partialScan,
-    };
-    summaries.set(summary.sessionId, merged);
-    if (filter) {
-      if (matchesSessionFilter(merged, filter)) {
-        matched.add(summary.sessionId);
-      } else if (unreadSpanSessions.has(summary.sessionId)) {
-        // Dropped on the strength of a summary that skipped a span of this rollout. The record that
-        // matches may be in that span, so this is an unanswered question, not a "no". A
-        // history-backed row reaches here with `partialScan` absent even though the rollout went
-        // partly unread, which is exactly why this check reads the scan's own set rather than the
-        // merged row.
-        unreadSpanCount += 1;
-      }
+    const { merged } = mergeSessionFileSummary(summaries, summary);
+    if (matchesSessionFilter(merged, filter)) {
+      matched.add(summary.sessionId);
+    } else if (unreadSpanSessions.has(summary.sessionId)) {
+      // Dropped on the strength of a summary that skipped a span of this rollout. The record that
+      // matches may be in that span, so this is an unanswered question, not a "no". A
+      // history-backed row reaches here with `partialScan` absent even though the rollout went
+      // partly unread, which is exactly why this check reads the scan's own set rather than the
+      // merged row.
+      unreadSpanCount += 1;
     }
   }
   return finish(scannedFileCount < files.length);
