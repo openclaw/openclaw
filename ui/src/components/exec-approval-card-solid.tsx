@@ -1,7 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { JSX } from "@solidjs/web";
-import { For, createMemo, createSignal, onCleanup } from "solid-js";
+import { For, Show, createMemo, createSignal, onCleanup } from "solid-js";
 import { formatApprovalDisplayPath } from "../../../src/infra/approval-display-paths.ts";
 import { normalizeCommandSpans } from "../../../src/shared/exec-approval-command-spans.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
@@ -247,12 +247,13 @@ function SidebarApprovalRowContent(props: SidebarApprovalRowProps) {
   const nowMs = useApprovalClock();
   const expired = createMemo(() => approval().expiresAtMs <= nowMs());
   const command = createMemo(() => compactApprovalCommand(approval().request.command));
-  const sessionKey = createMemo(() => approval().request.sessionKey?.trim());
-  const sessionTitle = createMemo(
-    () =>
+  const sessionTitle = createMemo(() => {
+    const sessionKey = approval().request.sessionKey?.trim();
+    return (
       props.sessionTitle ??
-      (sessionKey() ? resolveSessionDisplayName(sessionKey()) : approvalTitle(approval())),
-  );
+      (sessionKey ? resolveSessionDisplayName(sessionKey) : approvalTitle(approval()))
+    );
+  });
   const expiryUrgent = createMemo(() => expired() || approval().expiresAtMs - nowMs() < 2 * 60_000);
   const expiryLabel = createMemo(() => approvalRemainingLabel(approval().expiresAtMs, nowMs()));
   const reviewOnlyMessage = createMemo(() => t("execApproval.reviewOnly"));
@@ -287,11 +288,9 @@ function SidebarApprovalRowContent(props: SidebarApprovalRowProps) {
           <span aria-hidden="true">$ </span>
           {command()}
         </div>
-        {approval().request.scope ? (
-          <div class="exec-approval-scope">
-            {summarizeApprovalScopeLabel(approval().request.scope)}
-          </div>
-        ) : undefined}
+        <Show when={approval().request.scope}>
+          {(scope) => <div class="exec-approval-scope">{summarizeApprovalScopeLabel(scope())}</div>}
+        </Show>
         <div
           class="sidebar-approval-row__actions"
           role="group"
@@ -400,13 +399,15 @@ function ExecApprovalCardContent(props: ExecApprovalCardProps) {
             </div>
           ) : undefined}
         </div>
-        {props.variant === "inline" && active().sourceSessionKey ? (
-          <div class="exec-approval-warning" role="note">
-            {t("execApproval.requestedBySession", {
-              session: resolveSessionDisplayName(active().sourceSessionKey, props.sourceSession),
-            })}
-          </div>
-        ) : undefined}
+        <Show when={props.variant === "inline" && active().sourceSessionKey}>
+          {(sessionKey) => (
+            <div class="exec-approval-warning" role="note">
+              {t("execApproval.requestedBySession", {
+                session: resolveSessionDisplayName(sessionKey(), props.sourceSession),
+              })}
+            </div>
+          )}
+        </Show>
         {active().kind === "exec"
           ? renderExecBody(active().request, props.variant)
           : renderPluginBody(active(), props.variant)}

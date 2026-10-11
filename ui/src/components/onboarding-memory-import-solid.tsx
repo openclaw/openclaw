@@ -336,7 +336,7 @@ function OnboardingMemoryImportContent(props: Props & { host: OnboardingMemoryIm
         <label>
           <input
             type="checkbox"
-            prop:checked={view().selectedByProvider[providerProps.provider.providerId] ?? false}
+            checked={view().selectedByProvider[providerProps.provider.providerId] ?? false}
             disabled={view().applyingProviderId !== null || view().done}
             onChange={(event) => {
               selectedByProvider[providerProps.provider.providerId] = event.currentTarget.checked;

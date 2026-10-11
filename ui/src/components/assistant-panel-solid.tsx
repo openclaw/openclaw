@@ -1,3 +1,4 @@
+import { ContextNotFoundError } from "@solidjs/signals";
 import type { AssistantDockOwner } from "../app/assistant-dock.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
@@ -22,7 +23,15 @@ const controls = new WeakMap<HTMLElement, AssistantPanelController>();
 export const AssistantPanel = defineSolidBridge<AssistantPanelProps, Methods>(
   "openclaw-assistant-panel",
   (props, element) => {
-    const application = useApplication();
+    // A standalone bridge can connect before the application provider exists.
+    let application: ReturnType<typeof useApplication> | undefined;
+    try {
+      application = useApplication();
+    } catch (error) {
+      if (!(error instanceof ContextNotFoundError)) {
+        throw error;
+      }
+    }
     const { host, revision } = useSolidControllerHost(() => [
       props.context,
       props.custodianAvailable,

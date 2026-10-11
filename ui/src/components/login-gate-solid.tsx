@@ -59,7 +59,7 @@ function ConnectCommand(props: { command: string; variant?: "hero" }) {
       <div
         class={["login-gate__command", { "login-gate__command--hero": props.variant === "hero" }]}
         role="button"
-        tabIndex={0}
+        tabindex={0}
         aria-label={t("connection.help.copyCommandAria", { command: props.command })}
         onClick={(event) => {
           if (!(event.target instanceof Element && event.target.closest(".chat-copy-btn"))) {
@@ -178,7 +178,7 @@ function LoginForm(
           spellcheck="false"
           enterkeyhint="go"
           aria-invalid={invalidField() === "url" ? "true" : undefined}
-          prop:value={props.model.gatewayUrl}
+          value={props.model.gatewayUrl}
           onInput={(event) => {
             props.cancelRefresh();
             props.model.onGatewayUrlChange(event.currentTarget.value);
@@ -198,7 +198,7 @@ function LoginForm(
             enterkeyhint="go"
             aria-invalid={invalidField() === "credential" ? "true" : undefined}
             aria-describedby={setupCode() ? "login-gate-secret-hint" : undefined}
-            prop:value={props.model.secret}
+            value={props.model.secret}
             onInput={(event) => {
               props.cancelRefresh();
               props.model.onSecretChange(event.currentTarget.value);

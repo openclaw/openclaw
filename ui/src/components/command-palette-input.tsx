@@ -76,7 +76,7 @@ export function CommandPaletteInput(
           placeholder={props.placeholder}
           value={props.value}
           disabled={props.disabled}
-          readOnly={props.readOnly}
+          readonly={props.readOnly}
           onScroll={handlePaletteInputScroll}
           onPaste={(event) => props.onPaste?.(event)}
           onBeforeInput={(event) => props.onBeforeInput?.(event)}
