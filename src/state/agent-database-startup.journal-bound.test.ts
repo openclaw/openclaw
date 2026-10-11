@@ -1,23 +1,45 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 
 // Mirrors AGENT_DATABASE_STARTUP_JOURNAL_CONCURRENCY; a literal keeps the bound pinned
 // even if the constant is renamed or removed.
 const EXPECTED_MAX_CONCURRENT_JOURNAL_READS = 8;
 
-const journalReadState = vi.hoisted(() => ({ active: 0, maxActive: 0, calls: 0 }));
+const tempDirTracker = useAutoCleanupTempDirTracker(afterEach);
 
+const journalReadState = vi.hoisted(() => ({
+  active: 0,
+  maxActive: 0,
+  calls: 0,
+  opened: false,
+  gates: [] as Array<() => void>,
+}));
+
+// mock-isolation: The journal read transport stands in for state-read workers so the
+// fixture can observe admission concurrency without spawning real workers.
 vi.mock("./agent-deletion-journal.read.js", () => ({
   readAgentDeletionJournalStatusInWorker: vi.fn(async () => {
     journalReadState.calls += 1;
     journalReadState.active += 1;
     journalReadState.maxActive = Math.max(journalReadState.maxActive, journalReadState.active);
-    // Hold the read across a macrotask so every admitted read overlaps.
-    await new Promise((resolve) => {
-      setTimeout(resolve, 5);
+    // Hold each admitted read on a deferred gate so concurrent admissions overlap;
+    // once the bound is first saturated the gate opens for good, keeping the
+    // overlap deterministic instead of paying real timer delays.
+    if (journalReadState.active >= EXPECTED_MAX_CONCURRENT_JOURNAL_READS) {
+      journalReadState.opened = true;
+      for (const release of journalReadState.gates.splice(0)) {
+        release();
+      }
+    }
+    await new Promise<void>((resolve) => {
+      if (journalReadState.opened) {
+        resolve();
+        return;
+      }
+      journalReadState.gates.push(resolve);
     });
     journalReadState.active -= 1;
     return "absent";
@@ -55,12 +77,14 @@ beforeEach(() => {
   journalReadState.active = 0;
   journalReadState.maxActive = 0;
   journalReadState.calls = 0;
+  journalReadState.opened = false;
+  journalReadState.gates = [];
   admissionState.failed = [];
   admissionState.prepared = [];
 });
 
 it("bounds startup deletion-journal reads below the state-read pool's pending-task admission", async () => {
-  const env = { OPENCLAW_STATE_DIR: fs.mkdtempSync(path.join(os.tmpdir(), "journal-bound-")) };
+  const env = { OPENCLAW_STATE_DIR: tempDirTracker.make("journal-bound-") };
   const sharedPath = path.join(env.OPENCLAW_STATE_DIR, "openclaw-agent.sqlite");
   fs.writeFileSync(sharedPath, "");
   const inspections = Array.from({ length: AGENT_COUNT }, (_, index) => ({
@@ -89,7 +113,8 @@ it("bounds startup deletion-journal reads below the state-read pool's pending-ta
     expect(admissionState.failed).toEqual([]);
     expect(journalReadState.calls).toBe(AGENT_COUNT * 2);
     // The fan-out must stay far below the pool's 128-pending-task admission so a
-    // transient capacity rejection can never fail an otherwise-healthy agent.
-    expect(journalReadState.maxActive).toBeLessThanOrEqual(EXPECTED_MAX_CONCURRENT_JOURNAL_READS);
+    // transient capacity rejection can never fail an otherwise-healthy agent; the
+    // gate only opens once the reads actually saturate the permitted bound.
+    expect(journalReadState.maxActive).toBe(EXPECTED_MAX_CONCURRENT_JOURNAL_READS);
   });
 });
