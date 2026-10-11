@@ -6,6 +6,7 @@ import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requ
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { openChatDetails, openDetailsPullRequests } from "./chat-details.test-support.ts";
 import {
   captureUiProofEnabled,
   chatThreadDistanceFromBottom,
@@ -178,6 +179,7 @@ suite.define(() => {
             },
           });
           const pullRequest = page.locator(".chat-pr");
+          await openDetailsPullRequests(page);
           await pullRequest.waitFor();
           const thread = page.locator(".chat-thread");
           await page.getByText("Project verification 29.", { exact: false }).waitFor();
@@ -214,8 +216,7 @@ suite.define(() => {
           await waitForChatScrollIdle(page);
           await capture("01-pr-and-error");
 
-          // This assertion uses the original public surfaces, so the old overlay
-          // fails for the actual collision before requiring the new footer structure.
+          // Details must keep PR actions outside the notice/input footer.
           const overlap = await pullRequest.evaluate((element) => {
             const row = element.getBoundingClientRect();
             const notice = document.querySelector(".chat-error")!.getBoundingClientRect();
@@ -228,12 +229,14 @@ suite.define(() => {
           if (!touch) {
             const row = (await pullRequest.boundingBox())!;
             await scrollDown(page, { x: row.x + 8, y: row.y + 8 });
+            await waitForChatScrollIdle(page);
             await expect
               .poll(() => thread.evaluate((element) => element.scrollTop))
-              .toBeGreaterThan(beforeNotice.scrollTop);
+              .toBe(beforeNotice.scrollTop);
           }
 
           const latest = page.locator('.chat-scroll-to-bottom[data-visible="true"]');
+          await page.getByRole("button", { name: "Close details", exact: true }).click();
           await activate(latest, touch);
           await expect
             .poll(() => chatThreadDistanceFromBottom(page))
@@ -247,6 +250,7 @@ suite.define(() => {
           await expectInputReachable(page);
           await capture("02-latest-with-notice");
 
+          await openDetailsPullRequests(page);
           await activate(pullRequest.locator(".chat-pr__checks-pill"), touch);
           await gateway.waitForRequest(checksMethod);
           const menu = page.locator(".chat-pr__checks-menu");
@@ -277,7 +281,8 @@ suite.define(() => {
             },
           });
           await gateway.emitGatewayEvent("progressCard.changed", { sessionKey, revision: 1 });
-          const progress = page.locator('[data-progress-card-placement="composer"]');
+          const progress = page.locator('[data-progress-card-placement="details"]');
+          await openChatDetails(page);
           await progress.waitFor();
           if ((await progress.getAttribute("open")) === null) {
             await activate(progress.locator("summary"), touch);
@@ -299,54 +304,30 @@ suite.define(() => {
           );
           await composer.fill(draft);
           const persistentContext = page.locator(".chat-footer__context");
-          await expect
-            .poll(() =>
-              persistentContext.evaluate((element) => element.scrollHeight > element.clientHeight),
-            )
-            .toBe(true);
+          expect(await persistentContext.locator(".chat-queue__item").count()).toBe(3);
           await expectInputReachable(page);
           await capture("04-dense-context");
 
-          // A finished inner scroll must hand off to the surrounding context,
-          // otherwise a tall progress card traps touch readers above the queue.
+          // Progress scrolls inside Details rather than chaining into the queue.
+          await openChatDetails(page);
+          const details = page.locator('.chat-details[role="dialog"]');
           const body = progress.locator(".session-progress-card__body");
-          await body.evaluate((element) => {
-            const stack = element.closest<HTMLElement>(".chat-footer__context")!;
-            stack.scrollTop = 0;
-            element.scrollTop = 0;
-          });
-          const stackBounds = (await persistentContext.boundingBox())!;
-          const bodyBounds = (await body.boundingBox())!;
-          const scrollPoint = {
-            x: stackBounds.x + stackBounds.width / 2,
-            y:
-              (Math.max(stackBounds.y, bodyBounds.y) +
-                Math.min(stackBounds.y + stackBounds.height, bodyBounds.y + bodyBounds.height)) /
-              2,
-          };
-          expect(
-            await body.evaluate(
-              (element, point) => element.contains(document.elementFromPoint(point.x, point.y)),
-              scrollPoint,
-            ),
-          ).toBe(true);
-          // Touch inertia can already hand off during the first swipes.
-          const beforeHandoff = await persistentContext.evaluate((element) => element.scrollTop);
-          // Reach the inner boundary through native input before checking scroll chaining.
-          await scrollDown(page, scrollPoint, touchClient);
-          await scrollDown(page, scrollPoint, touchClient);
+          await body.scrollIntoViewIfNeeded();
+          await waitForChatScrollIdle(page);
+          const beforeDetailsScroll = await thread.evaluate((element) => element.scrollTop);
+          const bounds = (await details.boundingBox())!;
+          const point = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+          await scrollDown(page, point, touchClient);
           await expect
-            .poll(() =>
-              body.evaluate(
-                (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
-              ),
-            )
-            .toBeLessThanOrEqual(1);
-          await scrollDown(page, scrollPoint, touchClient);
-          await expect
-            .poll(() => persistentContext.evaluate((element) => element.scrollTop))
-            .toBeGreaterThan(beforeHandoff);
+            .poll(() => details.evaluate((element) => element.scrollTop))
+            .toBeGreaterThan(0);
+          await progress.locator(".session-progress-card__step").last().scrollIntoViewIfNeeded();
           await expectInputReachable(page);
+          expect(await thread.evaluate((element) => element.scrollTop)).toBe(beforeDetailsScroll);
+          expect(await persistentContext.locator(".session-progress-card, .chat-pr").count()).toBe(
+            0,
+          );
+          await page.keyboard.press("Escape");
           const remove = page
             .locator(".chat-queue__item", { hasText: queuedMessages[2] })
             .locator(".chat-queue__remove");
@@ -360,17 +341,25 @@ suite.define(() => {
             await persistentContext.evaluate((element) => {
               element.scrollTop = 0;
             });
-            await body.evaluate((element) => {
-              element.scrollTop = 0;
-            });
-            const visibleBody = (await body.boundingBox())!;
-            await page.mouse.move(visibleBody.x + visibleBody.width / 2, visibleBody.y + 12);
+            const visibleContext = (await persistentContext.boundingBox())!;
+            await page.mouse.move(
+              visibleContext.x + visibleContext.width / 2,
+              visibleContext.y + 8,
+            );
             await page.mouse.wheel(0, -160);
             await expect
               .poll(() => chatThreadDistanceFromBottom(page))
               .toBeGreaterThan(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
             await activate(latest, false);
             await waitForChatScrollIdle(page);
+            // PRs/progress no longer create footer overflow. Queue enough real
+            // messages to preserve the short-pane scroll/reachability contract.
+            for (const message of ["Review narrow footer", "Check short canvas"]) {
+              await composer.fill(message);
+              await composer.press("Enter");
+              await page.locator(".chat-queue__item", { hasText: message }).waitFor();
+            }
+            await composer.fill(draft);
             for (const paneHeight of [248, 200]) {
               await page.setViewportSize({ width, height: paneHeight });
               await waitForChatScrollIdle(page);

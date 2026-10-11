@@ -80,12 +80,6 @@
   overflow-wrap: anywhere;
 }
 
-.chat-subagents__load-more {
-  flex-shrink: 0;
-  align-self: center;
-  margin: 8px;
-}
-
 .chat-subagents__detail-pane,
 .chat-subagent-detail {
   display: flex;

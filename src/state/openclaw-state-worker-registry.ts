@@ -14,7 +14,10 @@ import type { MentionWorkerOperations } from "../gateway/mention-inbox.worker-co
 import type { OperatorApprovalWorkerOperations } from "../gateway/operator-approval-store.worker-contract.js";
 import type { WorkerInferenceStoreOperations } from "../gateway/worker-environments/inference-store.worker-contract.js";
 import type { localWorkspaceOperations } from "../gateway/worker-environments/local-workspace-store.worker.js";
-import type { WorkerPlacementDispatchStoreOperations } from "../gateway/worker-environments/placement-dispatch-store.worker-contract.js";
+import type {
+  placementLifecycleOperations,
+  placementReadOperations,
+} from "../gateway/worker-environments/placement-lifecycle.worker.js";
 import type { PlacementSessionToolWorkerOperations } from "../gateway/worker-environments/placement-session-tool-operations.worker-contract.js";
 import type { PlacementTurnClaimWorkerOperations } from "../gateway/worker-environments/placement-turn-claims.worker-contract.js";
 import type { WorkspaceJournalWorkerOperations } from "../gateway/worker-environments/placement-workspace-journal.worker-contract.js";
@@ -50,6 +53,7 @@ import type { agentDeletionOperations } from "./agent-deletion.worker.js";
 import type { OnboardingRecommendationWriteOperations } from "./onboarding-recommendations.kernel.js";
 import type { AgentDatabaseRegistryWorkerOperations } from "./openclaw-agent-db-contract.js";
 import type { RepositoryWorkspaceWorkerOperations } from "./session-repository-workspaces.worker-contract.js";
+import type { UserBackgroundWorkerOperations } from "./user-background.worker.js";
 import type { UserGitHubConnectionWorkerOperations } from "./user-github-connections.worker.js";
 import type { UserProfileWorkerOperations } from "./user-profiles.worker.js";
 import type { WorkerOperations, WorkerWriteOperationContext } from "./worker-operation-registry.js";
@@ -100,13 +104,15 @@ export type RegisteredStateWorkerOperations = WorkerOperations<typeof gatewayBoo
   PluginModelCatalogCredentialReadWorkerOperations &
   PluginRuntimeWorkerOperations &
   WorkerInferenceStoreOperations &
-  WorkerPlacementDispatchStoreOperations &
+  WorkerOperations<typeof placementLifecycleOperations> &
+  WorkerOperations<typeof placementReadOperations> &
   PlacementSessionToolWorkerOperations &
   PlacementTurnClaimWorkerOperations &
   WorkspaceJournalWorkerOperations &
   WorkerEnvironmentWorkerOperations &
   WorkerTranscriptCommitOperations &
   RepositoryWorkspaceWorkerOperations &
+  UserBackgroundWorkerOperations &
   UserProfileWorkerOperations &
   UserGitHubConnectionWorkerOperations;
 
@@ -153,6 +159,8 @@ export const stateWorkerRegistry = createWorkerOperationRegistry<
     ),
   userGitHubConnections: () =>
     import("./user-github-connections.worker.js").then((m) => m.userGitHubConnectionOperations),
+  userBackground: async () =>
+    (await import("./user-background.worker.js")).userBackgroundOperations,
   userProfiles: () => import("./user-profiles.worker.js").then((m) => m.userProfileOperations),
   agentDatabaseRegistry: () =>
     import("./openclaw-agent-db-registry.worker.js").then((m) => m.agentDatabaseRegistryOperations),
@@ -224,9 +232,10 @@ export const stateWorkerRegistry = createWorkerOperationRegistry<
       (m) => m.workerInferenceOperations,
     ),
   workerPlacements: () =>
-    import("../gateway/worker-environments/placement-dispatch-store.worker.js").then(
-      (m) => m.workerPlacementOperations,
-    ),
+    import("../gateway/worker-environments/placement-lifecycle.worker.js").then((m) => ({
+      ...m.placementLifecycleOperations,
+      ...m.placementReadOperations,
+    })),
   placementTools: () =>
     import("../gateway/worker-environments/placement-session-tool-operations.worker.js").then(
       (m) => m.placementSessionToolOperations,

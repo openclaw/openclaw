@@ -464,20 +464,38 @@ export class EmbeddedBlockChunker {
         breakResult.index = sliceUtf16Safe(view, 0, boundary - removedLength - start).length;
       }
 
-      const consumed = this.#resolveBreakResult({
-        breakResult,
-        reopenPrefix,
-        source,
-        start,
-      });
-      if (consumed === null) {
+      if (breakResult.index <= 0) {
         continue;
       }
-      if (consumed.chunk) {
-        emitSourceChunk(consumed.chunk, start, consumed.start);
+      let nextStart = start + breakResult.index;
+      let chunk = `${reopenPrefix}${source.slice(start, nextStart)}`;
+      let nextReopenFence: FenceSplit | undefined;
+      const fenceSplit = breakResult.fenceSplit;
+      if (chunk.trim().length === 0) {
+        chunk = "";
+        nextStart = skipLeadingNewlines(source, nextStart);
+      } else if (fenceSplit) {
+        chunk += chunk.endsWith("\n")
+          ? fenceSplit.closeFenceLine
+          : `\n${fenceSplit.closeFenceLine}`;
+        if (nextStart === findFenceCloseLineStart(source, fenceSplit.fence)) {
+          // The synthetic closer already owns this boundary; replaying the source
+          // closer after reopening would publish an empty fenced-code message.
+          nextStart = skipLeadingNewlines(source, fenceSplit.fence.end);
+        } else {
+          nextReopenFence = fenceSplit;
+        }
+      } else {
+        if (nextStart < source.length && /\s/.test(source.charAt(nextStart))) {
+          nextStart += 1;
+        }
+        nextStart = skipLeadingNewlines(source, nextStart);
       }
-      start = consumed.start;
-      reopenFence = consumed.reopenFence;
+      if (chunk) {
+        emitSourceChunk(chunk, start, nextStart);
+      }
+      start = nextStart;
+      reopenFence = nextReopenFence;
 
       const nextLength =
         (reopenFence ? `${reopenFence.reopenFenceLine}\n`.length : 0) + (source.length - start);
@@ -503,50 +521,6 @@ export class EmbeddedBlockChunker {
     this.#buffer = this.#buffer.slice(consumed);
     this.#reopenPrefix =
       !this.#codeContext && reopenFence ? `${reopenFence.reopenFenceLine}\n` : "";
-  }
-
-  #resolveBreakResult(params: {
-    breakResult: BreakResult;
-    reopenPrefix: string;
-    source: string;
-    start: number;
-  }): { chunk?: string; start: number; reopenFence?: FenceSplit } | null {
-    const { breakResult, reopenPrefix, source, start } = params;
-    const breakIdx = breakResult.index;
-    if (breakIdx <= 0) {
-      return null;
-    }
-
-    const absoluteBreakIdx = start + breakIdx;
-    let rawChunk = `${reopenPrefix}${source.slice(start, absoluteBreakIdx)}`;
-    if (rawChunk.trim().length === 0) {
-      return { start: skipLeadingNewlines(source, absoluteBreakIdx), reopenFence: undefined };
-    }
-
-    const fenceSplit = breakResult.fenceSplit;
-    if (fenceSplit) {
-      const closeFence = rawChunk.endsWith("\n")
-        ? fenceSplit.closeFenceLine
-        : `\n${fenceSplit.closeFenceLine}`;
-      rawChunk = `${rawChunk}${closeFence}`;
-      const closeFenceStart = findFenceCloseLineStart(source, fenceSplit.fence);
-      if (absoluteBreakIdx === closeFenceStart) {
-        // The synthetic closer already owns this boundary; replaying the source
-        // closer after reopening would publish an empty fenced-code message.
-        return { chunk: rawChunk, start: skipLeadingNewlines(source, fenceSplit.fence.end) };
-      }
-      return { chunk: rawChunk, start: absoluteBreakIdx, reopenFence: fenceSplit };
-    }
-
-    const nextStart =
-      absoluteBreakIdx < source.length && /\s/.test(source.charAt(absoluteBreakIdx))
-        ? absoluteBreakIdx + 1
-        : absoluteBreakIdx;
-    return {
-      chunk: rawChunk,
-      start: skipLeadingNewlines(source, nextStart),
-      reopenFence: undefined,
-    };
   }
 
   // Forced tails take the first paragraph/newline break; capped windows take the last.
@@ -720,9 +694,6 @@ function findNextParagraphBreak(
   startIndex = 0,
   minCharsFromStart = 1,
 ): ParagraphBreak | null {
-  if (startIndex < 0) {
-    return null;
-  }
   const re = /\n[\t ]*\n+/g;
   re.lastIndex = startIndex;
   let match: RegExpExecArray | null;

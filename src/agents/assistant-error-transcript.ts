@@ -82,6 +82,14 @@ export function createAssistantErrorTranscript(params: { runId: string; config?:
       }
       const text = message.content.filter((block) => isAssistantTextContentType(block.type));
       const hasDisplayOverride = ASSISTANT_DISPLAY_CONTENT_FIELD in message;
+      const displayFields = (includeText: boolean) =>
+        hasDisplayOverride
+          ? {
+              [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent.filter(
+                (block) => isAssistantTextContentType(block.type) === includeText,
+              ),
+            }
+          : {};
       const { errorMessage, errorCode, errorType, errorBody, diagnostics, ...replayMessage } =
         message;
       // Facts and billing are recorded once; only text/error remains deferred.
@@ -91,13 +99,7 @@ export function createAssistantErrorTranscript(params: { runId: string; config?:
         provider: message.provider,
         model: message.model,
         content: text,
-        ...(hasDisplayOverride
-          ? {
-              [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent.filter((block) =>
-                isAssistantTextContentType(block.type),
-              ),
-            }
-          : {}),
+        ...displayFields(true),
         usage: makeZeroUsageSnapshot(),
         stopReason: "error",
         errorMessage,
@@ -110,13 +112,7 @@ export function createAssistantErrorTranscript(params: { runId: string; config?:
       return {
         ...replayMessage,
         content: message.content.filter((block) => !isAssistantTextContentType(block.type)),
-        ...(hasDisplayOverride
-          ? {
-              [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent.filter(
-                (block) => !isAssistantTextContentType(block.type),
-              ),
-            }
-          : {}),
+        ...displayFields(false),
         stopReason: extractToolCallsFromAssistant(message).length > 0 ? "toolUse" : "stop",
       };
     },

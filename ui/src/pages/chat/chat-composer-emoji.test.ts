@@ -2,10 +2,16 @@ import { nothing, render } from "lit";
 import MarkdownIt from "markdown-it";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { TextareaTokenAnchor } from "../../components/textarea-token-anchor.ts";
+import { NewSessionAttachmentDraft } from "../new-session/attachment-draft.ts";
 /* @vitest-environment jsdom */
 import { NewSessionComposerTextareaController } from "../new-session/composer-controller.ts";
 import { renderNewSessionComposer } from "../new-session/composer.ts";
-import { createComposerProps, resetComposerFixture } from "./chat-composer.test-support.ts";
+import { NewSessionModelControl } from "../new-session/model-control.ts";
+import {
+  createComposerContainer,
+  createComposerProps,
+  resetComposerFixture,
+} from "./chat-composer.test-support.ts";
 import { renderChatComposer } from "./components/chat-composer.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 
@@ -45,11 +51,12 @@ beforeEach(() => {
 });
 
 function fixture(kind: "chat" | "new", locked = false, requiresModifier = false) {
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   document.body.append(container);
   let retired = false;
   fixtureDisposals.push(() => {
     retired = true;
+    attachmentDraft.reset();
     render(nothing, container);
     container.remove();
   });
@@ -57,6 +64,11 @@ function fixture(kind: "chat" | "new", locked = false, requiresModifier = false)
   const send = vi.fn();
   const backgroundSend = vi.fn();
   const controller = new NewSessionComposerTextareaController();
+  const attachmentDraft = new NewSessionAttachmentDraft(
+    () => redraw(),
+    () => {},
+  );
+  const modelControl = new NewSessionModelControl(() => redraw());
   controllers.push(controller);
   const props = createComposerProps({
     canSend: !locked,
@@ -75,20 +87,19 @@ function fixture(kind: "chat" | "new", locked = false, requiresModifier = false)
       kind === "chat"
         ? renderChatComposer({ ...props, draft })
         : renderNewSessionComposer({
-            renderCritters: () => nothing,
-            attachments: [],
-            getAttachments: () => [],
+            agentId: "main",
+            context: undefined,
+            draftOwnerKey: "emoji",
+            attachmentDraft,
+            modelControl,
+            isCatalogTarget: true,
             canSubmit: true,
             message: draft,
-            pendingAttachmentReads: 0,
-            readSignal: new AbortController().signal,
             requiresModifier,
             submitting: false,
             messageLocked: locked,
             textareaController: controller,
             requestUpdate: redraw,
-            onAttachmentsChange: () => {},
-            onPendingReadsChange: () => {},
             onInput: (next) => {
               draft = next;
               redraw();

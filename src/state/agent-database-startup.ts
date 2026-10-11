@@ -1,12 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { statSync } from "node:fs";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import {
-  sameFileMutationFingerprint,
-  type FileMutationFingerprint,
-} from "../infra/file-descriptor.js";
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
 import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -90,39 +85,14 @@ function recoveryTiming(recovery: PendingRecovery, now = performance.now()) {
     },
   };
 }
-type SchemaSourceWitness = Array<FileMutationFingerprint | undefined>;
 type PreparedSchemaHeader = Pick<
   AgentSchemaInspection,
   "version" | "writerAppVersion" | "agentSchemaMeta"
 >;
 type PreparedSchemaHeaders = {
   statePath: string;
-  headers: Map<string, { inspection: PreparedSchemaHeader; witness: SchemaSourceWitness }>;
+  headers: Map<string, PreparedSchemaHeader>;
 };
-
-function readSchemaSourceWitness(pathname: string): SchemaSourceWitness | undefined {
-  try {
-    const files = ["", "-wal", "-journal"].map((suffix) =>
-      statSync(`${pathname}${suffix}`, { bigint: true, throwIfNoEntry: false }),
-    );
-    return files[0] && files.every((file) => !file || file.isFile()) ? files : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function matchesSchemaSourceWitness(
-  before: SchemaSourceWitness,
-  after: SchemaSourceWitness | undefined,
-): boolean {
-  return Boolean(
-    after &&
-    before.every((file, index) => {
-      const current = after[index];
-      return file ? current && sameFileMutationFingerprint(file, current) : !current;
-    }),
-  );
-}
 
 function matchesInspectionPath(
   paths: readonly string[],
@@ -192,7 +162,7 @@ class AgentDatabaseStartupAdmission {
     this.progressTimer = undefined;
   }
 
-  /** Full readiness stays fresh; only unchanged compatibility headers cross into bootstrap. */
+  /** Bootstrap reuses this startup's compatibility headers; writable opens retain admission. */
   prepareSchemaHeaders(env: NodeJS.ProcessEnv) {
     const prepared: PreparedSchemaHeaders = {
       statePath: resolveOpenClawStateSqlitePath(env),
@@ -200,19 +170,13 @@ class AgentDatabaseStartupAdmission {
     };
     this.preparedSchemaHeaders = prepared;
     return (pathname: string) => {
-      const before = readSchemaSourceWitness(pathname);
       return ({ version, writerAppVersion, agentSchemaMeta }: PreparedSchemaHeader) => {
         if (
           !this.stopped &&
           this.preparedSchemaHeaders === prepared &&
-          before &&
-          version === OPENCLAW_AGENT_SCHEMA_VERSION &&
-          matchesSchemaSourceWitness(before, readSchemaSourceWitness(pathname))
+          version === OPENCLAW_AGENT_SCHEMA_VERSION
         ) {
-          prepared.headers.set(pathname, {
-            inspection: { version, writerAppVersion, agentSchemaMeta },
-            witness: before,
-          });
+          prepared.headers.set(pathname, { version, writerAppVersion, agentSchemaMeta });
         }
       };
     };
@@ -225,9 +189,8 @@ class AgentDatabaseStartupAdmission {
       const header = prepared?.headers.get(pathname);
       return !this.stopped &&
         prepared?.statePath === resolveOpenClawStateSqlitePath(env) &&
-        header?.inspection.version === supportedVersion &&
-        matchesSchemaSourceWitness(header.witness, readSchemaSourceWitness(pathname))
-        ? header.inspection
+        header?.version === supportedVersion
+        ? header
         : undefined;
     };
   }

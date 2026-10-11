@@ -90,6 +90,7 @@ test("retains shared code when a native fixture has no worker join receipt", asy
   const finishers: Array<Parameters<TestContext["onTestFinished"]>[0]> = [];
   const run = createGatewayFixtureFork((cleanup) => cleanups.push(cleanup));
   let caseRoot: string | undefined;
+  let codeRoot: string | undefined;
   let completion: Promise<void> | undefined;
   let probeWorkerExited = false;
   try {
@@ -98,8 +99,9 @@ test("retains shared code when a native fixture has no worker join receipt", asy
     }
     completion = run(
       { signal: context.signal, onTestFinished: (callback) => finishers.push(callback) },
-      (_repoRoot, ownedRoot) => {
+      (_repoRoot, ownedRoot, ownedCodeRoot) => {
         caseRoot = ownedRoot;
+        codeRoot = ownedCodeRoot;
         return `
 import fs from "node:fs";
 import { test } from "vitest";
@@ -138,6 +140,7 @@ test("finishes without publishing the required join receipt", () => {
     await expect(cleanups[0]!()).rejects.toThrow("Fixture cleanup unverified");
     await expect(fs.access(config)).resolves.toBeUndefined();
     await expect(fs.access(caseRoot!)).resolves.toBeUndefined();
+    await expect(fs.access(codeRoot!)).resolves.toBeUndefined();
     expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
   } finally {
     await Promise.allSettled(completion ? [completion] : []);
@@ -147,8 +150,11 @@ test("finishes without publishing the required join receipt", () => {
         throw new Error(`Native receipt probe exit is unverified: ${root}`);
       });
     }
-    // This independent PID observation permits probe disposal only; the fixture's
-    // missing join receipt and retained code claim are never repaired or released.
+    // This independent PID observation permits probe input disposal only; the
+    // fixture's missing join receipt and retained code claim are never repaired or released.
+    if (probeWorkerExited && codeRoot) {
+      await fs.rm(codeRoot, { recursive: true, force: true });
+    }
     await probe.cleanup();
   }
 });

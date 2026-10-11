@@ -54,6 +54,7 @@ import type {
   ManagedGatewayUpdateVerdict,
   ManagedServicePackageUpdatePlan,
 } from "./update-command-service-context-types.js";
+import { resolveUpdateServiceHeapEnv } from "./update-command-service-env.js";
 
 export class GatewayServiceUpdateOwnershipError extends Error {
   readonly failureFacts: UpdateFailureFact[];
@@ -308,17 +309,22 @@ export function readGatewayServiceStateForUpdate(
       loadForInspection,
       validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
       timeoutMs,
-    }).catch((error: unknown) => {
-      if (error instanceof ServiceStartRefusalError) {
-        throw new GatewayServiceUpdateOwnershipError(
-          error.message,
-          error,
-          undefined,
-          "service-mutation-refused",
-        );
-      }
-      throw error;
-    });
+    })
+      .then((state) => ({
+        ...state,
+        env: resolveUpdateServiceHeapEnv(state.env, env, state.command?.programArguments),
+      }))
+      .catch((error: unknown) => {
+        if (error instanceof ServiceStartRefusalError) {
+          throw new GatewayServiceUpdateOwnershipError(
+            error.message,
+            error,
+            undefined,
+            "service-mutation-refused",
+          );
+        }
+        throw error;
+      });
   if (process.platform !== "linux" || inspection?.managerUid === undefined) {
     return read();
   }

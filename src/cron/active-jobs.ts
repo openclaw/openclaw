@@ -5,7 +5,6 @@ import {
   type OperationalRunInstanceRef,
 } from "../agents/admitted-run-context.js";
 import type { CommandLaneTaskMarker } from "../process/command-queue.js";
-import type { PreparedEffectUse } from "../shared/effect-authority.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { CronStandingGrantAuthority } from "./standing-grant-authority.types.js";
 
@@ -41,9 +40,7 @@ function captureCronJobMessageAuthority(
     operationalRunInstance: OperationalRunInstanceRef;
   },
   sourceSensitive: boolean,
-):
-  | ((() => void) & { prepareUse?: (assertCurrent?: () => void) => Promise<PreparedEffectUse> })
-  | undefined {
+): (() => void) | undefined {
   const { jobId } = params;
   const marker = getCurrentCronActiveJobMarker(jobId);
   const isAuthorityCurrent = sourceSensitive
@@ -88,25 +85,7 @@ function captureCronJobMessageAuthority(
     }
     assertLocal();
   };
-  const prepare = marker.prepareMessageUse;
-  return Object.assign(
-    assertCurrent,
-    prepare
-      ? {
-          prepareUse: (assertCallerCurrent?: () => void) => {
-            assertLocal();
-            return prepare(
-              sourceSensitive,
-              () => {
-                assertLocal();
-                assertCallerCurrent?.();
-              },
-              owner?.signal,
-            );
-          },
-        }
-      : {},
-  );
+  return assertCurrent;
 }
 
 export function captureCronJobMessageActionAuthority(params: {
@@ -156,11 +135,6 @@ export function captureCronJobStandingGrantAuthority(params: {
     context: receipt.context,
     handle: { ...receipt.handle },
     assertCurrent,
-    acquireUse: (assertUseCurrent, signal) =>
-      receipt.acquireUse(() => {
-        assertCurrent();
-        assertUseCurrent();
-      }, signal),
   };
 }
 
@@ -210,11 +184,6 @@ export type CronActiveJobMarker = {
   triggerMutated?: true;
   isMessageActionAuthorityCurrent?: () => boolean;
   isMessageSourceAuthorityCurrent?: () => boolean;
-  prepareMessageUse?: (
-    sourceSensitive: boolean,
-    assertCurrent: () => void,
-    signal?: AbortSignal,
-  ) => Promise<PreparedEffectUse>;
   messageActionAuthorityRevoked?: true;
   messageSourceAuthorityRevoked?: true;
   jobRemoved?: true;
@@ -301,7 +270,6 @@ export function markCronJobActive(
     preserveAcrossGenerationAdvance?: boolean;
     isMessageActionAuthorityCurrent?: () => boolean;
     isMessageSourceAuthorityCurrent?: () => boolean;
-    prepareMessageUse?: CronActiveJobMarker["prepareMessageUse"];
   },
 ): CronActiveJobMarker | undefined {
   if (!jobId) {
@@ -320,7 +288,6 @@ export function markCronJobActive(
     ...(opts?.isMessageSourceAuthorityCurrent
       ? { isMessageSourceAuthorityCurrent: opts.isMessageSourceAuthorityCurrent }
       : {}),
-    ...(opts?.prepareMessageUse ? { prepareMessageUse: opts.prepareMessageUse } : {}),
     generation: state.generation,
     token,
     ...(opts?.preserveAcrossGenerationAdvance ? { preserveAcrossGenerationAdvance: true } : {}),
@@ -466,6 +433,11 @@ export function captureActiveCronJobAgentDeletion(
 /** Returns whether the given cron job id is currently executing in this process. */
 export function isCronJobActive(jobId: string) {
   return getCurrentCronActiveJobMarker(jobId) !== undefined;
+}
+
+/** Snapshot host-only activity before scheduling worker maintenance. */
+export function listActiveCronJobIds(): string[] {
+  return [...getCronActiveJobState().activeJobs.keys()].filter(isCronJobActive);
 }
 
 /** Includes admitted runs that have not entered their executing core yet. */

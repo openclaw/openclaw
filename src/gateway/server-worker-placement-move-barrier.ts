@@ -26,6 +26,7 @@ export async function runWorkerPlacementHandoff<T>(
   params: WorkerPlacementHandoffParams,
   request: WorkerSessionPlacementIdentity & {
     action: "dispatch" | "move";
+    requiredProfile?: string;
     sourceDisposition?: "reconcile" | "abandon";
     signal?: AbortSignal;
   },
@@ -56,6 +57,11 @@ export async function runWorkerPlacementHandoff<T>(
       });
       resolved.assertCurrent(getRuntimeConfig());
       begun = await begin(resolved);
+      if (action === "dispatch" && request.requiredProfile) {
+        // Initial required placement belongs to this held input; there is no local
+        // turn to revoke, and clearing its queues would discard the first message.
+        return;
+      }
       clearSessionLifecycleQueues({
         keys: lifecycleIdentities,
         agentId: resolved.target.agentId,

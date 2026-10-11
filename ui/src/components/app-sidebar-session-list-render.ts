@@ -5,6 +5,7 @@ import type { GatewaySessionRow } from "../api/types.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
+import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { renderHoverMarquee } from "../lib/hover-marquee.ts";
 import {
   presenceViewerActivity,
@@ -41,6 +42,8 @@ import { icons } from "./icons.ts";
 import { renderNewSessionLink } from "./new-session-link.ts";
 import { areSessionCatalogsSettled } from "./session-data-controller-catalog.ts";
 import type { SessionDataController } from "./session-data-controller.ts";
+
+registerSessionOrganizationEnglish();
 
 type RenderableSessionSection = SidebarVisibleSections["sections"][number];
 
@@ -669,7 +672,7 @@ export function renderSessionListFrame(host: SidebarSessionListHost, body: unkno
     >
       ${host.sidebarAgentsMode === "roster" ? nothing : renderSessionListToolbar(host)}
       ${
-        host.sessionData.sessionsStartingUp
+        host.sessionData.sessionsStartingUp && !host.sidebarSnapshot
           ? html`<div
               class="sidebar-session-empty-hint sidebar-session-empty-hint--startup"
               role="status"
@@ -680,6 +683,13 @@ export function renderSessionListFrame(host: SidebarSessionListHost, body: unkno
           : nothing
       }
       ${homeLoadKeys.map((key) => renderChildSessionLoadError(host, key))}
+      ${
+        host.sessionOrganizer.isDraggingChildSession
+          ? html`<div class="sidebar-session-root-drop" data-session-root-drop role="status">
+              ${t("sessionsView.moveToTopLevel")}
+            </div>`
+          : nothing
+      }
       ${renderSessionMutationError(host)} ${body}
     </section>
   `;

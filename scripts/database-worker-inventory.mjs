@@ -174,6 +174,17 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/plugin-state/plugin-state-store.reads.ts",
+    [
+      {
+        tier: "W",
+        operations: ["selectPluginStateBatchRows"],
+        evidence:
+          "Only the invocation-bound plugin-state-operation.kernel.ts facade calls this row reader; that facade executes in plugin-state.worker.ts. Existing native scalar readers remain separately classified.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-transcript-state.ts",
     [
       {
@@ -320,7 +331,7 @@ const reviewedOperations = new Map([
       {
         tier: "W",
         operations: [
-          "assertNoRunningWorkerSessionToolOperations",
+          "deleteWorkerTurnToolState",
           "closeWorkerTurnToolAdmission",
           "clearWorkerTurnToolState",
           "createPlacementSessionToolOperationKernel.hasToolAuthority",
@@ -373,9 +384,13 @@ const reviewedOperations = new Map([
           "placement-store.ts:102 selects only native restart/wait/validation; claim/release/cancel mutations run in placement-turn-claims.worker.ts:102,117,191,200,287,355,360",
       },
       {
-        tier: "T2",
-        operations: ["createPlacementTurnClaimOps.clearLocalTurnClaimsAfterRestart"],
-        evidence: "Only server-worker-environment-startup.ts:177 clears restart claims",
+        tier: "T1",
+        operations: [
+          "createPlacementTurnClaimOps.clearLocalTurnClaimsAfterRestart",
+          "clearLocalTurnClaimsInDatabase",
+        ],
+        evidence:
+          "The released placement-store.ts clearLocalTurnClaimsAfterRestart facade retains synchronous native access until the next Plugin SDK major; bundled startup awaits the placement-lifecycle.worker.ts clearLocalTurnClaims operation. The shared kernel remains native compatibility debt.",
       },
     ],
   ],
@@ -419,7 +434,7 @@ const reviewedOperations = new Map([
           "clearWorkerWorkspacePendingResult",
           "hasAcceptedWorkerWorkspacePendingResult",
           "insertWorkerWorkspacePendingResult",
-          "markWorkerWorkspacePendingResultAccepted",
+          "createPlacementWorkspaceResultOps.acceptWorkspaceResult",
           "assertPendingClaim",
           "createPlacementWorkspaceResultOps.handoffWorkspaceResultRecovery",
           "createPlacementWorkspaceResultOps.abandonWorkspaceResult",
@@ -479,7 +494,7 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["ensureLocal"],
         evidence:
-          "placement-dispatch-store.worker.ts:38 and placement-turn-claims.ts:112 claim path; claims only invoked at placement-turn-claims.worker.ts:160,175,345. Native placement-store.ts:75,76 selects clear/wait/validate methods that do not claim.",
+          "Dispatch in placement-lifecycle.worker.ts and the placement-turn-claims.ts claim path run in workers. Native placement-store.ts selects clear/wait/validate methods that do not claim.",
       },
     ],
   ],
@@ -662,17 +677,6 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/secrets/store/secret-store.ts",
-    [
-      {
-        tier: "T3",
-        operations: ["updateSecretStoreAllowedHosts"],
-        evidence:
-          "Only cli/secrets-store-cli.ts:251 mutates allowed hosts; runtime reads and other writes remain T1",
-      },
-    ],
-  ],
-  [
     "src/secrets/store/secret-store-write.ts",
     [
       {
@@ -681,6 +685,7 @@ const reviewedOperations = new Map([
           "writeSecretStoreEntriesInDatabase",
           "rollbackSecretStoreEntryWriteInDatabase",
           "deleteSecretStoreEntryInDatabase",
+          "updateSecretStoreAllowedHostsInDatabase",
         ],
         evidence:
           "Only openclaw-state-worker-runtime.ts calls these ordinary secret mutation kernels",
@@ -929,17 +934,6 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/config/sessions/session-accessor.sqlite-transcript-write.ts",
-    [
-      {
-        tier: "T3",
-        operations: ["replaceTranscriptEvents"],
-        evidence:
-          "Only production invocations are developer benchmarks scripts/bench-agent-database-holds.ts:142 and scripts/bench-session-history.ts:383; remaining references are internal reexports and excluded test helpers. Synchronous replacement is separately retained.",
-      },
-    ],
-  ],
-  [
     "src/config/sessions/session-canonical-key-read.ts",
     [
       {
@@ -1044,7 +1038,7 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["readWorkerPlacementMovesReadOnly"],
         evidence:
-          "Only placement-dispatch-store.worker.ts:69, placement-turn-claims.worker.ts:72 and placement-read-projection.ts:85 call the batch reader; projection itself is only called by state/openclaw-state-read.worker.ts:670. Native getPlacementMove uses another reader.",
+          "placement-lifecycle.worker.ts, placement-turn-claims.worker.ts and placement-read-projection.ts call the batch reader in workers. Native getPlacementMove uses another reader.",
       },
       {
         tier: "W",
@@ -1084,7 +1078,7 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["assertSessionWorkspaceUnreserved"],
         evidence:
-          "placement-dispatch-store.worker.ts:39 and placement-turn-claims.ts:93 claim path; claims only invoked at placement-turn-claims.worker.ts:160,175,345. Native placement-store.ts:75,76 selects clear/wait/validate methods.",
+          "Dispatch in placement-lifecycle.worker.ts and the placement-turn-claims.ts claim path run in workers. Native placement-store.ts selects clear/wait/validate methods.",
       },
     ],
   ],
@@ -2086,6 +2080,7 @@ const reviewedOperations = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/state/user-background.store.ts", // Background read/write workers; preference validation and profile merge/link/GitHub-sync also run in shared-state workers.
   "src/gateway/worker-environments/local-workspace-store.kernel.ts", // Projection read/write workers and worktree retirement worker only.
   "src/skills/library/import.kernel.ts", // Upload commands execute only in the shared-state writer.
   "src/skills/library/service.kernel.ts", // Library catalog and revision reads use the shared-state read registry.

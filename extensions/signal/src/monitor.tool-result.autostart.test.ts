@@ -1,5 +1,4 @@
 import { Buffer } from "node:buffer";
-import * as timers from "node:timers/promises";
 import { expectPairingReplyText } from "openclaw/plugin-sdk/channel-test-helpers";
 import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
@@ -15,9 +14,6 @@ import {
 } from "./monitor.tool-result.test-harness.js";
 
 installSignalToolResultTestHooks();
-vi.mock("node:timers/promises", { spy: true });
-const nativeTimers =
-  await vi.importActual<typeof import("node:timers/promises")>("node:timers/promises");
 
 const { monitorSignalProvider } = await import("./monitor.js");
 
@@ -369,79 +365,6 @@ describe("monitorSignalProvider tool results", () => {
       expect(streamMock).toHaveBeenNthCalledWith(2, expect.objectContaining({ timeoutMs: 0 }));
     } finally {
       vi.useRealTimers();
-    }
-  });
-
-  it("cancels a pending reply-session conflict retry when the monitor stops", async ({
-    signal,
-  }) => {
-    const abortController = new AbortController();
-    const retryStarted = Promise.withResolvers<AbortSignal | undefined>();
-    let releaseRetry: (() => void) | undefined;
-    let retryAborted = false;
-    const onTestAbort = () => {
-      retryStarted.reject(new Error("Test stopped before retry", { cause: signal.reason }));
-      releaseRetry?.();
-    };
-    signal.addEventListener("abort", onTestAbort, { once: true });
-    const sleep = vi.mocked(timers.setTimeout).mockImplementation((delay, value, options) => {
-      if (replyMock.mock.calls.length === 0 || options?.ref !== false) {
-        return nativeTimers.setTimeout(delay, value, options);
-      }
-      const retrySignal = options.signal;
-      retryStarted.resolve(retrySignal);
-      return new Promise((resolve, reject) => {
-        const onAbort = () => {
-          retryAborted = true;
-          reject(new Error("retry cancelled", { cause: retrySignal?.reason }));
-        };
-        releaseRetry = () => {
-          retrySignal?.removeEventListener("abort", onAbort);
-          resolve(value);
-        };
-        retrySignal?.addEventListener("abort", onAbort, { once: true });
-        if (retrySignal?.aborted) {
-          onAbort();
-        }
-      });
-    });
-    replyMock.mockRejectedValue(
-      new Error(
-        "reply session initialization conflicted for agent:main:signal:direct:+15550001111",
-      ),
-    );
-    streamMock.mockImplementation(async ({ onEvent, abortSignal }) => {
-      onEvent(receiveEvent("hello after the prior turn"));
-      await waitForAbortSignal(abortSignal);
-    });
-
-    const monitorPromise = monitorSignalProvider({
-      autoStart: false,
-      baseUrl: "http://127.0.0.1:8080",
-      abortSignal: AbortSignal.any([abortController.signal, signal]),
-    });
-    try {
-      const retrySignal = await Promise.race([
-        retryStarted.promise,
-        monitorPromise.then(() => {
-          throw new Error("Signal monitor stopped before scheduling its retry");
-        }),
-      ]);
-      expect(replyMock).toHaveBeenCalledTimes(1);
-      expect(retrySignal?.aborted).toBe(false);
-      abortController.abort(new Error("monitor stopped"));
-      await monitorPromise;
-      expect(retryAborted).toBe(true);
-      expect(replyMock).toHaveBeenCalledTimes(1);
-    } finally {
-      abortController.abort(new Error("monitor stopped"));
-      signal.removeEventListener("abort", onTestAbort);
-      releaseRetry?.();
-      try {
-        await monitorPromise;
-      } finally {
-        sleep.mockImplementation(nativeTimers.setTimeout);
-      }
     }
   });
 

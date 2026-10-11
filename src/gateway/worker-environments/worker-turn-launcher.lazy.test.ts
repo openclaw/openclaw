@@ -1,6 +1,7 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import type { WorkerSessionTurnClaim } from "./placement-store.js";
 
 describe("worker turn execution loading", () => {
@@ -43,12 +44,23 @@ describe("worker turn execution loading", () => {
       const { createAgentRunRestartAbortError } = await import("../../agents/run-termination.js");
       const restart = createAgentRunRestartAbortError();
       let revoked = false;
+      let executionAssertion: (() => void) | undefined;
       const execute = vi.fn(
         async (params: {
           onHandoff: () => void;
           onTerminal?: () => void;
           turnClaim: WorkerSessionTurnClaim;
+          assertRunCurrent: () => void;
         }) => {
+          executionAssertion = params.assertRunCurrent;
+          const sql = observeMainThreadSql();
+          try {
+            params.assertRunCurrent();
+            params.assertRunCurrent();
+            sql.expectIdle();
+          } finally {
+            sql.restore();
+          }
           params.onHandoff();
           params.onTerminal?.();
           await fixture.placements.releaseTurn(params.turnClaim);
@@ -157,6 +169,9 @@ describe("worker turn execution loading", () => {
           expect(execute).toHaveBeenCalledOnce();
           expect(execute.mock.calls[0]?.[0].turnClaim).toEqual(retained);
           expect(createOwner).toHaveBeenCalledTimes(mode === "worker-turn" ? 1 : 0);
+          if (mode === "worker-turn") {
+            expect(executionAssertion).toThrow();
+          }
         } else {
           if (scenario === "cancelled") {
             await expect(run).rejects.toBe(restart);

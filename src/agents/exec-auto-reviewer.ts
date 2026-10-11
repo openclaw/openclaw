@@ -1,3 +1,4 @@
+import { adjustMaxTokensForThinking } from "@openclaw/ai/internal/shared";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { z } from "zod";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -10,6 +11,7 @@ import {
   type ExecAutoReviewDecision,
   type ExecAutoReviewInput,
 } from "../infra/exec-auto-review.js";
+import type { Model } from "../llm/types.js";
 import { AsyncWorkScope, captureAsyncWorkTracker } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveAmbientOwnerAgentId } from "./agent-scope-config.js";
@@ -276,11 +278,19 @@ function extractCompletionFailure(
   return `model stopped without a complete response (${stopReason ?? "unknown"})`;
 }
 
-function resolveExecReviewerMaxTokens(modelMaxTokens?: number): number {
-  if (typeof modelMaxTokens === "number" && Number.isFinite(modelMaxTokens) && modelMaxTokens > 0) {
-    return Math.max(1, Math.floor(Math.min(EXEC_REVIEWER_MAX_TOKENS, modelMaxTokens)));
-  }
-  return EXEC_REVIEWER_MAX_TOKENS;
+function resolveExecReviewerMaxTokens(
+  model: Model,
+  thinking?: ExecReviewerConfig["thinking"],
+): number {
+  const modelMaxTokens =
+    Number.isFinite(model.maxTokens) && model.maxTokens > 0
+      ? Math.max(1, Math.floor(model.maxTokens))
+      : Number.POSITIVE_INFINITY;
+  // Reasoning can share the completion limit with the verdict, including provider defaults.
+  return model.reasoning
+    ? adjustMaxTokensForThinking(EXEC_REVIEWER_MAX_TOKENS, modelMaxTokens, thinking ?? "medium")
+        .maxTokens
+    : Math.min(EXEC_REVIEWER_MAX_TOKENS, modelMaxTokens);
 }
 
 async function raceWithReviewerTimeout<T>(
@@ -340,19 +350,14 @@ export function createModelExecAutoReviewer(params: {
         );
       }
       if (hasReviewerDirective(input)) {
-        return "kind" in input
-          ? {
-              decision: "ask",
-              risk: "medium",
-              rationale:
-                "exec reviewer deferred because the command contains reviewer-directed text",
-            }
-          : {
-              decision: "deny",
-              risk: "high",
-              rationale:
-                "exec reviewer denied the command because it contains reviewer-directed text",
-            };
+        const widget = "kind" in input;
+        return {
+          decision: widget ? "ask" : "deny",
+          risk: widget ? "medium" : "high",
+          rationale: widget
+            ? "exec reviewer deferred because the command contains reviewer-directed text"
+            : "exec reviewer denied the command because it contains reviewer-directed text",
+        };
       }
       completionController = new AbortController();
       const signal = params.signal
@@ -422,7 +427,7 @@ export function createModelExecAutoReviewer(params: {
               ],
             },
             options: {
-              maxTokens: resolveExecReviewerMaxTokens(prepared.model.maxTokens),
+              maxTokens: resolveExecReviewerMaxTokens(prepared.model, params.reviewer?.thinking),
               temperature: 0,
               ...(params.reviewer?.thinking ? { reasoning: params.reviewer.thinking } : {}),
               ...(params.reviewer?.fastMode !== undefined

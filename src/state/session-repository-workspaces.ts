@@ -158,23 +158,16 @@ export function createSessionRepositoryWorkspaceStore(
               },
               assertCurrent: captured.assertPublicationCurrent ?? captured.admission.assertCurrent,
             });
-            let stage: "transaction" | "commit" | "complete" = "transaction";
             admission = createSqliteWorkerOperationAdmission((request, grant) => {
               check();
               const admitted = assertSessionEntryCurrentAdmission(request, sessionEntryCurrent);
-              if (admitted.stage === "transaction" && stage === "transaction") {
-                stage = "commit";
+              if (admitted.stage === "transaction") {
                 grant();
                 return;
               }
-              if (
-                admitted.stage !== "commit" ||
-                stage !== "commit" ||
-                !isMutationResult(admitted.facts)
-              ) {
+              if (admitted.stage !== "commit" || !isMutationResult(admitted.facts)) {
                 throw new Error("Repository workspace mutation has no admitted commit result");
               }
-              stage = "complete";
               prepared = admitted.facts;
               if (afterCommit) {
                 const identity = captured.admission.identity;

@@ -77,7 +77,7 @@ export type InternalRealtimeVoiceProviderApi = {
   ) => Promise<void> | void;
 };
 
-function readInternalRealtimeVoiceProviderApi(
+export function readInternalRealtimeVoiceProviderApi(
   provider: RealtimeVoiceProviderPlugin,
 ): InternalRealtimeVoiceProviderApi | undefined {
   const value = Reflect.get(provider, INTERNAL_REALTIME_VOICE_PROVIDER) as unknown;
@@ -88,61 +88,6 @@ function readInternalRealtimeVoiceProviderApi(
   return typeof api.isBrowserSessionConfigured === "function"
     ? (api as InternalRealtimeVoiceProviderApi)
     : undefined;
-}
-
-export function isInternalRealtimeVoiceBrowserSessionConfigured(
-  params: RealtimeVoiceProviderConfiguredContext & {
-    provider: RealtimeVoiceProviderPlugin;
-  },
-): boolean | undefined {
-  return readInternalRealtimeVoiceProviderApi(params.provider)?.isBrowserSessionConfigured({
-    cfg: params.cfg,
-    providerConfig: params.providerConfig,
-    agentId: params.agentId,
-  });
-}
-
-export function resolveInternalRealtimeVoiceBrowserSessionCapabilities(
-  params: RealtimeVoiceProviderConfiguredContext & {
-    provider: RealtimeVoiceProviderPlugin;
-    model?: string;
-    clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
-  },
-): InternalRealtimeVoiceProviderCapabilities | undefined {
-  return readInternalRealtimeVoiceProviderApi(params.provider)?.resolveBrowserSessionCapabilities?.(
-    {
-      cfg: params.cfg,
-      providerConfig: params.providerConfig,
-      agentId: params.agentId,
-      model: params.model,
-      ...(params.clientControl ? { clientControl: params.clientControl } : {}),
-    },
-  );
-}
-
-export function isInternalRealtimeVoiceGatewayRelayConfigured(
-  params: RealtimeVoiceProviderConfiguredContext & {
-    provider: RealtimeVoiceProviderPlugin;
-  },
-): boolean | undefined {
-  return readInternalRealtimeVoiceProviderApi(params.provider)?.isGatewayRelayConfigured?.({
-    cfg: params.cfg,
-    providerConfig: params.providerConfig,
-    agentId: params.agentId,
-  });
-}
-
-export function resolveInternalRealtimeVoiceGatewayRelayCapabilities(params: {
-  provider: RealtimeVoiceProviderPlugin;
-  cfg?: OpenClawConfig;
-  providerConfig: RealtimeVoiceProviderConfig;
-  model?: string;
-}): InternalRealtimeVoiceProviderCapabilities | undefined {
-  return readInternalRealtimeVoiceProviderApi(params.provider)?.resolveGatewayRelayCapabilities?.({
-    cfg: params.cfg,
-    providerConfig: params.providerConfig,
-    model: params.model,
-  });
 }
 
 export function projectInternalRealtimeVoicePublicConfig<

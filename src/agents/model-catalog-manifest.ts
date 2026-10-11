@@ -46,12 +46,9 @@ export function loadManifestModelProviderConfigs(params: {
   });
   const rowsByProvider = new Map<string, NormalizedModelCatalogRow[]>();
   for (const row of rows) {
-    const providerRows = rowsByProvider.get(row.provider);
-    if (providerRows) {
-      providerRows.push(row);
-    } else {
-      rowsByProvider.set(row.provider, [row]);
-    }
+    const providerRows = rowsByProvider.get(row.provider) ?? [];
+    providerRows.push(row);
+    rowsByProvider.set(row.provider, providerRows);
   }
   const providers: Record<string, ModelProviderConfig> = {};
   for (const [provider, providerRows] of rowsByProvider) {

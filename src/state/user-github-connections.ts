@@ -140,7 +140,7 @@ async function write<Key extends keyof UserGitHubConnectionWorkerOperations>(
           if (!isUserGitHubConnectionCommit(facts)) {
             throw new Error("Personal GitHub connection returned an invalid commit receipt");
           }
-          publishUserGitHubConnectionCommit(context.admission.databasePath, facts);
+          publishUserGitHubConnectionCommit(facts);
         });
         return { admission, nativeLocations: [context.admission.databasePath] };
       },

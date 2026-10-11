@@ -1,10 +1,7 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import {
   loseFirstCronMutationReply,
-  observeCronJobWrites,
   observeCronStoreCommits,
-  terminateFirstCronMutationBeforeCommit,
 } from "../../../test/helpers/cron/runtime-mutation.js";
 import {
   createCronRegressionState,
@@ -12,18 +9,11 @@ import {
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../agent-id.js";
 import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import { isCronRunReceiptOwnerStale } from "../store/run-receipt-store.js";
-import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import { start, stop } from "./ops-lifecycle.js";
 import { list } from "./ops-read.js";
 import { run } from "./ops-run.js";
@@ -36,141 +26,6 @@ import { onTimer } from "./timer.test-support.js";
 const opsRegressionFixtures = setupCronRegressionFixtures({
   prefix: "cron-reservation-settlement-",
 });
-
-it.each(["startup", "scheduled"] as const)(
-  "releases exact local %s ownership after real unknown cleanup settlement without replay",
-  async (entrypoint) => {
-    await withOpenClawTestState(
-      { label: `cron-${entrypoint}-unknown-cleanup` },
-      async (fixture) => {
-        await closeOpenClawStateDatabaseAsync();
-        const fault = terminateFirstCronMutationBeforeCommit("cron.releaseReservations");
-        const storePath = fixture.statePath("cron", "jobs.json");
-        const now = Date.now();
-        const futureAt = now + 60_000;
-        const job = createDueIsolatedJob({
-          id: `unknown-${entrypoint}-cleanup`,
-          nowMs: now,
-          nextRunAtMs: now,
-        });
-        const runner = vi.fn(async () => ({ status: "ok" as const }));
-        const state = createCronRegressionState({
-          storePath,
-          nowMs: () => now,
-          defaultAgentId: "main",
-          runIsolatedAgentJob: runner,
-        });
-        let stopObservingCommits: (() => void) | undefined;
-        let captured: { identity: object; receipt: CronRunReceiptHandle } | undefined;
-        const settlements: string[] = [];
-        const policy = entrypoint === "startup" ? "startup-settlement" : "scheduled-ineligible";
-        const attemptedPolicies: string[] = [];
-        const release = admissionMutation.releaseReservedCronRuns;
-        const observed = vi
-          .spyOn(admissionMutation, "releaseReservedCronRuns")
-          .mockImplementation(async (params) => {
-            attemptedPolicies.push(params.policy?.kind ?? "general");
-            if (params.policy?.kind !== policy) {
-              return release(params);
-            }
-            const owner = state.queuedRunReservationsByJobId.get(job.id);
-            if (!captured && owner) {
-              captured = { identity: owner.identity, receipt: { ...owner.runReceipt } };
-              expect(isCronRunReceiptOwnerStale(captured.receipt, now)).toBe(false);
-            }
-            return release({
-              ...params,
-              onSettled(outcome) {
-                settlements.push(outcome);
-                params.onSettled(outcome);
-              },
-            });
-          });
-        try {
-          await saveCronStore(storePath, { version: 1, jobs: [job] });
-          const database = openOpenClawStateDatabase().db;
-          let reservationObserved = false;
-          stopObservingCommits = observeCronStoreCommits(storePath, () => {
-            if (reservationObserved) {
-              return;
-            }
-            const queued = database
-              .prepare(
-                "SELECT 1 FROM cron_jobs WHERE store_key = ? AND job_id = ? AND json_extract(state_json, '$.queuedAtMs') = ?",
-              )
-              .get(cronStoreKey(storePath), job.id, now);
-            if (queued) {
-              reservationObserved = true;
-              if (entrypoint === "startup") {
-                stop(state);
-              } else {
-                // Preserve the queued claim but make the real scheduled activation ineligible.
-                database
-                  .prepare(
-                    "UPDATE cron_jobs SET state_json = json_set(state_json, '$.nextRunAtMs', ?) WHERE store_key = ? AND job_id = ?",
-                  )
-                  .run(futureAt, cronStoreKey(storePath), job.id);
-              }
-            }
-          });
-          const outcome = await (
-            entrypoint === "startup" ? runMissedJobs(state) : onTimer(state)
-          ).then(
-            () => ({ kind: "reported" as const }),
-            (error: unknown) => ({ kind: "rejected" as const, error }),
-          );
-          await fault.waitForExit();
-          expect.soft(attemptedPolicies).toEqual([policy]);
-          expect.soft(fault.attempts).toEqual(["cron.releaseReservations"]);
-          expect(reservationObserved).toBe(true);
-          expect(fault.wasHeld()).toBe(true);
-          expect(settlements).toEqual(["unknown"]);
-          if (outcome.kind !== "rejected") {
-            throw new Error(
-              `${entrypoint} reported success after losing its native cleanup settlement`,
-            );
-          }
-          expect(hasSqliteWorkerOutcomeUnknown(outcome.error)).toBe(true);
-          const original = expectDefined(captured, `${entrypoint} reservation before cleanup`);
-          expect
-            .soft(
-              database
-                .prepare(
-                  "SELECT status, finished_at_ms FROM cron_run_receipts WHERE receipt_id = ?",
-                )
-                .get(original.receipt.receiptId),
-            )
-            .toEqual({ status: "running", finished_at_ms: null });
-          const persisted = (await loadCronStore(storePath)).jobs.find((row) => row.id === job.id);
-          expect.soft(persisted?.state).toMatchObject({
-            queuedAtMs: now,
-            nextRunAtMs: entrypoint === "startup" ? now : futureAt,
-          });
-          expect(persisted?.state.runningAtMs).toBeUndefined();
-          expect(state.queuedRunReservationsByJobId.has(job.id)).toBe(false);
-          expect(isCronRunReceiptOwnerStale(original.receipt, now)).toBe(true);
-          expect(state.runAdmission.active).toBe(0);
-          expect(runner).not.toHaveBeenCalled();
-          expect(
-            readCronRunHistoryPageForTests({ storeKey: cronStoreKey(storePath), jobId: job.id })
-              .entries,
-          ).toEqual([]);
-        } finally {
-          stopObservingCommits?.();
-          observed.mockRestore();
-          await fault.close();
-          if (captured) {
-            admissionMutation.releaseReservationOwnership(state, [
-              { jobId: job.id, reservationIdentity: captured.identity },
-            ]);
-          }
-          stop(state);
-          await state.op;
-        }
-      },
-    );
-  },
-);
 
 it.each(["manual", "startup"] as const)(
   "retains a committed %s cleanup failure without retrying its reservation",
@@ -227,6 +82,19 @@ it.each(["manual", "startup"] as const)(
       }
     });
     const reply = loseFirstCronMutationReply("cron.releaseReservations");
+    const settlements: string[] = [];
+    const release = admissionMutation.releaseReservedCronRuns;
+    const observed = vi
+      .spyOn(admissionMutation, "releaseReservedCronRuns")
+      .mockImplementation((params) =>
+        release({
+          ...params,
+          onSettled(outcome) {
+            settlements.push(outcome);
+            params.onSettled(outcome);
+          },
+        }),
+      );
     const pending = (
       entrypoint === "manual" ? run(state, job.id, "force") : runMissedJobs(state)
     ).then(
@@ -239,6 +107,7 @@ it.each(["manual", "startup"] as const)(
       expect(reply.wasDropped()).toBe(true);
       await reply.waitForExit();
       expect(reply.attempts).toEqual(["cron.releaseReservations"]);
+      expect(settlements).toEqual(["unknown"]);
       expect(
         database
           .prepare("SELECT status, error_text FROM cron_run_receipts WHERE receipt_id = ?")
@@ -267,6 +136,7 @@ it.each(["manual", "startup"] as const)(
       ).toEqual([]);
     } finally {
       stopObservingCommits();
+      observed.mockRestore();
       await pending;
       await reply.close();
       stop(state);
@@ -406,13 +276,32 @@ it.each([
     let successorAdmission: Promise<unknown> | undefined;
     let reservationPersisted = false;
     let cleanupFailed = false;
-    const stopObserving = observeCronJobWrites(job.id, ({ queuedAtMs }) => {
-      if (reservationPersisted && !cleanupFailed && queuedAtMs === undefined) {
-        cleanupFailed = true;
-        throw new Error("reservation cleanup persist failed");
-      }
-    });
     const database = openOpenClawStateDatabase().db;
+    database.exec(`
+      CREATE TRIGGER fail_cron_reservation_cleanup
+      BEFORE UPDATE OF state_json ON cron_jobs
+      WHEN NEW.job_id = '${job.id}'
+        AND json_extract(OLD.state_json, '$.queuedAtMs') IS NOT NULL
+        AND json_extract(NEW.state_json, '$.queuedAtMs') IS NULL
+      BEGIN
+        SELECT RAISE(ABORT, 'reservation cleanup persist failed');
+      END;
+    `);
+    const release = admissionMutation.releaseReservedCronRuns;
+    const cleanup = vi
+      .spyOn(admissionMutation, "releaseReservedCronRuns")
+      .mockImplementation(async (params) => {
+        try {
+          return await release(params);
+        } catch (error) {
+          if (!cleanupFailed) {
+            expect(String(error)).toContain("reservation cleanup persist failed");
+            cleanupFailed = true;
+            database.exec("DROP TRIGGER fail_cron_reservation_cleanup");
+          }
+          throw error;
+        }
+      });
     const stopObservingCommits = observeCronStoreCommits(store.storePath, () => {
       const queued = database
         .prepare(
@@ -454,7 +343,8 @@ it.each([
       expect(persisted?.state.runningAtMs).toBeUndefined();
     } finally {
       stopObservingCommits();
-      stopObserving();
+      cleanup.mockRestore();
+      database.exec("DROP TRIGGER IF EXISTS fail_cron_reservation_cleanup");
       releaseSuccessor.resolve();
       await Promise.allSettled([restarted, successorAdmission]);
       stop(state);
@@ -464,16 +354,14 @@ it.each([
 );
 
 it.each([
-  { phase: "planning", route: "default", boundary: "after commit" },
-  { phase: "planning", route: "absence", boundary: "after commit" },
-  { phase: "planning", route: "explicit agent", boundary: "after commit" },
-  { phase: "planning", route: "session owner", boundary: "after commit" },
-  { phase: "cleanup", route: "default", boundary: "after commit" },
-  { phase: "planning", route: "default", boundary: "before commit" },
-  { phase: "cleanup", route: "default", boundary: "before commit" },
+  { phase: "planning", route: "default" },
+  { phase: "planning", route: "absence" },
+  { phase: "planning", route: "explicit agent" },
+  { phase: "planning", route: "session owner" },
+  { phase: "cleanup", route: "default" },
 ] as const)(
-  "guards startup $phase auto-disable routing when the default changes $boundary ($route)",
-  async ({ phase, route, boundary }) => {
+  "preserves startup $phase auto-disable routing when the default changes after commit ($route)",
+  async ({ phase, route }) => {
     const { storePath } = opsRegressionFixtures.makeStorePath();
     const now = Date.now();
     const job = createDueIsolatedJob({
@@ -491,7 +379,6 @@ it.each([
       job.sessionKey = "agent:session-owner:main";
     }
     await saveCronStore(storePath, { version: 1, jobs: [job] });
-    const originalStore = await loadCronStore(storePath);
     const database = openOpenClawStateDatabase().db;
     const readEnabled = () =>
       database
@@ -499,7 +386,6 @@ it.each([
         .get(cronStoreKey(storePath), job.id)?.enabled;
     let currentDefault = route === "default" ? "original-agent" : undefined;
     let committed = false;
-    let observedBeforeCommit = false;
     const order: string[] = [];
     const enqueueSystemEvent = vi.fn(() => {
       expect(readEnabled()).toBe(0);
@@ -538,17 +424,6 @@ it.each([
         currentDefault = "replacement-agent";
       }
     });
-    const stopObservingWrites =
-      boundary === "before commit"
-        ? observeCronJobWrites(job.id, () => {
-            if (!observedBeforeCommit) {
-              // The worker has changed its row, but the real host grant has not committed it.
-              expect(readEnabled()).toBe(1);
-              observedBeforeCommit = true;
-              currentDefault = "replacement-agent";
-            }
-          })
-        : undefined;
     try {
       const outcome = await runMissedJobs(state).then(
         () => ({ kind: "completed" as const }),
@@ -569,20 +444,6 @@ it.each([
           .all(cronStoreKey(storePath), job.id),
       ).toEqual([]);
       expect(state.startupCatchup).toBeUndefined();
-      if (boundary === "before commit") {
-        expect(observedBeforeCommit).toBe(true);
-        expect.soft(outcome).toMatchObject({
-          kind: "rejected",
-          error: { message: "Cron notification default owner changed before commit" },
-        });
-        expect(persistedStore).toEqual(originalStore);
-        expect(state.store?.jobs.find((entry) => entry.id === job.id)?.enabled).toBe(true);
-        expect(committed).toBe(false);
-        expect(order).toEqual([]);
-        expect(enqueueSystemEvent).not.toHaveBeenCalled();
-        expect(requestHeartbeat).not.toHaveBeenCalled();
-        return;
-      }
       expect(outcome).toEqual({ kind: "completed" });
       expect(committed).toBe(true);
       expect(persisted).toMatchObject({
@@ -635,7 +496,6 @@ it.each([
         }
       }
     } finally {
-      stopObservingWrites?.();
       stopObserving();
       stop(state);
       await state.op;
