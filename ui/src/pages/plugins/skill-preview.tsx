@@ -7,12 +7,13 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/plugin-skills.ts";
 import type { FilePreviewModalFile } from "../../components/file-preview-modal.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import "../../components/file-preview-modal-registration.ts";
 import { registerFilePreviewEnglish } from "../../i18n/locales/en-file-preview.ts";
+import "../../components/file-preview-modal-registration.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
+import "./custom-elements.ts";
 import { renderPluginCapabilitySection as PluginCapabilitySection } from "./overview.tsx";
 import { showPluginToolPreview, type PluginToolPreview } from "./tool-preview.tsx";
 import "./skill-preview.css";
@@ -208,7 +209,7 @@ export function PluginSkillPreview(props: {
           }
           prop:notice={incomplete() ? t("filePreview.bundle.incomplete") : ""}
           onFile-preview-select={(event: CustomEvent<string>) =>
-            props.controller.select(event.detail)
+            void props.controller.select(event.detail)
           }
           onFile-preview-retry={() => props.controller.retry()}
           onFile-preview-close={() => props.controller.close()}

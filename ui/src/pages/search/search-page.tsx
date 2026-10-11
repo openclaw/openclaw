@@ -1,6 +1,6 @@
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
 import type {
   WebSearchStatusParams,
   WebSearchStatusResult,
@@ -98,7 +98,10 @@ function SearchPageContent() {
   const agents = projectAgents(context.agents);
   const selectionProjection = projectAgentSelection(context.settingsAgentSelection);
   // Record the initial config receipt before the Gateway effect starts loading.
-  createEffect(() => undefined, syncRuntime);
+  createEffect(
+    () => undefined,
+    () => untrack(syncRuntime),
+  );
   const { gateway, revision: gatewayRevision } = useGatewayPage({
     getGateway: () => context.gateway,
     onIdentityChange: () => {
@@ -125,11 +128,12 @@ function SearchPageContent() {
       void load();
     }
   }
-  const stopRuntime = runtimeView.subscribe(syncRuntime);
-  const stopSelection = selectionProjection.subscribe(syncAgent);
+  const stopRuntime = runtimeView.subscribe(() => untrack(syncRuntime));
+  const stopSelection = selectionProjection.subscribe(() => untrack(syncAgent));
   onCleanup(() => {
     disposed = true;
-    invalidate();
+    generation++;
+    testGeneration++;
     stopRuntime();
     stopSelection();
   });
@@ -411,7 +415,7 @@ function SearchPageContent() {
           {error() ? (
             <div role="alert" class="callout danger">
               {error()}
-              <button class="btn btn--sm" onClick={() => load()}>
+              <button class="btn btn--sm" onClick={() => void load()}>
                 {t("common.retry")}
               </button>
             </div>
@@ -419,7 +423,7 @@ function SearchPageContent() {
           {configState().lastError ? (
             <div role="alert" class="callout danger">
               {configState().lastError}
-              <button class="btn btn--sm" onClick={() => retryConfig(gateway.capture())}>
+              <button class="btn btn--sm" onClick={() => void retryConfig(gateway.capture())}>
                 {t("common.retry")}
               </button>
             </div>
@@ -510,7 +514,7 @@ function SearchPageContent() {
                       <button
                         class="btn btn--sm"
                         disabled={loading() || testing() || !connected()}
-                        onClick={() => load()}
+                        onClick={() => void load()}
                       >
                         {t("searchPage.refresh")}
                       </button>
@@ -567,7 +571,7 @@ function SearchPageContent() {
                               !isSearchConfigSettled(configState()) ||
                               !connected()
                             }
-                            onClick={() => test(renderScope, generation)}
+                            onClick={() => void test(renderScope, generation)}
                           >
                             {testing()
                               ? t("searchPage.testing")

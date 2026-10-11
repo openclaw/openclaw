@@ -11,10 +11,7 @@ let container: HTMLElement | undefined;
 
 afterEach(() => {
   cleanupSkillsViews();
-  if (container) {
-    render(nothing, container);
-    container.remove();
-  }
+  container?.remove();
 });
 
 describe.runIf(browserMode)("skill reader shell", () => {
@@ -54,6 +51,9 @@ describe.runIf(browserMode)("skill reader shell", () => {
       container.querySelector<HTMLElement>(".exec-approval-card")!,
     );
     render(nothing, container);
+    container.remove();
+    container = document.createElement("openclaw-skills-page");
+    document.body.append(container);
     const showContent = (content: string) => {
       renderSkills(
         createProps(

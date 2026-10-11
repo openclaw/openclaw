@@ -1,4 +1,4 @@
-import { For, createEffect, createSignal, onCleanup } from "solid-js";
+import { For, createEffect, createSignal, onCleanup, untrack } from "solid-js";
 import type {
   PluginCredentialDescriptor,
   PluginCredentialInspection,
@@ -86,7 +86,7 @@ function PluginCredentialEditorContent(props: PluginCredentialEditorProps) {
         next.field !== previous?.field ||
         !next.canInspect ||
         (connection && !next.gateway.isCurrent(connection));
-      const wasOpen = dialogOpen();
+      const wasOpen = untrack(dialogOpen);
       setRevealed(false);
       // Other settings can advance the revision before this field's blur commit.
       // Only retiring the field or connection may discard its uncommitted key.
@@ -100,23 +100,19 @@ function PluginCredentialEditorContent(props: PluginCredentialEditorProps) {
       }
       setInspection(null);
       generation++;
-      if (wasOpen && !saving() && !sourceChanged) {
-        setError(t("pluginsPage.credentials.stale"));
+      if (wasOpen && !untrack(saving) && !sourceChanged) {
+        setError(untrack(() => t("pluginsPage.credentials.stale")));
         setLoading(false);
         return;
       }
-      void inspect();
+      void untrack(inspect);
     },
   );
 
   onCleanup(() => {
-    generation++;
-    setInspection(null);
-    setRevealed(false);
-    setLiteral("");
-    setReference({ source: "env", provider: "default", id: "" });
-    referenceSubmitted = false;
     active = false;
+    generation++;
+    referenceSubmitted = false;
   });
 
   async function inspect(reveal = false) {
@@ -406,7 +402,10 @@ function PluginCredentialEditorContent(props: PluginCredentialEditorProps) {
       {!dialogOpen() && failure() ? (
         <div role="alert">
           {failure()}
-          <button class="btn btn--sm" onClick={() => (literal() ? patch(literal()) : inspect())}>
+          <button
+            class="btn btn--sm"
+            onClick={() => void (literal() ? patch(literal()) : inspect())}
+          >
             {t("common.retry")}
           </button>
         </div>
@@ -479,11 +478,15 @@ function PluginCredentialEditorContent(props: PluginCredentialEditorProps) {
               </p>
             ) : null}
             <footer>
-              <button class="btn" disabled={saving() || cancelling()} onClick={cancelReference}>
+              <button
+                class="btn"
+                disabled={saving() || cancelling()}
+                onClick={() => void cancelReference()}
+              >
                 {t("common.cancel")}
               </button>
               {!inspection() && !loading() ? (
-                <button class="btn" onClick={() => inspect()}>
+                <button class="btn" onClick={() => void inspect()}>
                   {t("common.retry")}
                 </button>
               ) : null}
@@ -491,7 +494,7 @@ function PluginCredentialEditorContent(props: PluginCredentialEditorProps) {
                 <button
                   class="btn primary"
                   disabled={blocked() || !isValidSecretRef(reference())}
-                  onClick={() => patch({ ...reference() })}
+                  onClick={() => void patch({ ...reference() })}
                 >
                   {saving() ? t("common.saving") : t("common.save")}
                 </button>

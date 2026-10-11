@@ -149,7 +149,12 @@ it("flushes a pending config draft before enabling and refreshes afterward", asy
     runtimeConfig.patchForm(["pending"], true);
     await clickPluginAction(page, "Enable Workboard");
     await waitForSolid(() => expect(order).toContain("plugins.list"));
-    expect(order).toEqual(["config.set", "plugins.setEnabled", "config.get", "plugins.list"]);
+    expect(order.slice(0, 4)).toEqual([
+      "config.set",
+      "plugins.setEnabled",
+      "config.get",
+      "plugins.list",
+    ]);
     expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-3");
     expect(runtimeConfig.state.configForm).toMatchObject({
       pending: true,

@@ -142,7 +142,7 @@ export function SkillDiscovery(props: SkillsProps) {
       )}
       {props.state.clawhubSearchError && (
         <div class="callout danger" role="alert">
-          {props.state.clawhubSearchError}
+          {props.state.clawhubSearchError}{" "}
           <button
             type="button"
             class="btn btn--sm"

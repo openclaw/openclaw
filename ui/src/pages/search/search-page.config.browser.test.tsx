@@ -204,13 +204,13 @@ async function mount(options: { advanced?: boolean } = {}) {
     runtime.dispose();
   });
   const settle = async (includeTests = false) => {
-    await flush();
+    flush();
     await settleModelCatalogRequests(client, { agentId: "main" });
     await Promise.allSettled(reads);
     if (includeTests) {
       await Promise.allSettled(tests);
     }
-    await flush();
+    flush();
   };
   await settle();
   return {
@@ -312,7 +312,7 @@ describe("Search configuration lifecycle", () => {
       );
       await committed;
     }
-    await flush();
+    flush();
     try {
       expect(fixture.runtime.state.configSaving).toBe(false);
       expect(fixture.runtime.state.configFormDirty).toBe(phase !== "pending reverted");
@@ -350,7 +350,7 @@ describe("Search configuration lifecycle", () => {
       const pending = createDeferred<WebSearchTestResult>();
       fixture.setTestResponse(pending.promise);
       testButton(fixture.element).click();
-      await flush();
+      flush();
       if (change === "unsaved draft") {
         pending.resolve(testResult);
         await fixture.settle(true);
@@ -365,7 +365,7 @@ describe("Search configuration lifecycle", () => {
         await fixture.runtime.refresh({ background: true });
       } else {
         fixture.runtime.patchForm(endpointPath, "https://draft.example.test");
-        await flush();
+        flush();
         if (change === "discarded draft") {
           await fixture.runtime.discardDraft();
           expect(fixture.runtime.state.configFormDirty).toBe(false);

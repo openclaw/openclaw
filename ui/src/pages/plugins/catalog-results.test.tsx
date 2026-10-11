@@ -81,8 +81,8 @@ function baseProps(overrides: Partial<PluginCatalogResultsProps> = {}): PluginCa
   };
 }
 
-const updates = new WeakMap<HTMLDivElement, (props: PluginCatalogResultsProps) => void>();
-function mount(props: PluginCatalogResultsProps): HTMLDivElement {
+const updates = new WeakMap<HTMLElement, (props: PluginCatalogResultsProps) => void>();
+function mount(props: PluginCatalogResultsProps): HTMLElement {
   const [current, setCurrent] = createSignal(props);
   const view = mountSolid(() => <PluginCatalogResults {...current()} />);
   updates.set(view.container, (next) => {
@@ -92,7 +92,7 @@ function mount(props: PluginCatalogResultsProps): HTMLDivElement {
   flush();
   return view.container;
 }
-function update(container: HTMLDivElement, props: PluginCatalogResultsProps) {
+function update(container: HTMLElement, props: PluginCatalogResultsProps) {
   updates.get(container)!(props);
 }
 

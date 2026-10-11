@@ -8,6 +8,7 @@ import { formatUnit } from "../../lib/format.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import "./custom-elements.ts";
 import "./install-action.css";
 import type { PluginInstallProgress } from "./install-progress.ts";
 
@@ -35,7 +36,9 @@ function InstallActionContent(
   host: PluginInstallActionElement,
 ): JSX.Element {
   let button!: HTMLButtonElement;
-  const [open, setOpen] = createSignal(false);
+  const [open, setOpen] = createSignal<boolean>((previous) =>
+    props.progress || props.busy ? (previous ?? false) : false,
+  );
   const [now, setNow] = createSignal(Date.now());
   let pinned = false;
   let hovering = false;
@@ -66,7 +69,7 @@ function InstallActionContent(
     () => props.progress && props.progress.finishedAt === undefined,
     (running) => {
       if (!running) {
-        return;
+        return undefined;
       }
       const timer = setInterval(() => setNow(Date.now()), 1000);
       return () => clearInterval(timer);
@@ -90,7 +93,7 @@ function InstallActionContent(
     () => !props.progress && !props.busy,
     (idle) => {
       if (idle) {
-        dismiss();
+        pinned = false;
       }
     },
   );

@@ -153,13 +153,13 @@ async function mount(
   ));
   const element = view.container;
   const settle = async () => {
-    await flush();
+    flush();
     await settleModelCatalogRequests(client, { agentId: selection.state.selectedId });
     await Promise.allSettled(requested);
-    await flush();
+    flush();
   };
   if (options.waitReady === false) {
-    await flush();
+    flush();
   } else {
     await settle();
   }
@@ -283,7 +283,7 @@ describe("Search settings", () => {
         },
       );
       fixture.publishRuntime();
-      await flush();
+      flush();
       if (!endpoint) {
         const advanced = fixture.element.querySelector<HTMLDetailsElement>("details")!;
         expect(advanced.open).toBe(false);
@@ -356,7 +356,7 @@ describe("Search settings", () => {
       },
     );
     fixture.publishRuntime();
-    await flush();
+    flush();
     const independent = fixture.element.querySelector<HTMLInputElement>(
       'input[aria-label="Independent request key"]',
     );
@@ -375,7 +375,7 @@ describe("Search settings", () => {
       expect(independent).toBeNull();
     }
     const editor = fixture.element.querySelector<HTMLElement>("openclaw-plugin-credential-editor")!;
-    await flush();
+    flush();
     const input = editor.querySelector<HTMLInputElement>(
       'input[aria-label="Provider credential"]',
     )!;
@@ -396,7 +396,7 @@ describe("Search settings", () => {
     const fixture = await mount();
     fixture.runtime.state.lastError = "Could not load search settings";
     fixture.publishRuntime();
-    await flush();
+    flush();
     button(fixture.element, "Retry").click();
     await fixture.settle();
     expect(fixture.runtime.refresh).toHaveBeenCalledOnce();
@@ -411,7 +411,7 @@ describe("Search settings", () => {
       const old = createDeferred<unknown>();
       fixture.setTestResponse(old.promise);
       button(fixture.element, "Test search").click();
-      await flush();
+      flush();
       expect(
         [...fixture.element.querySelectorAll('[role="status"]')].map(
           (region) => region.textContent,
@@ -449,7 +449,7 @@ describe("Search settings", () => {
       const pending = createDeferred<unknown>();
       fixture.setTestResponse(pending.promise);
       button(fixture.element, "Test search").click();
-      await flush();
+      flush();
       try {
         expect(query.disabled).toBe(true);
         expect(query.value).toBe("Query A");
@@ -488,7 +488,7 @@ describe("Search settings", () => {
       }
       query.value = "Query B";
       query.dispatchEvent(new Event("input", { bubbles: true }));
-      await flush();
+      flush();
       expect(fixture.element.textContent).toContain("Not tested");
       expect(fixture.element.textContent).not.toContain("Previous");
       expect(fixture.element.querySelector('a[href="https://example.com/previous"]')).toBeNull();

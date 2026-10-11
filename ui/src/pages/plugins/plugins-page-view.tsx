@@ -1,4 +1,4 @@
-import { createMemo } from "solid-js";
+import { createMemo, Show } from "solid-js";
 import type { PluginsSkillsReadParams } from "../../../../packages/gateway-protocol/src/schema/plugin-skills.ts";
 import {
   pathForPluginCatalogEntry,
@@ -15,6 +15,7 @@ import { LitContent } from "../../lit/lit-content.tsx";
 import { renderPluginCatalogDetail as PluginCatalogDetail } from "./catalog-detail.tsx";
 import { renderPluginCatalogResults as PluginCatalogResults } from "./catalog-results.tsx";
 import { renderPluginConsentDialog as PluginConsentDialog } from "./consent-dialog.tsx";
+import "./custom-elements.ts";
 import { pluginDetailLocation, type InstalledPluginDetailTab } from "./detail-tabs.ts";
 import {
   pluginRowKey,
@@ -22,8 +23,8 @@ import {
 } from "./plugin-row-message.tsx";
 import { PluginsHubHeader } from "./plugins-hub-header.tsx";
 import { PLUGINS_HUB_PANEL_ID, type PluginsHubTab } from "./plugins-hub.ts";
+import type { PluginsPageController } from "./plugins-page-controller.ts";
 import { installRequestForDiscoveryDetail } from "./plugins-page-model.ts";
-import type { PluginsPageController } from "./plugins-page.tsx";
 import {
   pluginAdvancedSchema,
   pluginConfigSchema,
@@ -155,6 +156,10 @@ export function PluginsPageView(props: { page: PluginsPageController; revision: 
   const configAnalysis = createMemo(() => analyzeConfigSchema(configState().configSchema));
   const detailPluginId = () => page().state.detail?.pluginId;
   const catalogId = () => page().state.catalogDetail?.id ?? "";
+  const catalogInstallable = createMemo(() => {
+    const result = page().state.catalogDetail?.result;
+    return Boolean(result && installRequestForDiscoveryDetail(result));
+  });
   const settingsParentRoute = () =>
     new URLSearchParams(page().routeData?.location.search ?? "").get("from") === "plugins"
       ? ("plugins" as const)
@@ -321,10 +326,7 @@ export function PluginsPageView(props: { page: PluginsPageController; revision: 
                   canInstall={
                     page().canMutate() &&
                     !page().state.messages[`install:${catalogId()}`]?.savedInstall &&
-                    Boolean(
-                      page().state.catalogDetail?.result &&
-                      installRequestForDiscoveryDetail(page().state.catalogDetail.result),
-                    )
+                    catalogInstallable()
                   }
                   installBlockedReason={page().accessBlockedReason(
                     page().state.result?.mutationAllowed,
@@ -405,29 +407,35 @@ export function PluginsPageView(props: { page: PluginsPageController; revision: 
       </SettingsWorkspace>
       <PluginSkillPreview controller={page().skillPreview} state={page().skillPreview.state} />
       <LitContent>{page().mcpLogin.render()}</LitContent>
-      {page().consentController.consent && (
-        <PluginConsentDialog
-          consent={page().consentController.consent!}
-          inspection={page().consentController.inspection}
-          loading={page().consentController.inspectionLoading}
-          error={page().consentController.inspectionError}
-          iconUrl={
-            page().consentController.consent?.pluginId
-              ? page().state.iconUrls[page().consentController.consent.pluginId]
-              : undefined
-          }
-          iconLoading={Boolean(
-            page().consentController.consent?.pluginId &&
-            page().icons.installed.isLoading?.(page().consentController.consent.pluginId),
-          )}
-          canMutate={page().canMutate()}
-          mutationBlockedReason={page().accessBlockedReason(page().state.result?.mutationAllowed)}
-          busy={Object.values(page().state.busy).some(Boolean)}
-          onCancel={() => page().consentController.close()}
-          onConfirm={() => page().consentController.confirm()}
-          onRetry={() => void page().consentController.inspect()}
-        />
-      )}
+      <Show when={page().consentController.consent}>
+        {(consent) => {
+          const icon = createMemo(() => {
+            const pluginId = consent().pluginId;
+            return {
+              url: pluginId ? page().state.iconUrls[pluginId] : undefined,
+              loading: Boolean(pluginId && page().icons.installed.isLoading(pluginId)),
+            };
+          });
+          return (
+            <PluginConsentDialog
+              consent={consent()}
+              inspection={page().consentController.inspection}
+              loading={page().consentController.inspectionLoading}
+              error={page().consentController.inspectionError}
+              iconUrl={icon().url}
+              iconLoading={icon().loading}
+              canMutate={page().canMutate()}
+              mutationBlockedReason={page().accessBlockedReason(
+                page().state.result?.mutationAllowed,
+              )}
+              busy={Object.values(page().state.busy).some(Boolean)}
+              onCancel={() => page().consentController.close()}
+              onConfirm={() => page().consentController.confirm()}
+              onRetry={() => void page().consentController.inspect()}
+            />
+          );
+        }}
+      </Show>
     </>
   );
 }

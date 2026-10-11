@@ -17,9 +17,10 @@ import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PluginDiscoveryDetailResult, PluginsInspectResult } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { LitContent } from "../../lit/lit-content.tsx";
-import "../../plugins/control-ui-contributions.ts";
 import { renderPluginReadme } from "./catalog-detail.tsx";
+import "../../plugins/control-ui-contributions.ts";
 import { renderArtTile } from "./consent-dialog.tsx";
+import "./custom-elements.ts";
 import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx";
 import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
 import { PluginInstallAction } from "./install-action.tsx";
@@ -509,12 +510,11 @@ function PluginOverview(props: DetailProps): JSX.Element {
           iconUrl: props.iconUrls[plugin().id] ?? catalogIcon().src,
           onIconError: () => props.onIconError(plugin().id),
           authorIconUrl: authorIcon().src,
-          loading: Boolean(
+          loading:
             props.iconLoading?.(plugin().id) ||
             props.catalogLoading ||
             catalogIcon().loading ||
             authorIcon().loading,
-          ),
         })}
         identity={renderPluginPublisher(catalog(), props.inspection?.overview?.publisherName)}
         titleAction={

@@ -4,6 +4,8 @@ import { LitElement, html } from "lit";
 import { createSignal, flush, onCleanup } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
+import { ShellLayoutOwner } from "../app/shell-layout-owner.ts";
+import { ShellLayoutBoundary } from "../app/shell-layout-traits-solid.tsx";
 import { ApplicationProvider, useApplication } from "../lib/reactive/context.ts";
 import { collectGarbageForTest } from "../test-helpers/garbage-collection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "./solid-bridge.ts";
@@ -337,4 +339,36 @@ it("releases a disconnected Solid root while the custom element itself is retain
   expect(control.deref()).toBeUndefined();
   expect(weak.deref()).toBeUndefined();
   expect(host.isConnected).toBe(false);
+});
+
+it("publishes Solid page layout traits to the containing Lit shell and clears them on removal", async () => {
+  defineSolidBridge<{ enabled: boolean }>(
+    "openclaw-layout-bridge-test",
+    (props) => (
+      <ShellLayoutBoundary traits={{ hubHeader: props.enabled }}>
+        <section>Page</section>
+      </ShellLayoutBoundary>
+    ),
+    { properties: { enabled: { default: true } } },
+  );
+  const content = document.createElement("main");
+  content.className = "content";
+  const owner = new ShellLayoutOwner();
+  owner.contentRef(content);
+  document.body.append(content);
+  const host = document.createElement("openclaw-layout-bridge-test") as SolidBridgeElement<{
+    enabled: boolean;
+  }>;
+  content.append(host);
+  await host.updateComplete;
+  expect(content.classList.contains("content--hub-header")).toBe(true);
+  host.enabled = false;
+  await host.updateComplete;
+  expect(content.classList.contains("content--hub-header")).toBe(false);
+  host.enabled = true;
+  await host.updateComplete;
+  host.remove();
+  await Promise.resolve();
+  expect(content.classList.contains("content--hub-header")).toBe(false);
+  owner.contentRef(undefined);
 });

@@ -1,5 +1,4 @@
 import { afterAll, beforeAll, expect, it } from "vitest";
-import type { ApplicationContext } from "../../app/context.ts";
 import type { PluginDiscoveryDetailResult } from "../../lib/plugins/index.ts";
 import {
   calendarInspection,
@@ -137,16 +136,7 @@ describeControlUiE2e("Plugin overview", () => {
         expect(await permission.isChecked()).toBe(true);
         // The request recorder observes dispatch; wait for the owning writer's
         // acknowledgement before reloading the saved permission.
-        await expect
-          .poll(() =>
-            page.evaluate(
-              () =>
-                document.querySelector<HTMLElement & { context: ApplicationContext }>(
-                  "openclaw-plugins-page",
-                )?.context.runtimeConfig.state.configAutoSaveStatus,
-            ),
-          )
-          .toBe("saved");
+        await page.locator(".settings-save-indicator--saved").waitFor();
         await page.reload();
         await page.getByRole("textbox", { name: "Time zone", exact: true }).waitFor();
         await expect.poll(() => permission.isChecked()).toBe(true);
@@ -157,16 +147,7 @@ describeControlUiE2e("Plugin overview", () => {
           .click();
         await permissionRow.locator('wa-dropdown-item[value="reset"]').click();
         await expect.poll(async () => (await gateway.getRequests("config.set")).length).toBe(1);
-        await expect
-          .poll(() =>
-            page.evaluate(
-              () =>
-                document.querySelector<HTMLElement & { context: ApplicationContext }>(
-                  "openclaw-plugins-page",
-                )?.context.runtimeConfig.state.configAutoSaveStatus,
-            ),
-          )
-          .toBe("saved");
+        await page.locator(".settings-save-indicator--saved").waitFor();
         const writes = await gateway.getRequests("config.set");
         const saved = JSON.parse((writes.at(-1)!.params as { raw: string }).raw);
         expect(saved.plugins.entries[plugin.id].hooks).toEqual({});

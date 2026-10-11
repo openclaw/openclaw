@@ -26,7 +26,14 @@ export function useGatewayPage(options: ConstructorParameters<typeof GatewayPage
       return Promise.resolve(true);
     },
   };
-  const gateway = new GatewayPageController(host, options);
+  const gateway = new GatewayPageController(host, {
+    ...options,
+    invalidateRequests: (change) => {
+      if (connected) {
+        options.invalidateRequests?.(change);
+      }
+    },
+  });
   createEffect(
     () => [options.getGateway(), revision()] as const,
     () => {

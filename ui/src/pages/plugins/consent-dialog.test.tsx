@@ -13,7 +13,7 @@ import { createInspectResult } from "./plugins-page.test-support.ts";
 
 type ConsentProps = Parameters<typeof PluginConsentDialog>[0];
 
-function mount(overrides: Partial<ConsentProps> = {}): HTMLDivElement {
+function mount(overrides: Partial<ConsentProps> = {}): HTMLElement {
   const props: ConsentProps = {
     consent: {
       intent: { kind: "enable", pluginId: "workboard", rowKey: "plugin:workboard" },

@@ -1,13 +1,16 @@
-import { render, spread, type JSX } from "@solidjs/web";
+import { insert, render, spread, type JSX } from "@solidjs/web";
 import {
   createComponent,
   createRenderEffect,
+  createRoot,
   createSignal,
   flush,
   onCleanup,
   runWithOwner,
 } from "solid-js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
+import { shellLayoutOwnerForHost } from "../app/shell-layout-owner.ts";
+import { ShellLayoutProvider } from "../app/shell-layout-traits-solid.tsx";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 
 type Property<T> = {
@@ -214,7 +217,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
         source = [...this.#content.childNodes];
       }
       this.#mountedApplication = this.#application;
-      this.#dispose = render(() => {
+      const viewRoot = () => {
         const [revision, setRevision] = createSignal(0);
         this.#notify = () => setRevision((value) => value + 1);
         const props = {
@@ -231,7 +234,17 @@ export function defineSolidBridge<Props extends object, Methods extends object =
             },
           });
         }
-        const view = () => content(props, this.#host);
+        const host = this.#host;
+        const layout = shellLayoutOwnerForHost(host);
+        const view = () =>
+          layout
+            ? createComponent(ShellLayoutProvider, {
+                value: { owner: layout, host },
+                get children() {
+                  return content(props, host);
+                },
+              })
+            : content(props, host);
         return this.#application
           ? createComponent(ApplicationProvider, {
               value: this.#application,
@@ -240,7 +253,20 @@ export function defineSolidBridge<Props extends object, Methods extends object =
               },
             })
           : view();
-      }, this);
+      };
+      if (this.#solidOwned) {
+        // The containing Solid renderer owns the flush; nested render() would flush
+        // imperative effects while its component scope is still active.
+        this.#dispose = createRoot((dispose) => {
+          insert(this, viewRoot());
+          return () => {
+            dispose();
+            this.replaceChildren();
+          };
+        });
+      } else {
+        this.#dispose = render(viewRoot, this);
+      }
     }
 
     #disposeRoot() {

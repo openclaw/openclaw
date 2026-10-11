@@ -19,7 +19,10 @@ export function renderSearchTestResult(result: WebSearchTestResult | null, error
   if (!result) {
     return undefined;
   }
-  const sources = [...(result.results ?? []), ...(result.citations ?? [])];
+  const sources: Array<{ url: string; title?: string; snippet?: string }> = [
+    ...(result.results ?? []),
+    ...(result.citations ?? []),
+  ];
   const uniqueSources = sources.filter(
     (source, index) => sources.findIndex((item) => item.url === source.url) === index,
   );
