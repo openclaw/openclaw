@@ -358,7 +358,7 @@ it.each(["usage-only", "with-final-custody"] as const)(
         await expect(fixture.account("ordinary", meta)).resolves.toBeUndefined();
       } else {
         await expect(finalizeReplyAgentRun(fixture.context)).rejects.toThrow(
-          "SQLite transaction admission was refused",
+          "synthetic completion refusal",
         );
       }
       expect(
@@ -381,7 +381,7 @@ it("rechecks the live reply operation at the final commit boundary", async () =>
   const observer = observeCompletionCommands({ beforeCommit });
   try {
     await expect(finalizeReplyAgentRun(fixture.context)).rejects.toThrow(
-      "SQLite transaction admission was refused",
+      "Terminal accounting lost its reply operation",
     );
     expect(
       observer.commands.filter((command) => command === "session.actor.completeTurn"),
