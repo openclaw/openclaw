@@ -47,6 +47,7 @@ export const outputLimitScenarios = [outputLimitScenario, emptyLengthScenario];
 
 export type TransportDropScenario = {
   config?: OpenClawConfig;
+  modelFallbackPolicy?: "configured";
   assistant?: AssistantMessage;
   providerOwner?: PreparedProviderFailoverOwner;
   assistantTexts?: string[];
@@ -228,6 +229,7 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
       runInput: {
         runParams: {
           config: scenario.config ?? {},
+          modelFallbackPolicy: scenario.modelFallbackPolicy,
           agentId: "main",
           trigger: scenario.trigger,
           resolveReplyDelivery: scenario.resolveReplyDelivery,

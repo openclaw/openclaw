@@ -612,6 +612,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
               ? { kind: "set", runtime: err.agentRuntimeOverride }
               : { kind: "clear" },
           );
+          sessionEntry.modelFallbackPolicy = err.modelFallbackPolicy;
           sessionEntry.authProfileOverride = err.authProfileId;
           sessionEntry.authProfileOverrideSource = err.authProfileId
             ? err.authProfileIdSource

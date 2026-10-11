@@ -114,14 +114,7 @@ function createCronPromptExecutor(
   },
 ) {
   const sessionFile = params.runSessionKey;
-  const cronFallbacks = resolveCronFallbackOptions({
-    cfg: params.cfg,
-    job: params.job,
-    agentId: params.agentId,
-    useSubagentFallbacks: params.useSubagentFallbacks,
-    inheritDefaultFallbacksForAgentStringModel: params.inheritDefaultFallbacksForAgentStringModel,
-    modelFallbacksOverride: params.modelFallbacksOverride,
-  });
+  const cronFallbacks = resolveCronFallbackOptions(params);
   const fastModeStartedAtMs = Date.now();
   const fastModeAutoProgressState: FastModeAutoProgressState = {
     offAnnounced: false,
@@ -604,6 +597,8 @@ function createCronPromptExecutor(
           requestedRouteResolution: "resolved",
           modelFallbacksOverride: cronFallbacks.fallbacksOverride,
           modelFallbacksOverrideSource: cronFallbacks.fallbacksOverrideSource,
+          // Pairs the row's selection for live-switch comparison; cron lists stay job-owned.
+          modelFallbackPolicy: params.cronSession.sessionEntry.modelFallbackPolicy,
           authProfileId: params.liveSelection.authProfileId,
           authProfileIdSource: params.liveSelection.authProfileId
             ? params.liveSelection.authProfileIdSource

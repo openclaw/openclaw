@@ -51,6 +51,37 @@ afterEach(() => {
 });
 
 describe("session preference API integration", () => {
+  it.each([
+    { before: "configured" as const, after: null },
+    { before: undefined, after: "configured" as const },
+  ])(
+    "marks a policy-only patch to $after for active selection refresh",
+    async ({ before, after }) => {
+      const original: SessionEntry = {
+        sessionId: "policy-only",
+        updatedAt: 1,
+        providerOverride: "preferred",
+        modelOverride: "gpt-fixture",
+        modelOverrideSource: "user",
+        modelFallbackPolicy: before,
+        contextTokens: 16000,
+      };
+      const entry = expectPatchOk(
+        await runPatch({
+          cfg,
+          store: { [key]: original },
+          storeKey: key,
+          patch: { key, modelFallbackPolicy: after },
+          loadGatewayModelCatalog: catalog,
+          providerAuthMetadataSnapshot: { plugins: [] },
+        }),
+      );
+      expect(entry.modelFallbackPolicy).toBe(after ?? undefined);
+      expect(entry.liveModelSwitchPending).toBe(true);
+      expect(entry.contextTokens).toBe(16000);
+    },
+  );
+
   it("accepts only the explicit per-session opt-in or clear on the wire", () => {
     expect(validateSessionsPatchParams(patch)).toBe(true);
     expect(validateSessionsPatchParams({ key, modelFallbackPolicy: null })).toBe(true);

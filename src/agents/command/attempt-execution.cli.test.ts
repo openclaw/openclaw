@@ -65,6 +65,8 @@ import {
 } from "./attempt-execution.announce.test-support.js";
 import {
   cliRuntimeConfig,
+  type EmbeddedAttemptFixtureOverrides,
+  runOpenClawEmbeddedAttemptFixture,
   createCliImageCapabilityPlugins,
   makeCliResult,
   makeRunAgentAttemptParams,
@@ -225,55 +227,16 @@ describe("CLI attempt execution", () => {
   });
 
   async function runOpenClawEmbeddedAttemptForTest(
-    overrides: Omit<
-      Partial<RunAgentAttemptOverrides>,
-      "agentDir" | "workspaceDir" | "sessionEntry"
-    > & {
-      config?: OpenClawConfig;
-      sessionEntry?: Partial<SessionEntry>;
-      additionalSessionEntries?: Record<string, Partial<SessionEntry>>;
-    } = {},
+    overrides: EmbeddedAttemptFixtureOverrides = {},
   ) {
-    const {
-      runId = "run-embedded-live-stream-gate",
-      sessionKey = `agent:main:direct:${runId}`,
-      sessionEntry: entry,
-      additionalSessionEntries = {},
-      config = { session: { store: storePath } },
-      opts,
-      ...attempt
-    } = overrides;
-    const sessionEntry = makeSessionEntry(`session-${runId}`, entry);
-    const sessionStore = { [sessionKey]: sessionEntry };
-    for (const [additionalSessionKey, additionalEntry] of Object.entries(
-      additionalSessionEntries,
-    )) {
-      sessionStore[additionalSessionKey] = makeSessionEntry(
-        `${additionalSessionKey}-session`,
-        additionalEntry,
-      );
-    }
-    await writeSessionStoreSeed(sessionStore);
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      meta: { durationMs: 1 },
-    } satisfies EmbeddedAgentRunResult);
-    await runStoredAttempt({
-      originalProvider: "openai",
-      cfg: config,
-      sessionEntry,
-      sessionKey,
-      sessionFile: path.join(tmpDir, `${runId}.jsonl`),
-      body: "stream gate",
-      runId,
-      opts: {
-        message: "stream gate",
-        ...opts,
-      },
-      messageChannel: "telegram",
-      sessionStore,
-      ...attempt,
+    await runOpenClawEmbeddedAttemptFixture({
+      overrides,
+      storePath,
+      tmpDir,
+      runStoredAttempt,
+      writeSessionStoreSeed,
+      runEmbeddedAgentMock,
     });
-
     return firstEmbeddedAgentArg(runEmbeddedAgentMock.mock.calls.length - 1);
   }
 
@@ -916,6 +879,16 @@ describe("CLI attempt execution", () => {
         cliSessionId: expectedBinding?.sessionId,
         cliSessionBinding: expectedBinding,
       });
+    },
+  );
+
+  it.each([undefined, "configured"] as const)(
+    "passes selected fallback policy %s into embedded live-switch recovery",
+    async (modelFallbackPolicy) => {
+      const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+        sessionEntry: { modelFallbackPolicy },
+      });
+      expect(embeddedArg.modelFallbackPolicy).toBe(modelFallbackPolicy);
     },
   );
 

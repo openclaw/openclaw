@@ -18,10 +18,7 @@ import { annotateInterSessionPromptText } from "../../sessions/input-provenance.
 import { resolveUserPath } from "../../utils.js";
 import { resizeExecApprovalContinuationPrompt } from "../bash-tools.exec-approval-output.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
-import {
-  cliBackendAcceptsAuthProfileForwarding,
-  resolveCliExecutionAuthProfileId,
-} from "../cli-execution-auth.js";
+import { resolveCliExecutionAuthProfileId } from "../cli-execution-auth.js";
 import { runCliAgent } from "../cli-runner.js";
 import { hasCliLiveSession } from "../cli-runner/cli-live-session-registry.js";
 import { buildCliMcpDelegationCapabilityBinding } from "../cli-runner/mcp-grant-context.js";
@@ -63,6 +60,7 @@ import {
 import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "../tool-policy-match.js";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "../tool-result-limits.js";
 import {
+  allowsCommandCliAuthProfileForwarding,
   resolveCommandAuthProfileSelection,
   resolveHarnessAuthProfileSelection,
 } from "./attempt-auth-selection.js";
@@ -249,13 +247,11 @@ export function runAgentAttempt(params: RunAgentAttemptParams) {
   }
   const shouldForwardImagesToEmbedded =
     !params.isFallbackRetry || params.fallbackRuntimeState?.originRuntime === "cli";
-  const allowCliAuthProfileForwarding =
-    isCliExecutionProvider &&
-    cliBackendAcceptsAuthProfileForwarding({
-      provider: cliExecutionProvider,
-      config: params.cfg,
-      agentId: params.sessionAgentId,
-    });
+  const allowCliAuthProfileForwarding = allowsCommandCliAuthProfileForwarding(
+    params,
+    isCliExecutionProvider,
+    cliExecutionProvider,
+  );
   const agentHarnessPolicy = isRawModelRun
     ? ({ runtime: "openclaw", runtimeSource: "model" } as const)
     : sessionRuntimeOverride
@@ -717,6 +713,7 @@ export function runAgentAttempt(params: RunAgentAttemptParams) {
     modelThinkingCapability: params.modelThinkingCapability,
     modelFallbacksOverride: params.modelFallbacksOverride,
     modelFallbacksOverrideSource: params.modelFallbacksOverrideSource,
+    modelFallbackPolicy: params.sessionEntry?.modelFallbackPolicy,
     authProfileId,
     authProfileIdSource: authProfileId ? harnessAuthSelection.authProfileIdSource : undefined,
     isFinalFallbackAttempt: params.isFinalFallbackAttempt,

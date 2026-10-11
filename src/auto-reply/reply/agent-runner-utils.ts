@@ -489,6 +489,7 @@ export async function buildEmbeddedRunExecutionParams(params: {
     requestedRouteResolution: "resolved" as const,
     modelSelectionLocked: snapshot.run.modelSelectionLocked,
     modelFallbackAvailability,
+    modelFallbackPolicy: snapshot.run.modelFallbackPolicy,
     modelFallbacksOverride,
     modelFallbacksOverrideSource,
     ...authProfile,

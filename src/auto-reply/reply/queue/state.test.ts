@@ -204,6 +204,49 @@ describe("refreshQueuedFollowupSession", () => {
     });
   });
 
+  it.each([
+    {
+      name: "a route rewrite without policy withdraws",
+      refresh: { nextProvider: "openai", nextModel: "gpt-4o", nextModelOverrideSource: "user" },
+      expected: undefined,
+    },
+    {
+      name: "a route rewrite with policy keeps",
+      refresh: {
+        nextProvider: "openai",
+        nextModel: "gpt-4o",
+        nextModelOverrideSource: "user",
+        nextModelFallbackPolicy: "configured",
+      },
+      expected: "configured",
+    },
+    {
+      name: "a thinking-only refresh keeps",
+      refresh: { nextThinking: { level: "low" } },
+      expected: "configured",
+    },
+    {
+      name: "a session rotation keeps",
+      refresh: { previousSessionId: "session-1", nextSessionId: "session-2" },
+      expected: "configured",
+    },
+  ] as const)("$name queued fallback consent", ({ refresh, expected }) => {
+    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+    const run: FollowupRun["run"] = {
+      ...makeRun(),
+      hasSessionModelOverride: true,
+      modelOverrideSource: "user",
+      modelFallbackPolicy: "configured",
+    };
+    queue.lastRun = { ...run };
+    queue.items.push({ prompt: "queued message", enqueuedAt: Date.now(), run });
+
+    refreshQueuedFollowupSession({ key: QUEUE_KEY, ...refresh });
+
+    expect(run.modelFallbackPolicy).toBe(expected);
+    expect(queue.lastRun?.modelFallbackPolicy).toBe(expected);
+  });
+
   it("preserves queued Sol Ultra work when switching to Codex Luna", () => {
     const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
     queue.items.push({

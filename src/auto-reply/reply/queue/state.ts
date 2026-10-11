@@ -283,8 +283,11 @@ export function refreshQueuedFollowupSession(params: {
           params.nextModelOverrideSource !== undefined && Boolean(run.provider || run.model);
         run.modelOverrideSource = params.nextModelOverrideSource;
       }
+      // Fallback consent belongs to the selection; a route rewrite without it withdraws consent.
       if (Object.hasOwn(params, "nextModelFallbackPolicy")) {
         run.modelFallbackPolicy = params.nextModelFallbackPolicy;
+      } else if (hasNextModelRoute) {
+        delete run.modelFallbackPolicy;
       }
       if (Object.hasOwn(params, "nextAuthProfileId")) {
         run.authProfileId = normalizeOptionalString(params.nextAuthProfileId);

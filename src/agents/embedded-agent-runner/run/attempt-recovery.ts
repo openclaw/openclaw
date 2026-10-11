@@ -309,6 +309,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     defaultModel: DEFAULT_MODEL,
     currentProvider: preparedRuntime.provider,
     currentModel: preparedRuntime.modelId,
+    currentModelFallbackPolicy: params.modelFallbackPolicy,
     currentAgentRuntimeOverride: params.agentHarnessRuntimeOverride,
     currentAuthProfileId: preparedRuntime.preferredProfileId,
     currentAuthProfileIdSource: params.authProfileIdSource,

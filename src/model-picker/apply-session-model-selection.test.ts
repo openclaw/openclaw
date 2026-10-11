@@ -1,9 +1,14 @@
 import path from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { loadProviderScopedThinkingCatalog } from "../agents/model-catalog.runtime.js";
-import { FOLLOWUP_QUEUES, getFollowupQueue } from "../auto-reply/reply/queue/state.js";
+import {
+  FOLLOWUP_QUEUES,
+  getFollowupQueue,
+  clearFollowupQueue,
+  refreshQueuedFollowupSession,
+} from "../auto-reply/reply/queue/state.js";
 import {
   loadSessionEntryReadOnly,
   replaceSessionEntry,
@@ -86,6 +91,35 @@ beforeEach(() => {
 afterEach(() => unsubscribeLifecycle());
 
 describe("applySessionModelSelection", () => {
+  it("clears queued fallback policy when the model picker selects a strict route", async () => {
+    const sessionKey = "agent:main:dm:picker-fallback-policy";
+    onTestFinished(() => clearFollowupQueue(sessionKey));
+    const queue = getFollowupQueue(sessionKey, { mode: "followup" });
+    queue.lastRun = {
+      agentId: "main",
+      agentDir: "/tmp/agent",
+      sessionId: "session-1",
+      sessionKey,
+      sessionFile: "/tmp/session-1.jsonl",
+      workspaceDir: "/tmp/workspace",
+      config: {},
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      modelOverrideSource: "user",
+      hasSessionModelOverride: true,
+      modelFallbackPolicy: "configured",
+      timeoutMs: 1000,
+      blockReplyBreak: "message_end",
+    };
+    effects.refreshQueuedFollowupSession.mockImplementationOnce(refreshQueuedFollowupSession);
+    const sessionEntry = createEntry({ modelFallbackPolicy: "configured" });
+    const result = await applySessionModelSelection(createParams({ sessionKey, sessionEntry }));
+    expect(result.status).toBe("applied");
+    expect(sessionEntry.modelFallbackPolicy).toBeUndefined();
+    expect(queue.lastRun.model).toBe("gpt-4o");
+    expect(queue.lastRun.modelFallbackPolicy).toBeUndefined();
+  });
+
   it.each([false, true])("uses configured default only with reset intent=%s", async (reset) => {
     const modelCatalog = [
       { provider: "fixture", id: "automatic", name: "Automatic" },

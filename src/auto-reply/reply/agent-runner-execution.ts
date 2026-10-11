@@ -144,6 +144,7 @@ async function executeAgentTurnInternalLoop(
   ): void => {
     run.provider = err.provider;
     run.model = err.model;
+    run.modelFallbackPolicy = err.modelFallbackPolicy;
     run.authProfileId = err.authProfileId;
     run.authProfileIdSource = err.authProfileId ? err.authProfileIdSource : undefined;
     run.autoFallbackPrimaryProbe = undefined;

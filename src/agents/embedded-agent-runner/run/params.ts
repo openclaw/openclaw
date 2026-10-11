@@ -158,6 +158,8 @@ export type RunEmbeddedAgentParams = {
   modelFallbacksOverrideSource?: "configured";
   /** Prepared fallback availability fact shared by selection and failure reporting. */
   modelFallbackAvailability?: ModelFallbackAvailability;
+  /** Admitted selection policy, paired with the route for live-switch comparison. */
+  modelFallbackPolicy?: "configured";
   /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
   agentHarnessId?: string;
   /** Locks the selected model against hooks and fallbacks; does not imply native model ownership. */

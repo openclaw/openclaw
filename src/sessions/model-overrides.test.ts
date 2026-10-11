@@ -332,6 +332,31 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(withFlagEntry.liveModelSwitchPending).toBe(true);
   });
 
+  it.each([
+    { before: "configured" as const, after: undefined },
+    { before: undefined, after: "configured" as const },
+  ])("marks a fallback-policy-only switch to $after as pending", ({ before, after }) => {
+    const entry: SessionEntry = {
+      sessionId: "policy-switch",
+      updatedAt: 1,
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      modelOverrideSource: "user",
+      modelOverrideRouteResolution: "resolved",
+      modelFallbackPolicy: before,
+      contextTokens: 16000,
+    };
+    applyModelOverrideToSessionEntry({
+      entry,
+      selection: { provider: "openai", model: "gpt-5.4" },
+      modelFallbackPolicy: after,
+      markLiveSwitchPending: true,
+    });
+    expect(entry.modelFallbackPolicy).toBe(after);
+    expect(entry.liveModelSwitchPending).toBe(true);
+    expect(entry.contextTokens).toBe(16000);
+  });
+
   it("marks profile-only switches as pending when requested", () => {
     const entry: SessionEntry = {
       sessionId: "sess-profile-switch",

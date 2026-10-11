@@ -113,6 +113,7 @@ export function applyModelOverrideToSessionEntry(params: {
       "modelOverrideFallbackOriginModel",
     ) || updated;
 
+  const previousModelFallbackPolicy = entry.modelFallbackPolicy;
   // The preference belongs to this selection, never to the configured default
   // or to a later unmarked strict selection.
   if (selection.isDefault || params.modelFallbackPolicy !== "configured") {
@@ -172,7 +173,12 @@ export function applyModelOverrideToSessionEntry(params: {
 
   // Clear stale fallback notice when the user explicitly switches models.
   if (updated) {
-    if ((selectionUpdated || profileUpdated) && params.markLiveSwitchPending) {
+    if (
+      (selectionUpdated ||
+        profileUpdated ||
+        previousModelFallbackPolicy !== entry.modelFallbackPolicy) &&
+      params.markLiveSwitchPending
+    ) {
       // Pending without modelOverride is the deliberate encoding for "switch
       // back to the agent default": the default branch above also clears the
       // runtime model fields so live-switch resolution lands on the default.
