@@ -562,6 +562,33 @@ describe("dispatchReplyFromConfig", () => {
     },
   );
 
+  it("records the stop command next to the delivered fast-abort notice", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({ handled: true, aborted: true });
+    const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
+    transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Body: "/stop",
+        BodyForCommands: "/stop",
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        SessionKey: "agent:main:main",
+        MessageSid: "stop-message",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: vi.fn(),
+    });
+    await settleReplyDispatcher({ dispatcher });
+    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "⚙️ Agent was aborted.",
+        command: { text: "/stop", idempotencyKey: "command-input:stop-message" },
+      }),
+    );
+  });
+
   it("mirrors reset acknowledgements into the canonically prepared Slack session", async () => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockReturnValue(false);

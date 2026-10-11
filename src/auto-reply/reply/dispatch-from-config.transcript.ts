@@ -136,7 +136,7 @@ export function captureDeliveredTranscriptMirror(params: {
     } else if (
       !payloadMirror &&
       !metadata.transcriptOwner &&
-      (!idempotencyKey || metadata.deliveryMirror)
+      (!idempotencyKey || metadata.deliveryMirror || metadata.commandId)
     ) {
       deliveredMetadata = transcriptMirrorForDeliveredPayload(metadata, payload);
     }
