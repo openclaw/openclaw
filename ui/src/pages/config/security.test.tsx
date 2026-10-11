@@ -59,22 +59,21 @@ describe("renderSecurity", () => {
     const onBrowserEnabledToggle = vi.fn();
     const onToolProfileChange = vi.fn();
 
-    const { container } = mountSolid(
-      () =>
-        renderSecurity(
-          createProps({
-            security: {
-              gatewayAuth: "token",
-              execPolicy: "allowlist",
-              browserEnabled: false,
-              browserEnabledOverridden: true,
-              toolProfile: "messaging",
-              toolProfileOverridden: true,
-            },
-            onBrowserEnabledToggle,
-            onToolProfileChange,
-          }),
-        ),
+    const { container } = mountSolid(() =>
+      renderSecurity(
+        createProps({
+          security: {
+            gatewayAuth: "token",
+            execPolicy: "allowlist",
+            browserEnabled: false,
+            browserEnabledOverridden: true,
+            toolProfile: "messaging",
+            toolProfileOverridden: true,
+          },
+          onBrowserEnabledToggle,
+          onToolProfileChange,
+        }),
+      ),
     );
 
     const browserRow = expectRowByTitle(container, "Browser enabled");
@@ -104,30 +103,31 @@ describe("renderSecurity", () => {
       expectRowByTitle(container, "Available tools"),
       "Full",
     );
-    expect(profileButton.querySelector<HTMLInputElement>(".settings-segmented__input")?.disabled).toBe(
-      true,
-    );
+    expect(
+      profileButton.querySelector<HTMLInputElement>(".settings-segmented__input")?.disabled,
+    ).toBe(true);
     profileButton.click();
     expect(onToolProfileChange).not.toHaveBeenCalled();
     const browserRow = expectRowByTitle(container, "Browser enabled");
-    expect(browserRow.querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled).toBe(true);
+    expect(browserRow.querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled).toBe(
+      true,
+    );
   });
 
   it("shows gateway auth as a dot status, not a pill", () => {
-    const { container } = mountSolid(
-      () =>
-        renderSecurity(
-          createProps({
-            security: {
-              gatewayAuth: "none",
-              execPolicy: "allowlist",
-              browserEnabled: true,
-              browserEnabledOverridden: false,
-              toolProfile: "",
-              toolProfileOverridden: false,
-            },
-          }),
-        ),
+    const { container } = mountSolid(() =>
+      renderSecurity(
+        createProps({
+          security: {
+            gatewayAuth: "none",
+            execPolicy: "allowlist",
+            browserEnabled: true,
+            browserEnabledOverridden: false,
+            toolProfile: "",
+            toolProfileOverridden: false,
+          },
+        }),
+      ),
     );
 
     const authRow = expectRowByTitle(container, "Gateway auth");
@@ -149,8 +149,8 @@ describe("renderSecurity", () => {
   });
 
   it("embeds the schema editor below the curated overview", () => {
-    const { container } = mountSolid(
-      () => renderSecurity(createProps({ editor: <div data-testid="security-editor" /> })),
+    const { container } = mountSolid(() =>
+      renderSecurity(createProps({ editor: <div data-testid="security-editor" /> })),
     );
 
     const page = container.querySelector(".security-page");
@@ -159,20 +159,19 @@ describe("renderSecurity", () => {
   });
 
   it("shows inherited default descriptions", () => {
-    const { container } = mountSolid(
-      () =>
-        renderSecurity(
-          createProps({
-            security: {
-              gatewayAuth: "token",
-              execPolicy: "allowlist",
-              browserEnabled: true,
-              browserEnabledOverridden: false,
-              toolProfile: "",
-              toolProfileOverridden: false,
-            },
-          }),
-        ),
+    const { container } = mountSolid(() =>
+      renderSecurity(
+        createProps({
+          security: {
+            gatewayAuth: "token",
+            execPolicy: "allowlist",
+            browserEnabled: true,
+            browserEnabledOverridden: false,
+            toolProfile: "",
+            toolProfileOverridden: false,
+          },
+        }),
+      ),
     );
 
     expect(expectRowByTitle(container, "Browser enabled").textContent).not.toContain(
@@ -192,18 +191,17 @@ describe("renderSecurity", () => {
     ({ profile, overridden, busy, writes }) => {
       const props = createProps();
       const onToolProfileChange = vi.fn();
-      const { container } = mountSolid(
-        () =>
-          renderSecurity({
-            ...props,
-            security: {
-              ...props.security,
-              toolProfile: profile,
-              toolProfileOverridden: overridden,
-            },
-            configBusy: busy,
-            onToolProfileChange,
-          }),
+      const { container } = mountSolid(() =>
+        renderSecurity({
+          ...props,
+          security: {
+            ...props.security,
+            toolProfile: profile,
+            toolProfileOverridden: overridden,
+          },
+          configBusy: busy,
+          onToolProfileChange,
+        }),
       );
 
       expect(onToolProfileChange).not.toHaveBeenCalled();

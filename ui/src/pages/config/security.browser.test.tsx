@@ -35,7 +35,9 @@ it.each([
       { container },
     );
     try {
-      const radios = [...container.querySelectorAll<HTMLInputElement>(".settings-segmented__input")];
+      const radios = [
+        ...container.querySelectorAll<HTMLInputElement>(".settings-segmented__input"),
+      ];
       expect(radios).toHaveLength(4);
       expect(radios.filter((radio) => radio.checked)).toHaveLength(profile ? 1 : 0);
       expect(onToolProfileChange).not.toHaveBeenCalled();

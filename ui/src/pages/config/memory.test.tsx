@@ -65,7 +65,6 @@ function renderInto(props: MemoryViewProps): HTMLElement {
 }
 
 describe("renderMemory", () => {
-
   it("retains engine and add-on controls when their owner publishes new state", () => {
     const [props, setProps] = createSignal(createProps());
     const { container } = mountSolid(() => <Memory {...props()} />);
