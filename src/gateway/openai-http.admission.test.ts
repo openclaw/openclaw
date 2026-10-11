@@ -68,7 +68,9 @@ describe("OpenAI-compatible HTTP drain-503 mapping (e2e)", () => {
     agentCommandMock.mockClear();
     // The detached run loses process admission mid-flight; agentCommandFromIngress
     // surfaces that as a GatewayDrainingError rather than a generic failure.
-    agentCommandMock.mockRejectedValueOnce(new GatewayDrainingError() as never);
+    agentCommandMock.mockRejectedValueOnce(
+      new GatewayDrainingError("Gateway is draining; new tasks are not accepted") as never,
+    );
 
     const res = await postChatCompletions(enabledPort, {
       model: "openclaw",
@@ -89,7 +91,9 @@ describe("OpenAI-compatible HTTP drain-503 mapping (e2e)", () => {
 
   it("maps a GatewayDrainingError run rejection to a streaming 503 error chunk, not 'Error: internal error'", async () => {
     agentCommandMock.mockClear();
-    agentCommandMock.mockRejectedValueOnce(new GatewayDrainingError() as never);
+    agentCommandMock.mockRejectedValueOnce(
+      new GatewayDrainingError("Gateway is draining; new tasks are not accepted") as never,
+    );
 
     const res = await postChatCompletions(enabledPort, {
       stream: true,
