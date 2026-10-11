@@ -189,7 +189,6 @@ export function createDoctorMaintenanceState(options: {
       const assertCurrent = relocatedMaintenanceOwner
         ? () => relocatedMaintenanceOwner.assertCurrent(options.assertCurrent)
         : options.assertCurrent;
-      assertCurrent?.();
       const acquired = await acquireDoctorGatewayMaintenanceOwner(
         path.resolve(resolveOpenClawStateSqlitePath(selectedEnv)),
         selectedEnv,

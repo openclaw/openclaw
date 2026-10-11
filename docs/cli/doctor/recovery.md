@@ -79,6 +79,10 @@ therefore does not consume the manager I/O allowance. Every authority check
 still runs; manager calls, cancellation, and service stop and drain deadlines
 remain bounded. Database inspection can still increase the total command time.
 
+Once Doctor owns maintenance, it checks the update requester's current authority
+within that same ownership scope. Its own maintenance window does not trigger a
+lock wait or an offline-maintenance refusal; requester revocation still stops repair.
+
 If Doctor's output pipe closes (for example, `openclaw doctor --fix | head -20`),
 or Doctor receives SIGINT, SIGTERM, or SIGPIPE during maintenance, it waits for
 admitted repair work and service restoration before exiting. An ordinary repair
