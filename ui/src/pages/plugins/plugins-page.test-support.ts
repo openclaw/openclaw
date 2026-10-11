@@ -1,5 +1,5 @@
 import type { RouteLocation } from "@openclaw/uirouter";
-import { createComponent, createSignal, flush } from "solid-js";
+import { createComponent, flush } from "solid-js";
 import { vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -404,31 +404,15 @@ export async function mountPage(
     ? "settings"
     : "discovery",
 ): Promise<{ page: TestPluginsPage }> {
-  const [currentRoute, setCurrentRoute] = createSignal(routeData, { ownedWrite: true });
-  const [currentSurface, setCurrentSurface] = createSignal(surface, { ownedWrite: true });
   const provider = createSolidApplicationContextProvider(context);
-  const mounted = mountSolid(
-    () =>
-      createComponent(PluginsPage, {
-        get routeData() {
-          return currentRoute();
-        },
-        get surface() {
-          return currentSurface();
-        },
-      }),
-    { wrapper: provider.wrapper },
-  );
+  const mounted = mountSolid(() => createComponent(PluginsPage, { routeData, surface }), {
+    wrapper: provider.wrapper,
+  });
   await settlePlugins();
   const page = mounted.container.querySelector("openclaw-plugins-page") as TestPluginsPage;
   if (!page) {
     throw new Error("Plugins page did not render its host element");
   }
-  Object.defineProperties(page, {
-    routeData: { get: currentRoute, set: setCurrentRoute },
-    surface: { get: currentSurface, set: setCurrentSurface },
-    updateComplete: { get: settlePlugins },
-  });
   page.remove = () => mounted.unmount();
   return { page };
 }

@@ -1519,9 +1519,13 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             updateComplete: Promise<boolean>;
           };
           owner.append(view);
-          document.body.replaceChildren(owner);
+          const app = document.querySelector("openclaw-app");
+          if (!app) {
+            throw new Error("Expected the application context provider");
+          }
+          app.append(owner);
           await view.updateComplete;
-          const mount = view.shadowRoot?.querySelector(".mount");
+          const mount = view.querySelector(".mount");
           if (!mount) {
             throw new Error("MCP App mount is missing");
           }
