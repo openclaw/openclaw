@@ -1,14 +1,13 @@
 import type { DatabaseSync } from "node:sqlite";
 import { readMemoryEntryOriginsInDatabase } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { withFreshOpenClawAgentDatabaseReadOnly } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   sqliteStringSet,
   tableExists,
-  withFreshOpenClawAgentDatabaseReadOnly,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import type { MemoryOriginReadInput, MemoryOriginReadOutput } from "./memory-entry-origins-task.js";
-import { extractPromotionKeys } from "./short-term-promotion-memory-write.js";
 
 type OriginReadDatabase = {
   memory_entry_origins: { entry_key: string; agent_id: string; session_id: string };
@@ -18,7 +17,6 @@ type OriginReadDatabase = {
     reason: string;
     created_at: number;
   };
-  memory_index_chunks: { text: string; source: string };
 };
 
 function queryOrigins(
@@ -49,38 +47,25 @@ function queryOrigins(
     }
     return { kind: request.kind, exists };
   }
-  if (request.kind === "session-tombstones") {
-    if (!db || !tableExists(db, "memory_session_tombstones")) {
-      return { kind: request.kind, rows: [] };
-    }
-    let query = getNodeSqliteKysely<OriginReadDatabase>(db)
-      .selectFrom("memory_session_tombstones")
-      .selectAll()
-      .where("agent_id", "=", request.agentId);
-    if (request.sessionIds) {
-      query = query.where("session_id", "in", sqliteStringSet(request.sessionIds));
-    }
-    return {
-      kind: request.kind,
-      rows: executeSqliteQuerySync(db, query.orderBy("session_id", "asc")).rows.map((row) => ({
-        sessionId: row.session_id,
-        agentId: row.agent_id,
-        reason: row.reason,
-        createdAt: row.created_at,
-      })),
-    };
+  if (!db || !tableExists(db, "memory_session_tombstones")) {
+    return { kind: request.kind, rows: [] };
   }
-  const keys = db
-    ? executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<OriginReadDatabase>(db)
-          .selectFrom("memory_index_chunks")
-          .select("text")
-          .where("source", "=", "memory")
-          .where("text", "like", "%openclaw-memory-promotion:%"),
-      ).rows.flatMap(({ text }) => extractPromotionKeys(text))
-    : [];
-  return { kind: request.kind, keys };
+  let query = getNodeSqliteKysely<OriginReadDatabase>(db)
+    .selectFrom("memory_session_tombstones")
+    .selectAll()
+    .where("agent_id", "=", request.agentId);
+  if (request.sessionIds) {
+    query = query.where("session_id", "in", sqliteStringSet(request.sessionIds));
+  }
+  return {
+    kind: request.kind,
+    rows: executeSqliteQuerySync(db, query.orderBy("session_id", "asc")).rows.map((row) => ({
+      sessionId: row.session_id,
+      agentId: row.agent_id,
+      reason: row.reason,
+      createdAt: row.created_at,
+    })),
+  };
 }
 
 export function readMemoryOriginsInWorker(request: MemoryOriginReadInput): MemoryOriginReadOutput {

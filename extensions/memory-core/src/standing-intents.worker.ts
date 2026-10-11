@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
-import { ensureOpenClawAgentStandingIntentsSchema } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   assertTransactionUsable,
+  ensureOpenClawAgentStandingIntentsSchema,
   runSqliteImmediateTransactionSync,
   withSqlitePostCommitPublications,
   type SqliteWorkerBackend,

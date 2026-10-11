@@ -1,10 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
-import {
-  openOpenClawAgentSqliteWorkerStore,
-  runOpenClawAgentWriteAdmission,
-  withOpenClawAgentDatabaseRuntime,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+import { openOpenClawAgentSqliteWorkerStoreV2 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { captureMemoryAgentDatabaseOptions } from "./memory-agent-database.js";
 import { memoryCpuProcessEntrypoints } from "./memory/manager-cpu-entrypoints.js";
 import {
@@ -40,38 +36,23 @@ async function executeStandingIntent<Key extends keyof StandingIntentOperations>
   const assertCurrent = params.assertCurrent;
   assertCurrent?.();
   const options = captureMemoryAgentDatabaseOptions(params.agentId);
-  return runOpenClawAgentWriteAdmission(
+  const worker = await openOpenClawAgentSqliteWorkerStoreV2<StandingIntentOperations>(
     options,
-    async (_identity, assertAdmission) =>
-      // Caller expiry refuses its operation, never a coalesced physical open.
-      withOpenClawAgentDatabaseRuntime(
-        options,
-        async ({ db }) => {
-          assertCurrent?.();
-          const worker = await openOpenClawAgentSqliteWorkerStore<StandingIntentOperations>(
-            options,
-            db,
-            {
-              moduleUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.standingIntents),
-              input: undefined,
-            },
-          );
-          try {
-            return await worker.run(
-              (scope) => scope.execute(command),
-              () => {
-                assertAdmission();
-                assertCurrent?.();
-              },
-            );
-          } finally {
-            await worker.close();
-          }
-        },
-        assertAdmission,
-      ),
-    true,
+    { version: 2, assertCurrent: () => assertCurrent?.() },
+    {
+      moduleUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.standingIntents),
+      input: undefined,
+    },
   );
+  try {
+    await worker.prepare();
+    return await worker.run(
+      (scope) => scope.execute(command),
+      () => assertCurrent?.(),
+    );
+  } finally {
+    await worker.close();
+  }
 }
 
 export async function createStandingIntent(params: {

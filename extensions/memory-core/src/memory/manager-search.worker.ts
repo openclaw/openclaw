@@ -105,8 +105,7 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
   if (
     request.kind === "origin-rows" ||
     request.kind === "origin-exists" ||
-    request.kind === "session-tombstones" ||
-    request.kind === "origin-index-keys"
+    request.kind === "session-tombstones"
   ) {
     return readMemoryOriginsInWorker(request);
   }

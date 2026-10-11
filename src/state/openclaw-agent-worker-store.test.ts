@@ -40,6 +40,7 @@ import type { OpenClawAgentDatabaseExecution } from "./openclaw-agent-execution-
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import {
   openOpenClawAgentSqliteWorkerStore,
+  openOpenClawAgentSqliteWorkerStoreV2,
   type OpenClawAgentSqliteWorkerStore,
 } from "./openclaw-agent-worker-store.js";
 import { agentWorkerStoreFixtureEntrypoint } from "./openclaw-agent-worker-store.runtime.test-support.js";
@@ -121,6 +122,63 @@ async function waitForFixtureEntry(marker: string, work: Promise<unknown>, signa
   );
   await withinTest(Promise.race([receipts.waitFor(marker, "entered"), settled]), signal);
 }
+
+it("V2 preserves absence until explicit worker preparation and rejects retained calls after close", async () => {
+  const worker = await openOpenClawAgentSqliteWorkerStoreV2<AgentWorkerFixtureOperations>(
+    options,
+    { version: 2, assertCurrent() {} },
+    { moduleUrl: resolveRuntimeWorkerUrl(agentWorkerStoreFixtureEntrypoint), input: undefined },
+  );
+  workers.add(worker);
+  expect(
+    await worker.executeExisting({ type: "inspect", input: undefined }, () => {}),
+  ).toBeUndefined();
+  expect(fs.existsSync(options.path)).toBe(false);
+  await worker.prepare();
+  expect(fs.existsSync(options.path)).toBe(true);
+  const { db } = openOpenClawAgentDatabase(options);
+  db.exec("CREATE TABLE worker_proof (value TEXT NOT NULL)");
+  expect(
+    await worker.execute({ type: "append", input: { value: "worker-owned" } }, () => {}),
+  ).toBeGreaterThan(0);
+  expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([{ value: "worker-owned" }]);
+  await worker.close();
+  await expect(worker.prepare()).rejects.toThrow("closed");
+  await expect(worker.execute({ type: "inspect", input: undefined }, () => {})).rejects.toThrow(
+    "closed",
+  );
+});
+
+it("V2 retains owner authority through commit even when the operation guard remains current", async () => {
+  const { db } = openOpenClawAgentDatabase(options);
+  db.exec("CREATE TABLE worker_proof (value TEXT NOT NULL)");
+  let current = true;
+  const worker = await openOpenClawAgentSqliteWorkerStoreV2<AgentWorkerFixtureOperations>(
+    options,
+    {
+      version: 2,
+      assertCurrent() {
+        if (!current) {
+          throw new Error("V2 owner revoked");
+        }
+      },
+    },
+    {
+      moduleUrl: resolveRuntimeWorkerUrl(agentWorkerStoreFixtureEntrypoint),
+      input: undefined,
+      onAdmitted(request) {
+        if (request.stage === "transaction") {
+          current = false;
+        }
+      },
+    },
+  );
+  workers.add(worker);
+  await expect(
+    worker.execute({ type: "append", input: { value: "refused" } }, () => {}),
+  ).rejects.toThrow("V2 owner revoked");
+  expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([]);
+});
 
 it("retains an idle agent executor for thirty minutes and renews the window after reborrowing", async () => {
   const { db, worker } = await setup();

@@ -26,6 +26,7 @@ import {
   type SqliteWorkerStore,
 } from "../infra/sqlite-worker-store.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import {
   getGatewayRestartDrainSignal,
   getGatewayShutdownCleanupSignal,
@@ -82,6 +83,17 @@ export type OpenClawAgentSqliteWorkerStore<Operations extends SqliteWorkerOperat
   close(): Promise<void>;
 };
 
+export type OpenClawAgentSqliteWorkerAuthorityV2 = {
+  version: 2;
+  assertCurrent(): void;
+};
+
+export type OpenClawAgentSqliteWorkerStoreV2<Operations extends SqliteWorkerOperations> =
+  OpenClawAgentSqliteWorkerStore<Operations> & {
+    /** Explicitly admit/create storage in the worker; ordinary commands preserve absence. */
+    prepare(options?: { signal?: AbortSignal }): Promise<void>;
+  };
+
 /** Send a paired module's command through the caller's already-admitted executor. */
 export function executeOpenClawAgentWorkerPublication<
   Operations extends SqliteWorkerOperations,
@@ -135,6 +147,12 @@ type AgentWorkerPublicationOptions = {
   onAdmitted?: (request: SqliteWorkerAdmissionRequest) => void;
 };
 
+/** @deprecated Use openOpenClawAgentSqliteWorkerStoreV2 without a native handle; removed in the next Plugin SDK major. */
+export function openOpenClawAgentSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
+  inputOptions: OpenClawAgentDatabaseOptions,
+  publicationSource: DatabaseSync,
+  worker: AgentWorkerPublicationOptions,
+): Promise<OpenClawAgentSqliteWorkerStore<Operations>>;
 export function openOpenClawAgentSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
   inputOptions: OpenClawAgentDatabaseOptions,
   publicationSource: DatabaseSync | { execution: AgentWorkerPublicationExecution },
@@ -157,6 +175,38 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
   publicationSource: DatabaseSync | { execution: AgentWorkerPublicationExecution },
   worker: AgentWorkerPublicationOptions,
 ): Promise<OpenClawAgentSqliteWorkerStore<Operations>> {
+  if (!("execution" in publicationSource)) {
+    warnPluginSdkDeprecation({
+      family: "sqlite-runtime-native-access",
+      method: "openOpenClawAgentSqliteWorkerStore(nativeDatabase)",
+      replacement: "openOpenClawAgentSqliteWorkerStoreV2",
+    });
+  }
+  return createOpenClawAgentSqliteWorkerStore(inputOptions, publicationSource, worker);
+}
+
+/** A retained worker capability; no writable native handle leaves the storage owner. */
+export async function openOpenClawAgentSqliteWorkerStoreV2<
+  Operations extends SqliteWorkerOperations,
+>(
+  inputOptions: OpenClawAgentDatabaseOptions,
+  authority: OpenClawAgentSqliteWorkerAuthorityV2,
+  worker: AgentWorkerPublicationOptions,
+): Promise<OpenClawAgentSqliteWorkerStoreV2<Operations>> {
+  if (authority.version !== 2 || typeof authority.assertCurrent !== "function") {
+    throw new Error("Agent worker storage requires V2 live authority");
+  }
+  return createOpenClawAgentSqliteWorkerStore(inputOptions, { authority }, worker);
+}
+
+async function createOpenClawAgentSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
+  inputOptions: OpenClawAgentDatabaseOptions,
+  publicationSource:
+    | DatabaseSync
+    | { execution: AgentWorkerPublicationExecution }
+    | { authority: OpenClawAgentSqliteWorkerAuthorityV2 },
+  worker: AgentWorkerPublicationOptions,
+): Promise<OpenClawAgentSqliteWorkerStoreV2<Operations>> {
   const env = cloneEnvWithPlatformSemantics(inputOptions.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const options = {
@@ -165,15 +215,12 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
     env,
     path: resolveOpenClawAgentSqlitePath({ ...inputOptions, env }),
   };
-  const capturedExecution =
-    "execution" in publicationSource ? publicationSource.execution : undefined;
-  const expectedDatabase = "execution" in publicationSource ? undefined : publicationSource;
-  if (
-    capturedExecution &&
-    (capturedExecution.agentId !== options.agentId || capturedExecution.path !== options.path)
-  ) {
-    throw new Error("Agent publication source differs from its captured executor");
-  }
+  const ownedAuthority = "authority" in publicationSource ? publicationSource.authority : undefined;
+  ownedAuthority?.assertCurrent();
+  const expectedDatabase =
+    "execution" in publicationSource || "authority" in publicationSource
+      ? undefined
+      : publicationSource;
   const prepared = expectedDatabase
     ? readOpenClawAgentDatabaseIdentity({ db: expectedDatabase })
     : undefined;
@@ -194,6 +241,11 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
   const state = captureOpenClawStateDatabaseReadAdmission(
     resolveOpenClawStateSqlitePath(options.env),
   );
+  const capturedExecution = ownedAuthority
+    ? captureOpenClawAgentDatabaseExecution(options)
+    : "execution" in publicationSource
+      ? publicationSource.execution
+      : undefined;
   let revoked = false;
   let closing: Promise<void> | undefined;
   let drainExecution: OpenClawAgentDatabaseExecution | undefined;
@@ -211,6 +263,9 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
       throw new AgentDatabaseExecutionAdmissionClosedError("Agent database Worker owner is closed");
     }
     state.assertCurrent();
+    if (!cleanup) {
+      ownedAuthority?.assertCurrent();
+    }
     if (capturedExecution) {
       capturedExecution.assertCurrent();
       return;
@@ -226,20 +281,15 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
       throw new Error("Borrowed agent database closed or changed before Worker admission");
     }
   };
-  assertHeld();
-  if (expectedIdentity) {
-    assertExistingDatabaseIdentity(
-      options.path,
-      `file:${expectedIdentity.physicalIdentity}`,
-      expectedIdentity.birthtime,
-    );
-  }
   const close = (): Promise<void> => {
     revoked = true;
     cleanupListener[Symbol.dispose]();
     closing ??= (async () => {
       await Promise.allSettled(pending);
       await releaseDrainExecution();
+      if (ownedAuthority) {
+        await capturedExecution?.release();
+      }
       releaseBorrow?.();
       releaseBorrow = undefined;
       unregisterAgent?.();
@@ -258,6 +308,20 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
       .catch(reportCompletedPublicationCleanupFailure);
   });
   try {
+    if (
+      capturedExecution &&
+      (capturedExecution.agentId !== options.agentId || capturedExecution.path !== options.path)
+    ) {
+      throw new Error("Agent publication source differs from its captured executor");
+    }
+    assertHeld();
+    if (expectedIdentity) {
+      assertExistingDatabaseIdentity(
+        options.path,
+        `file:${expectedIdentity.physicalIdentity}`,
+        expectedIdentity.birthtime,
+      );
+    }
     unregisterAgent = registerOpenClawAgentDatabaseAsyncResource({
       agentId: options.agentId,
       path: options.path,
@@ -428,6 +492,14 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
     }
   };
   return {
+    async prepare(prepareOptions) {
+      prepareOptions?.signal?.throwIfAborted();
+      return runPublication(
+        () => {},
+        (execution, source) => execution.prepare(source, prepareOptions?.signal),
+        prepareOptions?.signal,
+      );
+    },
     execute(command, assertCurrent, commandOptions) {
       return executeCommand(
         command,
