@@ -35,41 +35,6 @@ type Rows = {
 };
 type Row = Rows[keyof Rows];
 
-/** Request digests bind content; authority publication does not materialize presentation text. */
-export const sharedGitHubPublicationAuthorityColumns = [
-  "request_id",
-  "idempotency_key",
-  "request_digest",
-  "session_id",
-  "session_key",
-  "agent_id",
-  "worktree_id",
-  "repository_fingerprint",
-  "claim_id",
-  "run_id",
-  "environment_id",
-  "owner_epoch",
-  "placement_generation",
-  "identity_source",
-  "identity_profile_id",
-  "identity_account_id",
-  "identity_login",
-  "status",
-  "gateway_instance_id",
-  "repository",
-  "branch",
-  "base_branch",
-  "source_head_commit",
-  "source_index_tree",
-  "workspace_tree",
-  "head_commit",
-  "pull_request_url",
-  "error_code",
-  "created_at_ms",
-  "updated_at_ms",
-  "reported_at_ms",
-] as const satisfies readonly (keyof Rows["shared"])[];
-
 type Receipt = SqliteCommitReceipt<Row>;
 type Change =
   | { kind: "committed"; receipt: Receipt }
