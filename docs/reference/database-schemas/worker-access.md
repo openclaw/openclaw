@@ -813,6 +813,9 @@ The MAIN replica retains complete committed hot state. A synchronous snapshot
 reads installed facts; an ordered read joins the existing physical writer FIFO
 and requests actor state only on a miss. Commit receipts identify the command,
 phase, and before/after version, and install before command acknowledgement.
+If a receipt supersedes an in-flight read, that read uses the current replica.
+An empty replica permits one worker-read retry. A replacement before disclosure
+is reacquired once and authorized again; revoked authority still refuses the read.
 Existing session publications and in-process write receipts invalidate only
 the affected logical keys and shared transcript/window dependencies. Unrelated
 session snapshots survive. Raw writes with unknown coverage, schema changes,
@@ -1012,6 +1015,15 @@ migrations are complete. Outside writers must use the Gateway or hold exclusive
 ownership while it is stopped. Schemas, stored bytes, retention, and update
 behavior are unchanged; published updaters need no migration for these
 process-local facts.
+
+Transcript projection readers carry generation, raw sequence, mutation time, and
+cold-state facts through their existing synchronous read snapshot. Bounded context
+consumers reuse those facts for watermark and hot-state reads; managed native writes,
+rollback, and the end of the snapshot retire them. Activity recap selection, ancestry,
+and byte-bounded pages share that same snapshot rather than reopening it for each
+step. The SQL projections that exclude large payloads remain in the database.
+These facts do not replace live permission or replay-admission checks. No schema,
+retention, stored bytes, or update behavior changes.
 
 ### Approval, placement, and workspace receipts
 

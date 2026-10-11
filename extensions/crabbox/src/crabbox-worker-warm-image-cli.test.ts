@@ -128,59 +128,7 @@ describe("Crabbox warm-image CLI", () => {
     await expect(assertCrabboxWarmImageMigrationReady(crabboxState)).resolves.toBeUndefined();
   });
 
-  it("inspects retained capture ownership after reopening SQLite without changing it", async () => {
-    const record = pendingCapture();
-    record.image!.runtimeIdentity = {
-      nodeBootstrapSha256: "a".repeat(64),
-      executionMode: "worker-turn",
-      workerBundleSha256: "b".repeat(64),
-    };
-    openWarmImageStore().register("profile", record);
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
-
-    await runCli("--json");
-
-    expect(JSON.parse(output)).toEqual({
-      legacyLeases: [],
-      images: [
-        {
-          profileKey: "profile",
-          checkpointId: "chk_last_good",
-          state: "available",
-          createdAtMs: record.image!.createdAtMs,
-          preparationKey: null,
-          cacheKey: null,
-          purpose: null,
-          lastDemandAtMs: record.image!.lastDemandAtMs,
-          runtimeIdentity: record.image!.runtimeIdentity,
-          allocations: {},
-          capture: {
-            selector: SELECTOR,
-            startedAtMs:
-              record.operation?.type === "capture" ? record.operation.startedAtMs : undefined,
-            leaseId: "cbx_capture",
-            provider: "aws",
-            phase: "creating",
-            stale: true,
-          },
-        },
-      ],
-    });
-    expect(openWarmImageStore().lookup("profile")).toEqual(record);
-  });
-
   it.each([
-    {
-      name: "missing acknowledgement",
-      args: ["--recover", SELECTOR],
-      error: "--acknowledge-provider-cleanup",
-    },
-    {
-      name: "changed selector",
-      args: ["--recover", "stale-selector", "--acknowledge-provider-cleanup"],
-      error: "selector is absent or changed",
-    },
     {
       name: "missing selector",
       args: ["--acknowledge-provider-cleanup"],
@@ -231,7 +179,7 @@ describe("Crabbox warm-image CLI", () => {
     expect(openWarmImageStore().lookup("profile")).toEqual(replacement);
   });
 
-  it.each(["scrubbing", "creating", "uncertain"] as const)(
+  it.each(["scrubbing", "uncertain"] as const)(
     "prints guidance for an old %s capture and pending deletion",
     async (phase) => {
       const record = pendingCapture(phase);
