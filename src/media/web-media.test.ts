@@ -260,6 +260,36 @@ describe("loadWebMedia", () => {
     );
   });
 
+  it("keys reused encodes by the byte cap and keeps them isolated from caller edits", async () => {
+    // Opaque noise wider than the preferred side always re-encodes, and its JPEG size tracks the cap.
+    const width = 2200;
+    const height = 64;
+    const pixels = Buffer.alloc(width * height * 4);
+    for (let index = 0; index < pixels.length; index += 1) {
+      pixels[index] = index % 4 === 3 ? 255 : (Math.imul(index, 2654435761) >>> 24) & 0xff;
+    }
+    const png = encodePngRgba(pixels, width, height);
+    const optimize = (maxBytes: number, reuseEncodes: boolean) =>
+      media.optimizeImageBufferForWebMedia({
+        buffer: png,
+        contentType: "image/png",
+        maxBytes,
+        reuseEncodes,
+      });
+
+    const first = await optimize(256 * 1024, true);
+    const reused = await optimize(256 * 1024, true);
+    // A caller that edits its bytes must not change what later replays receive.
+    first.buffer.fill(0);
+    reused.buffer.fill(0);
+    const replayed = await optimize(256 * 1024, true);
+    const tighter = await optimize(24 * 1024, true);
+
+    expect(replayed.buffer).toEqual((await optimize(256 * 1024, false)).buffer);
+    expect(tighter.buffer).toEqual((await optimize(24 * 1024, false)).buffer);
+    expect(tighter.buffer.length).toBeLessThan(replayed.buffer.length);
+  });
+
   it("preserves oriented JPEG bytes with a stale HEIF filename and model limits", async () => {
     const jpeg = await resizeToJpeg({
       buffer: createSolidPngBuffer(32, 16, { r: 12, g: 34, b: 56 }),

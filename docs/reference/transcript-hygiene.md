@@ -111,7 +111,10 @@ original stored image bytes, so failed checks are never remembered and a corrupt
 image stays omitted on every replay. Successful outcomes (verified as-is, or the
 downscaled replacement) are cached in process by content digest and limits,
 bounded to 16 MiB, so later turns reuse them instead of decoding the same bytes
-again.
+again. Stored attachment originals that replay loads from disk, such as a phone
+photo wider than 2048 px, are re-encoded before this check; that encode is also
+cached in process by content digest and encode settings, bounded to 32 MiB, so
+every later model request reuses it instead of re-encoding the original.
 This also helps
 control image-driven token pressure for vision-capable models: lower max
 dimensions reduce token usage, higher dimensions preserve detail.

@@ -25,7 +25,7 @@ import { resolveMediaReferenceLocalPath } from "../../../media/media-reference.j
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import { finalizeRuntimePromptImages } from "../../../media/runtime-prompt-image-provenance.js";
 import { getMediaDir } from "../../../media/store.js";
-import { loadWebMedia, type WebMediaResult } from "../../../media/web-media.js";
+import { loadReplayWebMedia, type WebMediaResult } from "../../../media/web-media.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import { resolveUserPath } from "../../../utils.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -199,16 +199,17 @@ async function loadMediaFromRef(
       targetPath = path.resolve(ref.workspaceDir ?? options.workspaceDir, targetPath);
     }
 
+    // History hydration loads the same stored originals into every later model request.
     const media = sandbox
-      ? await loadWebMedia(targetPath, {
+      ? await loadReplayWebMedia(targetPath, {
           maxBytes: options.maxBytes,
           sandboxValidated: true,
           readFile: createSandboxBridgeReadFile({ sandbox }),
         })
-      : await loadWebMedia(
-          targetPath,
-          localRoots ? { maxBytes: options.maxBytes, localRoots } : options.maxBytes,
-        );
+      : await loadReplayWebMedia(targetPath, {
+          maxBytes: options.maxBytes,
+          ...(localRoots ? { localRoots } : {}),
+        });
 
     options.signal?.throwIfAborted();
     return media;
