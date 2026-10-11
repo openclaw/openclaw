@@ -48,6 +48,27 @@ describe("SecretRef docs file boundary", () => {
     expect(result.stdout).toContain("SecretRef reference docs are up to date.");
   }, 60_000);
 
+  it("loads source-owned channel security surfaces when bundled plugins are disabled", () => {
+    const repoRoot = path.resolve(import.meta.dirname, "../..");
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        path.join(repoRoot, "scripts/tsx.mjs"),
+        path.join(repoRoot, "scripts/generate-secretref-docs.ts"),
+        "--check",
+      ],
+      {
+        cwd: repoRoot,
+        encoding: "utf8",
+        env: { ...process.env, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("SecretRef reference docs are up to date.");
+  }, 60_000);
+
   it("reads and writes a regular file under docs/reference", async () => {
     const { root, filePath } = makeDocsFile();
     expect(readSecretRefDocsFile(root, filePath)).toBe("original");

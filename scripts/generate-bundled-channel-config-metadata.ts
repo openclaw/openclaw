@@ -9,7 +9,8 @@ import {
   normalizeUniqueTrimmedStringList,
   uniqueStrings,
 } from "../packages/normalization-core/src/string-normalization.ts";
-import { loadBundledPluginPublicArtifactModuleSync } from "../src/plugins/public-surface-loader.js";
+import { loadValidatedPublicSurfaceModule } from "../src/plugins/public-surface-loader.js";
+import { resolvePluginRootPublicSurfacePath } from "../src/plugins/public-surface-runtime.js";
 import { collectBundledPluginSources } from "./lib/bundled-plugin-source-utils.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { formatGeneratedModule } from "./lib/format-generated-module.mts";
@@ -101,28 +102,30 @@ function resolveChannelUnsupportedSecretRefSurfacePatterns(
   source: BundledPluginSource,
   channelId: string,
 ): string[] {
-  try {
-    const surface = loadBundledPluginPublicArtifactModuleSync<BundledChannelSecuritySurface>({
-      dirName: source.dirName,
-      artifactBasename: "security-contract-api.js",
-    });
-    const prefix = `channels.${channelId}.`;
-    return [
-      ...new Set(
-        (surface.unsupportedSecretRefSurfacePatterns ?? []).filter(
-          (pattern): pattern is string => typeof pattern === "string" && pattern.startsWith(prefix),
-        ),
-      ),
-    ].toSorted((left, right) => left.localeCompare(right));
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      error.message.startsWith("Unable to resolve bundled plugin public surface ")
-    ) {
-      return [];
-    }
-    throw error;
+  const artifactBasename = "security-contract-api.js";
+  const modulePath = resolvePluginRootPublicSurfacePath({
+    pluginRoot: source.pluginDir,
+    pluginId: channelId,
+    artifactBasename,
+  });
+  if (!modulePath) {
+    return [];
   }
+  const surface = loadValidatedPublicSurfaceModule({
+    modulePath,
+    boundaryRoot: source.pluginDir,
+    surfaceLabel: `plugin public surface ${artifactBasename}`,
+    origin: "bundled",
+    pluginId: channelId,
+  }) as BundledChannelSecuritySurface;
+  const prefix = `channels.${channelId}.`;
+  return [
+    ...new Set(
+      (surface.unsupportedSecretRefSurfacePatterns ?? []).filter(
+        (pattern): pattern is string => typeof pattern === "string" && pattern.startsWith(prefix),
+      ),
+    ),
+  ].toSorted((left, right) => left.localeCompare(right));
 }
 
 async function collectBundledChannelConfigMetadata(repoRoot: string) {
