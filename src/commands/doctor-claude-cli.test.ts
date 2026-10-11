@@ -56,6 +56,7 @@ async function withTempHome<T>(
     return await withEnvAsync(
       {
         HOME: homeDir,
+        CLAUDE_CONFIG_DIR: undefined,
         OPENCLAW_HOME: homeDir,
         OPENCLAW_STATE_DIR: path.join(homeDir, ".openclaw"),
         PATH: binDir,
@@ -244,6 +245,41 @@ describe("noteClaudeCliHealth", () => {
       expect(body).toContain("Control UI Settings → Import Memory");
       expect(body).not.toContain("migrate claude");
       expect(body).not.toContain("- Fix:");
+    });
+  });
+
+  it("locates excluded Claude memory under CLAUDE_CONFIG_DIR", async () => {
+    await withTempHome(async ({ homeDir, workspaceDir }) => {
+      const projectDir = resolveClaudeCliProjectDirForWorkspace({ workspaceDir, homeDir });
+      // The default profile's memory is not what the relocated profile loads.
+      fs.mkdirSync(path.join(projectDir, "memory"), { recursive: true });
+      fs.writeFileSync(path.join(projectDir, "memory", "MEMORY.md"), "- stale\n");
+      const profileDir = path.join(homeDir, "claude-profile");
+      const memoryDir = path.join(profileDir, "projects", path.basename(projectDir), "memory");
+      fs.mkdirSync(memoryDir, { recursive: true });
+      fs.writeFileSync(path.join(memoryDir, "MEMORY.md"), "- fact\n");
+      fs.writeFileSync(path.join(memoryDir, "fact.md"), "fact\n");
+      mockClaudeAuthentication(true);
+
+      await withEnvAsync({ CLAUDE_CONFIG_DIR: profileDir }, async () => {
+        const noteFn = vi.fn();
+        noteClaudeCliHealth(defaultClaudeConfig, { workspaceDir, noteFn });
+        const body = noteBody(noteFn);
+        expect(body).toContain("Claude Code memory: 2 file(s)");
+        expect(body).toContain(`--from ${quote(memoryDir)}`);
+
+        fs.mkdirSync(path.join(homeDir, "claude-notes"));
+        fs.writeFileSync(path.join(homeDir, "claude-notes", "MEMORY.md"), "- fact\n");
+        fs.writeFileSync(
+          path.join(profileDir, "settings.json"),
+          JSON.stringify({ autoMemoryDirectory: "~/claude-notes" }),
+        );
+        const configured = vi.fn();
+        noteClaudeCliHealth(defaultClaudeConfig, { workspaceDir, noteFn: configured });
+        expect(noteBody(configured)).toContain(
+          `Claude Code memory: 1 file(s) in $OPENCLAW_HOME${path.sep}claude-notes (Claude Code autoMemoryDirectory)`,
+        );
+      });
     });
   });
 

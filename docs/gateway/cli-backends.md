@@ -323,7 +323,9 @@ To move existing Claude Code memory into OpenClaw:
 
   When `~/.claude/settings.json` sets `autoMemoryDirectory`, Claude Code keeps
   its auto memory in that one directory instead. Doctor reports that directory,
-  and **Import Memory** lists it as its own collection.
+  and **Import Memory** lists it as its own collection. When the Gateway runs
+  with `CLAUDE_CONFIG_DIR`, Doctor and the import read that directory in place
+  of `~/.claude`.
 
 - **`~/.claude/CLAUDE.md`:** these rules apply to every Claude Code session on
   the host, so OpenClaw does not copy them automatically. Move the rules an

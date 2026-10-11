@@ -48,8 +48,17 @@ function countMarkdownFiles(dirPath: string): number {
   }
 }
 
+/** Claude Code inherits CLAUDE_CONFIG_DIR, which relocates its settings and project memory. */
+function resolveClaudeHomeDir(env: NodeJS.ProcessEnv, defaultProjectDir: string): string {
+  const relocated = env.CLAUDE_CONFIG_DIR?.trim();
+  return relocated ? path.resolve(relocated) : path.resolve(defaultProjectDir, "..", "..");
+}
+
 /** Claude Code keeps auto memory in the user setting `autoMemoryDirectory` when one is set. */
-function resolveConfiguredAutoMemoryDir(claudeHomeDir: string): string | undefined {
+function resolveConfiguredAutoMemoryDir(
+  claudeHomeDir: string,
+  userHomeDir: string,
+): string | undefined {
   let settings: unknown;
   try {
     settings = JSON.parse(fs.readFileSync(path.join(claudeHomeDir, "settings.json"), "utf8"));
@@ -61,8 +70,8 @@ function resolveConfiguredAutoMemoryDir(claudeHomeDir: string): string | undefin
   if (path.isAbsolute(dir)) {
     return dir;
   }
-  // Claude Code accepts only absolute paths or `~/`, relative to the home that owns `.claude`.
-  return dir.startsWith("~/") ? path.join(path.dirname(claudeHomeDir), dir.slice(2)) : undefined;
+  // Claude Code accepts only absolute paths or `~/`.
+  return dir.startsWith("~/") ? path.join(userHomeDir, dir.slice(2)) : undefined;
 }
 
 // The Control UI import runs inside the Gateway; `openclaw migrate` needs the Gateway stopped.
@@ -225,7 +234,10 @@ export function noteClaudeCliHealth(
   const firstProjectDir = workspaceTargets[0]?.directories[1][0];
   const configuredMemoryDir =
     excludesNativeMemory && firstProjectDir
-      ? resolveConfiguredAutoMemoryDir(path.resolve(firstProjectDir, "..", ".."))
+      ? resolveConfiguredAutoMemoryDir(
+          resolveClaudeHomeDir(env, firstProjectDir),
+          path.resolve(firstProjectDir, "..", "..", ".."),
+        )
       : undefined;
   const hasClaudeImport = (workspaceDir: string) =>
     probeDirectoryHealth(path.join(workspaceDir, "memory", "imports", "claude-code")) !== "missing";
@@ -259,7 +271,12 @@ export function noteClaudeCliHealth(
     }
 
     const [[workspaceDir], [projectDir]] = target.directories;
-    const nativeMemoryDir = path.join(projectDir, "memory");
+    const nativeMemoryDir = path.join(
+      resolveClaudeHomeDir(env, projectDir),
+      "projects",
+      path.basename(projectDir),
+      "memory",
+    );
     const nativeMemoryFiles =
       excludesNativeMemory && !configuredMemoryDir ? countMarkdownFiles(nativeMemoryDir) : 0;
     if (nativeMemoryFiles > 0 && !hasClaudeImport(workspaceDir)) {
