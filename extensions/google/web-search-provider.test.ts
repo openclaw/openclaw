@@ -729,6 +729,45 @@ describe("google web search provider", () => {
     );
   });
 
+  it("reaches a private proxy origin only when the operator declared it", async () => {
+    const createProxyTool = () =>
+      createGeminiWebSearchProvider().createTool({
+        config: {
+          plugins: {
+            entries: {
+              google: {
+                config: {
+                  webSearch: {
+                    apiKey: "proxy-placeholder",
+                    baseUrl: "http://172.17.0.1:8443/google/v1beta",
+                  },
+                },
+              },
+            },
+          },
+        },
+        searchConfig: { provider: "gemini", cacheTtlMinutes: 0 },
+      });
+
+    const refusedFetch = installGeminiFetch();
+    await withEnvAsync({ OPENCLAW_GOOGLE_GENERATIVE_AI_TRUSTED_ORIGINS: undefined }, async () => {
+      await expect(createProxyTool()?.execute({ query: "private proxy" })).rejects.toThrow();
+    });
+    expect(refusedFetch).not.toHaveBeenCalled();
+
+    const mockFetch = installGeminiFetch();
+    await withEnvAsync(
+      { OPENCLAW_GOOGLE_GENERATIVE_AI_TRUSTED_ORIGINS: "http://172.17.0.1:8443" },
+      async () => {
+        await createProxyTool()?.execute({ query: "private proxy" });
+      },
+    );
+    expect(getGeminiFetchUrl(mockFetch)).toBe(
+      "http://172.17.0.1:8443/google/v1beta/models/gemini-3.6-flash:generateContent",
+    );
+    expect(getFetchHeaders(mockFetch)["x-goog-api-key"]).toBe("proxy-placeholder");
+  });
+
   it("keeps plugin webSearch.baseUrl ahead of provider-level google.baseUrl", async () => {
     const mockFetch = installGeminiFetch();
     const provider = createGeminiWebSearchProvider();

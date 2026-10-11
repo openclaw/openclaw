@@ -1,5 +1,5 @@
 // Google tests cover api plugin behavior.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   isGoogleVertexBaseUrl,
   isGoogleVertexHostname,
@@ -11,6 +11,11 @@ import {
   resolveGoogleGenerativeAiTransport,
   shouldNormalizeGoogleGenerativeAiProviderConfig,
 } from "./api.js";
+import {
+  GOOGLE_GENERATIVE_AI_TRUSTED_ORIGINS_ENV,
+  isOperatorTrustedPrivateGoogleGenerativeAiBaseUrl,
+  resolveTrustedGoogleGenerativeAiOrigins,
+} from "./src/google-trusted-origins.js";
 
 describe("google generative ai helpers", () => {
   it("normalizes only explicit Google Generative AI baseUrls", () => {
@@ -263,5 +268,86 @@ describe("google generative ai helpers", () => {
       request: { allowPrivateNetwork: true },
     });
     expect(config.allowPrivateNetwork).toBe(true);
+  });
+
+  describe("operator-declared trusted origins", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    const resolveImageRequest = (baseUrl: string) =>
+      resolveGoogleGenerativeAiHttpRequestConfig({
+        apiKey: "placeholder",
+        baseUrl,
+        capability: "image",
+        transport: "http",
+      });
+
+    it("accepts only bare https origins, or http on a private IP literal", () => {
+      const origins = resolveTrustedGoogleGenerativeAiOrigins({
+        [GOOGLE_GENERATIVE_AI_TRUSTED_ORIGINS_ENV]: [
+          "https://gemini-proxy.example.com",
+          "http://172.17.0.1:8443",
+          "http://[::1]:9000",
+          "http://proxy.example.com",
+          "http://8.8.8.8",
+          "https://other.example.com/gemini",
+          "https://user@third.example.com",
+          "https://fourth.example.com?x=1",
+          "not a url",
+        ].join(", "),
+      });
+      expect([...origins]).toEqual([
+        "https://gemini-proxy.example.com",
+        "http://172.17.0.1:8443",
+        "http://[::1]:9000",
+      ]);
+    });
+
+    it("keeps the official-origin pin when no origin is declared", () => {
+      vi.stubEnv(GOOGLE_GENERATIVE_AI_TRUSTED_ORIGINS_ENV, "");
+      expect(() => resolveImageRequest("http://172.17.0.1:8443/google/v1beta")).toThrow(
+        "Google Generative AI baseUrl must use https://generativelanguage.googleapis.com",
+      );
+    });
+
+    it("routes credentialed requests only to the exact declared origin", () => {
+      vi.stubEnv(GOOGLE_GENERATIVE_AI_TRUSTED_ORIGINS_ENV, "http://172.17.0.1:8443");
+      expect(resolveImageRequest("http://172.17.0.1:8443/google/v1beta").baseUrl).toBe(
+        "http://172.17.0.1:8443/google/v1beta",
+      );
+      for (const baseUrl of [
+        "http://172.17.0.1:8444/google/v1beta",
+        "https://172.17.0.1:8443/google/v1beta",
+        "http://172.17.0.2:8443/google/v1beta",
+        "https://proxy.example.com/v1beta",
+      ]) {
+        expect(() => resolveImageRequest(baseUrl)).toThrow(
+          "Google Generative AI baseUrl must use https://generativelanguage.googleapis.com",
+        );
+      }
+      expect(resolveImageRequest("https://generativelanguage.googleapis.com").baseUrl).toBe(
+        "https://generativelanguage.googleapis.com/v1beta",
+      );
+    });
+
+    it("treats only declared private IP origins as self-hosted web search endpoints", () => {
+      const env = {
+        [GOOGLE_GENERATIVE_AI_TRUSTED_ORIGINS_ENV]:
+          "http://172.17.0.1:8443 https://gemini-proxy.example.com",
+      };
+      expect(
+        isOperatorTrustedPrivateGoogleGenerativeAiBaseUrl("http://172.17.0.1:8443/google", env),
+      ).toBe(true);
+      expect(
+        isOperatorTrustedPrivateGoogleGenerativeAiBaseUrl("https://gemini-proxy.example.com", env),
+      ).toBe(false);
+      expect(
+        isOperatorTrustedPrivateGoogleGenerativeAiBaseUrl("http://10.0.0.5:8443/google", env),
+      ).toBe(false);
+      expect(isOperatorTrustedPrivateGoogleGenerativeAiBaseUrl("http://172.17.0.1:8443", {})).toBe(
+        false,
+      );
+    });
   });
 });

@@ -685,6 +685,33 @@ roundtrip; pass `--openai-audio-cycles 3` for a short repeated lifecycle soak.
   </Accordion>
 </AccordionGroup>
 
+## Trusted proxy origins
+
+Image generation, audio and video understanding, and speech send the Google
+credential only to `https://generativelanguage.googleapis.com` and reject any
+other `models.providers.google.baseUrl`. A deployment that injects the real key
+in its own reverse proxy, so the Gateway holds only a placeholder, can declare
+that proxy's exact origin in the Gateway process environment:
+
+```bash
+OPENCLAW_GOOGLE_GENERATIVE_AI_TRUSTED_ORIGINS=http://172.17.0.1:8443
+```
+
+- Entries are bare origins (scheme, host, optional port), separated by commas
+  or spaces. Entries with a path, query, fragment or userinfo are ignored.
+- `https` origins may use any host. Plain `http` is accepted only for a loopback
+  or private (RFC 1918) IP literal.
+- The base URL may add a path under that origin, for example
+  `http://172.17.0.1:8443/google/v1beta`.
+- Gemini web search also reaches a declared origin on a private IP literal,
+  which trusted web-tool endpoints otherwise refuse.
+- Unset keeps today's behavior.
+
+Requests to a private address still need the usual opt-in for the capability,
+such as `models.providers.google.request.allowPrivateNetwork` for media
+understanding or `tools.web.fetch.ssrfPolicy.allowedHostnames` for image
+generation.
+
 ## Related
 
 <CardGroup cols={2}>
