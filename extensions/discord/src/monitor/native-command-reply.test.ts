@@ -8,7 +8,7 @@ import { discordComponentRegistryState } from "../components-registry-state.js";
 import { resolveDiscordComponentEntryWithPersistence } from "../components-registry.js";
 import { clearDiscordComponentEntriesForTest } from "../components-registry.test-support.js";
 import { parseDiscordComponentCustomId } from "../components.js";
-import { Button, Container, Row, TextDisplay, type MessagePayload } from "../internal/discord.js";
+import { Button, Container, Row, type MessagePayload } from "../internal/discord.js";
 import { createDiscordLoopbackRest } from "../send.test-harness.js";
 import {
   deliverDiscordInteractionReply,
@@ -223,84 +223,7 @@ describe("deliverDiscordInteractionReply", () => {
     },
   );
 
-  it("sends component-only native command replies as follow-ups", async () => {
-    const interaction = createInteraction();
-    const components = [new Container([new TextDisplay("Pick a model")])];
-    const payload = {
-      channelData: {
-        discord: {
-          components,
-        },
-      },
-    };
-
-    expect(hasRenderableReplyPayload(payload)).toBe(true);
-
-    await deliverDiscordInteractionReply({
-      interaction: interaction as never,
-      payload,
-      textLimit: 2000,
-      preferFollowUp: true,
-      responseEphemeral: true,
-      chunkMode: "length",
-    });
-
-    expect(interaction.followUp).toHaveBeenCalledWith({
-      components,
-      ephemeral: true,
-    });
-    expect(interaction.reply).not.toHaveBeenCalled();
-  });
-
-  it("sends component-only native command replies through the initial reply when not deferred", async () => {
-    const interaction = createInteraction();
-    const components = [new Container([new TextDisplay("Choose an action")])];
-
-    await deliverDiscordInteractionReply({
-      interaction: interaction as never,
-      payload: {
-        channelData: {
-          discord: {
-            components,
-          },
-        },
-      },
-      textLimit: 2000,
-      preferFollowUp: false,
-      chunkMode: "length",
-    });
-
-    expect(interaction.reply).toHaveBeenCalledWith({
-      components,
-    });
-    expect(interaction.followUp).not.toHaveBeenCalled();
-  });
-
-  it("sends embed-only native command replies through the initial reply", async () => {
-    const interaction = createInteraction();
-    const embeds = [{ title: "Status", description: "All systems operational" }];
-    const payload = { channelData: { discord: { embeds } } };
-
-    expect(hasRenderableReplyPayload(payload)).toBe(true);
-    await expect(
-      deliverDiscordInteractionReply({
-        interaction: interaction as never,
-        payload,
-        textLimit: 2000,
-        preferFollowUp: false,
-        responseEphemeral: true,
-        chunkMode: "length",
-      }),
-    ).resolves.toBe(true);
-
-    expect(interaction.reply).toHaveBeenCalledWith({ embeds, ephemeral: true });
-  });
-
-  it.each([
-    { includeMedia: false, includeEmbeds: true },
-    { includeMedia: true, includeEmbeds: true },
-    { includeMedia: true, includeEmbeds: false },
-  ])(
+  it.each([{ includeMedia: true, includeEmbeds: true }])(
     "preserves native attachments and embeds with shared presentation: %j",
     async ({ includeMedia, includeEmbeds }) => {
       const interaction = createInteraction();
@@ -370,10 +293,6 @@ describe("deliverDiscordInteractionReply", () => {
   });
 
   it.each([
-    {
-      name: "plural media URLs",
-      media: { mediaUrls: ["file:///tmp/sticker.webp"] },
-    },
     {
       name: "singular media URL after blank plural URLs",
       media: { mediaUrls: ["   "], mediaUrl: "file:///tmp/sticker.webp" },

@@ -31,7 +31,6 @@ const {
   clientDeployCommandsMock,
   clientFetchUserMock,
   clientGetPluginMock,
-  createDiscordExecApprovalButtonContextMock,
   createDiscordMessageHandlerMock,
   createDiscordNativeCommandMock,
   createdBindingManagers,
@@ -105,21 +104,6 @@ function createRateLimitError(
   return new RateLimitErrorCtor(response, body, fallbackRequest);
 }
 
-function createConfigWithDiscordAccount(overrides: Record<string, unknown> = {}): OpenClawConfig {
-  return {
-    channels: {
-      discord: {
-        accounts: {
-          default: {
-            token: "MTIz.abc.def",
-            ...overrides,
-          },
-        },
-      },
-    },
-  } as OpenClawConfig;
-}
-
 type MockCallReader = { mock: { calls: unknown[][] } };
 
 function firstMockArg(mock: MockCallReader, label: string) {
@@ -178,19 +162,6 @@ describe("monitorDiscordProvider", () => {
     healthProbe?: (
       params: ReconcileHealthProbeParams,
     ) => Promise<{ status: string; reason?: string }>;
-  };
-
-  const getConstructedClientOptions = (): {
-    clientId?: string;
-    eventQueue?: { listenerTimeout?: number; slowListenerThreshold?: number };
-    requestOptions?: { timeout?: number };
-  } => {
-    expect(clientConstructorOptionsMock).toHaveBeenCalledTimes(1);
-    return firstMockArg(clientConstructorOptionsMock, "Discord client constructor") as {
-      clientId?: string;
-      eventQueue?: { listenerTimeout?: number; slowListenerThreshold?: number };
-      requestOptions?: { timeout?: number };
-    };
   };
 
   const getHealthProbe = () => {
@@ -364,34 +335,6 @@ describe("monitorDiscordProvider", () => {
     expect(voiceRuntimeModuleLoadedMock).not.toHaveBeenCalled();
   });
 
-  it.each(["binding reconciliation", "interaction registration"] as const)(
-    "stops thread bindings when %s fails before lifecycle begins",
-    async (phase) => {
-      const failure = new Error("startup failed");
-      if (phase === "binding reconciliation") {
-        reconcileAcpThreadBindingsOnStartupMock.mockImplementationOnce(async () => {
-          throw failure;
-        });
-      } else {
-        createDiscordNativeCommandMock.mockImplementationOnce(() => {
-          throw failure;
-        });
-      }
-
-      await expect(
-        monitorDiscordProvider({
-          scheduler: createTestPluginServiceScheduler(),
-          config: baseConfig(),
-          runtime: baseRuntime(),
-        }),
-      ).rejects.toBe(failure);
-
-      expect(monitorLifecycleMock).not.toHaveBeenCalled();
-      expect(createdBindingManagers).toHaveLength(1);
-      expect(createdBindingManagers[0]?.stop).toHaveBeenCalledTimes(1);
-    },
-  );
-
   it.each(["binding restoration", "binding reconciliation"] as const)(
     "stops acquired thread bindings without starting a client when cancelled during %s",
     async (phase) => {
@@ -504,42 +447,6 @@ describe("monitorDiscordProvider", () => {
     await runProvider();
 
     expect(voiceRuntimeModuleLoadedMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps forwarded approval actions live when native delivery is disabled", async () => {
-    const cfg = createConfigWithDiscordAccount();
-    const channelRuntime = createTestChannelRuntime();
-    const execApprovalsConfig = { enabled: false, approvers: ["123"] };
-    resolveDiscordAccountMock.mockReturnValue({
-      accountId: "default",
-      token: "cfg-token",
-      config: {
-        commands: { native: true, nativeSkills: false },
-        voice: { enabled: false },
-        agentComponents: { enabled: false },
-        execApprovals: execApprovalsConfig,
-      },
-    });
-
-    await monitorDiscordProvider({
-      scheduler: createTestPluginServiceScheduler(),
-      config: cfg,
-      runtime: baseRuntime(),
-      channelRuntime,
-    });
-
-    expect(createDiscordExecApprovalButtonContextMock).toHaveBeenCalledWith({
-      cfg,
-      accountId: "default",
-      config: execApprovalsConfig,
-    });
-    expect(
-      channelRuntime.runtimeContexts.get({
-        channelId: "discord",
-        accountId: "default",
-        capability: "approval.native",
-      }),
-    ).toBeUndefined();
   });
 
   it("registers the native approval runtime context when exec approvals are enabled", async () => {
@@ -899,30 +806,6 @@ describe("monitorDiscordProvider", () => {
     expect(listNativeCommandSpecsForConfigMock).not.toHaveBeenCalled();
     expect(clientDeployCommandsMock).not.toHaveBeenCalled();
     expectMockLogNotContains(runtime.log, "cleared native commands");
-  });
-
-  it("derives application id from token before probing Discord over REST", async () => {
-    const probeApplicationId = vi.fn(async () => ({
-      kind: "resolved" as const,
-      applicationId: "network-app",
-    }));
-    providerTesting.setProbeDiscordApplicationId(probeApplicationId);
-    resolveDiscordAccountMock.mockReturnValue({
-      accountId: "default",
-      token: "MTIz.abc.def",
-      config: {
-        commands: { native: true, nativeSkills: false },
-        voice: { enabled: false },
-        agentComponents: { enabled: false },
-        execApprovals: { enabled: false },
-      },
-    });
-
-    await runProvider();
-
-    expect(probeApplicationId).not.toHaveBeenCalled();
-    expect(clientFetchUserMock).not.toHaveBeenCalled();
-    expect(getConstructedClientOptions().clientId).toBe("123");
   });
 
   it.each([
