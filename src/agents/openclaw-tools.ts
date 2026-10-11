@@ -8,10 +8,7 @@ import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.
 import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { resolveSkillWorkshopToolConstructionBlock } from "../skills/workshop/tool-availability.js";
-import {
-  hasConfiguredWebSearchProvider,
-  prepareWebSearchConfiguration,
-} from "../web-search/runtime.js";
+import { hasConfiguredWebSearchProvider } from "../web-search/runtime.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -24,10 +21,7 @@ import {
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
-import {
-  ensureAuthProfileStoreWithoutExternalProfiles,
-  ensureAuthProfileStoreWithoutExternalProfilesAsync,
-} from "./auth-profiles/store-runtime.js";
+import { ensureAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles/store-runtime.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { filterToolsByClientCaps } from "./openclaw-tools.client-caps.js";
 import { createHostedGatewayTools } from "./openclaw-tools.gateway.js";
@@ -37,6 +31,7 @@ import {
   resolveImageToolFactoryAvailable,
   resolveOptionalMediaToolFactoryPlan,
 } from "./openclaw-tools.media-factory-plan.js";
+import { prepareOpenClawTools } from "./openclaw-tools.preparation.js";
 import {
   applyNodesToolWorkspaceGuard,
   shouldIncludePrimarySessionToolForOpenClawTools,
@@ -47,7 +42,6 @@ import { createOpenClawSwarmToolGroups } from "./openclaw-tools.swarm.js";
 import { resolveTranscriptsTool } from "./openclaw-tools.transcripts.js";
 import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
 import { resolveWidgetPresentationForRun } from "./openclaw-tools.widget-presentation.js";
-import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
 import {
   withPreparedToolConstruction,
   type PreparedToolConstruction,
@@ -80,12 +74,10 @@ import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
 import { callAgentToolGatewayRequest } from "./tools/in-process-gateway.js";
 import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
-import { hasGenerationToolAvailabilityAsync } from "./tools/media-tool-shared.js";
 import { createMessageTool, createMessageToolAsync } from "./tools/message-tool-execution.js";
 import { createMobileUiTool } from "./tools/mobile-ui-tool.js";
 import { createMusicGenerateTool } from "./tools/music-generate-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
-import { createOpenClawDelegateToolsForRunAsync } from "./tools/openclaw-delegate-tool.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
 import { createAvailablePortalTools } from "./tools/portal-tool.js";
 import { createProgressCardTool } from "./tools/progress-card-tool.js";
@@ -132,90 +124,13 @@ export async function createOpenClawToolsWithPreparation(
   options: OpenClawToolsOptions | undefined,
   shared: PreparedToolConstruction,
 ): Promise<AnyAgentTool[]> {
-  const captured = { ...options, config: shared.config };
-  const { sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: captured.runSessionKey ?? captured.agentSessionKey,
-    config: captured.config,
-    agentId: captured.requesterAgentIdOverride,
-  });
-  captured.authProfileStore ??= captured.preparedModelRuntime
-    ? getPreparedModelRuntimeAuthStore(captured.preparedModelRuntime)
-    : undefined;
-  captured.authProfileStore ??= await ensureAuthProfileStoreWithoutExternalProfilesAsync(
-    captured.agentDir ?? resolveAgentDir(captured.config ?? {}, sessionAgentId),
-    { allowKeychainPrompt: false },
+  const { captured, delegated, webSearchConfigured, mediaTools } = await prepareOpenClawTools(
+    options,
+    shared,
   );
-  const delegated = isEmbeddedMode()
-    ? []
-    : await createOpenClawDelegateToolsForRunAsync({ ...captured, sessionAgentId }, shared);
   shared.assertCurrent();
   captured.assertInvocationCurrent?.();
-  const webSearchConfigured =
-    captured.webSearchEnabled === false || captured.config?.tools?.web?.search?.enabled === false
-      ? undefined
-      : await prepareWebSearchConfiguration({
-          config: captured.config,
-          agentDir: captured.agentDir ?? resolveAgentDir(captured.config ?? {}, sessionAgentId),
-          authStore: captured.authProfileStore,
-          ...(captured.authProfileStoreSource !== undefined
-            ? { resolveAuthProfileStoreSource: () => captured.authProfileStoreSource === true }
-            : {}),
-          runtimeWebSearch: getActiveRuntimeWebToolsMetadataFromState()?.search,
-        });
-  shared.assertCurrent();
-  captured.assertInvocationCurrent?.();
-  const runtimeSnapshot = getActiveSecretsRuntimeConfigSnapshot();
-  const availabilityConfig =
-    selectApplicableRuntimeConfig({
-      inputConfig: captured.config,
-      runtimeConfig: runtimeSnapshot?.config,
-      runtimeSourceConfig: runtimeSnapshot?.sourceConfig,
-    }) ?? captured.config;
-  const inferredWorkspaceDir =
-    captured.workspaceDir || !captured.config
-      ? undefined
-      : resolveAgentWorkspaceDir(captured.config, sessionAgentId);
-  const workspaceDir = resolveWorkspaceRoot(captured.workspaceDir ?? inferredWorkspaceDir);
-  const mediaPlan = resolveOptionalMediaToolFactoryPlan({
-    config: availabilityConfig,
-    workspaceDir,
-    authStore: captured.authProfileStore,
-    toolAllowlist: captured.pluginToolAllowlist,
-    toolDenylist: captured.pluginToolDenylist,
-    preparedModelRuntime: captured.preparedModelRuntime,
-  });
-  const prepareMediaAvailability = async (
-    tool: "imageGenerate" | "videoGenerate" | "musicGenerate",
-    providerKey:
-      | "imageGenerationProviders"
-      | "videoGenerationProviders"
-      | "musicGenerationProviders",
-    kind: "image" | "video" | "music",
-  ) =>
-    mediaPlan[tool] &&
-    (await hasGenerationToolAvailabilityAsync({
-      cfg: availabilityConfig,
-      agentDir: captured.agentDir,
-      workspaceDir,
-      authStore: captured.authProfileStore,
-      authProfileStoreSource: captured.authProfileStoreSource,
-      modelConfig: availabilityConfig?.agents?.defaults?.mediaModels?.[kind],
-      providerKey,
-      providers: captured.preparedModelRuntime?.mediaCapabilityProviders?.[providerKey],
-    }));
-  const [imageGenerate, videoGenerate, musicGenerate] = await Promise.all([
-    prepareMediaAvailability("imageGenerate", "imageGenerationProviders", "image"),
-    prepareMediaAvailability("videoGenerate", "videoGenerationProviders", "video"),
-    prepareMediaAvailability("musicGenerate", "musicGenerationProviders", "music"),
-  ]);
-  shared.assertCurrent();
-  captured.assertInvocationCurrent?.();
-  const steps = createOpenClawToolsSteps(captured, delegated, webSearchConfigured, {
-    ...mediaPlan,
-    imageGenerate,
-    videoGenerate,
-    musicGenerate,
-  });
+  const steps = createOpenClawToolsSteps(captured, delegated, webSearchConfigured, mediaTools);
   let next = steps.next();
   while (!next.done) {
     const messageTool = await createMessageToolAsync(next.value);

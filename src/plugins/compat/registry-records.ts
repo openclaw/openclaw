@@ -1,5 +1,6 @@
 import { AGENT_HARNESS_COMPAT_RECORDS } from "./agent-harness-records.js";
 import { AGENT_LIST_RUNTIME_PROJECTION_COMPAT_RECORDS } from "./agent-list-runtime-projection-records.js";
+import { ASSISTANT_TEXT_PHASE_TERMINAL_HINT_COMPAT_RECORD } from "./assistant-text-phase-terminal-hint-record.js";
 import { AUTH_ASYNC_COMPAT_RECORD } from "./auth-async-record.js";
 import { BINDING_PERSISTENCE_COMPAT_RECORDS } from "./binding-persistence-records.js";
 import { CHANNEL_PAIRING_COMPAT_RECORD } from "./channel-pairing-record.js";
@@ -49,20 +50,7 @@ export const PLUGIN_COMPAT_RECORDS = [
   ...AGENT_LIST_RUNTIME_PROJECTION_COMPAT_RECORDS,
   WATCHED_SESSIONS_COMPAT_RECORD,
   PROGRESS_RECEIPT_HANDOFF_COMPAT_RECORD,
-  {
-    code: "assistant-text-phase-terminal-hint",
-    status: "deprecated",
-    owner: "sdk",
-    introduced: "2026-08-17",
-    deprecated: "2026-10-11",
-    warningStarts: "2026-10-11",
-    removalGate: "next-plugin-sdk-major",
-    replacement: "Omit textPhaseRequiresTerminal; unphased text is never retroactively classified.",
-    docsPath: "/concepts/streaming#text-phases-and-final-replies",
-    surfaces: ["AssistantMessage.openclawDelivery.textPhaseRequiresTerminal"],
-    diagnostics: ["TypeScript @deprecated annotation; no runtime warning for the ignored field"],
-    tests: ["src/plugin-sdk/assistant-message-compat.test.ts"],
-  },
+  ASSISTANT_TEXT_PHASE_TERMINAL_HINT_COMPAT_RECORD,
   {
     code: "gateway-placement-sync-results",
     status: "deprecated",
