@@ -277,9 +277,9 @@ describe("PortalsPage", () => {
     const page = await mountPage(source.context, undefined, "old-machine");
     page.requestedEnvironmentId = replacement.id;
     await page.updateComplete;
-    await vi.waitFor(() => expect(source.request).toHaveBeenCalledTimes(2));
+    await waitForSolid(() => expect(source.request).toHaveBeenCalledTimes(2));
     await source.request.mock.results[1]?.value;
-    await vi.waitFor(() => expect(page.textContent).toContain("Starting your machine"));
+    await waitForSolid(() => expect(page.textContent).toContain("Starting your machine"));
 
     retired.reject(new Error("Previous machine failed"));
     await retired.promise.catch(() => undefined);
@@ -368,13 +368,13 @@ describe("PortalsPage", () => {
       );
       const page = await mountPage(source.context);
       const closeButton = () => page.querySelector<HTMLButtonElement>(".portals-preview__close")!;
-      await vi.waitFor(() => expect(closeButton()).not.toBeNull());
+      await waitForSolid(() => expect(closeButton()).not.toBeNull());
       closeButton().click();
-      await vi.waitFor(() => expect(closeButton().disabled).toBe(true));
+      await waitForSolid(() => expect(closeButton().disabled).toBe(true));
       source.updateSnapshot({ client: replacement.context.gateway.snapshot.client });
-      await vi.waitFor(() => expect(closeButton()?.disabled).toBe(false));
+      await waitForSolid(() => expect(closeButton()?.disabled).toBe(false));
       closeButton().click();
-      await vi.waitFor(() => expect(closeButton().disabled).toBe(true));
+      await waitForSolid(() => expect(closeButton().disabled).toBe(true));
       try {
         if (outcome === "success") {
           retired.resolve({ closed: true });
@@ -393,7 +393,7 @@ describe("PortalsPage", () => {
         current.resolve({ closed: true });
         await current.promise;
       }
-      await vi.waitFor(() => expect(closeButton().disabled).toBe(false));
+      await waitForSolid(() => expect(closeButton().disabled).toBe(false));
     },
   );
 

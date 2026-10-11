@@ -33,11 +33,7 @@ export class PortalsController {
   portalProbeState: PortalProbeState | null = null;
   pendingEnvironment: EnvironmentSummary | null = null;
   environmentFailure: { environmentId: string; message: string } | null = null;
-  private environmentRequestGeneration = 0;
   private environmentLoading = false;
-  private requestGeneration = 0;
-  private portalSetRevision = 0;
-  private portalProbeGeneration = 0;
   private readonly portalProbeCache = new Map<string, PortalReachability>();
   private readonly listeners = new Set<() => void>();
   private readonly lifecycle;
@@ -107,10 +103,8 @@ export class PortalsController {
       previous.requestedPortalId !== this.presentation().requestedPortalId ||
       previous.requestedEnvironmentId !== this.presentation().requestedEnvironmentId;
     if (targetChanged) {
-      this.requestGeneration += 1;
       this.resetPendingEnvironment();
       this.loading = false;
-      this.portalProbeGeneration += 1;
       this.portalProbeState = null;
       this.applyPortalSet(this.portals);
       void this.loadPresentation();
@@ -118,7 +112,6 @@ export class PortalsController {
       void this.loadPresentation();
     } else if (!this.presentation().presented) {
       this.pollEnvironment(false);
-      this.environmentRequestGeneration += 1;
       this.environmentLoading = false;
     }
     this.notify();
@@ -145,11 +138,8 @@ export class PortalsController {
     ) {
       return;
     }
-    const generation = ++this.environmentRequestGeneration;
     const isCurrent = () =>
-      this.lifecycle.isCurrent(scope) &&
-      generation === this.environmentRequestGeneration &&
-      this.pendingEnvironmentId === environmentId;
+      this.lifecycle.isCurrent(scope) && this.pendingEnvironmentId === environmentId;
     this.environmentLoading = true;
     this.environmentFailure = null;
     this.notify();
@@ -196,7 +186,6 @@ export class PortalsController {
   }
 
   resetPendingEnvironment() {
-    this.environmentRequestGeneration += 1;
     this.environmentLoading = false;
     this.pendingEnvironment = null;
     this.environmentFailure = null;
@@ -205,21 +194,17 @@ export class PortalsController {
 
   resetGatewayState() {
     this.resetPendingEnvironment();
-    this.requestGeneration += 1;
-    this.portalSetRevision += 1;
     this.portals = [];
     this.selectedPortalId = null;
     this.loading = false;
     this.loaded = false;
     this.error = null;
     this.closingPortalId = null;
-    this.portalProbeGeneration += 1;
     this.portalProbeCache.clear();
     this.portalProbeState = null;
   }
 
   applyPortalSet(portals: readonly PortalSummary[]) {
-    this.portalSetRevision += 1;
     this.portals = [...portals];
     const previousPortalId = this.selectedPortalId;
     const selectedPortalId = this.pendingEnvironmentId
@@ -235,7 +220,6 @@ export class PortalsController {
     if (selectedPortal) {
       this.ensurePortalProbe(selectedPortal, selectedPortalId !== previousPortalId);
     } else {
-      this.portalProbeGeneration += 1;
       this.portalProbeState = null;
     }
     this.notify();
@@ -243,7 +227,6 @@ export class PortalsController {
 
   ensurePortalProbe(portal: PortalSummary, force = false) {
     if (!portal.tokenQuery || !portal.url) {
-      this.portalProbeGeneration += 1;
       this.portalProbeState = null;
       this.notify();
       return;
@@ -255,13 +238,11 @@ export class PortalsController {
       return;
     }
     if (portalNeedsRemoteIngress(url, this.context.gateway.connection.gatewayUrl)) {
-      this.portalProbeGeneration += 1;
       this.portalProbeState = { key, status: "ingress-required" };
       this.notify();
       return;
     }
     if (portalNeedsNewTab(url, location.href)) {
-      this.portalProbeGeneration += 1;
       this.portalProbeState = { key, status: "new-tab-required" };
       this.notify();
       return;
@@ -273,11 +254,11 @@ export class PortalsController {
       return;
     }
 
-    const generation = ++this.portalProbeGeneration;
+    const scope = this.lifecycle.capture();
     this.portalProbeState = { key, status: "probing" };
     this.notify();
     void probePortalReachable(url).then((reachability) => {
-      if (generation === this.portalProbeGeneration && this.portalProbeState?.key === key) {
+      if (scope && this.lifecycle.isCurrent(scope) && this.portalProbeState?.key === key) {
         this.portalProbeCache.set(key, reachability);
         this.portalProbeState = { key, status: reachability };
         this.notify();
@@ -308,16 +289,13 @@ export class PortalsController {
     if (!scope) {
       return;
     }
-    const generation = ++this.requestGeneration;
-    const portalSetRevision = this.portalSetRevision;
-    const isCurrent = () =>
-      generation === this.requestGeneration && this.lifecycle.isCurrent(scope);
+    const isCurrent = () => this.lifecycle.isCurrent(scope);
     this.loading = true;
     this.error = null;
     this.notify();
     try {
       const result = await scope.client.request<PortalListResult>("portal.list", {});
-      if (isCurrent() && portalSetRevision === this.portalSetRevision) {
+      if (isCurrent()) {
         this.applyPortalSet(result.portals);
       }
     } catch (error) {
@@ -344,17 +322,18 @@ export class PortalsController {
     this.closingPortalId = portal.id;
     this.error = null;
     this.notify();
+    const current = () => this.lifecycle.isCurrent(scope) && this.closingPortalId === portal.id;
     try {
       await scope.client.request<PortalCloseResult>("portal.close", { id: portal.id });
-      if (this.lifecycle.isCurrent(scope)) {
+      if (current()) {
         void this.loadPortals();
       }
     } catch (error) {
-      if (this.lifecycle.isCurrent(scope)) {
+      if (current()) {
         this.error = t("portalsPage.closeFailed", { error: formatUiError(error) });
       }
     } finally {
-      if (this.lifecycle.isCurrent(scope) && this.closingPortalId === portal.id) {
+      if (current()) {
         this.closingPortalId = null;
       }
       this.notify();
