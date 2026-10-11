@@ -176,10 +176,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
     agentDir: params.selection.agentDir,
     workspaceDir: params.harness.workspaceDir,
   });
-  const assistantErrorTranscript = createAssistantErrorTranscript({
-    runId: params.identity.runId,
-    config: params.selection.cfg,
-  });
+  const assistantErrorTranscript = createAssistantErrorTranscript();
   let failed = true;
   let candidateIndex = 0;
   const committedSideEffect =
@@ -623,7 +620,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
   } finally {
     forgetPromptBuildDrainCacheForRun(params.identity.runId);
     try {
-      await assistantErrorTranscript.settle(failed && !params.abortSignal?.aborted);
+      assistantErrorTranscript.settle(failed && !params.abortSignal?.aborted);
     } finally {
       await contextEngineLogicalTurnLease.dispose();
     }

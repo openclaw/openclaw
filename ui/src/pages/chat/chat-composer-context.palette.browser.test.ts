@@ -21,16 +21,13 @@ describe("mounted context usage palette", () => {
       rootStyle.setProperty("--warn", "#d97706");
       rootStyle.setProperty("--danger", "#dc2626");
       render(
-        renderContextNotice(
-          {
-            key: "main",
-            kind: "direct",
-            updatedAt: null,
-            totalTokens: percent,
-            contextTokens: 100,
-          },
-          null,
-        ),
+        renderContextNotice({
+          key: "main",
+          kind: "direct",
+          updatedAt: null,
+          totalTokens: percent,
+          contextTokens: 100,
+        }),
         container,
       );
       document.body.append(container);

@@ -25,7 +25,7 @@ import {
 import { SessionManager } from "../../sessions/session-manager.js";
 import { SettingsManager } from "../../sessions/settings-manager.js";
 import {
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
   clearEmbeddedSessionPromptStates,
   prepareSessionSystemPrompt,
   persistSessionSystemPrompt,
@@ -88,8 +88,9 @@ describe("runEmbeddedAttemptPromptPhase", () => {
       const session = ownedSession.activeSession;
       session.agent.state.systemPrompt = "pruned prompt";
       session.agent.state.tools = [];
+      using promptStateLease = retainEmbeddedSessionPromptState("phase-system-update");
       if (inHistorySystemUpdates) {
-        const state = getEmbeddedSessionPromptState("phase-system-update");
+        const state = promptStateLease.state;
         const project = (systemPrompt: string) =>
           prepareSessionSystemPrompt({
             state,
@@ -194,6 +195,7 @@ describe("runEmbeddedAttemptPromptPhase", () => {
         content: "hello",
         timestamp: 1,
         idempotencyKey: "current:user",
+        __openclaw: { modelPromptProjection: { version: 1, text: "hello" } },
       };
       const oldCarrier = buildRuntimeContextCustomMessage("Previously recorded context");
       const nextCarrier = buildRuntimeContextCustomMessage(
@@ -296,7 +298,8 @@ describe("runEmbeddedAttemptPromptPhase", () => {
         userTurnTranscriptRecorder: recorder,
       };
       fixture.input.attempt.sessionId = "phase-context-replay";
-      const sessionPromptState = getEmbeddedSessionPromptState(fixture.input.attempt.sessionId);
+      using promptStateLease = retainEmbeddedSessionPromptState(fixture.input.attempt.sessionId);
+      const sessionPromptState = promptStateLease.state;
       sessionRuntime.sessionPromptState = sessionPromptState;
       sessionRuntime.toolResultPromptProjectionState = sessionPromptState.toolResults;
       sessionRuntime.transcriptPolicy.appendOnlyRuntimeContext = appendOnlyRuntimeContext;
@@ -544,7 +547,8 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     const fixture = createFixture();
     fixture.input.attempt.operation = "settled-tool-finalization";
     const sessionManager = SessionManager.inMemory();
-    const state = getEmbeddedSessionPromptState("phase-finalization");
+    using promptStateLease = retainEmbeddedSessionPromptState("phase-finalization");
+    const state = promptStateLease.state;
     const project = (systemPrompt: string) =>
       prepareSessionSystemPrompt({
         state,

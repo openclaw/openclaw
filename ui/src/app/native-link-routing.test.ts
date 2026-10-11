@@ -244,15 +244,10 @@ describe("native link routing", () => {
   });
 
   it("shares a working hovercard across duplicate bootstrap module instances", async () => {
-    // Shared jsdom files can leave two bootstrap instances on one document.
-    // Use the native registry so duplicate definitions reject without wrapping its owner.
-    const first = await import("../components/link-reader-hovercard-registration.ts");
-    vi.resetModules();
-    const second = await import("../components/link-reader-hovercard-registration.ts");
-    await Promise.all([
-      first.linkReaderHovercardBootstrap.define(),
-      second.linkReaderHovercardBootstrap.define(),
-    ]);
+    // Reevaluate only the bootstrap, preserving Solid's scheduler and the registry.
+    const duplicateBootstrap =
+      "../components/link-reader-hovercard-registration.ts?duplicate-bootstrap";
+    await import(duplicateBootstrap);
     const anchor = await focusGitHubLink();
     const registered = customElements.get("openclaw-link-reader-hovercard-provider");
     expect(registered).toBeDefined();

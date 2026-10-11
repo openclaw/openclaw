@@ -56,6 +56,11 @@ Choose llama.cpp once in interactive setup. OpenClaw installs a verified
 `llama-server`, downloads the embedding GGUF, and writes its managed service
 configuration.
 
+Managed `local` and Ollama embeddings index one file at a time when batch
+indexing is disabled. This bounds background embedding requests during a full
+rebuild; large indexes can take longer on hosts that previously ran several
+local jobs in parallel.
+
 EmbeddingGemma uses its trained task prefixes automatically for queries and
 indexed documents, including through Ollama, LM Studio, and OpenAI-compatible
 providers. After upgrading, an existing unprefixed EmbeddingGemma index rebuilds

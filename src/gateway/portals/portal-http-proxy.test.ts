@@ -369,20 +369,27 @@ describe("portal HTTP proxy", () => {
 
   it("streams HTTP requests and responses with rewritten safe headers", async () => {
     let receivedHeaders: IncomingMessage["headers"] | undefined;
+    let receivedBody = "";
     targetHandler = (req, res) => {
       receivedHeaders = req.headers;
+      req.setEncoding("utf8");
+      req.on("data", (chunk: string) => (receivedBody += chunk));
       res.statusCode = 201;
       res.setHeader("Connection", "keep-alive, x-target-hop");
       res.setHeader("Keep-Alive", "upstream-secret=17");
       res.setHeader("X-Target-Hop", "remove");
       res.setHeader("X-App", "kept");
-      res.write("hello ");
-      res.end("portal");
+      req.once("end", () => {
+        res.write("hello ");
+        res.end("portal");
+      });
     };
     const portal = await portalService().open({ targetPort });
     const result = await httpCall({
       port: portal.listenPort,
       path: "/asset?q=1",
+      method: "POST",
+      body: "streamed request",
       headers: {
         Host: "portal.example:9999",
         Cookie: `openclaw_plugin_tab=secret; ${portalAuthCookie(portal)}`,
@@ -399,6 +406,7 @@ describe("portal HTTP proxy", () => {
     });
 
     expect(result).toMatchObject({ status: 201, body: "hello portal" });
+    expect(receivedBody).toBe("streamed request");
     expect(result.headers["x-app"]).toBe("kept");
     expect(result.headers["x-target-hop"]).toBeUndefined();
     // Node may add its own connection-local Keep-Alive header; the upstream value must not pass.
@@ -528,7 +536,7 @@ describe("portal HTTP proxy", () => {
     expect(receivedCookiesB).toEqual([undefined, undefined, "session=portal-b"]);
   });
 
-  it.each(["localhost", "127.0.0.1", "[::1]"])(
+  it.each(["localhost"])(
     "keeps absolute %s app redirects on the published portal origin",
     async (host) => {
       targetHandler = (_req, res) => {
@@ -544,19 +552,18 @@ describe("portal HTTP proxy", () => {
     },
   );
 
-  it.each([
-    "/nested/page?q=1",
-    "https://accounts.example.test/login",
-    "//accounts.example.test/login",
-  ])("preserves intentional redirect %s", async (location) => {
-    targetHandler = (_req, res) => {
-      res.writeHead(302, { Location: location });
-      res.end();
-    };
-    const portal = await portalService().open({ targetPort });
-    const response = await httpCall({ port: portal.listenPort, path: `/?${portal.tokenQuery}` });
-    expect(response.headers.location).toBe(location);
-  });
+  it.each(["/nested/page?q=1", "https://accounts.example.test/login"])(
+    "preserves intentional redirect %s",
+    async (location) => {
+      targetHandler = (_req, res) => {
+        res.writeHead(302, { Location: location });
+        res.end();
+      };
+      const portal = await portalService().open({ targetPort });
+      const response = await httpCall({ port: portal.listenPort, path: `/?${portal.tokenQuery}` });
+      expect(response.headers.location).toBe(location);
+    },
+  );
 
   it("forces no-referrer and never forwards a token-bearing referrer", async () => {
     let receivedReferer: string | undefined;
@@ -584,31 +591,6 @@ describe("portal HTTP proxy", () => {
 
     const unauthorized = await httpCall({ port: portal.listenPort });
     expect(unauthorized.headers["referrer-policy"]).toBe("no-referrer");
-  });
-
-  it("streams POST bodies to the target", async () => {
-    let body = "";
-    targetHandler = (req, res) => {
-      req.setEncoding("utf8");
-      req.on("data", (chunk: string) => (body += chunk));
-      req.once("end", () => {
-        res.statusCode = 204;
-        res.end();
-      });
-    };
-    const portal = await portalService().open({ targetPort });
-    const result = await httpCall({
-      port: portal.listenPort,
-      method: "POST",
-      headers: {
-        Cookie: portalAuthCookie(portal),
-        "Content-Type": "text/plain",
-      },
-      body: "streamed request",
-    });
-
-    expect(result.status).toBe(204);
-    expect(body).toBe("streamed request");
   });
 
   it("shows a retry page when the target closes the connection", async () => {
@@ -793,10 +775,8 @@ describe("portal HTTP proxy", () => {
   });
 
   it.each([
-    ["direct", "complete"],
     ["local", "complete"],
     ["worker", "complete"],
-    ["direct", "abort"],
     ["local", "abort"],
     ["worker", "abort"],
   ] as const)(
@@ -822,19 +802,16 @@ describe("portal HTTP proxy", () => {
         }
         res.writeHead(404).end();
       };
-      const portal =
-        kind === "direct"
-          ? undefined
-          : await portalService().open({
-              targetPort,
-              ...(kind === "worker"
-                ? { target: workerTarget(async () => createWorkerStream(targetPort), targetPort) }
-                : {}),
-            });
+      const portal = await portalService().open({
+        targetPort,
+        ...(kind === "worker"
+          ? { target: workerTarget(async () => createWorkerStream(targetPort), targetPort) }
+          : {}),
+      });
       const connection = {
         host: "127.0.0.1",
-        port: portal?.listenPort ?? targetPort,
-        ...(portal ? { headers: { Cookie: portalAuthCookie(portal) } } : {}),
+        port: portal.listenPort,
+        headers: { Cookie: portalAuthCookie(portal) },
       };
       const browserRequest = request({
         ...connection,

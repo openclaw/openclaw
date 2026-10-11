@@ -26,7 +26,10 @@ import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.tes
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { holdStateDatabaseWriteTransaction } from "../../test-utils/state-database-contention.js";
 import { replyRunRegistry, waitForReplyRunSuccessorAdmission } from "./reply-run-registry.js";
-import { acquireReplyOperationSessionActor } from "./reply-run-registry.state.js";
+import {
+  acquireReplyOperationSessionActor,
+  getReplyOperationSessionTarget,
+} from "./reply-run-registry.state.js";
 import { testing } from "./reply-run-registry.test-support.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 
@@ -446,10 +449,13 @@ it.each(["complete", "user-abort", "restart-abort", "frozen-restart"] as const)(
               cancel() {},
             });
             if (ending === "frozen-restart") {
-              active.operation.freezeAbort();
-              work.beginClose(createAgentRunRestartAbortError());
-              expect(active.operation.abortForRestart()).toBe(false);
-              expect(active.operation.abortSignal.aborted).toBe(false);
+              const operation = active.operation;
+              operation.freezeAbort();
+              const restartReason = createAgentRunRestartAbortError();
+              work.beginClose(restartReason);
+              expect(operation.abortForRestart()).toBe(false);
+              expect(operation.abortSignal.aborted).toBe(false);
+              expect(() => getReplyOperationSessionTarget(operation)).toThrow(restartReason);
             } else {
               expect(
                 ending === "restart-abort"
