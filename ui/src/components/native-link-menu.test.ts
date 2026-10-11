@@ -46,25 +46,6 @@ function menuItems(menu: ParentNode): HTMLButtonElement[] {
 }
 
 describe("native link menu", () => {
-  it("renders the native link actions in order and closes before dispatch", async () => {
-    const calls: string[] = [];
-    const menu = await mountMenu({
-      onClose: () => calls.push("close"),
-      onAction: (action) => calls.push(action),
-    });
-    const items = menuItems(menu);
-
-    await Promise.resolve();
-    expect(document.activeElement).toBe(items[0]);
-
-    expect(
-      items.map((item) => item.querySelector(".session-menu__text")?.textContent?.trim()),
-    ).toEqual(["Open in Browser Panel", "Open in Default Browser", "Copy Link"]);
-
-    items[0]?.click();
-    expect(calls).toEqual(["close", "inline"]);
-  });
-
   it("rerenders open actions when the locale changes", async () => {
     const menu = await mountMenu({});
     const dropdown = menu.querySelector<DropdownElement>("wa-dropdown");

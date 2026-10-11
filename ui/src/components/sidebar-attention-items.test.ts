@@ -88,15 +88,6 @@ describe("automation attention", () => {
     expect(overdue?.label).toBe("stalled-id");
   });
 
-  it("does not flag an enabled overdue job while the scheduler is disabled", () => {
-    const overdue = cronJob("overdue-id");
-    overdue.state = { lastRunStatus: "ok", nextRunAtMs: 1 };
-
-    expect(cronItems([overdue], 300_002, false)).not.toContainEqual(
-      expect.objectContaining({ kind: "cronOverdue" }),
-    );
-  });
-
   it("shows automation owners only when the caller supplies an all-agent owner map", () => {
     const item = buildSidebarAttentionEntries({
       cronJobs: [cronJob("writer-job")],

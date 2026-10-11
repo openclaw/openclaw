@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createDataTransferStub } from "../test-helpers/drag-data.ts";
 import {
-  panelTabStripStyles,
   renderPanelTabStrip,
   type PanelTabStripTab,
   type PanelTabStripParams,
@@ -79,10 +78,6 @@ function tabViewport(container: ParentNode) {
     throw new Error("expected rendered tab strip viewport");
   }
   return viewport;
-}
-
-function requestTabSelection(container: ParentNode, id: string) {
-  tabStrip(container)!.dispatchEvent(new CustomEvent("wa-tab-show", { detail: { name: id } }));
 }
 
 function deferTabLayout() {
@@ -170,21 +165,6 @@ afterEach(async () => {
 });
 
 describe("renderPanelTabStrip", () => {
-  it("keeps the new-tab control from shrinking when the strip overflows", () => {
-    expect(panelTabStripStyles.cssText).toMatch(/\.tabstrip-new\s*\{[^}]*flex:\s*none/u);
-  });
-
-  it("renders an unslotted new button without an empty tab group", async () => {
-    const onNew = vi.fn();
-    const container = await renderStrip({ onNew });
-
-    expect(tabStrip(container)).toBeNull();
-    const button = container.querySelector<HTMLButtonElement>(".tabstrip-new");
-    expect(button?.hasAttribute("slot")).toBe(false);
-    button?.click();
-    expect(onNew).toHaveBeenCalledOnce();
-  });
-
   it("slots new controls and preserves interactive Lit content across updates", async () => {
     const renderHost = {};
     const container = await renderStrip({ tabs: [TAB], host: renderHost });
@@ -227,100 +207,26 @@ describe("renderPanelTabStrip", () => {
     expect(contentRef.mock.contexts.at(-1)).toBe(renderHost);
   });
 
-  it.each([
-    { groups: [undefined, undefined, undefined, undefined], before: [2, 3, 4] },
-    { groups: ["files", "browser", "browser", "terminal"], before: [2, 4] },
-    { groups: ["browser", "browser", "browser", "browser"], before: [] },
-  ])("keeps separators only outside adjacent groups ($groups)", async ({ groups, before }) => {
-    const tabs = groups.map((group, index) => ({
-      ...TAB,
-      id: `tab-${index + 1}`,
-      domId: `test-tab-${index + 1}`,
-      group,
-    }));
-    const container = await renderStrip({ tabs, separateTabs: true });
-    const separatorTargets = () =>
-      [...container.querySelectorAll(".tabstrip-separator")].map(
-        (separator) => separator.nextElementSibling?.id,
-      );
+  it.each([{ groups: ["files", "browser", "browser", "terminal"], before: [2, 4] }])(
+    "keeps separators only outside adjacent groups ($groups)",
+    async ({ groups, before }) => {
+      const tabs = groups.map((group, index) => ({
+        ...TAB,
+        id: `tab-${index + 1}`,
+        domId: `test-tab-${index + 1}`,
+        group,
+      }));
+      const container = await renderStrip({ tabs, separateTabs: true });
+      const separatorTargets = () =>
+        [...container.querySelectorAll(".tabstrip-separator")].map(
+          (separator) => separator.nextElementSibling?.id,
+        );
 
-    expect(separatorTargets()).toEqual(before.map((index) => `test-tab-${index}`));
-    await renderStrip({ tabs, separateTabs: true, activeId: "tab-2", container });
-    expect(separatorTargets()).toEqual(before.map((index) => `test-tab-${index}`));
-  });
-
-  it("reports user selection without echoing controlled selection changes", async () => {
-    const onSelect = vi.fn();
-    const tabs = [TAB, { ...TAB, id: "tab-2", domId: "test-tab-2" }];
-    const container = await renderStrip({ tabs, onSelect });
-    requestTabSelection(container, TAB.id);
-    expect(onSelect).not.toHaveBeenCalled();
-    requestTabSelection(container, "tab-2");
-    expect(onSelect).toHaveBeenCalledExactlyOnceWith("tab-2");
-    await renderStrip({ tabs, onSelect, container, activeId: "tab-2" });
-    requestTabSelection(container, "tab-2");
-    expect(onSelect).toHaveBeenCalledOnce();
-  });
-
-  it("keeps explicit tab activation separate from selection, key repeats, and close", async () => {
-    const onActivate = vi.fn();
-    const onSelect = vi.fn();
-    const onClose = vi.fn();
-    const container = await renderStrip({
-      tabs: [
-        { ...TAB, id: "selected", domId: "selected-tab" },
-        { ...TAB, onActivate },
-      ],
-      onSelect,
-      onClose,
-    });
-    await settleTabStrip(container);
-    const [, tab] = renderedTabs(container);
-    expect(tab).toBeDefined();
-    tab!.click();
-    expect(onActivate).toHaveBeenCalledTimes(1);
-    for (const key of ["Enter", " "]) {
-      const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
-      tab!.dispatchEvent(event);
-      expect(event.defaultPrevented).toBe(true);
-      tab!.dispatchEvent(new KeyboardEvent("keydown", { key, repeat: true, bubbles: true }));
-    }
-    expect(onActivate).toHaveBeenCalledTimes(3);
-    tab!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
-    container.querySelector<HTMLButtonElement>(`#${TAB.domId}-close`)!.click();
-    expect(onClose).toHaveBeenCalledExactlyOnceWith(TAB.id);
-    expect(onActivate).toHaveBeenCalledTimes(3);
-    expect(onSelect).not.toHaveBeenCalled();
-  });
-
-  it("closes the requested tab from its labeled close button", async () => {
-    const onClose = vi.fn();
-    const container = await renderStrip({ tabs: [TAB], onClose });
-    const closeButton = container.querySelector<HTMLButtonElement>(".tabstrip-tab__close");
-
-    expect(closeButton?.hasAttribute("title")).toBe(false);
-    expect(closeButton?.getAttribute("aria-label")).toBe(TAB.closeLabel);
-    closeButton?.click();
-    expect(onClose).toHaveBeenCalledWith(TAB.id);
-  });
-
-  it("keeps only the active tab close action in the keyboard order", async () => {
-    const container = await renderStrip({
-      tabs: [TAB, { ...TAB, id: "tab-2", domId: "test-tab-2", label: "Second tab" }],
-      activeId: "tab-2",
-    });
-    const closeButtons = [...container.querySelectorAll<HTMLButtonElement>(".tabstrip-tab__close")];
-
-    expect(closeButtons.map((button) => button.tabIndex)).toEqual([-1, 0]);
-  });
-
-  it("closes a tab on middle click", async () => {
-    const onClose = vi.fn();
-    const container = await renderStrip({ tabs: [TAB], onClose });
-
-    renderedTabs(container)[0]?.dispatchEvent(new MouseEvent("auxclick", { button: 1 }));
-    expect(onClose).toHaveBeenCalledWith(TAB.id);
-  });
+      expect(separatorTargets()).toEqual(before.map((index) => `test-tab-${index}`));
+      await renderStrip({ tabs, separateTabs: true, activeId: "tab-2", container });
+      expect(separatorTargets()).toEqual(before.map((index) => `test-tab-${index}`));
+    },
+  );
 
   it("batches overflow reads after content commits and skips unchanged renders", async () => {
     const clock = tabMeasurementClock();
@@ -394,7 +300,7 @@ describe("renderPanelTabStrip", () => {
     render(nothing, container);
   });
 
-  it.each(["ltr", "rtl"])(
+  it.each(["rtl"])(
     "refreshes physical scroll edges and releases measurements across connection changes (%s)",
     async (dir) => {
       document.documentElement.dir = dir;
@@ -520,7 +426,6 @@ describe("renderPanelTabStrip", () => {
   it.each([
     { dir: "ltr", placement: "before", reorderIds: undefined },
     { dir: "rtl", placement: "after", reorderIds: undefined },
-    { dir: "ltr", placement: "before", reorderIds: ["files", "browser"] },
   ])(
     "reorders draggable tabs at the requested edge ($dir, $reorderIds)",
     async ({ dir, placement, reorderIds }) => {

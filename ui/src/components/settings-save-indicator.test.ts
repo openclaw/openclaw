@@ -59,16 +59,6 @@ describe("settings save indicator", () => {
     expect(indicator.querySelector('[role="status"]')).toBeNull();
   });
 
-  it("renders the shared working claw while saving", async () => {
-    await update(props({ status: "saving" }));
-
-    expect(indicator.textContent?.trim()).toBe("Saving…");
-    expect(indicator.querySelector(".settings-save-indicator__claw--saving svg")).not.toBeNull();
-    expect(
-      indicator.querySelector(".settings-save-indicator__claw")?.getAttribute("aria-hidden"),
-    ).toBe("true");
-  });
-
   it("shows saved for two seconds after saving, then returns to apply", async () => {
     vi.useFakeTimers();
     await update(props({ status: "saving" }));

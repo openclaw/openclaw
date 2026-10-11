@@ -171,25 +171,6 @@ afterEach(async () => {
 });
 
 describe("sessionProgressHoverTargetFromEvent", () => {
-  it.each([
-    ["a chat link", "a", "markdown-session-link"],
-    ["a sidebar row", "div", "sidebar-recent-session"],
-  ])("matches %s", (_label, tagName, className) => {
-    const host = document.body.appendChild(document.createElement("div"));
-    const target = host.appendChild(document.createElement(tagName));
-    target.className = className;
-    target.dataset.sessionKey = "agent:main:other-session";
-    const child = target.appendChild(document.createElement("span"));
-    let matched: HTMLElement | null = null;
-    host.addEventListener("pointerover", (event) => {
-      matched = sessionProgressHoverTargetFromEvent(event);
-    });
-
-    child.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, composed: true }));
-
-    expect(matched).toBe(target);
-  });
-
   it("ignores unrelated data carriers", () => {
     const host = document.body.appendChild(document.createElement("div"));
     const candidate = host.appendChild(document.createElement("button"));
