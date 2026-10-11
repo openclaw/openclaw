@@ -1,7 +1,7 @@
 import type { Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ResponseInput } from "openai/resources/responses/responses.js";
-import type { OpenAIResponsesCompactionRejection } from "../provider-options.js";
+import type { CompactionReplayRejection } from "../provider-options.js";
 import { prepareModelRequestBody } from "./model-request-body.js";
 import type { createOpenAIResponsesClient } from "./openai-responses-client.js";
 import {
@@ -88,12 +88,12 @@ type ResponsesEncryptedContentAttemptKind =
 export type ResponsesEncryptedContentAttempt<TRequest extends ResponsesEncryptedContentRequest> = {
   kind: ResponsesEncryptedContentAttemptKind;
   request: TRequest;
-  rejectedCompaction?: OpenAIResponsesCompactionRejection;
+  rejectedCompaction?: CompactionReplayRejection;
 };
 
 export function commitResponsesEncryptedContentAttempt(
   attempt: ResponsesEncryptedContentAttempt<ResponsesEncryptedContentRequest>,
-  commit: (checkpoint: OpenAIResponsesCompactionRejection | undefined) => void,
+  commit: (checkpoint: CompactionReplayRejection | undefined) => void,
 ): void {
   if (attempt.kind === "compaction-stripped") {
     commit(attempt.rejectedCompaction);
@@ -126,7 +126,7 @@ function stripResponsesRequestCompaction<TRequest extends ResponsesEncryptedCont
 
 function readOpenAIResponsesCompactionRejection(
   request: ResponsesEncryptedContentRequest,
-): OpenAIResponsesCompactionRejection | undefined {
+): CompactionReplayRejection | undefined {
   if (!Array.isArray(request.input)) {
     return undefined;
   }
@@ -193,8 +193,8 @@ export async function createResponsesStreamWithRecovery(params: {
   encodeBody?: ReturnType<typeof prepareModelRequestBody>;
   observePrompt?: NonNullable<ReturnType<typeof createResponsesPromptEgressObserver>>;
   initialAttemptKind?: ResponsesEncryptedContentAttemptKind;
-  initialRejectedCompaction?: OpenAIResponsesCompactionRejection;
-  onCompactionRejected?: (checkpoint: OpenAIResponsesCompactionRejection) => void;
+  initialRejectedCompaction?: CompactionReplayRejection;
+  onCompactionRejected?: (checkpoint: CompactionReplayRejection) => void;
   canRetryStream?: () => boolean;
   onServiceTierRejected?: (tier: "ultrafast" | "priority") => void;
   wrapStream?: (result: {

@@ -51,6 +51,7 @@ import {
   invokeAgent,
   describe0AfterEach0,
 } from "./agent.test-harness.js";
+import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
 
 const mocks = getAgentTestMocks();
 
@@ -135,7 +136,6 @@ describe("gateway agent handler", () => {
   it("releases a claimed cron continuation when the request exits before dispatch", async () => {
     mocks.agentCommand.mockClear();
     const sessionKey = "agent:main:cron:job-1:run:run-1";
-    const baseSessionKey = "agent:main:cron:job-1";
     const entry = {
       sessionId: "run-1",
       updatedAt: Date.now(),
@@ -152,13 +152,13 @@ describe("gateway agent handler", () => {
     };
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       canonicalKey: sessionKey,
       entry,
     });
     const { cronRunContinuation: _cronRunContinuation, ...baseEntry } = structuredClone(entry);
     const store = {
-      [baseSessionKey]: baseEntry,
+      "agent:main:cron:job-1": baseEntry,
       [sessionKey]: structuredClone(entry),
     };
     mocks.updateSessionStore.mockImplementation(async (_path, updater) => await updater(store));
@@ -305,7 +305,7 @@ describe("gateway agent handler", () => {
     const sessionKey = "agent:main:internal:ephemeral";
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: undefined,
       canonicalKey: sessionKey,
     });
@@ -535,7 +535,7 @@ describe("gateway agent handler", () => {
     const sessionKey = `agent:main:explicit:${sessionId}`;
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: undefined,
       canonicalKey: sessionKey,
     });

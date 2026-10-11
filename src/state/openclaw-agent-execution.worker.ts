@@ -8,6 +8,7 @@ import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
 import {
   SQLITE_WORKER_OPERATION_CLEANUP,
   SQLITE_WORKER_PREPARE_ADMITTED,
+  SqliteWorkerOpenRefusedError,
   type SqliteWorkerCommand,
   type SqliteWorkerPreparedBackend,
 } from "../infra/sqlite-worker-contract.js";
@@ -19,7 +20,6 @@ import {
 import {
   requestSqliteWorkerOperationAdmission,
   takeSqliteWorkerOperationAdmissionAttachment,
-  SqliteWorkerOpenRefusedError,
   type SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
 import { withAgentCreationClaimWitness } from "./agent-creation-claim.js";
@@ -426,6 +426,7 @@ function openAgentDatabaseBackend(
     keyof RegisteredAgentWorkerOperations
   >({
     "session.entry.read": loadAgentEntryReadOperations,
+    "session.entry.readResult": loadAgentEntryReadOperations,
     "voice.session.read": loadAgentVoiceSessionOperations,
     "voice.session.mutate": loadAgentVoiceSessionOperations,
     "session.entry.patch.prepare": loadAgentEntryPatchOperations,

@@ -1,4 +1,5 @@
-import type { MessagePort } from "node:worker_threads";
+import { MessagePort } from "node:worker_threads";
+import { withSqliteWorkerOperationAdmissionAsync } from "../../infra/sqlite-worker-operation-admission.js";
 import type { OpenClawAgentDatabaseValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
   withOpenClawAgentDatabaseAdmission,
@@ -22,6 +23,7 @@ export function withWorkerWriteAdmission<T>(
     const admission = await new Promise<{
       allowed: boolean;
       validation?: OpenClawAgentDatabaseValidation;
+      databaseAdmissionPort?: MessagePort;
     }>((resolve, reject) => {
       const receive = (admissionMessage: {
         type: string;
@@ -29,6 +31,7 @@ export function withWorkerWriteAdmission<T>(
         admissionId: number;
         allowed: boolean;
         validation?: OpenClawAgentDatabaseValidation;
+        databaseAdmissionPort?: MessagePort;
       }) => {
         cleanup();
         if (
@@ -57,14 +60,25 @@ export function withWorkerWriteAdmission<T>(
         admissionId: requestedId,
       });
     });
-    const value = await run(() => {
-      if (!admission.allowed) {
-        throw new SqliteReclamationRequestRefusedError(
-          "SQLite reclamation database admission was revoked",
-        );
+    const invoke = () =>
+      run(() => {
+        if (!admission.allowed) {
+          throw new SqliteReclamationRequestRefusedError(
+            "SQLite reclamation database admission was revoked",
+          );
+        }
+        assertSourceCurrent?.();
+      }, admission.validation);
+    const metadata = admission.databaseAdmissionPort;
+    const value = await (async () => {
+      try {
+        return metadata instanceof MessagePort
+          ? await withSqliteWorkerOperationAdmissionAsync({ port: metadata }, invoke)
+          : await invoke();
+      } finally {
+        metadata?.close();
       }
-      assertSourceCurrent?.();
-    }, admission.validation);
+    })();
     if (!finalAdmission) {
       port.postMessage({
         type: "admission-release",

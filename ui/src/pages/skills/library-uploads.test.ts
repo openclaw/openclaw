@@ -49,7 +49,7 @@ function harness() {
     defaultSelectionLimit: 64,
   };
   library.view = "mine";
-  return { library, config, request };
+  return { library, config, request, connection };
 }
 function fileWithReader(name: string, read: () => Promise<ArrayBuffer>) {
   const file = new File(["skill"], name);
@@ -93,6 +93,41 @@ function savedReceipt(read: SkillsLibraryReadResult): SkillsLibraryReceipt {
 afterEach(() => document.body.replaceChildren());
 
 describe("skill library upload policy", () => {
+  it("keeps a replacement save locked when a previous connection's save fails", async () => {
+    const { library, request, connection } = harness();
+    const oldSave = createDeferred<SkillsLibraryReceipt>();
+    const newSave = createDeferred<SkillsLibraryReceipt>();
+    const read = existingSkill();
+    const initialList = library.list;
+    request
+      .mockResolvedValueOnce(read)
+      .mockReturnValueOnce(oldSave.promise)
+      .mockResolvedValueOnce(read)
+      .mockReturnValueOnce(newSave.promise)
+      .mockResolvedValueOnce(initialList);
+    await library.open(read.entry.skillId);
+    library.draft!.content = "First connection edit";
+    const savingOld = library.save();
+    connection.publish({ ...connection.gateway.snapshot, phase: "reconnecting" });
+    library.reset();
+    connection.publish({ ...connection.gateway.snapshot, phase: "connected" });
+    await library.open(read.entry.skillId);
+    library.draft!.content = "Current connection edit";
+    const savingNew = library.save();
+    expect(library.busy).toBe(true);
+
+    oldSave.reject(new Error("Previous connection failed"));
+    await savingOld;
+    expect(library.busy).toBe(true);
+    expect(library.error).toBeNull();
+
+    newSave.resolve(savedReceipt(read));
+    await savingNew;
+    expect(library.busy).toBe(false);
+    expect(library.draft?.content).toBe("Current connection edit");
+    expect(library.draft?.entry?.revision).toBe("b".repeat(64));
+  });
+
   it.each([
     ["content", { content: "changed" }],
     ["encoding", { encoding: "utf8" }],

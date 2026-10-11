@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import type {
   ThemeMascot,
   ThemeWorkingIndicator,
@@ -33,6 +33,7 @@ export function renderChatWorkingIndicator(
     waitingSubagents?: ChatSubagentWait;
     /** Unfinished subagents to mention while the session itself is still working. */
     runningSubagents?: number;
+    subagentActivity?: TemplateResult;
     /** Shows one subagent; without it a waited-on subagent's name is plain text. */
     onOpenSubagent?: (key: string) => void;
     /** Shows the session's subagents; without it their count is plain text. */
@@ -116,7 +117,7 @@ export function renderChatWorkingIndicator(
   const startedAt = waitingSubagents ? waitingSubagents.startedAt : part.startedAt;
   // The animated claw stays decorative; the text status exposes progress without
   // announcing every elapsed-time tick to screen readers.
-  return html`
+  const status = html`
     <div
       class="chat-working-indicator ${continuation ? "chat-working-indicator--continuation" : ""} ${waitingSubagents ? "chat-working-indicator--subagents" : ""}"
       role="status"
@@ -197,6 +198,9 @@ export function renderChatWorkingIndicator(
       </span>
     </div>
   `;
+  // Keep the live activity slot stable when the parent yields or resumes.
+  return html`${waitingSubagents && options.subagentActivity ? nothing : status}
+  ${options.subagentActivity ?? nothing}`;
 }
 
 /** Post-turn recap row: once the run settles, the parked claw reports how

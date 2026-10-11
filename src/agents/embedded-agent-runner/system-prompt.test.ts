@@ -28,8 +28,6 @@ function basicPromptInputs(): Parameters<typeof buildConfiguredAgentSystemPrompt
     },
     tools: [],
     modelAliasLines: [],
-    userTimezone: "UTC",
-    userDate: "2026-01-05",
   };
 }
 
@@ -49,8 +47,6 @@ function fixedEmbeddedPromptInputs(): Parameters<typeof buildConfiguredAgentSyst
     },
     tools: ["read", "exec", "process", "message", "sessions_spawn"].map(createStubTool),
     capabilityToolNames: ["tool_search", "web_search"],
-    userTimezone: "UTC",
-    userDate: "2026-01-05",
     ownerNumbers: ["fixture-owner"],
     modelAliasLines: ["- direct-alias: fixture/direct"],
     ttsHint: "Fixture direct TTS hint.",

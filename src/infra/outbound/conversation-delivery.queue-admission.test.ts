@@ -11,7 +11,7 @@ import {
 } from "../../config/sessions/conversation-delivery-store.js";
 import {
   registerConversationAddresses,
-  resolveConversationRegistryScope,
+  prepareConversationRegistryScope,
 } from "../../config/sessions/conversation-registry.js";
 import { resolveConversationRouteFingerprint } from "../../config/sessions/conversation-route-fingerprint.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -93,7 +93,7 @@ describe("conversation completion through the real delivery queue", () => {
   ) {
     const stateDir = fixtures.tmpDir();
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const scope = resolveConversationRegistryScope({ agentId: "main", config });
+    const scope = await prepareConversationRegistryScope({ agentId: "main", config });
     onTestFinished(async () => {
       await closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
     });
@@ -398,7 +398,7 @@ describe("conversation completion through the real delivery queue", () => {
     fs.mkdirSync(originalRoot);
     fs.mkdirSync(replacementRoot);
     vi.stubEnv("OPENCLAW_STATE_DIR", originalRoot);
-    const scope = resolveConversationRegistryScope({ agentId: "main", config: {} });
+    const scope = await prepareConversationRegistryScope({ agentId: "main", config: {} });
     const replacementScope = {
       agentId: "main",
       storePath: path.join(replacementRoot, "agents", "main", "agent", "openclaw-agent.sqlite"),

@@ -68,6 +68,7 @@ export const SessionListRowSchema = Type.Object(
       "derivedTitle",
       "lastMessagePreview",
       "parentSessionKey",
+      "sidebarRoot",
       "model",
       "contextTokens",
       "totalTokens",

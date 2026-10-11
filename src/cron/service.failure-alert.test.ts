@@ -120,7 +120,11 @@ describe("CronService failure alerts", () => {
         expect(firstAlert.job.id).toBe(job.id);
         expectAlertTextContaining(sendCronFailureAlert, 'Automation "daily report" failed 2 times');
 
-        runIsolatedAgentJob.mockResolvedValue({ status: "error", error: "timeout" });
+        runIsolatedAgentJob.mockResolvedValue({
+          status: "error",
+          error: "timeout",
+          provider: "anthropic",
+        });
         await cron.run(job.id, "force");
         expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
 
@@ -129,7 +133,11 @@ describe("CronService failure alerts", () => {
         await cron.run(job.id, "force");
         expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
 
-        runIsolatedAgentJob.mockResolvedValue({ status: "error", error: "timeout" });
+        runIsolatedAgentJob.mockResolvedValue({
+          status: "error",
+          error: "timeout",
+          provider: "anthropic",
+        });
         await cron.run(job.id, "force");
         expect(sendCronFailureAlert).toHaveBeenCalledTimes(2);
         expectAlertTextContaining(sendCronFailureAlert, "Cause: timeout");
@@ -145,7 +153,11 @@ describe("CronService failure alerts", () => {
         expect(cron.getJob(job.id)?.state.failureAlertIncident).toBeUndefined();
         expect(cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
 
-        runIsolatedAgentJob.mockResolvedValue({ status: "error", error: "timeout" });
+        runIsolatedAgentJob.mockResolvedValue({
+          status: "error",
+          error: "timeout",
+          provider: "anthropic",
+        });
         await cron.run(job.id, "force");
         expect(sendCronFailureAlert).toHaveBeenCalledTimes(2);
         await cron.run(job.id, "force");

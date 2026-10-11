@@ -4,12 +4,13 @@ import { getRuntimeConfig } from "../config/io.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
-  listSessionEntriesReadOnly,
   resolveSessionTranscriptRuntimeTarget,
   type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
 import { resolveSessionKeyBySessionIdAsync } from "../config/sessions/session-accessor.transcript-target.js";
 import type { SessionTranscriptRuntimeScope } from "../config/sessions/session-accessor.types.js";
+import { readSessionEntrySummariesInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey, toAgentStoreSessionKey } from "../routing/session-key.js";
@@ -102,12 +103,18 @@ export async function resolveAgentRunSessionTarget(
   const compatibilitySessionKey =
     recognizedCompatibilitySessionKey ??
     (params.missingSessionKey === "create" ? plainCompatibilitySessionKey : undefined);
+  const markerSource =
+    legacyMarker && !hasCompleteTypedTarget
+      ? captureIncognitoSessionSource(legacyMarker)
+      : undefined;
   const markerEntries =
     legacyMarker && !hasCompleteTypedTarget
-      ? listSessionEntriesReadOnly({
-          agentId: legacyMarker.agentId,
-          storePath: legacyMarker.storePath,
-        })
+      ? markerSource && "kind" in markerSource
+        ? []
+        : await readSessionEntrySummariesInWorker({
+            agentId: legacyMarker.agentId,
+            storePath: legacyMarker.storePath,
+          })
       : [];
   const markerMatches = legacyMarker
     ? markerEntries.filter(({ entry }) => entry.sessionId === legacyMarker.sessionId)

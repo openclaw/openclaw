@@ -267,7 +267,8 @@ describe("background command progress", () => {
 });
 
 it("keeps Slack commentary progress open while its exec is running", async () => {
-  const command = "grep 'SLACK-QA-TOOL-A1B2C3D4' /dev/null || sleep 5";
+  const command =
+    "printf '%s' 'SLACK-QA-TOOL-A1B2C3D4' >/dev/null; sleep 5; printf '%s\\n' 'SLACK-QA-OUTPUT-A1B2C3D4'";
   const prompt = `SLACK-QA-COMMENTARY-A1B2C3D4 ${command} SLACK-QA-COMMENTARY-DONE-A1B2C3D4`;
   const results: ProgressResult[] = [{ tool: "exec", args: { command }, output: RUNNING_OUTPUT }];
   expect(await requestProgress("responses", prompt, results)).toMatchObject({

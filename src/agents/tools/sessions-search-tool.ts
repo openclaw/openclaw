@@ -523,6 +523,8 @@ export function createSessionsSearchTool(opts?: {
             });
           const scopedCandidate = chunk.length === 1 ? chunk[0] : undefined;
           let expectedSessionId = scopedCandidate?.expectedSessionId;
+          let revalidateCurrent: (() => Promise<void>) | undefined;
+          let admissionIdentities: string[] | undefined;
           if (visibility === "channel" && scopedCandidate) {
             const freshAccess = await resolveSessionToolAccess({
               action: "history",
@@ -542,13 +544,17 @@ export function createSessionsSearchTool(opts?: {
               continue;
             }
             expectedSessionId = freshAccess.expectedSessionId;
+            revalidateCurrent = freshAccess.revalidateCurrent;
+            admissionIdentities = freshAccess.admissionIdentities;
           }
           const result =
-            scopedCandidate && expectedSessionId
+            scopedCandidate && (expectedSessionId || revalidateCurrent)
               ? await runWithScopedSessionAccess({
                   cfg,
                   agentId,
                   expectedSessionId,
+                  revalidateCurrent,
+                  admissionIdentities,
                   targetSessionKey: scopedCandidate.key,
                   run: runSearch,
                 })

@@ -247,7 +247,14 @@ export async function resolveSessionToolAccess(params: {
   readConfig?: () => OpenClawConfig;
   sandboxed?: boolean;
   callGateway?: AgentToolGatewayRequestCaller;
-}): Promise<SessionVisibilityDecision & { assertCurrent?: () => void }> {
+}): Promise<
+  SessionVisibilityDecision & {
+    assertCurrent?: () => void;
+    revalidateCurrent?: () => Promise<void>;
+    admissionIdentities?: string[];
+    basis?: "scoped-grant";
+  }
+> {
   const authorizationTargetSessionKey =
     params.authorizationTargetSessionKey ?? params.targetSessionKey;
   const deny = (denial: SessionToolAccessDenied) => {
@@ -285,7 +292,7 @@ export async function resolveSessionToolAccess(params: {
     // Channel visibility is a ceiling, including host-scoped grants. Do not let
     // lineage or the main-session exception substitute for route ownership.
     const isCurrent = authorizationTargetSessionKey === params.requesterSessionKey;
-    const [requester, target] =
+    const readChannelRows = async () =>
       !isCurrent && params.requesterAgentId === params.targetAgentId
         ? await Promise.all([
             readSessionToolChannelRow({
@@ -300,23 +307,54 @@ export async function resolveSessionToolAccess(params: {
             }),
           ])
         : [];
-    const decision = createSessionVisibilityDecisionChecker({
-      action: params.action,
-      defaultAgentId: params.targetAgentId,
-      requesterAgentId: params.requesterAgentId,
-      requesterSessionKey: params.requesterSessionKey,
-      visibility: params.visibility,
-      a2aPolicy: params.a2aPolicy,
-      requesterChannelScope: requester?.channelScope,
-    }).check({
-      key: authorizationTargetSessionKey,
-      agentId: params.targetAgentId,
-      channelScope: target?.channelScope,
-    });
+    const checkChannelRows = (
+      requester: DescribedSessionVisibilityRow | undefined,
+      target: DescribedSessionVisibilityRow | undefined,
+    ) =>
+      createSessionVisibilityDecisionChecker({
+        action: params.action,
+        defaultAgentId: params.targetAgentId,
+        requesterAgentId: params.requesterAgentId,
+        requesterSessionKey: params.requesterSessionKey,
+        visibility: params.visibility,
+        a2aPolicy: params.a2aPolicy,
+        requesterChannelScope: requester?.channelScope,
+      }).check({
+        key: authorizationTargetSessionKey,
+        agentId: params.targetAgentId,
+        channelScope: target?.channelScope,
+      });
+    const [requester, target] = await readChannelRows();
+    const decision = checkChannelRows(requester, target);
     if (!decision.allowed) {
       return deny(decision);
     }
-    return target?.sessionId ? { allowed: true, expectedSessionId: target.sessionId } : decision;
+    if (isCurrent) {
+      return decision;
+    }
+    return {
+      allowed: true,
+      ...(target?.sessionId ? { expectedSessionId: target.sessionId } : {}),
+      admissionIdentities: [params.requesterSessionKey, requester?.sessionId].filter(
+        (identity): identity is string => Boolean(identity),
+      ),
+      revalidateCurrent: async () => {
+        const [currentRequester, currentTarget] = await readChannelRows();
+        const current = checkChannelRows(currentRequester, currentTarget);
+        if (!current.allowed) {
+          const denial = deny(current);
+          throw new Error(
+            formatSessionToolAccessDenial(denial, {
+              action: params.displayAction ?? params.action,
+              targetSessionKey: params.targetSessionKey,
+            }),
+          );
+        }
+        if (target?.sessionId && currentTarget?.sessionId !== target.sessionId) {
+          throw new Error(`Session "${params.targetSessionKey}" changed after access was granted.`);
+        }
+      },
+    };
   }
   const scoped = await createSessionVisibilityChecker.resolveScopedAccessAsync({
     action: params.action,
@@ -326,7 +364,7 @@ export async function resolveSessionToolAccess(params: {
     targetSessionKey: authorizationTargetSessionKey,
   });
   if (scoped) {
-    return { allowed: true, expectedSessionId: scoped.expectedSessionId };
+    return { allowed: true, expectedSessionId: scoped.expectedSessionId, basis: "scoped-grant" };
   }
   const createChecker = () => {
     const cfg = params.readConfig?.();

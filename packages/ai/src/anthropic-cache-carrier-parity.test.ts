@@ -94,7 +94,7 @@ describe("Anthropic runtime-context cache lifecycle", () => {
     { implementation: "transport", marker: "legacy" },
     { implementation: "transport", marker: "canonical" },
   ] as const)(
-    "keeps mixed-media $marker carriers out of the prompt cache through $implementation replay",
+    "keeps mixed-media $marker carriers before steering out of the cache through $implementation replay",
     async ({ implementation, marker }) => {
       const carrier: Message = {
         role: "user",
@@ -112,7 +112,11 @@ describe("Anthropic runtime-context cache lifecycle", () => {
         cacheRetention: "short",
         context: {
           ...context,
-          messages: [{ role: "user", content: "Original question", timestamp: 1 }, carrier],
+          messages: [
+            { role: "user", content: "Original question", timestamp: 1 },
+            carrier,
+            { role: "user", content: "Steering correction", timestamp: 3 },
+          ],
         },
       });
       const wire = payload.messages as Array<{ content: unknown }>;
@@ -131,6 +135,7 @@ describe("Anthropic runtime-context cache lifecycle", () => {
           source: { type: "base64", media_type: "image/png", data: "aW1n" },
         },
       ]);
+      expect(wire[2]?.content).toBe("Steering correction");
     },
   );
 
@@ -422,11 +427,16 @@ describe("Anthropic runtime-context cache lifecycle", () => {
                 : "OpenClaw runtime context:\nRuntime context",
             });
           } else {
-            expect(wire[1]?.content).toEqual([
+            const retainedContent = wire[1]?.content;
+            expect(
+              typeof retainedContent === "string"
+                ? [{ type: "text", text: retainedContent }]
+                : retainedContent,
+            ).toEqual([
               {
                 type: "text",
                 text: "OpenClaw runtime context:\nRuntime context",
-                cache_control: cacheControl,
+                ...(round < 2 ? { cache_control: cacheControl } : {}),
               },
             ]);
           }
@@ -448,9 +458,16 @@ describe("Anthropic runtime-context cache lifecycle", () => {
                   }),
                 ],
           );
-          // Checkpoint metadata advances; the content preceding it must remain reusable.
+          // String content is Anthropic's shorthand for one text block; markers may move.
           const prefix = JSON.parse(
-            JSON.stringify(stable, (key, value) => (key === "cache_control" ? undefined : value)),
+            JSON.stringify(stable, (key, value) => {
+              if (key === "cache_control") {
+                return undefined;
+              }
+              return key === "content" && typeof value === "string"
+                ? [{ type: "text", text: value }]
+                : value;
+            }),
           );
           expect(prefix.slice(0, previousPrefix.length)).toEqual(previousPrefix);
           previousPrefix = prefix;

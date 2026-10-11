@@ -15,7 +15,7 @@ becomes `/openclaw/chat/main` when the base path is `/openclaw`.
 
 ## Session and dashboard URLs
 
-**Copy → Session link** uses the connected Gateway's public Control UI address
+**Copy link** in the session menu uses the connected Gateway's public Control UI address
 when `gateway.publicOrigin` is configured, including its
 `gateway.controlUi.basePath`. This keeps links shareable when the desktop app
 connects through a local SSH tunnel. Without a public origin, copied links use
@@ -189,10 +189,10 @@ also works under `/dashboard/<agentId>`.
 
 ## Social previews
 
-Use **Copy → Preview link** in a session's menu to share a link with an OpenClaw
+Use **Advanced → Copy details → Preview link** in a session's menu to share a link with an OpenClaw
 social card. It opens a small public landing page; **Open dashboard** or
 **Open session** then takes the recipient to the normal authenticated view.
-**Copy → Session link** still copies the direct link.
+**Copy link** in the root menu still copies the direct link.
 
 For example, `/share/dashboard/main/deploy-monitor-6db92d48` previews
 `/dashboard/main/deploy-monitor-6db92d48`. A configured Control UI base path
@@ -251,8 +251,14 @@ Token/password operators with a saved credential for this Gateway automatically
 continue into the Control UI when reopening, reloading, or following a chat link.
 The browser uses its session token or paired-device credential; passwords remain
 in memory only. This also works on loopback HTTP, which permits public readers.
-The anonymous private-thread document initially returns `404`, then the browser
-opens the app through the session-entry handoff with a `200` response. No extra
+In trusted-proxy deployments, browsers controlled by the installed Control UI service worker request the
+protected session-entry app document directly when reopening a chat deep link,
+without first loading the public reader or probing access. Registration is only
+a navigation hint: the protected handoff still checks current permissions.
+Denied access or a login redirect falls back to the public reader. Browsers
+without the worker retain the public document and protected access probe.
+The anonymous private-thread document initially returns `404`, then an admitted
+browser opens the app through the session-entry handoff with a `200` response. No extra
 **Log in** click is needed. Without a saved credential, **Log in** opens the normal
 login gate. On non-secure ingress where public transcripts are unavailable,
 token/password deployments serve the app shell directly.
@@ -265,7 +271,9 @@ and you are its creator or a Gateway admin. See
 Public access is separate from teammate visibility and editing permissions.
 The public reader does not open a Gateway WebSocket, subscribe to the session
 roster, send messages, invoke tools, or open private dashboards. It shows user
-messages and assistant final answers with Markdown formatting. Tool output,
+messages and assistant final answers with Markdown formatting in the Control UI's
+chat layout and typeface, offers a copy control on code blocks, and closes with a
+short OpenClaw introduction for readers who are new to it. Tool output,
 reasoning, files, images, executable widgets, internal metadata, and hidden
 messages are omitted. Credential-pattern redaction is best effort, not a
 guarantee that sensitive prose is detected. Review the conversation before

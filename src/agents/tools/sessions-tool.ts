@@ -107,6 +107,7 @@ async function resolvePatchTarget(
   key: string;
   requesterAgentId: string;
   requesterSessionKey: string;
+  revalidateCurrent?: () => Promise<void>;
 }> {
   const context = resolveSessionToolContext(opts);
   const rawKey = sessionKey ?? context.effectiveRequesterKey;
@@ -152,6 +153,7 @@ async function resolvePatchTarget(
   });
   const isRequesterSession =
     resolved.key === context.effectiveRequesterKey && agentId === requesterAgentId;
+  let revalidateCurrent: (() => Promise<void>) | undefined;
   if (!isRequesterSession) {
     // Session controls require status visibility, never an outbound-only send grant.
     // Owner gating remains separate.
@@ -180,6 +182,7 @@ async function resolvePatchTarget(
         }),
       );
     }
+    revalidateCurrent = access.revalidateCurrent;
   }
   return {
     agentId,
@@ -188,6 +191,7 @@ async function resolvePatchTarget(
     key: resolved.key,
     requesterAgentId,
     requesterSessionKey: context.effectiveRequesterKey,
+    revalidateCurrent,
   };
 }
 
@@ -466,7 +470,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
           }),
         );
       }
-      const { agentId, cfg, isRequesterSession, key } = await resolvePatchTarget(
+      const { agentId, cfg, isRequesterSession, key, revalidateCurrent } = await resolvePatchTarget(
         opts,
         readToolStringParam(params, "sessionKey"),
         gatewayRequest,
@@ -503,23 +507,25 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         operation: archived === true ? ("archive" as const) : ("restore" as const),
         restricted: true,
       });
-      const callSessionPatch = (
+      const callSessionPatch = async (
         sessionPatch: typeof patch & { agentId?: string },
-      ): Promise<SessionsPatchResult> =>
-        restrictedRename
-          ? patchGateway({
+      ): Promise<SessionsPatchResult> => {
+        await revalidateCurrent?.();
+        return restrictedRename
+          ? await patchGateway({
               method: "sessions.patch",
               params: sessionPatch,
               // Even broader non-owner operators use the canonical creator-only guard for rename.
               scopes: ["operator.sessions.write"],
             })
           : controlOnly
-            ? callSessionToolControl<SessionsPatchResult>(
+            ? await callSessionToolControl<SessionsPatchResult>(
                 controlTarget(),
                 { method: "sessions.patch", params: sessionPatch },
                 patchGateway,
               )
-            : patchGateway({ method: "sessions.patch", params: sessionPatch });
+            : await patchGateway({ method: "sessions.patch", params: sessionPatch });
+      };
       const includeResolved = patch.model !== undefined || patch.thinkingLevel !== undefined;
       const agentScope = parseAgentSessionKey(key) ? {} : { agentId };
 

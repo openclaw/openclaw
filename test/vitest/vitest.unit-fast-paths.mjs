@@ -1,5 +1,4 @@
 // Unit-fast test discovery and classification helpers for fast local routing.
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { isAgentsCoreIsolatedTestFile } from "./vitest.agents-paths.mjs";
@@ -12,6 +11,7 @@ import {
 } from "./vitest.gateway-server-paths.mjs";
 import { pluginSdkLightTestFiles } from "./vitest.plugin-sdk-paths.mjs";
 import { isToolingIsolatedTestFile } from "./vitest.tooling-isolated-paths.mjs";
+import { getRepositoryFileInventory } from "./vitest.ui-paths.mjs";
 import { boundaryTestFiles, bundledPluginDependentUnitTestFiles } from "./vitest.unit-paths.mjs";
 
 const normalizeRepoPath = (value) => value.replaceAll("\\", "/");
@@ -365,44 +365,20 @@ function walkFiles(directory, files = []) {
 
 const walkedTestFilesByCwd = new Map();
 
-function collectRepoTestFilesFromGit(cwd) {
-  // Planning, fast-lane includes, and scoped exclusions share this inventory.
-  // New working-tree tests must be present so explicit targets cannot become empty lanes.
-  const result = spawnSync(
-    "git",
-    [
-      "ls-files",
-      "--cached",
-      "--others",
-      "--exclude-standard",
-      "-z",
-      "--",
-      "src",
-      "packages",
-      "test",
-    ],
-    { cwd, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] },
-  );
-  if (result.error || result.status !== 0) {
-    return null;
-  }
-  return result.stdout
-    .split("\0")
-    .map(normalizeRepoPath)
-    .filter((file) => file.endsWith(".test.ts"));
-}
-
 function collectRepoTestFiles(cwd) {
   const normalizedCwd = normalizeRepoPath(cwd);
   const cached = walkedTestFilesByCwd.get(normalizedCwd);
   if (cached) {
     return cached;
   }
-  const files =
-    collectRepoTestFilesFromGit(cwd) ??
-    ["src", "packages", "test"]
-      .flatMap((directory) => walkFiles(path.join(cwd, directory)))
-      .map((file) => normalizeRepoPath(path.relative(cwd, file)));
+  const inventory = getRepositoryFileInventory(cwd);
+  const files = inventory
+    ? [...inventory]
+        .map(normalizeRepoPath)
+        .filter((file) => /^(?:src|packages|test)\//u.test(file) && file.endsWith(".test.ts"))
+    : ["src", "packages", "test"]
+        .flatMap((directory) => walkFiles(path.join(cwd, directory)))
+        .map((file) => normalizeRepoPath(path.relative(cwd, file)));
   walkedTestFilesByCwd.set(normalizedCwd, files);
   return files;
 }

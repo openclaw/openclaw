@@ -549,7 +549,11 @@ export function* filterSessionEntries(
       const agentId = expectDefined(params.getTarget(key), "counted row owner").agentId;
       const active = params.projectActiveRun?.(key, entry, agentId);
       counts.open += 1;
-      counts.running += Number(active?.active === true && active.status !== "queued");
+      counts.running += Number(
+        (active?.active === true && active.status !== "queued") ||
+          getRowContext().subagentRuns.countActiveDescendantRuns(storeKey) > 0 ||
+          getRowContext().projectedSubagentActivity?.has(storeKey) === true,
+      );
       ownerSessionCounts.set(profileId, counts);
     }
     if (activityPulse) {

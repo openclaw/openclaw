@@ -2,6 +2,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 
 const runIsolatedCompletion = vi.hoisted(() => vi.fn());
 const resolveSimpleCompletionSelectionForAgent = vi.hoisted(() => vi.fn());
@@ -42,6 +44,59 @@ beforeEach(() => {
 });
 
 describe("generateConversationLabel", () => {
+  it.each<{ primary: string; explicit: boolean; sessionRuntime?: string }>([
+    { primary: "claude-opus", explicit: false },
+    { primary: "claude-sonnet", explicit: false },
+    { primary: "claude-opus", explicit: true },
+    { primary: "claude-opus", explicit: false, sessionRuntime: "openclaw" },
+  ])(
+    "keeps the utility label on its selected runtime ($primary, explicit=$explicit, session=$sessionRuntime)",
+    async ({ primary, explicit, sessionRuntime }) => {
+      const utilityModel = "anthropic/claude-haiku";
+      const cfg = {
+        agents: {
+          defaults: {
+            model: `anthropic/${primary}`,
+            models: { [`anthropic/${primary}`]: { agentRuntime: { id: "claude-cli" } } },
+            ...(explicit ? { utilityModel } : {}),
+          },
+        },
+      };
+      const metadataSnapshot = createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "anthropic",
+            providers: ["anthropic"],
+            modelCatalog: {
+              providers: { anthropic: { defaultUtilityModel: "claude-haiku", models: [] } },
+            },
+          },
+        ],
+      });
+      await withPluginRuntimeGenerationScope({ metadataSnapshot }, () =>
+        generateConversationLabelWithFallback({
+          cfg,
+          agentId: "main",
+          utilityModelRef: utilityModel,
+          regularModelRef: `anthropic/${primary}`,
+          agentHarnessRuntimeOverride: sessionRuntime,
+          prompt: "Return a session title.",
+          userMessage: "Plan a garden.",
+        }),
+      );
+      expect(runIsolatedCompletion).toHaveBeenCalledOnce();
+      expect(runIsolatedCompletion.mock.calls[0]?.[0]).toMatchObject({
+        model: "claude-haiku",
+        ...(explicit ? {} : { agentHarnessRuntimeOverride: sessionRuntime ?? "claude-cli" }),
+      });
+      if (explicit) {
+        expect(runIsolatedCompletion.mock.calls[0]?.[0]).not.toHaveProperty(
+          "agentHarnessRuntimeOverride",
+        );
+      }
+    },
+  );
+
   it("uses one explicit model and timeout when supplied", async () => {
     await generateConversationLabel({
       userMessage: "Message",

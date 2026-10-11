@@ -75,7 +75,7 @@ describe("SQLite session entry patch commit revalidation", () => {
   });
 
   it.each(["native", "worker"] as const)(
-    "publishes the %s patch's exact transcript predicate and rereads a foreign generation next time",
+    "publishes the %s patch's exact transcript predicate and rereads a sibling generation next time",
     async (route) => {
       const appended = appendTranscriptMessageSync(
         { ...scope, sessionId: "session-1" },
@@ -109,13 +109,13 @@ describe("SQLite session entry patch commit revalidation", () => {
           watermark: { generation: anchor.generation, maxSeq: anchor.rawSeq },
         },
       );
-      const foreign = new DatabaseSync(database.path);
+      const sibling = openNodeSqliteDatabase(database.path);
       try {
-        foreign
+        sibling
           .prepare("UPDATE transcript_rewrite_watermarks SET generation = ? WHERE session_id = ?")
-          .run("foreign-rewrite", "session-1");
+          .run("sibling-rewrite", "session-1");
       } finally {
-        foreign.close();
+        sibling.close();
       }
       await expect(
         patchSessionEntryCore(scope, () => ({ label: "must not commit" }), options),
@@ -126,7 +126,7 @@ describe("SQLite session entry patch commit revalidation", () => {
       await patchSessionEntryCore(scope, () => ({ sessionId: "rotated-session" }), {
         ...options,
         workerGuard: {
-          shouldCommitIf: { ...options.workerGuard.shouldCommitIf, generation: "foreign-rewrite" },
+          shouldCommitIf: { ...options.workerGuard.shouldCommitIf, generation: "sibling-rewrite" },
         },
       });
       expect(onCommitted).toHaveBeenCalledExactlyOnceWith(
@@ -135,9 +135,9 @@ describe("SQLite session entry patch commit revalidation", () => {
     },
   );
 
-  /** Simulate another writer landing between patch preparation and its commit. */
-  function mutateRowOutOfBand(patch: Record<string, string>, targetKey = sessionKey): void {
-    const other = new DatabaseSync(database.path);
+  /** Use the native writer boundary so interleaved commits publish their own receipts. */
+  function mutateRowFromSibling(patch: Record<string, string>, targetKey = sessionKey): void {
+    const other = openNodeSqliteDatabase(database.path);
     try {
       const entries = Object.entries(patch);
       const setters = entries.map(([key]) => `'$.${key}', ?`).join(", ");
@@ -301,15 +301,15 @@ describe("SQLite session entry patch commit revalidation", () => {
     }
 
     it.each([
-      { field: "sessionId", writer: "foreign" },
-      { field: "lifecycleRevision", writer: "foreign" },
-      { field: "activeWriterRunId", writer: "foreign" },
+      { field: "sessionId", writer: "sibling" },
+      { field: "lifecycleRevision", writer: "sibling" },
+      { field: "activeWriterRunId", writer: "sibling" },
       { field: "activeWriterRunId", writer: "same-connection" },
     ])("rejects a changed $field from a $writer writer", ({ field, writer }) => {
       const guard = createSessionEntryRevisionGuard(database.db, () => {}, ownerPredicate());
       guard();
-      if (writer === "foreign") {
-        mutateRowOutOfBand({ [field]: "replacement" });
+      if (writer === "sibling") {
+        mutateRowFromSibling({ [field]: "replacement" });
         expect(guard).toThrowError(
           expect.objectContaining({
             code: "invalid_state",
@@ -331,7 +331,7 @@ describe("SQLite session entry patch commit revalidation", () => {
       }
     });
 
-    it("does not adopt a foreign revision that commits during the owner predicate", () => {
+    it("does not adopt a sibling revision that commits during the owner predicate", () => {
       const matches = ownerPredicate();
       let mutateDuringPredicate = false;
       const guard = createSessionEntryRevisionGuard(
@@ -340,13 +340,13 @@ describe("SQLite session entry patch commit revalidation", () => {
         () => {
           const matched = matches();
           if (mutateDuringPredicate) {
-            mutateRowOutOfBand({ activeWriterRunId: "replacement" });
+            mutateRowFromSibling({ activeWriterRunId: "replacement" });
           }
           return matched;
         },
       );
       guard();
-      mutateRowOutOfBand({ label: "harmless metadata" });
+      mutateRowFromSibling({ label: "harmless metadata" });
       mutateDuringPredicate = true;
       expect(guard).toThrow("Session entry facts changed during their mutation check");
       mutateDuringPredicate = false;
@@ -371,7 +371,7 @@ describe("SQLite session entry patch commit revalidation", () => {
         createSessionTranscriptOwnerPredicate(database, expected),
       );
       guard();
-      const other = new DatabaseSync(database.path);
+      const other = openNodeSqliteDatabase(database.path);
       try {
         other
           .prepare(
@@ -387,7 +387,7 @@ describe("SQLite session entry patch commit revalidation", () => {
     it("rejects JSON5 that the stored entry decoder would not accept", () => {
       const guard = createSessionEntryRevisionGuard(database.db, () => {}, ownerPredicate());
       guard();
-      const other = new DatabaseSync(database.path);
+      const other = openNodeSqliteDatabase(database.path);
       try {
         other
           .prepare(
@@ -433,10 +433,10 @@ describe("SQLite session entry patch commit revalidation", () => {
         const read = sessionEntryReads.readExactSessionEntryRow;
         const materialize = vi.spyOn(sessionEntryReads, "readExactSessionEntryRow");
         const race = () => {
-          mutateRowOutOfBand({ label: "invalidate the warm facts" });
+          mutateRowFromSibling({ label: "invalidate the warm facts" });
           materialize.mockImplementationOnce((...args) => {
             const row = read(...args);
-            mutateRowOutOfBand(
+            mutateRowFromSibling(
               { [field]: "concurrent-write" },
               otherSession ? otherKey : sessionKey,
             );
@@ -522,7 +522,7 @@ describe("SQLite session entry patch commit revalidation", () => {
       }
     });
 
-    it.each(["foreign", "same-connection"] as const)(
+    it.each(["sibling", "same-connection"] as const)(
       "refreshes a cached owner after a %s change and preserves rollback",
       (writer) => {
         const original = readSessionEntryCurrentFactsInDatabase(database, sessionKey);
@@ -538,8 +538,8 @@ describe("SQLite session entry patch commit revalidation", () => {
               "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.lifecycleRunId', ?, '$.subagentRecovery.lastRunId', ?) WHERE session_key = ?",
             )
             .run("next-lifecycle", "hidden-successor", sessionKey);
-        if (writer === "foreign") {
-          const other = new DatabaseSync(database.path);
+        if (writer === "sibling") {
+          const other = openNodeSqliteDatabase(database.path);
           try {
             update(other);
           } finally {
@@ -567,7 +567,7 @@ describe("SQLite session entry patch commit revalidation", () => {
 
     it("preserves parser values and last duplicate owner fields through native admission", () => {
       readSessionEntryCurrentFactsInDatabase(database, sessionKey);
-      const other = new DatabaseSync(database.path);
+      const other = openNodeSqliteDatabase(database.path);
       try {
         other
           .prepare(

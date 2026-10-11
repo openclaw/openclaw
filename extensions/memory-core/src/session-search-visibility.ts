@@ -179,23 +179,6 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
       })
     : undefined;
   const scopedAgentId = params.agentId?.trim() || requesterAgentId;
-  const { store: combinedSessionStore, storePath } = loadCombinedSessionStoreForGateway(
-    params.cfg,
-    scopedAgentId ? { agentId: scopedAgentId } : {},
-  );
-  const channelScopeForSession = (key: string) => {
-    const entry = combinedSessionStore[key];
-    return entry
-      ? resolveSessionChannelScope({
-          key,
-          chatType: entry.chatType,
-          space: entry.space,
-          origin: sessionDeliveryOrigin(entry),
-          deliveryContext: deliveryContextFromSession(entry),
-        })
-      : undefined;
-  };
-
   const archiveNames = [
     ...new Set(
       params.hits.flatMap((hit) => {
@@ -216,6 +199,24 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
       })
     : [];
   const archivedSessionsByName = new Map(archives.map((archive) => [archive.archiveName, archive]));
+  // Archive discovery yields. Read privacy and channel authority metadata only
+  // afterwards so a route change during that await cannot reuse a stale snapshot.
+  const { store: combinedSessionStore, storePath } = loadCombinedSessionStoreForGateway(
+    params.cfg,
+    scopedAgentId ? { agentId: scopedAgentId } : {},
+  );
+  const channelScopeForSession = (key: string) => {
+    const entry = combinedSessionStore[key];
+    return entry
+      ? resolveSessionChannelScope({
+          key,
+          chatType: entry.chatType,
+          space: entry.space,
+          origin: sessionDeliveryOrigin(entry),
+          deliveryContext: deliveryContextFromSession(entry),
+        })
+      : undefined;
+  };
   const guard = params.requesterSessionKey
     ? await createSessionVisibilityGuard({
         action: "history",
