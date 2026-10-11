@@ -16,10 +16,7 @@ import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, expect, it, vi } from "vitest";
 import { defaultTelegramBotDeps } from "./bot-deps.js";
-import {
-  enqueueTelegramMenuSync,
-  resolveTelegramMenuRemoteOwner,
-} from "./bot-native-command-menu-state.js";
+import { syncTelegramMenuCommands } from "./bot-native-command-menu.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { createTelegramBot } from "./bot.js";
 import { runTelegramChannelInboundEventWithHarness } from "./bot.test-helpers.js";
@@ -127,6 +124,7 @@ it.each(["none", "middleware", "handler"] as const)(
     });
     const telegramTransport = { fetch, sourceFetch: fetch, close: async () => {} };
     let monitor: ReturnType<typeof createTelegramTransportIngressMonitor> | undefined;
+    let menuSync: Promise<void> | undefined;
     const readHandlerAnswer = vi.spyOn(
       callbackQueryAnswerState,
       "getTelegramCallbackQueryAnswerPromise",
@@ -147,6 +145,7 @@ it.each(["none", "middleware", "handler"] as const)(
         telegramTransport,
         telegramDeps: {
           ...defaultTelegramBotDeps,
+          syncTelegramMenuCommands: (params) => (menuSync = syncTelegramMenuCommands(params)),
           getRuntimeConfig: () => cfg,
           listSkillCommandsForAgents: () => [],
           readChannelAllowFromStore: async () => [],
@@ -291,14 +290,7 @@ it.each(["none", "middleware", "handler"] as const)(
       }
       await monitor?.waitForIdle();
       await monitor?.stop();
-      // Menu sync has its own queue; finish it before closing the loopback API.
-      await new Promise<void>((resolve, reject) => {
-        enqueueTelegramMenuSync({
-          ownerKey: resolveTelegramMenuRemoteOwner({ botId: telegramBotInfoForTest.id }).queueKey,
-          sync: async () => resolve(),
-          onError: reject,
-        });
-      });
+      await menuSync;
       readHandlerAnswer.mockRestore();
       await telegramTransport.close();
       server.closeAllConnections();
