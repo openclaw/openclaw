@@ -9,6 +9,7 @@ import {
 import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { clearAuthProfileCooldown } from "./auth-profiles/usage-owner-write.js";
 import {
   markAuthProfileFailure,
   markInlineProviderApiKeyFailure,
@@ -90,6 +91,27 @@ describe("markAuthProfileFailure", () => {
     expect(stats.lastFailureAt).toBeGreaterThanOrEqual(startedAt);
     expect(stats.lastFailureAt).toBeLessThanOrEqual(Date.now());
     expect(stats.disabledUntil).toBe(stats.lastFailureAt + 10 * 60_000);
+  });
+
+  it("clears an inline-key billing disable that has no saved profile row", async () => {
+    const { store, agentDir } = fixture();
+    await markInlineProviderApiKeyFailure({
+      store,
+      agentDir,
+      provider: "anthropic",
+      reason: "billing",
+    });
+    const usageId = resolveInlineProviderApiKeyUsageId("anthropic");
+
+    await expect(clearAuthProfileCooldown({ store, profileId: usageId, agentDir })).resolves.toBe(
+      true,
+    );
+
+    expect(store.usageStats?.[usageId]?.disabledUntil).toBeUndefined();
+    clearRuntimeAuthProfileStoreSnapshots();
+    const persisted = ensureAuthProfileStore(agentDir).usageStats?.[usageId];
+    expect(persisted?.disabledUntil).toBeUndefined();
+    expect(persisted?.errorCount).toBe(0);
   });
 
   it("resets old billing failures, then preserves the new deadline across retries", async () => {

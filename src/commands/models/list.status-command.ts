@@ -16,7 +16,6 @@ import {
   DEFAULT_OAUTH_WARN_MS,
   formatRemainingShort,
 } from "../../agents/auth-health.js";
-import { buildAuthProfileUnusableHint } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
 import {
   ensureAuthProfileStore,
@@ -76,7 +75,7 @@ import { type RuntimeEnv, writeRuntimeJson, writeRuntimeStdout } from "../../run
 import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
-import { listUnavailableAuthProfiles } from "./auth-unavailability.js";
+import { listUnusableAuthProfilesWithHints } from "./auth-unavailability.js";
 import {
   formatProviderAuthProfileCounts,
   resolveProviderAuthOverview,
@@ -261,8 +260,9 @@ export async function modelsStatusCommand(
     skipPluginValidation: opts.probe !== true,
   });
   const explicitAgentId = opts.agent?.trim();
+  const agentDirOverride = explicitAgentId ? undefined : resolveEnvAgentDirOverride();
   const { agentId: workspaceAgentId, agentDir } = resolveModelsTargetAgent(cfg, opts.agent, {
-    agentDirOverride: explicitAgentId ? undefined : resolveEnvAgentDirOverride(),
+    agentDirOverride,
     kind: "read",
   });
   // Only an explicit --agent narrows the reported model/fallback overrides; an inferred
@@ -1055,24 +1055,11 @@ export async function modelsStatusCommand(
         (profile) => profile.type === "oauth" || profile.type === "token",
       );
 
-      const unusableProfiles = listUnavailableAuthProfiles(store)
-        .map(({ profileId, provider, kind, reason, classification, until, remainingMs }) =>
-          Object.assign(
-            { profileId, provider, kind, reason },
-            classification ? { classification } : {},
-            {
-              recoveryHint: buildAuthProfileUnusableHint({
-                kind,
-                reason,
-                provider: provider ?? profileId,
-                profileId,
-              }),
-              until,
-              remainingMs,
-            },
-          ),
-        )
-        .toSorted((a, b) => a.remainingMs - b.remainingMs);
+      // Mutation commands ignore the env dir override, so no --agent reaches that store.
+      const unusableProfiles = listUnusableAuthProfilesWithHints(
+        store,
+        agentDirOverride ? null : workspaceAgentId,
+      );
 
       const checkStatus = (() => {
         type RequirementHealth = "ok" | "expiring" | "missing" | "indeterminate";

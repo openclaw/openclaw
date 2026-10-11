@@ -21,6 +21,7 @@ function summarizeProfile(params: {
   profileId: string;
   profile: AuthProfileCredential;
   usage?: ProfileUsageStats;
+  agentId: string;
 }) {
   const expiresAt =
     params.profile.type === "api_key" ? undefined : timestampMsToIsoString(params.profile.expires);
@@ -39,6 +40,7 @@ function summarizeProfile(params: {
           reason,
           provider: params.profile.provider,
           profileId: params.profileId,
+          agentId: params.agentId,
         })
       : undefined;
   return {
@@ -107,6 +109,7 @@ export async function modelsAuthListCommand(
         profileId,
         profile,
         usage: store.usageStats?.[profileId],
+        agentId,
       }),
     )
     .filter((profile) => !provider || profile.provider === provider)

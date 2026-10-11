@@ -28,6 +28,7 @@ import {
   resolveSharedAuthStorePath,
 } from "../agents/auth-profiles/path-resolve.js";
 import { resolveAuthStorePathForDisplay } from "../agents/auth-profiles/paths.js";
+import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
   inspectPersistedSharedAuthProfileStoreRaw,
   resolveAuthProfileDatabasePath,
@@ -200,18 +201,31 @@ type AuthIssue = AuthHealthSummary["profiles"][number];
 type AuthProfileHealthTarget = {
   label: string;
   agentDir?: string;
+  /** Agent whose store this is; recovery commands need it with several agents. */
+  agentId?: string;
 };
 
 function listAuthProfileHealthTargets(cfg: OpenClawConfig): AuthProfileHealthTarget[] {
   const targets = new Map<string, AuthProfileHealthTarget>();
-  if (hasAnyAuthProfileStoreSource() || Object.keys(cfg.auth?.profiles ?? {}).length > 0) {
-    targets.set(resolveSharedAuthStorePath(), { label: "Shared" });
+  const shared: AuthProfileHealthTarget | undefined =
+    hasAnyAuthProfileStoreSource() || Object.keys(cfg.auth?.profiles ?? {}).length > 0
+      ? { label: "Shared" }
+      : undefined;
+  if (shared) {
+    targets.set(resolveSharedAuthStorePath(), shared);
   }
+  const sharedMainAgentDir = resolveSharedMainAuthAgentDir();
   for (const agentId of listAgentIds(cfg)) {
     const agentDir = resolveAgentDir(cfg, agentId);
     const databasePath = resolveAuthProfileDatabasePath(agentDir);
+    // The agent that owns the shared store addresses it in recovery commands. In the
+    // state-db layout no agent database is the shared store, so match the shared-main dir.
+    const ownsShared = targets.get(databasePath) === shared || agentDir === sharedMainAgentDir;
+    if (shared && !shared.agentId && ownsShared) {
+      shared.agentId = agentId;
+    }
     if (!targets.has(databasePath) && hasLocalAuthProfileStoreSource(agentDir)) {
-      targets.set(databasePath, { label: `Agent ${agentId}`, agentDir });
+      targets.set(databasePath, { label: `Agent ${agentId}`, agentDir, agentId });
     }
   }
 
@@ -282,7 +296,10 @@ async function resolveAuthIssueHint(
   }).replace(/^Run /, "Re-auth via ");
 }
 
-function collectAuthProfileCooldowns(store: ReturnType<typeof ensureAuthProfileStore>) {
+function collectAuthProfileCooldowns(
+  store: ReturnType<typeof ensureAuthProfileStore>,
+  agentId: string | undefined,
+) {
   return listUnavailableAuthProfiles(store).map(
     ({ profileId, provider, kind, reason, classification, remainingMs }) => {
       const displayReason = classification ?? reason;
@@ -297,6 +314,7 @@ function collectAuthProfileCooldowns(store: ReturnType<typeof ensureAuthProfileS
           provider:
             provider ?? findPersistedAuthProfileCredential({ profileId })?.provider ?? profileId,
           profileId,
+          agentId,
         }),
       };
     },
@@ -365,7 +383,7 @@ export async function collectAuthProfileHealthFindings(params: {
       target,
     });
     const owner = labelStores ? `${target.label} auth profile` : "Auth profile";
-    for (const cooldown of collectAuthProfileCooldowns(store)) {
+    for (const cooldown of collectAuthProfileCooldowns(store, target.agentId)) {
       findings.push({
         checkId: AUTH_PROFILES_CHECK_ID,
         severity: "warning",
@@ -421,7 +439,7 @@ async function noteAuthProfileHealthForTarget(params: {
   let { store, summary } = loadAuthProfileHealth(params);
   const noteTitle = (title: string) =>
     params.labelStores ? `${title} (${params.target.label})` : title;
-  const unusable = collectAuthProfileCooldowns(store).map(
+  const unusable = collectAuthProfileCooldowns(store, params.target.agentId).map(
     ({ profileId, kind, remaining, hint }) =>
       `- ${profileId}: ${kind} (${remaining})${hint ? ` — ${hint}` : ""}`,
   );

@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   modelsAuthLoginCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthLogoutCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthActivateCommand: vi.fn().mockResolvedValue(undefined),
+  modelsAuthClearCooldownCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthOrderGetCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthOrderUpdateCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthPasteApiKeyCommand: vi.fn().mockResolvedValue(undefined),
@@ -80,6 +81,10 @@ vi.mock("../commands/models/accounts.js", async (importOriginal) => ({
 }));
 vi.mock("../commands/models/auth-activate.js", () => ({
   modelsAuthActivateCommand: mocks.modelsAuthActivateCommand,
+}));
+vi.mock("../commands/models/auth-clear-cooldown.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/models/auth-clear-cooldown.js")>()),
+  modelsAuthClearCooldownCommand: mocks.modelsAuthClearCooldownCommand,
 }));
 vi.mock("../commands/models/auth-logout.js", () => ({
   modelsAuthLogoutCommand: mocks.modelsAuthLogoutCommand,
@@ -227,6 +232,12 @@ describe("models cli", () => {
       label: "activate",
       args: ["models", "auth", "--agent", "poe", "activate", "openai:saved"],
       command: mocks.modelsAuthActivateCommand,
+      expected: { agent: "poe", profileId: "openai:saved" },
+    },
+    {
+      label: "clear-cooldown",
+      args: ["models", "auth", "--agent", "poe", "clear-cooldown", "openai:saved"],
+      command: mocks.modelsAuthClearCooldownCommand,
       expected: { agent: "poe", profileId: "openai:saved" },
     },
     {

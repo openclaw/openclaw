@@ -21,6 +21,7 @@ const authProfileMocks = vi.hoisted(() => ({
   hasAnyAuthProfileStoreSource: vi.fn((_agentDir?: string) => false),
   hasLocalAuthProfileStoreSource: vi.fn((_agentDir?: string) => false),
   resolveApiKeyForProfile: vi.fn(),
+  sharedAuthStorePath: undefined as string | undefined,
 }));
 
 vi.mock("../agents/auth-profiles.js", async (importOriginal) => ({
@@ -31,6 +32,14 @@ vi.mock("../agents/auth-profiles.js", async (importOriginal) => ({
   resolveApiKeyForProfile: authProfileMocks.resolveApiKeyForProfile,
 }));
 
+vi.mock("../agents/auth-profiles/path-resolve.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/auth-profiles/path-resolve.js")>();
+  return {
+    ...actual,
+    resolveSharedAuthStorePath: () =>
+      authProfileMocks.sharedAuthStorePath ?? actual.resolveSharedAuthStorePath(),
+  };
+});
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
 vi.mock("../agents/auth-profiles/doctor.js", () => ({
   formatAuthDoctorHint: vi.fn(async () => "Re-authenticate this profile."),
@@ -68,6 +77,7 @@ describe("noteAuthProfileHealth", () => {
     authProfileMocks.hasLocalAuthProfileStoreSource.mockReset();
     authProfileMocks.hasLocalAuthProfileStoreSource.mockReturnValue(false);
     authProfileMocks.resolveApiKeyForProfile.mockReset();
+    authProfileMocks.sharedAuthStorePath = undefined;
     noteMock.mockReset();
   });
 
@@ -164,7 +174,31 @@ describe("noteAuthProfileHealth", () => {
         message: "Auth profile openai:billing is disabled:billing (5m).",
         path: expectedAuthStorePath(mainDir),
         target: "openai:billing",
-        fixHint: "Top up credits (provider billing) or switch provider.",
+        fixHint:
+          "Top up credits (provider billing), then run `openclaw models auth clear-cooldown 'openai:billing' --agent 'main'`, or switch provider.",
+      }),
+    ]);
+  });
+
+  it("targets the shared-main agent for shared state-db recovery commands", async () => {
+    // State-db ownership keeps the shared store outside every agent database path.
+    authProfileMocks.sharedAuthStorePath = path.join(tempDir, "state", "openclaw.sqlite");
+    authProfileMocks.hasAnyAuthProfileStoreSource.mockReturnValue(true);
+    authProfileMocks.loadAuthProfileStoreForRuntime.mockReturnValue({
+      version: 1,
+      profiles: {},
+      usageStats: {
+        "openai:billing": { disabledUntil: now + 5 * 60_000, disabledReason: "billing" },
+      },
+    } satisfies AuthProfileStore);
+
+    const findings = await collectAuthProfileHealthFindings({
+      cfg: { agents: { entries: { coder: {}, main: {} } } },
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        fixHint: expect.stringContaining("clear-cooldown 'openai:billing' --agent 'main'`"),
       }),
     ]);
   });
