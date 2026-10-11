@@ -886,25 +886,18 @@ it.skipIf(process.platform === "win32")(
         replaced = true;
       }
     };
+    const readEntry = (request = source()) =>
+      execution.runExisting(request, (scope) =>
+        scope.execute({
+          type: "session.entry.read",
+          input: { sessionKeys: ["agent:main:missing"] },
+        }),
+      );
     try {
       await execution.prepare(source());
-      await expect(
-        execution.runExisting(requestSource, (scope) =>
-          scope.execute({
-            type: "session.entry.read",
-            input: { sessionKeys: ["agent:main:missing"] },
-          }),
-        ),
-      ).resolves.toMatchObject({ entries: [] });
+      await expect(readEntry(requestSource)).resolves.toMatchObject({ entries: [] });
       expect(replaced).toBe(true);
-      await expect(
-        execution.runExisting(source(), (scope) =>
-          scope.execute({
-            type: "session.entry.read",
-            input: { sessionKeys: ["agent:main:missing"] },
-          }),
-        ),
-      ).rejects.toThrow(/identity changed/);
+      await expect(readEntry()).rejects.toThrow(/identity changed/);
     } finally {
       if (replaced) {
         fs.unlinkSync(options.path);
