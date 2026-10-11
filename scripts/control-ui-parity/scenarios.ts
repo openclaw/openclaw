@@ -324,6 +324,8 @@ export const scenes: Scene[] = [
         },
         "models.list": { models: [] },
         "models.authStatus": { ts: fixedTime, providers: [] },
+        "usage.status": { updatedAt: fixedTime, providers: [] },
+        "sessions.usage": { aggregates: { byProvider: [] } },
       },
     },
     prepare: async (page) => {

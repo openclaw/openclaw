@@ -1,3 +1,4 @@
+import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import { For, createEffect, createMemo } from "solid-js";
 import type {
   SystemAgentSetupActivateParams,
@@ -6,6 +7,7 @@ import type {
 import { Icon } from "../../components/solid/icon.tsx";
 import { syncDropdownItemRadio } from "../../components/web-awesome.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import type { JSX } from "../../types/solid-elements.js";
 import { renderProviderIcon } from "./model-setup-icon-loader.tsx";
 
 type ManualProvider = SystemAgentSetupDetectResult["manualProviders"][number];
@@ -33,29 +35,9 @@ export function revealManualProvider(root: ParentNode): void {
   input?.scrollIntoView?.({ block: "nearest", behavior: "auto" });
 }
 
-type DropdownEvent<T extends Event> = T & { currentTarget: HTMLElementTagNameMap["wa-dropdown"] };
-type WebAwesomeSelectEvent = DropdownEvent<
-  CustomEvent<{
-    item: HTMLElement & { checked?: boolean; value?: string };
-  }>
->;
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "wa-dropdown": HTMLAttributes<HTMLElementTagNameMap["wa-dropdown"]> & {
-        placement?: string;
-        "onWa-select"?: (event: WebAwesomeSelectEvent) => void;
-      };
-      "wa-dropdown-item": HTMLAttributes<HTMLElementTagNameMap["wa-dropdown-item"]> & {
-        "prop:value"?: string;
-        "prop:checked"?: boolean;
-        type?: "checkbox";
-        disabled?: boolean;
-      };
-    }
-  }
-}
+type WebAwesomeSelectEvent = Parameters<
+  NonNullable<JSX.IntrinsicElements["wa-dropdown"]["onWa-select"]>
+>[0];
 
 function restoreProviderTriggerAfterHide(dropdown: HTMLElement) {
   dropdown.addEventListener(
@@ -65,8 +47,7 @@ function restoreProviderTriggerAfterHide(dropdown: HTMLElement) {
   );
 }
 
-function handleManualProviderKeydown(event: DropdownEvent<KeyboardEvent>): void {
-  const dropdown = event.currentTarget;
+function handleManualProviderKeydown(event: KeyboardEvent, dropdown: WaDropdown): void {
   if (!dropdown.open || (event.key !== "Tab" && event.key !== "Escape")) {
     return;
   }
@@ -95,8 +76,9 @@ function handleManualProviderSelect(
   onChange: (providerId: string) => void,
 ): void {
   const item = event.detail.item;
-  const dropdown = event.currentTarget;
-  const value = item.value ?? item.getAttribute("value");
+  // SAFETY: this handler is installed on the wa-dropdown host, which owns currentTarget.
+  const dropdown = event.currentTarget as WaDropdown;
+  const value = item.value;
   if (!value) {
     return;
   }
@@ -150,10 +132,10 @@ export function ManualProviderPicker(
       class="model-setup-provider-select"
       placement="bottom-start"
       aria-label={t("modelSetup.manual.provider")}
-      onWa-select={(event: WebAwesomeSelectEvent) =>
+      onWa-select={(event) =>
         handleManualProviderSelect(event, props.manualProviderId, props.onManualProviderChange)
       }
-      onKeyDown={handleManualProviderKeydown}
+      onKeyDown={(event) => handleManualProviderKeydown(event, event.currentTarget)}
     >
       <button
         slot="trigger"
