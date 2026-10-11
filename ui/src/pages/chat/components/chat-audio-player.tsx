@@ -699,25 +699,21 @@ function ChatAudioPlayerContent(
   );
 }
 
-export const ChatAudioPlayer = defineSolidBridge(
-  "openclaw-chat-audio-player",
-  ChatAudioPlayerContent,
-  {
-    properties: {
-      src: { default: "" },
-      sourceIdentity: { default: "" },
-      label: { default: "" },
-      mimeType: { default: "" },
-      playback: { default: "native" },
-      authToken: { default: null },
-      sizeBytes: { default: undefined, type: Number },
-      serverDurationMs: { default: undefined, type: Number },
-      voiceNote: { default: false },
-      onExpand: { default: undefined, attribute: false },
-      onMediaLoaded: { default: undefined, attribute: false },
-    },
+defineSolidBridge("openclaw-chat-audio-player", ChatAudioPlayerContent, {
+  properties: {
+    src: { default: "" },
+    sourceIdentity: { default: "" },
+    label: { default: "" },
+    mimeType: { default: "" },
+    playback: { default: "native" },
+    authToken: { default: null },
+    sizeBytes: { default: undefined, type: Number },
+    serverDurationMs: { default: undefined, type: Number },
+    voiceNote: { default: false },
+    onExpand: { default: undefined, attribute: false },
+    onMediaLoaded: { default: undefined, attribute: false },
   },
-);
+});
 
 declare global {
   interface HTMLElementTagNameMap {

@@ -253,27 +253,23 @@ function ChatVideoPlayerContent(
   );
 }
 
-export const ChatVideoPlayer = defineSolidBridge(
-  "openclaw-chat-video-player",
-  ChatVideoPlayerContent,
-  {
-    properties: {
-      src: { default: "" },
-      preview: { default: false },
-      sourceIdentity: { default: "" },
-      label: { default: "" },
-      mimeType: { default: "" },
-      playback: { default: "native" },
-      authToken: { default: null },
-      sizeBytes: { default: undefined, type: Number },
-      mediaWidth: { default: undefined, type: Number },
-      mediaHeight: { default: undefined, type: Number },
-      onExpand: { default: undefined, attribute: false },
-      onFallbackExpand: { default: undefined, attribute: false },
-      onMediaLoaded: { default: undefined, attribute: false },
-    },
+defineSolidBridge("openclaw-chat-video-player", ChatVideoPlayerContent, {
+  properties: {
+    src: { default: "" },
+    preview: { default: false },
+    sourceIdentity: { default: "" },
+    label: { default: "" },
+    mimeType: { default: "" },
+    playback: { default: "native" },
+    authToken: { default: null },
+    sizeBytes: { default: undefined, type: Number },
+    mediaWidth: { default: undefined, type: Number },
+    mediaHeight: { default: undefined, type: Number },
+    onExpand: { default: undefined, attribute: false },
+    onFallbackExpand: { default: undefined, attribute: false },
+    onMediaLoaded: { default: undefined, attribute: false },
   },
-);
+});
 
 declare global {
   interface HTMLElementTagNameMap {

@@ -26,8 +26,8 @@ import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import type { PersonActivityData } from "./person-activity-data.ts";
 import { personActivityLink, type PersonActivityRouting } from "./person-activity-link.ts";
 import { Icon } from "./solid/icon.tsx";
+import { ViewerAvatar } from "./solid/viewer-facepile.tsx";
 import "./elapsed-time.ts";
-import "./viewer-facepile.ts";
 
 type ScopedSession = { row: GatewaySessionRow; agentId: string };
 export type PersonCardInput = {
@@ -228,12 +228,7 @@ export function PersonActivityCard(props: PersonCardInput) {
   return (
     <div class="person-activity-card">
       <header class="person-activity-card__header">
-        <openclaw-viewer-avatar
-          prop:user={props.user}
-          prop:markAsViewer={false}
-          variant="footer"
-          aria-hidden="true"
-        />
+        <ViewerAvatar user={props.user} markAsViewer={false} variant="footer" aria-hidden="true" />
         <div>
           <h2>{model().label.name}</h2>
           <Show when={model().observed}>

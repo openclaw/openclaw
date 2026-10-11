@@ -509,7 +509,7 @@ async function deliverReplyWithNormalization(
       info.kind !== "final" &&
       (result.kind === "preview-finalized" || result.kind === "preview-finalized-partial");
     if (finalizedPreview) {
-      await handlePreviewFinalizedResult(turn, result);
+      await handlePreviewFinalizedResult(turn, result, lanePayload);
       if (isAskUserPayload && result.kind === "preview-finalized") {
         registerTelegramQuestionDeliveryForMessage(turn, effectivePayload, {
           messageId: result.delivery.messageId,

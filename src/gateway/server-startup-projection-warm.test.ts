@@ -7,7 +7,7 @@ import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js"
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { createGatewayKernel } from "./server-kernel.js";
-import * as rowReads from "./session-row-projection-read.js";
+import * as rowReads from "./session-row-database-facts.js";
 import * as projections from "./session-row-projection.js";
 
 it("refuses startup and disposes its projection when initial rows fail after the first batch", async () => {

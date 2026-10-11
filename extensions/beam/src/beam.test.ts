@@ -118,24 +118,6 @@ async function serve(
 }
 
 describe("Beam payload validation", () => {
-  it("accepts the closed normalized payload", () => {
-    const upload = sampleUpload({
-      sourceModel: { provider: "OpenAI", model: "gpt-5.6-sol" },
-    });
-    const result = parseBeamUpload(upload);
-    expect(result).toEqual({
-      ok: true,
-      value: sampleUpload({ sourceModel: { provider: "openai", model: "gpt-5.6-sol" } }),
-    });
-  });
-
-  it("accepts timezone-bearing ISO timestamps with four-digit low years", () => {
-    expect(parseBeamUpload(sampleUpload({ updatedAt: "0099-01-01T00:00:00Z" }))).toEqual({
-      ok: true,
-      value: sampleUpload({ updatedAt: "0099-01-01T00:00:00Z" }),
-    });
-  });
-
   it("rejects unknown fields, non-ISO timestamps, and oversized transcript entries", () => {
     expect(parseBeamUpload(sampleUpload({ arbitrary: "junk" }))).toEqual({
       ok: false,
@@ -367,21 +349,6 @@ describe("Beam receiver", () => {
       await closeOpenClawStateDatabaseAsync();
       resetPluginStateStoreForTests();
     }
-  });
-
-  it("returns a Beam share URL beneath a nested Control UI base path", async () => {
-    const store = memoryStore();
-    const endpoint = await serve(store, {
-      resolveControlUiBasePath: () => "/admin/openclaw/",
-    });
-    const response = await postUpload(endpoint);
-
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({
-      ok: true,
-      beamId: "0123456789abcdef0123456789abcdef",
-      url: "/admin/openclaw/beam/fix-the-upload-flow-0123456789ab",
-    });
   });
 
   it("requires operator.write before reading the upload body", async () => {

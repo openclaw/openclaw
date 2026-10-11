@@ -58,6 +58,7 @@ describe("shared control ownership", () => {
       "components/composer-menu.ts",
       "components/multi-select.ts",
       "components/select-picker.ts",
+      "components/session-group-defaults-dialog.ts",
       "pages/chat/components/chat-model-account-control.ts",
       "pages/chat/components/chat-model-picker-options.ts",
       "pages/chat/components/chat-model-picker.ts",
@@ -72,6 +73,7 @@ describe("shared control ownership", () => {
     expect(matchingFiles(/<resizable-divider\b/u)).toEqual([
       "app/app-shell-view.ts",
       "components/dock-layout-controller.ts",
+      "components/dock-layout-solid.ts",
       "pages/chat/chat-page-pane-render.ts",
       "pages/chat/components/chat-resizable-divider.ts",
     ]);

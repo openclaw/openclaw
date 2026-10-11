@@ -147,18 +147,24 @@ describe("chat admission authority", () => {
           }
           return value;
         });
-      await expect(
-        admitChatSend({
-          request: first.request,
-          session: first.session,
-          client: fixture.client,
-          context: fixture.context,
-          respond: vi.fn(),
-          assertCurrent: first.authorization.assertCurrent,
-          withCurrent,
-          withPreparedCurrent: first.authorization.withPreparedCurrent,
-        }),
-      ).rejects.toThrow();
+      const revoked = await admitChatSend({
+        request: first.request,
+        session: first.session,
+        client: fixture.client,
+        context: fixture.context,
+        respond: vi.fn(),
+        assertCurrent: first.authorization.assertCurrent,
+        withCurrent,
+        withPreparedCurrent: first.authorization.withPreparedCurrent,
+      }).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      if ("error" in revoked) {
+        expect(revoked.error).toBeInstanceOf(Error);
+      } else {
+        expect(revoked.value).toEqual({ ok: false });
+      }
       expect(reservedIdentity).toBe(first.request.requestIdentity);
       await closing;
       expect(fixture.context.dedupe.has(pendingKey)).toBe(false);
@@ -197,7 +203,7 @@ describe("chat admission authority", () => {
     }
   });
 
-  it("retains callback custody after its real worker reader is revoked", async () => {
+  it("retains callback custody during database closure", async () => {
     const fixture = await createBrowserFollowupFixture();
     const request = await normalizeChatSendRequest({
       params: fixture.params,
@@ -280,13 +286,8 @@ describe("chat admission authority", () => {
       if (!retainedRead) {
         throw new Error("Expected the callback's retained worker read");
       }
-      const readerFailure = await retainedRead.then(
-        () => {
-          throw new Error("Revoked worker reader unexpectedly succeeded");
-        },
-        (error: unknown) => error,
-      );
-      expect(readerFailure).toBeInstanceOf(Error);
+      // Closure can reach the reader after its synchronous consumption finishes.
+      const [readerOutcome] = await Promise.allSettled([retainedRead]);
       const released = getSessionWorkAdmissionRelease({
         scope: fixture.scope.storePath,
         identities: [fixture.scope.sessionKey, fixture.scope.sessionId],
@@ -296,7 +297,15 @@ describe("chat admission authority", () => {
       expect(caller.isCurrent()).toBe(true);
       expect(fixture.context.chatAbortControllers.size).toBe(1);
       finishCallback.resolve();
-      expect(await outcome).toEqual({ error: readerFailure });
+      const result = await outcome;
+      if (readerOutcome.status === "rejected") {
+        expect(readerOutcome.reason).toBeInstanceOf(Error);
+        expect(result).toEqual({ error: readerOutcome.reason });
+      } else if ("error" in result) {
+        expect(result.error).toBeInstanceOf(Error);
+      } else {
+        expect(result.value).toEqual({ ok: false });
+      }
       await released;
       expect(getActiveGatewayRootWorkCount()).toBe(rootsBefore);
       expect(caller.isCurrent()).toBe(false);

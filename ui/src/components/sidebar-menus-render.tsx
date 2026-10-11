@@ -36,7 +36,7 @@ import { formatSidebarTimestamp } from "./app-sidebar-session-catalogs.ts";
 import { canRetryGatewayStatus } from "./gateway-status.ts";
 import "../styles/sidebar-menus.css";
 import { sessionMenuReasons } from "./session-menu-access.ts";
-import type { SessionMenuAction } from "./session-menu.ts";
+import { SessionMenu, type SessionMenuAction } from "./session-menu.ts";
 import {
   isSidebarAttentionDismissed,
   isUpdateAttentionForced,
@@ -333,8 +333,8 @@ export function renderSidebarSessionMenuForController(
   return (
     <Show when={menu} keyed>
       {(_identity) => (
-        <openclaw-session-menu
-          prop:session={{
+        <SessionMenu
+          session={{
             label: session().label,
             target: { key: session().key, agentId: session().agentId },
             sessionId: session().sessionId ?? null,
@@ -358,37 +358,37 @@ export function renderSidebarSessionMenuForController(
               sharedCategory() !== null &&
               rows().every((row) => categoryClearReturnsToGroups(row, host.sessionsGrouping)),
           }}
-          prop:involvingMeContext={host.sessionInvolvingMeFilterActive}
-          prop:selectionCount={rows().length}
-          prop:compact={isMobileNavLayout()}
-          prop:lastActive={batchRows() ? "" : formatSidebarTimestamp(session().updatedAt)}
-          prop:anchor={menu}
-          prop:trigger={controller.sessionMenuTrigger}
-          prop:disabled={!host.connected}
-          prop:actionDisabledReasons={actionDisabledReasons()}
-          prop:navigationAllowed={Boolean(context())}
-          prop:copyMarkdownAllowed={canCopySessionMarkdown(context()?.gateway.snapshot)}
-          prop:splitAllowed={canSplitSessionView()}
-          prop:forkDisabled={host.sessionData.sessionsLoading || session().modelSelectionLocked}
-          prop:forkFromLastCompleted={session().gatewayHasActiveRun ?? session().hasActiveRun}
-          prop:snoozeAllowed={true}
-          prop:archiveAllowed={archiveAllowed()}
-          prop:deleteAllowed={deleteAllowed()}
-          prop:cloudWorkerStopAllowed={cloudWorkerStopAllowed()}
-          prop:groups={host.knownSessionGroups()}
-          prop:currentOwner={session().owner?.actor ?? null}
-          prop:work={batchRows() ? null : controller.sessionMenuWork}
-          prop:pluginActions={
+          involvingMeContext={host.sessionInvolvingMeFilterActive}
+          selectionCount={rows().length}
+          compact={isMobileNavLayout()}
+          lastActive={batchRows() ? "" : formatSidebarTimestamp(session().updatedAt)}
+          anchor={menu}
+          trigger={controller.sessionMenuTrigger}
+          disabled={!host.connected}
+          actionDisabledReasons={actionDisabledReasons()}
+          navigationAllowed={Boolean(context())}
+          copyMarkdownAllowed={canCopySessionMarkdown(context()?.gateway.snapshot)}
+          splitAllowed={canSplitSessionView()}
+          forkDisabled={host.sessionData.sessionsLoading || session().modelSelectionLocked}
+          forkFromLastCompleted={session().gatewayHasActiveRun ?? session().hasActiveRun}
+          snoozeAllowed={true}
+          archiveAllowed={archiveAllowed()}
+          deleteAllowed={deleteAllowed()}
+          cloudWorkerStopAllowed={cloudWorkerStopAllowed()}
+          groups={host.knownSessionGroups()}
+          currentOwner={session().owner?.actor ?? null}
+          work={batchRows() ? null : controller.sessionMenuWork}
+          pluginActions={
             !batchRows() && context()?.plugins && pluginSession()
               ? pluginSessionMenuActions(context()!.plugins, pluginSession()!)
               : []
           }
-          prop:onClose={() => {
+          onClose={() => {
             if (controller.sessionMenu === menu) {
               controller.closeSessionMenu();
             }
           }}
-          prop:onAction={(action: SessionMenuAction) => {
+          onAction={(action: SessionMenuAction) => {
             const actionContext = context();
             const actionSignal = pluginActionSignal();
             const batch = batchRows();

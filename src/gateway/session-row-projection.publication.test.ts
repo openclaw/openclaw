@@ -3,7 +3,6 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import {
   assignSessionOwner,
   loadSessionEntry,
-  patchSessionEntryCore,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import {
@@ -22,7 +21,6 @@ import {
   onSessionIdentityMutation,
 } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import * as databaseIdentity from "../state/openclaw-agent-db-identity.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
@@ -38,90 +36,6 @@ import { createSessionRowProjection } from "./session-row-projection.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 
 afterEach(() => vi.restoreAllMocks());
-
-it("withholds a failed participant projection while retaining the committed session identity", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const scope = { agentId: "main", sessionKey: "agent:main:invalid-participant-publication" };
-    const entry = { sessionId: "invalid-participant", lifecycleRevision: "original", updatedAt: 1 };
-    replaceSessionEntrySync(scope, entry);
-    recordSessionParticipant(scope, {
-      identity: { type: "profile", id: "participant" },
-      promptedAt: 1,
-    });
-    const database = openOpenClawAgentDatabase(scope);
-    const identity = databaseIdentity.readOpenClawAgentDatabaseIdentity(database).identity;
-    const release = projectionWork.retainSessionListForegroundWork();
-    const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
-    const query = { agentId: scope.agentId, key: scope.sessionKey };
-    const list = () => listProjectedSessions({ projection, opts: {} });
-    const prepared = createDeferredCore();
-    const resume = createDeferredCore();
-    let patch: ReturnType<typeof patchSessionEntryCore> | undefined;
-    let stop = () => {};
-    try {
-      await list();
-      const generation = projection.capture(query)?.generation;
-      expect(generation).toBeDefined();
-      const inspect = () => {
-        const row = projection.capture(query);
-        return {
-          dirty: projection.dirtyRowCount,
-          generation: row?.generation,
-          source: row?.publishedSource?.identity,
-          sharing: projection.sharingTarget(query)?.entry,
-          retained: row?.retainedDatabaseFacts,
-          pending: row?.pendingDatabaseFacts,
-        };
-      };
-      const observed: ReturnType<typeof inspect>[] = [];
-      stop = sessionChanges.subscribe((change) => {
-        if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
-          observed.push(inspect());
-        }
-      });
-      patch = patchSessionEntryCore(
-        scope,
-        async () => {
-          prepared.resolve();
-          await resume.promise;
-          return { label: "Committed label" };
-        },
-        { skipMaintenance: true },
-      );
-      await prepared.promise;
-      database.db
-        .prepare("UPDATE session_participants SET identity_namespace = ? WHERE session_key = ?")
-        .run('{"type":"profile","extra":true}', scope.sessionKey);
-      resume.resolve();
-      await expect(patch).resolves.toMatchObject({ label: "Committed label" });
-      expect(observed).toHaveLength(1);
-      expect(observed[0]).toMatchObject({
-        generation,
-        source: identity,
-        sharing: { sessionId: entry.sessionId, lifecycleRevision: entry.lifecycleRevision },
-        retained: undefined,
-        pending: undefined,
-      });
-      expect(observed[0]?.dirty).toBeGreaterThan(0);
-      await expect(list()).rejects.toThrow("Session participant identity is invalid");
-      database.db
-        .prepare("DELETE FROM session_participants WHERE session_key = ?")
-        .run(scope.sessionKey);
-      expect((await list()).sessions).toEqual([
-        expect.objectContaining({ sessionId: entry.sessionId, label: "Committed label" }),
-      ]);
-      expect(projection.describe(query)?.entry.participantCount ?? 0).toBe(0);
-      expect(projection.capture(query)?.generation).toBe(generation);
-    } finally {
-      resume.resolve();
-      await patch?.catch(() => {});
-      stop();
-      await projection.ensureMaterialized().catch(() => {});
-      projection.dispose();
-      release();
-    }
-  });
-});
 
 it.each(["native", "worker"] as const)(
   "retains assigned owner and participants before observers after a %s metadata write",

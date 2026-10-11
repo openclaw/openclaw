@@ -1,6 +1,7 @@
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginGatewayAccessAuthority } from "../plugins/gateway-access-policy.types.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import {
   decodeGitHubPublicationRequester,
@@ -66,11 +67,13 @@ async function preparePublicationSession(
   }
 }
 
+/** @deprecated Use GitHubPublicationRequesterPolicyV2; removed in the next Plugin SDK major. */
 export type GitHubPublicationRequesterPolicy = Readonly<{
   snapshot: GitHubPublicationRequesterSnapshot;
   assertCurrent: () => void;
 }>;
 
+/** @deprecated Use GitHubPublicationRequesterV2; removed in the next Plugin SDK major. */
 export type GitHubPublicationRequester = GitHubPublicationRequesterPolicy &
   Readonly<{
     /** An accepted row keeps its own policy while the current invocation retains its fences. */
@@ -78,7 +81,7 @@ export type GitHubPublicationRequester = GitHubPublicationRequesterPolicy &
   }>;
 
 /** Prepared host policy and a required live source capability for worker-owned writes. */
-type GitHubPublicationRequesterPolicyV2 = GitHubPublicationRequesterPolicy &
+export type GitHubPublicationRequesterPolicyV2 = GitHubPublicationRequesterPolicy &
   Readonly<{
     version: 2;
     signal: AbortSignal;
@@ -86,8 +89,19 @@ type GitHubPublicationRequesterPolicyV2 = GitHubPublicationRequesterPolicy &
       selector: GitHubPublicationSourceSelector,
     ): Promise<GitHubPublicationSourceCapability>;
   }>;
-type GitHubPublicationRequesterV2 = GitHubPublicationRequesterPolicyV2 &
+export type GitHubPublicationRequesterV2 = GitHubPublicationRequesterPolicyV2 &
   Pick<GitHubPublicationRequester, "assertInvocationCurrent">;
+const workerRequesters = resolveGlobalSingleton(
+  Symbol.for("openclaw.githubPublicationWorkerRequesters"),
+  () => new WeakSet<GitHubPublicationRequesterPolicy>(),
+);
+
+/** Classify before invoking any released assertion; a failed worker command never selects legacy. */
+export function isGitHubPublicationRequesterV2(
+  requester: GitHubPublicationRequesterPolicy,
+): requester is GitHubPublicationRequesterPolicyV2 {
+  return workerRequesters.has(requester);
+}
 
 function prepareRequesterPolicy(
   snapshot: GitHubPublicationRequesterSnapshot,
@@ -343,6 +357,7 @@ export async function prepareGitHubPublicationRequesterV2(
         });
       },
     });
+    workerRequesters.add(requester);
     requester.assertCurrent();
     return { requester, release };
   } catch (error) {
@@ -438,6 +453,7 @@ export async function restoreGitHubPublicationRequester(
       },
       release,
     });
+    workerRequesters.add(requester);
     requester.assertCurrent();
     return requester;
   } catch (error) {

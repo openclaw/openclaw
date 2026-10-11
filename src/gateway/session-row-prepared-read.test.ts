@@ -607,7 +607,6 @@ it.each(["child", "parent"] as const)(
       prepareExactRows: () => undefined,
       prepareSelection: () => undefined,
       retainExactPreparation: () => () => {},
-      assertExactRowsPrepared: () => {},
       retainArchiveRows: () => ({ update: () => {}, release: () => {} }),
       describe: projection.describe,
       inOwnerContext: AsyncLocalStorage.snapshot(),

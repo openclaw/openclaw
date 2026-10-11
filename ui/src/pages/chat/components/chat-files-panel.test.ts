@@ -523,6 +523,27 @@ describe("workspace file tabs", () => {
     expect(getSessionWorkspace(state).previews).not.toContain(a);
   });
 
+  it("opens the file browser from its action hosted outside the panel", async () => {
+    const panel = mountPanel();
+    panel.tabsInHeader = true;
+    panel.browser = html`<button>reports</button>`;
+    const onSelect = vi.fn((id: string | null) => {
+      panel.activeId = id;
+    });
+    panel.onSelect = onSelect;
+    await panel.updateComplete;
+    const header = document.createElement("header");
+    document.body.append(header);
+    header.append(panel.hostedActions);
+
+    panel.hostedActions.click();
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith(null);
+    await panel.updateComplete;
+    const browser = panel.querySelector<HTMLElement>(".chat-files-panel__page");
+    expect(browser?.hidden).toBe(false);
+    expect(browser?.textContent).toContain("reports");
+  });
+
   it("announces hosted-tab changes without invalidating the header for file content updates", async () => {
     const panel = document.createElement("openclaw-chat-files-panel");
     const changed = vi.fn();

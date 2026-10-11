@@ -621,6 +621,16 @@ export async function createWorkerGatewayTools(
       throw new Error("Worker tool authority changed");
     }
   };
+  const authorizeTool = (tool: AnyAgentTool, execute: AnyAgentTool["execute"]) =>
+    copyAgentToolMetadata(tool, {
+      ...tool,
+      execute: async (...args) => {
+        assertAuthorized(tool.name);
+        const result = await execute(...args);
+        assertAuthorized(tool.name);
+        return result;
+      },
+    });
   const definitions = {
     sessions_spawn: createSessionsSpawnTool(toolOptions),
     sessions_send: createSessionsSendTool(toolOptions),
@@ -628,23 +638,17 @@ export async function createWorkerGatewayTools(
   };
   const execute = createWorkerSessionToolExecutor(params, definitions);
   const adapters = Object.values(definitions).map((tool) => {
-    const bound = copyAgentToolMetadata<AnyAgentTool>(tool, {
-      ...tool,
-      execute: async (toolCallId, raw, signal, onUpdate) => {
-        assertAuthorized(tool.name);
-        const operation = prepareWorkerSessionToolRequest(
-          { identity: params.identity, signal, onUpdate },
-          tool.name,
-          toolCallId,
-          raw,
-        );
-        if (!operation) {
-          throw new Error(`Invalid ${tool.name} arguments`);
-        }
-        const value = await execute(operation);
-        assertAuthorized(tool.name);
-        return value;
-      },
+    const bound = authorizeTool(tool, (toolCallId, raw, signal, onUpdate) => {
+      const operation = prepareWorkerSessionToolRequest(
+        { identity: params.identity, signal, onUpdate },
+        tool.name,
+        toolCallId,
+        raw,
+      );
+      if (!operation) {
+        throw new Error(`Invalid ${tool.name} arguments`);
+      }
+      return execute(operation);
     });
     bindAgentToolExecutionLocation(bound, {
       kind: "gateway",
@@ -670,31 +674,25 @@ export async function createWorkerGatewayTools(
     if (getAgentToolExecutionLocation(tool).kind === "placement" || adapterNames.has(tool.name)) {
       return tool;
     }
-    return copyAgentToolMetadata(tool, {
-      ...tool,
-      execute: async (toolCallId, args, signal, onUpdate) => {
-        assertAuthorized(tool.name);
-        const invoke = () =>
-          runWithSource({
-            source: { ...source, turnClaim: claim },
-            request: {
-              tool,
-              toolName: tool.name,
-              ...(tool.name === "presence" || tool.name === "skill_workshop"
-                ? { approvalMode: "deny" as const }
-                : {}),
-              identity: params.identity,
-              signal,
-              onUpdate,
-              request: { toolCallId, arguments: args },
-            },
-          });
-        const result = await (tool.name === "skill_workshop"
-          ? retainWorkshopCall(toolCallId, args, invoke)
-          : invoke());
-        assertAuthorized(tool.name);
-        return result;
-      },
+    return authorizeTool(tool, (toolCallId, args, signal, onUpdate) => {
+      const invoke = () =>
+        runWithSource({
+          source: { ...source, turnClaim: claim },
+          request: {
+            tool,
+            toolName: tool.name,
+            ...(tool.name === "presence" || tool.name === "skill_workshop"
+              ? { approvalMode: "deny" as const }
+              : {}),
+            identity: params.identity,
+            signal,
+            onUpdate,
+            request: { toolCallId, arguments: args },
+          },
+        });
+      return tool.name === "skill_workshop"
+        ? retainWorkshopCall(toolCallId, args, invoke)
+        : invoke();
     });
   });
 }

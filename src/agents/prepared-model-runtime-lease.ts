@@ -115,13 +115,15 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     preserveWorkspaceDirOnRefresh:
       rawInput.preserveWorkspaceDirOnRefresh ?? rawInput.workspaceDir !== undefined,
   });
-  if (provenance === "run" && !options.pluginGeneration && context.getGatewayLifecycleActive()) {
+  if (provenance === "run" && context.getGatewayLifecycleActive()) {
     const configured = resolveConfiguredOwner(context.owners, input);
     if (configured?.pending) {
       assertPreparedModelRuntimeAdmissionCanWait(configured);
       await racePromiseWithAbortSignal(configured.pending, options.abortSignal);
       assertAdmission();
     }
+  }
+  if (provenance === "run" && !options.pluginGeneration && context.getGatewayLifecycleActive()) {
     try {
       input = rebindInputToCommittedConfiguredOwner(context.owners, input);
     } catch (error) {

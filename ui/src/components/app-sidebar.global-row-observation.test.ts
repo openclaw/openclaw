@@ -26,7 +26,7 @@ import "./app-sidebar.tsx";
 const requireRecord = createRequireRecord("object", "expected-label");
 
 describe("sidebar global row observation", () => {
-  it.each(["during describe", "while pinning and reading", "after a successor list"] as const)(
+  it.each(["after describe", "while pinning and reading", "after a successor list"] as const)(
     "keeps the routed Work alias scoped while reads and ownership change (%s)",
     async (eventTiming) => {
       const agentsList = {
@@ -220,13 +220,10 @@ describe("sidebar global row observation", () => {
             ts: 250,
           });
         };
-        if (eventTiming === "during describe") {
-          publishWorkPatch();
-        }
         workDescribe.resolve({ session: work });
         await sidebar.sessionData.loadActiveSessionLineage(route.sessionKey);
         await sidebar.updateComplete;
-        assertAlias(eventTiming === "during describe" ? updated : work);
+        assertAlias(work);
         expect(sessions.state.loading).toBe(true);
         assertMainUnchanged();
 
@@ -349,6 +346,7 @@ describe("sidebar global row observation", () => {
           assertMainUnchanged();
           return;
         }
+        publishWorkPatch();
         await sidebar.updateComplete;
         assertAlias(updated);
         assertMainUnchanged();

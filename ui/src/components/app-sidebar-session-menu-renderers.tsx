@@ -274,8 +274,11 @@ export function renderSidebarSessionSortMenuForController(
   const sessionSources = SETTINGS_ROUTE_TARGETS.sessionSources;
   const rosterMode = () => host.sidebarAgentsMode === "roster";
   const grouping = () => host.effectiveSessionsGrouping();
-  const owners = () => (host.sessionOwnershipVisibility.filters ? host.sessionOwnerOptions : []);
   const ownerFilterId = () => (host.sessionOwnerFilterActive ? host.sessionOwnerFilterId : null);
+  const owners = () =>
+    host.sessionOwnerOptions.filter(
+      (owner) => host.sessionOwnershipVisibility.filters || owner.id === ownerFilterId(),
+    );
   const unavailableOwner = createMemo(() => {
     const id = ownerFilterId();
     return id !== null && !owners().some((owner) => owner.id === id)
