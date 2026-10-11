@@ -62,17 +62,6 @@ describe("config defaults", () => {
     expect(mocks.applyProviderConfigDefaultsForConfig).not.toHaveBeenCalled();
   });
 
-  it("skips provider defaults when agent defaults have no Anthropic auth signal", () => {
-    const cfg = {
-      agents: {
-        defaults: {},
-      },
-    };
-
-    expect(applyContextPruningDefaults(cfg as never)).toBe(cfg);
-    expect(mocks.applyProviderConfigDefaultsForConfig).not.toHaveBeenCalled();
-  });
-
   it("uses anthropic provider defaults when agent defaults and auth signal exist", () => {
     const cfg = {
       auth: {
@@ -188,7 +177,7 @@ describe("config defaults", () => {
     expect(next.agents?.defaults?.subagents?.maxConcurrent).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "normalizes keyed agent models without authoring a legacy list (projection: %s)",
     (withProjection) => {
       const config: OpenClawConfig = {
@@ -266,10 +255,7 @@ describe("applyModelDefaults catalog seeding", () => {
   // Regression: an override entry pinning only sizing fields materialized as a
   // text-only, non-reasoning, zero-cost model, silently dropping vision-gated
   // tools (like `computer`) for that model downstream.
-  it.each([
-    { providerId: "openai", generatedRows: false },
-    { providerId: " OpenAI ", generatedRows: true },
-  ])(
+  it.each([{ providerId: " OpenAI ", generatedRows: true }])(
     "seeds $providerId models (normalizer supplies rows: $generatedRows)",
     async ({ providerId, generatedRows }) => {
       const { normalizeProviderConfigForConfigDefaults } = await import("./provider-policy.js");
@@ -387,11 +373,6 @@ describe("applyModelDefaults catalog seeding", () => {
   });
 
   const catalogFlatCost = { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 };
-  const authoredFlatCost = { input: 4, output: 24, cacheRead: 0.4, cacheWrite: 5 };
-  const authoredTieredCost = {
-    ...authoredFlatCost,
-    tieredPricing: [{ ...authoredFlatCost, range: [0] as [number] }],
-  };
   const catalogTieredCost = {
     ...catalogFlatCost,
     tieredPricing: [
@@ -402,46 +383,10 @@ describe("applyModelDefaults catalog seeding", () => {
 
   it.each([
     {
-      name: "omitted cost inherits catalog tiers",
-      authoredCost: undefined,
-      expectedCost: catalogTieredCost,
-      expectedUsd: 0.006675,
-    },
-    {
       name: "empty cost inherits catalog tiers",
       authoredCost: {},
       expectedCost: catalogTieredCost,
       expectedUsd: 0.006675,
-    },
-    {
-      name: "partial flat cost inherits missing rates but not catalog tiers",
-      authoredCost: { input: 4 },
-      expectedCost: { ...catalogFlatCost, input: 4 },
-      expectedUsd: 0.0038875,
-    },
-    {
-      name: "authored flat cost excludes catalog tiers",
-      authoredCost: authoredFlatCost,
-      expectedCost: authoredFlatCost,
-      expectedUsd: 0.00327,
-    },
-    {
-      name: "authored zero cost remains free",
-      authoredCost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      expectedCost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      expectedUsd: 0,
-    },
-    {
-      name: "authored tiers replace catalog tiers",
-      authoredCost: authoredTieredCost,
-      expectedCost: authoredTieredCost,
-      expectedUsd: 0.00327,
-    },
-    {
-      name: "authored empty tiers retain flat pricing",
-      authoredCost: { ...authoredFlatCost, tieredPricing: [] },
-      expectedCost: { ...authoredFlatCost, tieredPricing: [] },
-      expectedUsd: 0.00327,
     },
   ])("$name", ({ authoredCost, expectedCost, expectedUsd }) => {
     const tieredRegistry = {

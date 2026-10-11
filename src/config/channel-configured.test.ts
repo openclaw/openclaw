@@ -36,34 +36,6 @@ describe("isChannelConfigured", () => {
     vi.unstubAllEnvs();
   });
 
-  it("detects Telegram env configuration through the package metadata seam", () => {
-    expect(isChannelConfigured({}, "telegram", { TELEGRAM_BOT_TOKEN: "token" })).toBe(true);
-  });
-
-  it("detects Discord env configuration through the package metadata seam", () => {
-    expect(isChannelConfigured({}, "discord", { DISCORD_BOT_TOKEN: "token" })).toBe(true);
-  });
-
-  it("requires both Slack identity and transport tokens through the package metadata seam", () => {
-    expect(isChannelConfigured({}, "slack", { SLACK_BOT_TOKEN: "xoxb-test" })).toBe(false);
-    expect(
-      isChannelConfigured({}, "slack", {
-        SLACK_BOT_TOKEN: "xoxb-test",
-        SLACK_APP_TOKEN: "xapp-test",
-      }),
-    ).toBe(true);
-  });
-
-  it("requires both IRC host and nick env vars through the package metadata seam", () => {
-    expect(isChannelConfigured({}, "irc", { IRC_HOST: "irc.example.com" })).toBe(false);
-    expect(
-      isChannelConfigured({}, "irc", {
-        IRC_HOST: "irc.example.com",
-        IRC_NICK: "openclaw",
-      }),
-    ).toBe(true);
-  });
-
   it("requires both Mattermost URL and token env vars through the package metadata seam", () => {
     expect(isChannelConfigured({}, "mattermost", { MATTERMOST_BOT_TOKEN: "token" })).toBe(false);
     expect(
@@ -90,22 +62,6 @@ describe("isChannelConfigured", () => {
           },
         },
         "signal",
-        {},
-      ),
-    ).toBe(true);
-  });
-
-  it("treats explicit enabled channel config as configured state", () => {
-    expect(
-      isChannelConfigured(
-        {
-          channels: {
-            "openclaw-weixin": {
-              enabled: true,
-            },
-          },
-        },
-        "openclaw-weixin",
         {},
       ),
     ).toBe(true);

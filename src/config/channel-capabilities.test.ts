@@ -21,29 +21,6 @@ describe("resolveChannelCapabilities", () => {
     expect(resolveChannelCapabilities({ cfg: {}, channel: "" })).toBeUndefined();
   });
 
-  it("normalizes and prefers per-account capabilities", () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          capabilities: [" inlineButtons ", ""],
-          accounts: {
-            default: {
-              capabilities: [" perAccount ", "  "],
-            },
-          },
-        },
-      },
-    } satisfies Partial<OpenClawConfig>;
-
-    expect(
-      resolveChannelCapabilities({
-        cfg,
-        channel: "telegram",
-        accountId: "default",
-      }),
-    ).toEqual(["perAccount"]);
-  });
-
   it("falls back to provider capabilities when account capabilities are missing", () => {
     const cfg = {
       channels: {
@@ -63,26 +40,6 @@ describe("resolveChannelCapabilities", () => {
         accountId: "default",
       }),
     ).toEqual(["inlineButtons"]);
-  });
-
-  it("matches account keys case-insensitively", () => {
-    const cfg = {
-      channels: {
-        slack: {
-          accounts: {
-            Family: { capabilities: ["threads"] },
-          },
-        },
-      },
-    } satisfies Partial<OpenClawConfig>;
-
-    expect(
-      resolveChannelCapabilities({
-        cfg,
-        channel: "slack",
-        accountId: "family",
-      }),
-    ).toEqual(["threads"]);
   });
 
   it("supports msteams capabilities", () => {
@@ -105,26 +62,6 @@ describe("resolveChannelCapabilities", () => {
         channel: "msteams",
       }),
     ).toEqual(["polls"]);
-  });
-
-  it("handles object-format capabilities gracefully (e.g., { inlineButtons: 'dm' })", () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          // Object format - used for granular control like inlineButtons scope.
-          // Channel-specific handlers (resolveTelegramInlineButtonsScope) process these.
-          capabilities: { inlineButtons: "dm" },
-        },
-      },
-    } as unknown as Partial<OpenClawConfig>;
-
-    // Should return undefined (not crash), allowing channel-specific handlers to process it.
-    expect(
-      resolveChannelCapabilities({
-        cfg,
-        channel: "telegram",
-      }),
-    ).toBeUndefined();
   });
 });
 

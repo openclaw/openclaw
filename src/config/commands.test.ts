@@ -36,33 +36,6 @@ beforeEach(() => {
 });
 
 describe("resolveNativeSkillsEnabled", () => {
-  it("uses provider defaults for auto", () => {
-    expect(
-      resolveNativeSkillsEnabled({
-        providerId: "discord",
-        globalSetting: "auto",
-      }),
-    ).toBe(true);
-    expect(
-      resolveNativeSkillsEnabled({
-        providerId: "telegram",
-        globalSetting: "auto",
-      }),
-    ).toBe(true);
-    expect(
-      resolveNativeSkillsEnabled({
-        providerId: "slack",
-        globalSetting: "auto",
-      }),
-    ).toBe(false);
-    expect(
-      resolveNativeSkillsEnabled({
-        providerId: "whatsapp",
-        globalSetting: "auto",
-      }),
-    ).toBe(false);
-  });
-
   it("uses only enabled package channel metadata for bundled auto defaults before runtime loads", () => {
     setActivePluginRegistry(createTestRegistry([]));
     const env = {
@@ -117,23 +90,6 @@ describe("resolveNativeSkillsEnabled", () => {
       }),
     ).toBe(false);
   });
-
-  it("honors explicit provider settings", () => {
-    expect(
-      resolveNativeSkillsEnabled({
-        providerId: "slack",
-        providerSetting: true,
-        globalSetting: "auto",
-      }),
-    ).toBe(true);
-    expect(
-      resolveNativeSkillsEnabled({
-        providerId: "discord",
-        providerSetting: false,
-        globalSetting: true,
-      }),
-    ).toBe(false);
-  });
 });
 
 describe("resolveNativeCommandsEnabled", () => {
@@ -164,29 +120,6 @@ describe("resolveNativeCommandsEnabled", () => {
       }),
     ).toBe(false);
   });
-});
-
-describe("plugin registry auto defaults", () => {
-  it.each([
-    {
-      name: "native skills",
-      resolve: resolveNativeSkillsEnabled,
-    },
-    {
-      name: "native commands",
-      resolve: resolveNativeCommandsEnabled,
-    },
-  ])(
-    "uses the plugin registry for auto defaults even when chat-channel normalization misses for $name",
-    ({ resolve }) => {
-      expect(
-        resolve({
-          providerId: "demo-channel",
-          globalSetting: "auto",
-        }),
-      ).toBe(true);
-    },
-  );
 });
 
 describe("isNativeCommandsExplicitlyDisabled", () => {

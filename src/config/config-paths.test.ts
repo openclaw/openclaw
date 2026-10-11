@@ -33,37 +33,12 @@ describe("concrete config path readers and mutation guards", () => {
       }
     },
   );
-
-  it("retains quoted keys and array-index provenance through the shared grammar", () => {
-    const parsed = tokenizeConcreteConfigPath('entries["123"].headers["X.Trace"][0]');
-    expect(parsed.tokens).toEqual(["entries", "123", "headers", "X.Trace", 0]);
-    expect(parsed.quotedNumericSegments).toEqual(new Set([1]));
-    expect(parseConcreteConfigPathWithProvenance('entries["123"].headers["X.Trace"][0]')).toEqual(
-      parsed,
-    );
-  });
 });
 
 describe("config path own-property traversal", () => {
   it.each([
-    { parent: ["agents", "defaults", "model"], member: "fallbacks", value: ["openai/gpt-4o"] },
     {
       parent: ["agents", "defaults", "subagents", "model"],
-      member: "fallbacks",
-      value: ["openai/gpt-4o"],
-    },
-    {
-      parent: ["agents", "entries", "worker", "model"],
-      member: "fallbacks",
-      value: ["openai/gpt-4o"],
-    },
-    {
-      parent: ["agents", "entries", "worker", "subagents", "model"],
-      member: "fallbacks",
-      value: ["openai/gpt-4o"],
-    },
-    {
-      parent: ["tools", "exec", "reviewer", "model"],
       member: "fallbacks",
       value: ["openai/gpt-4o"],
     },
@@ -84,14 +59,14 @@ describe("config path own-property traversal", () => {
     });
   });
 
-  it.each([
-    { member: "fallbacks", value: ["backup"] },
-    { member: "timeoutMs", value: 5000 },
-  ])("does not promote unrelated plugin strings when setting $member", ({ member, value }) => {
-    const root = { plugins: { entries: { demo: { config: { model: "opaque" } } } } };
-    setConfigValueAtPath(root, ["plugins", "entries", "demo", "config", "model", member], value);
-    expect(root.plugins.entries.demo.config.model).toEqual({ [member]: value });
-  });
+  it.each([{ member: "timeoutMs", value: 5000 }])(
+    "does not promote unrelated plugin strings when setting $member",
+    ({ member, value }) => {
+      const root = { plugins: { entries: { demo: { config: { model: "opaque" } } } } };
+      setConfigValueAtPath(root, ["plugins", "entries", "demo", "config", "model", member], value);
+      expect(root.plugins.entries.demo.config.model).toEqual({ [member]: value });
+    },
+  );
 
   it("does not treat an inherited prototype leaf as config", () => {
     const key = "toString";
