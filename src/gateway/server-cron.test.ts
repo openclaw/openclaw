@@ -1978,7 +1978,7 @@ describe("buildGatewayCronService", () => {
   it("does not retry cancelled command output while still notifying terminal failure", async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     let deliverySignal: AbortSignal | undefined;
-    const failureDelivered = createDeferred<void>();
+    const failureDelivered = createDeferred();
     const send = expectDefined(
       sendCronAnnouncePayloadStrictMock.getMockImplementation(),
       "cron delivery mock",
