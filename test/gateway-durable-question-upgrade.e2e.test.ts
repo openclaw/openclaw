@@ -32,7 +32,8 @@ it.skipIf(!stableRoot)(
     const stableManifest = JSON.parse(
       await readFile(path.join(stableRoot, "package.json"), "utf8"),
     );
-    expect(stableManifest.openclaw.schemaVersions).toEqual({ agent: 24, state: 19 });
+    expect(stableManifest.version).toBe("2026.10.1");
+    expect(stableManifest.openclaw.schemaVersions).toEqual({ agent: 24, state: 20 });
     const fixture = await createQuestionUpgradeFixture(stableRoot, signal);
     const { instance } = fixture;
     let client: Awaited<ReturnType<typeof acquireGatewayTestClient>> | undefined;
@@ -126,6 +127,13 @@ it.skipIf(!stableRoot)(
         },
       );
     const sessionKey = "agent:main:installed-upgrade-proof";
+    const assertSettings = async () => {
+      const settings = await instance.cli(["config", "get", "agents.defaults.model", "--json"]);
+      expect(settings.code).toBe(0);
+      expect(parseUpgradeCliJson(settings.stdout)).toMatchObject({
+        primary: fixture.model.modelRef,
+      });
+    };
     const assertHistory = async () => {
       if (!client) {
         throw new Error("Upgrade proof client must be connected");
@@ -164,13 +172,14 @@ it.skipIf(!stableRoot)(
           await client.request("agent.wait", { runId: asking.runId, timeoutMs: 30_000 }),
         ).toMatchObject({ status: "ok" });
         await assertHistory();
+        await assertSettings();
         await persistUsageCache();
         await stop();
         const baseline = await inspectUpgradeDatabases(instance.state.stateDir);
         const baselineAgent = baseline.find((row) => row.cacheCount !== undefined);
         expect(baselineAgent?.version).toBe(24);
         expect(baselineAgent?.cacheCount).toBeGreaterThan(0);
-        expect(baseline.some((row) => row.version === 19)).toBe(true);
+        expect(baseline.some((row) => row.version === 20)).toBe(true);
         trace("stable-persisted", {
           binaryVersion: stableManifest.version,
           versions: baseline.map((row) => row.version),
@@ -210,6 +219,7 @@ it.skipIf(!stableRoot)(
         await instance.startGateway();
         client = await connect();
         await assertHistory();
+        await assertSettings();
         await stop();
         const beforeRefusal = await inspectUpgradeDatabases(instance.state.stateDir);
         fixture.useBinary(path.join(stableRoot, "openclaw.mjs"));
@@ -256,7 +266,7 @@ it.skipIf(!stableRoot)(
         const restoredAgent = restored.find((row) => row.cacheCount !== undefined);
         expect(restoredAgent?.version).toBe(24);
         expect(restoredAgent?.cacheDigest).toBe(baselineAgent?.cacheDigest);
-        expect(restored.some((row) => row.version === 19)).toBe(true);
+        expect(restored.some((row) => row.version === 20)).toBe(true);
         fixture.useBinary(path.join(stableRoot, "openclaw.mjs"));
         expect(
           (
@@ -268,6 +278,7 @@ it.skipIf(!stableRoot)(
         await instance.startGateway();
         client = await connect();
         await assertHistory();
+        await assertSettings();
         await persistUsageCache();
         await stop();
         trace("complete-backup-rollback-stable-ready", {
@@ -277,6 +288,7 @@ it.skipIf(!stableRoot)(
           cacheCount: restoredAgent?.cacheCount,
           cacheDigest: restoredAgent?.cacheDigest,
           retainedHistory: true,
+          retainedSettings: true,
         });
       },
       stop,
