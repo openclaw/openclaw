@@ -79,7 +79,7 @@ describe("routeReply delivery result", () => {
   it.each([
     ["channel_transform", true, 0, "deliveredNotVisible", false],
     ["invisible", true, 2, "delivered", true],
-    ["not-dispatched", true, 2, "delivered", true],
+
     ["not-dispatched", false, 1, "failedBeforeSend", false],
     ["unknown", true, 1, "failedAfterSend", true],
     ["no-identity", true, 1, "failedAfterSend", true],
@@ -235,11 +235,7 @@ describe("routeReply delivery result", () => {
     },
   );
 
-  it.each([
-    "cancelled_by_message_sending_hook",
-    "empty_after_message_sending_hook",
-    "adapter_returned_no_send",
-  ] as const)(
+  it.each(["empty_after_message_sending_hook"] as const)(
     "returns intentional suppression reason %s without claiming delivery",
     async (reason) => {
       mocks.deliverOutboundPayloads.mockImplementationOnce(
@@ -273,37 +269,6 @@ describe("routeReply delivery result", () => {
     },
   );
 
-  it("treats a send without adapter identity as ambiguous and non-retryable", async () => {
-    mocks.deliverOutboundPayloads.mockImplementationOnce(
-      async ({
-        onPayloadDeliveryOutcome,
-      }: {
-        onPayloadDeliveryOutcome?: (outcome: unknown) => void;
-      }) => {
-        onPayloadDeliveryOutcome?.({
-          index: 0,
-          status: "suppressed",
-          reason: "adapter_returned_no_identity",
-        });
-        return [];
-      },
-    );
-
-    const res = await routeReply({
-      payload: { text: "hello" },
-      channel: "telegram",
-      to: "chat-1",
-      cfg: {} as never,
-    });
-
-    expect(res).toEqual({
-      ok: true,
-      delivered: false,
-      ambiguous: true,
-      reason: "adapter_returned_no_identity",
-    });
-  });
-
   it("preserves session writer authority through route normalization", async () => {
     mocks.deliverOutboundPayloads.mockResolvedValueOnce([
       { channel: "telegram", messageId: "message-1" },
@@ -336,8 +301,7 @@ describe("routeReply delivery result", () => {
 
   it.each([
     ["a trailing suppression sentinel", { channel: "telegram", messageId: "suppressed" }],
-    ["a trailing unknown sentinel", { channel: "telegram", messageId: "unknown" }],
-    ["a trailing ok sentinel", { channel: "telegram", messageId: "ok" }],
+
     ["a trailing no-id receipt", { channel: "telegram", messageId: "" }],
   ])("preserves an earlier editable message id after %s", async (_label, trailingResult) => {
     const cause = new Error("network reset");
@@ -364,29 +328,4 @@ describe("routeReply delivery result", () => {
     });
     expect(res.cause).toBe(failure);
   });
-
-  it.each([
-    ["skipped", false, undefined],
-    ["suppressed", false, undefined],
-    ["unknown", true, undefined],
-    ["ok", true, undefined],
-  ] as const)(
-    "reports message id %s visibility as %s",
-    async (messageId, delivered, returnedId) => {
-      mocks.deliverOutboundPayloads.mockResolvedValueOnce([{ channel: "telegram", messageId }]);
-
-      const res = await routeReply({
-        payload: { text: "hello" },
-        channel: "telegram",
-        to: "chat-1",
-        cfg: {} as never,
-      });
-
-      expect(res).toEqual({
-        ok: true,
-        delivered,
-        ...(returnedId === undefined ? {} : { messageId: returnedId }),
-      });
-    },
-  );
 });

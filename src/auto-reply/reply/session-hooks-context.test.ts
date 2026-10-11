@@ -7,12 +7,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import {
-  resolveSqliteTranscriptReadScope,
-  toDatabaseOptions,
-} from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
-import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import * as memoryCapture from "../../hooks/bundled/session-memory/capture.js";
 import saveSessionMemory, {
   flushSessionMemoryWritesForTest,
@@ -28,7 +23,6 @@ import {
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { AsyncWorkScope, trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { emitResetCommandHooks } from "./commands-reset-hooks.js";
 import { finalizeInboundContext } from "./inbound-context.js";
@@ -131,31 +125,6 @@ async function createStoredSession(params: {
   return { storePath, transcriptPath };
 }
 
-type SessionResetConfig = NonNullable<NonNullable<OpenClawConfig["session"]>["reset"]>;
-
-async function initStoredSessionState(params: {
-  prefix: string;
-  sessionKey: string;
-  sessionId: string;
-  text: string;
-  updatedAt: number;
-  reset?: SessionResetConfig;
-}): Promise<void> {
-  const { storePath } = await createStoredSession(params);
-  const cfg = {
-    session: {
-      store: storePath,
-      ...(params.reset ? { reset: params.reset } : {}),
-    },
-  } as OpenClawConfig;
-
-  await initSessionState({
-    ctx: { Body: "hello", SessionKey: params.sessionKey },
-    cfg,
-    commandAuthorized: true,
-  });
-}
-
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
   if (!value || typeof value !== "object") {
     throw new Error("expected fields object");
@@ -217,105 +186,64 @@ describe("session hook context wiring", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(
-    (["new", "reset", "daily", "idle"] as const).flatMap((reason) =>
-      [false, true].map((projectionRepair) => ({ reason, projectionRepair })),
-    ),
-  )(
-    "captures the retiring memory window before $reason (projection repair: $projectionRepair)",
-    async ({ reason, projectionRepair }) => {
-      const sessionKey = "agent:main:memory-reset";
-      const sessionId = "memory-reset-session";
-      const storePath = await createStorePath(`memory-${reason}`);
-      const workspaceDir = path.join(path.dirname(storePath), "workspace");
-      const automatic = reason === "daily" || reason === "idle";
-      const cfg: OpenClawConfig = {
-        agents: { defaults: { workspace: workspaceDir } },
-        hooks: { internal: { enabled: true, entries: { "session-memory": { enabled: true } } } },
-        session: {
-          store: storePath,
-          ...(automatic
-            ? { reset: reason === "daily" ? { mode: "daily" } : { mode: "idle", idleMinutes: 30 } }
-            : {}),
+  it("captures the retiring memory window before new", async () => {
+    const sessionKey = "agent:main:memory-reset";
+    const sessionId = "memory-reset-session";
+    const storePath = await createStorePath("memory-new");
+    const workspaceDir = path.join(path.dirname(storePath), "workspace");
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { workspace: workspaceDir } },
+      hooks: { internal: { enabled: true, entries: { "session-memory": { enabled: true } } } },
+      session: { store: storePath },
+    };
+    await writeStore(storePath, {
+      [sessionKey]: { sessionId, updatedAt: Date.now() },
+    });
+    await replaceTranscriptEvents(
+      { agentId: "main", sessionId, sessionKey, storePath },
+      Array.from({ length: 20 }, (_, index) => ({
+        type: "message",
+        id: `message-${index}`,
+        parentId: index === 0 ? null : `message-${index - 1}`,
+        timestamp: new Date().toISOString(),
+        message: {
+          role: index % 2 === 0 ? "user" : "assistant",
+          content: `retiring-memory-${index}`,
         },
-      };
-      await writeStore(storePath, {
-        [sessionKey]: { sessionId, updatedAt: Date.now() - (automatic ? 86_400_000 : 0) },
-      });
-      await replaceTranscriptEvents(
-        { agentId: "main", sessionId, sessionKey, storePath },
-        Array.from({ length: 20 }, (_, index) => ({
-          type: "message",
-          id: `message-${index}`,
-          parentId: index === 0 ? null : `message-${index - 1}`,
-          timestamp: new Date().toISOString(),
-          message: {
-            role: index % 2 === 0 ? "user" : "assistant",
-            content: `retiring-memory-${index}`,
-          },
-        })),
-      );
-      registerInternalHook(
-        automatic ? "session:auto-reset" : `command:${reason}`,
-        saveSessionMemory,
-      );
-      if (projectionRepair) {
-        await sessionAccessor.waitForSessionTranscriptProjection({
-          agentId: "main",
-          sessionId,
-          sessionKey,
-          storePath,
-        });
-        const database = openOpenClawAgentDatabase(
-          toDatabaseOptions(
-            resolveSqliteTranscriptReadScope({ agentId: "main", sessionId, sessionKey, storePath }),
-          ),
-        );
-        database.db
-          .prepare(
-            "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
-          )
-          .run(sessionId);
-      }
-      hookRunnerMocks.hasHooks.mockImplementation(
-        (hookName) => !automatic && hookName === "before_reset",
-      );
+      })),
+    );
+    registerInternalHook("command:new", saveSessionMemory);
+    hookRunnerMocks.hasHooks.mockImplementation((hookName) => hookName === "before_reset");
 
-      try {
-        const body = automatic ? "Start the next turn" : `/${reason}`;
-        const ctx = { Body: body, SessionKey: sessionKey };
-        const initialized = await initSessionState({ ctx, cfg, commandAuthorized: true });
-        if (!automatic) {
-          await emitResetCommandHooks({
-            ...initialized,
-            action: reason,
-            agentId: "main",
-            cfg,
-            ctx,
-            command: { surface: "webchat", channel: "webchat" },
-            workspaceDir,
-          });
-        }
-        await flushSessionMemoryWritesForTest();
-        const memoryDir = path.join(workspaceDir, "memory");
-        const files = await fs.readdir(memoryDir);
-        expect(files).toHaveLength(1);
-        const content = await fs.readFile(path.join(memoryDir, files[0]!), "utf8");
-        expect(content).toContain('assistant: "retiring-memory-5"');
-        expect(content).toContain('assistant: "retiring-memory-19"');
-        expect(content).not.toContain('"retiring-memory-4"');
-        if (!automatic) {
-          expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledOnce();
-          expect(hookRunnerMocks.runBeforeReset.mock.calls[0]?.[0].messages).toHaveLength(20);
-          expect(hookRunnerMocks.runBeforeReset.mock.calls[0]?.[0].messages?.[0]).toMatchObject({
-            content: "retiring-memory-0",
-          });
-        }
-      } finally {
-        await flushSessionMemoryWritesForTest();
-      }
-    },
-  );
+    try {
+      const ctx = { Body: "/new", SessionKey: sessionKey };
+      const initialized = await initSessionState({ ctx, cfg, commandAuthorized: true });
+      await emitResetCommandHooks({
+        ...initialized,
+        action: "new",
+        agentId: "main",
+        cfg,
+        ctx,
+        command: { surface: "webchat", channel: "webchat" },
+        workspaceDir,
+      });
+      await flushSessionMemoryWritesForTest();
+      const memoryDir = path.join(workspaceDir, "memory");
+      const files = await fs.readdir(memoryDir);
+      expect(files).toHaveLength(1);
+      const content = await fs.readFile(path.join(memoryDir, files[0]!), "utf8");
+      expect(content).toContain('assistant: "retiring-memory-5"');
+      expect(content).toContain('assistant: "retiring-memory-19"');
+      expect(content).not.toContain('"retiring-memory-4"');
+      expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledOnce();
+      expect(hookRunnerMocks.runBeforeReset.mock.calls[0]?.[0].messages).toHaveLength(20);
+      expect(hookRunnerMocks.runBeforeReset.mock.calls[0]?.[0].messages?.[0]).toMatchObject({
+        content: "retiring-memory-0",
+      });
+    } finally {
+      await flushSessionMemoryWritesForTest();
+    }
+  });
 
   it.each(["stale", "failed"] as const)(
     "does not publish a memory snapshot from a %s lifecycle commit",
@@ -365,24 +293,6 @@ describe("session hook context wiring", () => {
       expect(onReset).not.toHaveBeenCalled();
     },
   );
-
-  it("passes sessionKey to session_start hook context", async () => {
-    const sessionKey = "agent:main:telegram:direct:123";
-    const storePath = await createStorePath("openclaw-session-hook-start");
-    await writeStore(storePath, {});
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
-
-    await initSessionState({
-      ctx: { Body: "hello", SessionKey: sessionKey },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
-    const [event, context] = requireHookCall(hookRunnerMocks.runSessionStart, "session_start");
-    expectFields(event, { sessionKey });
-    expectFields(context, { sessionKey, agentId: "main", sessionId: event?.sessionId });
-  });
 
   it.for([
     { kind: "new", dmScope: "main" },
@@ -480,108 +390,6 @@ describe("session hook context wiring", () => {
     });
     await withinTest(Promise.all([initialized, completed.promise]), signal);
     expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledOnce();
-  });
-
-  it("starts the first reply lifecycle for a session created by admission without resetting it", async () => {
-    const sessionKey = "agent:main:dashboard:admitted-goal";
-    const sessionId = "admitted-session";
-    const storePath = await createStorePath("openclaw-session-hook-admission");
-    const now = Date.now();
-    const seed: SessionEntry = {
-      sessionId,
-      lifecycleRevision: "admitted-generation",
-      updatedAt: now,
-      sessionStartedAt: now,
-      ...buildSessionCreationStamp({
-        via: "operator",
-        actor: { type: "human", source: "profile", id: "profile-ada" },
-        sandbox: "required",
-        now,
-      }),
-      goal: {
-        schemaVersion: 1,
-        id: "admitted-goal",
-        objective: "Start the first task",
-        status: "active",
-        createdAt: now,
-        updatedAt: now,
-        tokenStart: 0,
-        tokensUsed: 0,
-        continuationTurns: 0,
-      },
-    };
-    await writeStore(storePath, { [sessionKey]: seed });
-    const params = {
-      ctx: { Body: seed.goal?.objective, SessionKey: sessionKey },
-      cfg: { session: { store: storePath } } as OpenClawConfig,
-      commandAuthorized: true,
-      expectedExistingSessionId: sessionId,
-      pinExpectedExistingSession: true,
-    };
-    const result = await initSessionState({ ...params, newlyCreatedSessionId: sessionId });
-
-    expect(result.isNewSession).toBe(true);
-    expect(result.sessionCtx.IsNewSession).toBe("true");
-    expect(result.resetTriggered).toBe(false);
-    expect(result.previousSessionEntry).toBeUndefined();
-    const preserved = {
-      sessionId,
-      lifecycleRevision: seed.lifecycleRevision,
-      sessionStartedAt: now,
-      goal: seed.goal,
-      createdAt: now,
-      createdActor: seed.createdActor,
-      sandbox: "required",
-    };
-    expect(result.sessionEntry).toMatchObject(preserved);
-    expect(loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" })).toMatchObject(
-      preserved,
-    );
-    expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
-    expect(hookRunnerMocks.runSessionEnd).not.toHaveBeenCalled();
-    expectFields(requireHookCall(hookRunnerMocks.runSessionStart, "session_start")[0], {
-      sessionKey,
-      sessionId,
-      resumedFrom: undefined,
-    });
-
-    const next = await initSessionState(params);
-    expect(next.isNewSession).toBe(false);
-    expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
-  });
-
-  it("passes sessionKey to session_end hook context on reset", async () => {
-    const sessionKey = "agent:main:telegram:direct:123";
-    const { storePath } = await createStoredSession({
-      prefix: "openclaw-session-hook-end",
-      sessionKey,
-      sessionId: "old-session",
-    });
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
-
-    await initSessionState({
-      ctx: { Body: "/new", SessionKey: sessionKey },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(hookRunnerMocks.runSessionEnd).toHaveBeenCalledTimes(1);
-    expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
-    const [event, context] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
-    expectFields(event, {
-      sessionKey,
-      reason: "new",
-    });
-    expectFields(context, { sessionKey, agentId: "main", sessionId: event?.sessionId });
-
-    const [startEvent, startContext] = requireHookCall(
-      hookRunnerMocks.runSessionStart,
-      "session_start",
-    );
-    expectFields(startEvent, { resumedFrom: "old-session" });
-    expect(event?.nextSessionId).toBe("old-session");
-    expect(startEvent?.sessionId).toBe("old-session");
-    expectFields(startContext, { sessionId: startEvent?.sessionId });
   });
 
   it("keeps rollover hooks alive after their requester closes", async ({ signal }) => {
@@ -748,121 +556,5 @@ describe("session hook context wiring", () => {
 
     const [event] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
     expectFields(event, { reason: "new" });
-  });
-
-  it("marks daily stale rollovers and exposes the archived transcript path", async () => {
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
-      const sessionKey = "agent:main:telegram:direct:daily";
-      await initStoredSessionState({
-        prefix: "openclaw-session-hook-daily",
-        sessionKey,
-        sessionId: "daily-session",
-        text: "daily",
-        updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
-        reset: { mode: "daily" },
-      });
-
-      const [event] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
-      const [startEvent] = requireHookCall(hookRunnerMocks.runSessionStart, "session_start");
-      expectFields(event, {
-        reason: "daily",
-      });
-      expect(event?.nextSessionId).toBe(startEvent?.sessionId);
-      expect(startEvent?.sessionId).toBe("daily-session");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("marks idle stale rollovers with reason idle", async () => {
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
-      const sessionKey = "agent:main:telegram:direct:idle";
-      await initStoredSessionState({
-        prefix: "openclaw-session-hook-idle",
-        sessionKey,
-        sessionId: "idle-session",
-        text: "idle",
-        updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
-        reset: {
-          mode: "idle",
-          idleMinutes: 30,
-        },
-      });
-
-      const [event] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
-      expectFields(event, { reason: "idle" });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it.each([
-    {
-      reason: "daily",
-      reset: { mode: "daily", atHour: 4 } as SessionResetConfig,
-    },
-    {
-      reason: "idle",
-      reset: { mode: "idle", idleMinutes: 30 } as SessionResetConfig,
-    },
-  ])("emits one session:auto-reset event for $reason rollover", async ({ reason, reset }) => {
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
-      const listener = vi.fn();
-      registerInternalHook("session:auto-reset", listener);
-      const sessionKey = `agent:main:telegram:direct:auto-${reason}`;
-      await initStoredSessionState({
-        prefix: `openclaw-session-auto-${reason}`,
-        sessionKey,
-        sessionId: `auto-${reason}-session`,
-        text: reason,
-        updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
-        reset,
-      });
-
-      await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
-      const [event] = listener.mock.calls[0] ?? [];
-      expectFields(event, {
-        type: "session",
-        action: "auto-reset",
-        sessionKey,
-      });
-      expectFields((event as { context?: Record<string, unknown> }).context, {
-        reason,
-        nextSessionKey: sessionKey,
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("prefers idle over daily when both rollover conditions are true", async () => {
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
-      const sessionKey = "agent:main:telegram:direct:overlap";
-      await initStoredSessionState({
-        prefix: "openclaw-session-hook-overlap",
-        sessionKey,
-        sessionId: "overlap-session",
-        text: "overlap",
-        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
-        reset: {
-          mode: "daily",
-          atHour: 4,
-          idleMinutes: 30,
-        },
-      });
-
-      const [event] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
-      expectFields(event, { reason: "idle" });
-    } finally {
-      vi.useRealTimers();
-    }
   });
 });

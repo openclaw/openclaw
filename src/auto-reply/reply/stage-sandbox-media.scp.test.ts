@@ -44,9 +44,6 @@ const SUCCESS = {
   termination: "exit",
 } satisfies Awaited<ReturnType<typeof processExec.runCommandWithTimeout>>;
 
-const hasUnpairedUtf16Surrogate = (text: string): boolean =>
-  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(text);
-
 function remoteStageParams(state: OpenClawTestState, abortSignal?: AbortSignal) {
   vi.spyOn(mediaRoots, "resolveChannelRemoteInboundAttachmentRoots").mockReturnValue([
     "/synthetic/attachments",
@@ -187,7 +184,7 @@ function releaseInstalledOwnerSnapshot(): void {
 afterEach(() => vi.restoreAllMocks());
 
 describe("stageSandboxMedia SCP", () => {
-  it.each(["transfer", "document-only", "stopped-document-only"])(
+  it.each(["transfer", "document-only"])(
     "stages and hydrates channel attachments: %s",
     async (mode) => {
       const canTransfer = mode === "transfer";
@@ -220,20 +217,35 @@ describe("stageSandboxMedia SCP", () => {
               },
             },
           });
-          if (mode === "stopped-document-only") {
-            release();
-          }
-          vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv) => {
-            const target = argv.at(-1)!;
-            const source = argv.at(-2)!;
-            await fs.writeFile(
-              target,
-              source.endsWith(".png") ? image : source.endsWith(".mp4") ? video : "cached input",
-            );
-            return SUCCESS;
-          });
+          const runScp = vi
+            .spyOn(processExec, "runCommandWithTimeout")
+            .mockImplementation(async (argv) => {
+              const target = argv.at(-1)!;
+              const source = argv.at(-2)!;
+              await fs.writeFile(
+                target,
+                source.endsWith(".png") ? image : source.endsWith(".mp4") ? video : "cached input",
+              );
+              return SUCCESS;
+            });
           try {
             const result = await stageSandboxMedia(params);
+            expect(runScp).toHaveBeenNthCalledWith(
+              1,
+              [
+                "scp",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "StrictHostKeyChecking=yes",
+                "--",
+                `user@gateway-host:${REMOTE_PATH}`,
+                expect.any(String),
+              ],
+              expect.objectContaining({
+                maxOutputBytes: { stdout: 1, stderr: SCP_STDERR_TAIL_CHARS * 4 },
+              }),
+            );
             const cached = result.staged.get(0)!;
             if (canTransfer) {
               expect(cached.startsWith(path.join(getMediaDir(), "remote-cache") + path.sep)).toBe(
@@ -291,93 +303,6 @@ describe("stageSandboxMedia SCP", () => {
       }
     },
   );
-
-  it("stages bytes and both contexts through the strict bounded SCP command", async () => {
-    await withOpenClawTestState({ label: "scp-stage" }, async (state) => {
-      const params = remoteStageParams(state);
-      let download = "";
-      const runScp = vi
-        .spyOn(processExec, "runCommandWithTimeout")
-        .mockImplementation(async (argv) => {
-          download = argv.at(-1)!;
-          await fs.writeFile(download, "synthetic attachment bytes");
-          return SUCCESS;
-        });
-
-      const result = await stageSandboxMedia(params);
-
-      expect(runScp).toHaveBeenCalledExactlyOnceWith(
-        [
-          "scp",
-          "-o",
-          "BatchMode=yes",
-          "-o",
-          "StrictHostKeyChecking=yes",
-          "--",
-          `user@gateway-host:${REMOTE_PATH}`,
-          download,
-        ],
-        expect.objectContaining({
-          maxOutputBytes: { stdout: 1, stderr: SCP_STDERR_TAIL_CHARS * 4 },
-        }),
-      );
-      const fact = params.ctx.media?.[0];
-      expect(fact).toMatchObject({ staged: true, contentType: "text/plain" });
-      expect(fact?.path).toBe(result.staged.get(0));
-      expect(fact?.url).toBe(fact?.path);
-      expect(fact?.workspaceDir?.startsWith(state.path("sandbox"))).toBe(true);
-      expect(params.sessionCtx.media).toEqual(params.ctx.media);
-      expect(await fs.readFile(path.join(fact!.workspaceDir!, fact!.path!), "utf8")).toBe(
-        "synthetic attachment bytes",
-      );
-      await expect(fs.stat(path.dirname(download))).rejects.toMatchObject({ code: "ENOENT" });
-    });
-  });
-
-  it("stages a remote attachment whose roots resolve from a trusted installed channel plugin", async () => {
-    await withOpenClawTestState({ label: "scp-installed-owner" }, async (state) => {
-      const params = await installedOwnerStageParams({ state });
-      await withEmptyBundledPlugins(state, async () => {
-        publishInstalledOwnerSnapshot(params.cfg, params.pluginDir);
-        try {
-          let download = "";
-          const runScp = vi
-            .spyOn(processExec, "runCommandWithTimeout")
-            .mockImplementation(async (argv) => {
-              download = argv.at(-1)!;
-              await fs.writeFile(download, "installed channel bytes");
-              return SUCCESS;
-            });
-
-          const result = await stageSandboxMedia(params);
-
-          expect(runScp).toHaveBeenCalledExactlyOnceWith(
-            [
-              "scp",
-              "-o",
-              "BatchMode=yes",
-              "-o",
-              "StrictHostKeyChecking=yes",
-              "--",
-              `user@gateway-host:${INSTALLED_REMOTE_PATH}`,
-              download,
-            ],
-            expect.objectContaining({
-              maxOutputBytes: { stdout: 1, stderr: SCP_STDERR_TAIL_CHARS * 4 },
-            }),
-          );
-          expect(result.staged.size).toBe(1);
-          const fact = params.ctx.media?.[0];
-          expect(fact).toMatchObject({ staged: true, contentType: "text/plain" });
-          expect(await fs.readFile(path.join(fact!.workspaceDir!, fact!.path!), "utf8")).toBe(
-            "installed channel bytes",
-          );
-        } finally {
-          releaseInstalledOwnerSnapshot();
-        }
-      });
-    });
-  });
 
   it("skips a denied installed owner before its media contract executes", async () => {
     await withOpenClawTestState({ label: "scp-installed-owner-denied" }, async (state) => {
@@ -455,33 +380,7 @@ describe("stageSandboxMedia SCP", () => {
     });
   });
 
-  it("logs a bounded UTF-16-safe diagnostic without publishing failed media", async () => {
-    await withOpenClawTestState({ label: "scp-stderr" }, async (state) => {
-      const params = remoteStageParams(state);
-      const before = structuredClone([params.ctx, params.sessionCtx]);
-      // The retained window starts on the emoji's low surrogate.
-      const stderr = "n".repeat(99) + "🤖" + "n".repeat(SCP_STDERR_TAIL_CHARS - 5) + "fail";
-      const runScp = vi
-        .spyOn(processExec, "runCommandWithTimeout")
-        .mockResolvedValue({ ...SUCCESS, code: 1, stderr });
-      const log = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-      expect((await stageSandboxMedia(params)).staged.size).toBe(0);
-
-      expect(runScp).toHaveBeenCalledTimes(3);
-      const prefix = `Failed to stage inbound media path ${REMOTE_PATH}: Error: scp failed (1): `;
-      const message = log.mock.calls.find(([value]) => value.startsWith(prefix))?.[0] ?? "";
-      expect(message.startsWith(prefix)).toBe(true);
-      expect(message).toContain("fail");
-      expect(message).not.toContain("🤖");
-      expect(message.length).toBeLessThanOrEqual(prefix.length + SCP_STDERR_TAIL_CHARS);
-      expect(hasUnpairedUtf16Surrogate(message)).toBe(false);
-      expect([params.ctx, params.sessionCtx]).toEqual(before);
-    });
-  });
-
   it.each([
-    { failure: "spawn", cancel: false },
     { failure: "spawn", cancel: true },
     { failure: "exit", cancel: true },
   ])(

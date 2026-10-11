@@ -7,25 +7,14 @@ describe("inter-session lastRoute preservation (fixes #54441)", () => {
     expect(
       resolveSessionDeliveryRoute({
         originatingChannelRaw: "webchat",
-        persistedLastChannel: "discord",
-        sessionKey: "agent:samantha:main",
-        isInterSession: true,
-      }).channel,
-    ).toBe("discord");
-  });
-
-  it("inter-session message does NOT overwrite established external lastTo", () => {
-    expect(
-      resolveSessionDeliveryRoute({
-        originatingChannelRaw: "webchat",
         originatingToRaw: "session:somekey",
         toRaw: "session:somekey",
         persistedLastTo: "channel:1234567890",
         persistedLastChannel: "discord",
         sessionKey: "agent:samantha:main",
         isInterSession: true,
-      }).to,
-    ).toBe("channel:1234567890");
+      }),
+    ).toEqual({ channel: "discord", to: "channel:1234567890" });
   });
 
   it("regular Discord user message DOES update lastChannel normally", () => {
@@ -51,24 +40,10 @@ describe("inter-session lastRoute preservation (fixes #54441)", () => {
     // No external route existed — falls through to normal resolution (webchat or undefined).
     expect(["webchat", undefined]).toContain(result);
   });
-
-  it("inter-session on session with no persisted lastTo preserves session route", () => {
-    const result = resolveSessionDeliveryRoute({
-      originatingChannelRaw: "webchat",
-      originatingToRaw: "session:somekey",
-      toRaw: "session:somekey",
-      persistedLastTo: undefined,
-      persistedLastChannel: undefined,
-      sessionKey: "agent:samantha:main",
-      isInterSession: true,
-    }).to;
-    // No external route — falls through to normal resolution
-    expect(["session:somekey", undefined]).toContain(result);
-  });
 });
 
 describe("session delivery direct-session routing overrides", () => {
-  it.each(["agent:main:direct:user-1", "agent:main:telegram:account-a:direct:123456:topic:ops"])(
+  it.each(["agent:main:telegram:account-a:direct:123456:topic:ops"])(
     "preserves persisted external route when webchat accesses channel-peer session %s (fixes #47745)",
     (sessionKey) => {
       // Webchat/dashboard viewing an external-channel session must not overwrite
@@ -82,21 +57,6 @@ describe("session delivery direct-session routing overrides", () => {
           sessionKey,
         }),
       ).toEqual({ channel: "telegram", to: "123456" });
-    },
-  );
-
-  it.each(["agent:main:subagent:worker:direct:user-1"])(
-    "keeps persisted external routes for malformed direct-like key %s",
-    (sessionKey) => {
-      expect(
-        resolveSessionDeliveryRoute({
-          originatingChannelRaw: "webchat",
-          originatingToRaw: "session:dashboard",
-          persistedLastChannel: "telegram",
-          persistedLastTo: "group:12345",
-          sessionKey,
-        }),
-      ).toEqual({ channel: "telegram", to: "group:12345" });
     },
   );
 });

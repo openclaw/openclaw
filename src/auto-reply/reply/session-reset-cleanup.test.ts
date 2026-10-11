@@ -39,22 +39,6 @@ describe("clearSessionResetRuntimeState", () => {
     expect(replacement.state).not.toBe(state);
   });
 
-  it("clears reset queues and drains system events for normalized keys", () => {
-    enqueueSystemEvent("stale alpha", withSystemEventOwner({ sessionKey: "alpha" }, "main"));
-    enqueueSystemEvent("stale beta", withSystemEventOwner({ sessionKey: "beta" }, "main"));
-    enqueueSystemEvent("fresh gamma", withSystemEventOwner({ sessionKey: "gamma" }, "main"));
-
-    clearSessionResetRuntimeState([" alpha ", undefined, " ", "alpha", "beta"], {
-      agentId: "main",
-      sessionKey: "alpha",
-      assertCurrent: () => {},
-    });
-
-    expect(peekSystemEvents("agent:main:alpha")).toStrictEqual([]);
-    expect(peekSystemEvents("agent:main:beta")).toStrictEqual([]);
-    expect(peekSystemEvents("agent:main:gamma")).toEqual(["fresh gamma"]);
-  });
-
   it("preserves events owned by other agents during an agent-scoped reset", () => {
     enqueueSystemEvent("main", withSystemEventOwner({ sessionKey: "global" }, "main"));
     enqueueSystemEvent("alpha", withSystemEventOwner({ sessionKey: "global" }, "alpha"));

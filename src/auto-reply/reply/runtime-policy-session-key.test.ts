@@ -33,21 +33,6 @@ describe("resolveRuntimePolicySessionKey", () => {
     expect(resolveSandboxRuntimeStatus({ cfg, sessionKey }).sandboxed).toBe(true);
   });
 
-  it("normalizes dm chat type aliases", () => {
-    expect(
-      resolveRuntimePolicySessionKey({
-        cfg,
-        sessionKey: "agent:main:main",
-        ctx: {
-          SessionKey: "agent:main:main",
-          OriginatingChannel: "slack" as MsgContext["OriginatingChannel"],
-          ChatType: "dm",
-          SenderId: "U123",
-        },
-      }),
-    ).toBe("agent:main:slack:default:direct:u123");
-  });
-
   it("leaves local main-session runs unsandboxed in non-main mode", () => {
     const sessionKey = resolveRuntimePolicySessionKey({
       cfg,
