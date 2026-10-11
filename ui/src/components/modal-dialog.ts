@@ -273,16 +273,17 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     this.#returnFocus = null;
     this.#returnFocusOverride = undefined;
     if (returnFocus?.isConnected) {
-      if (!isInert(returnFocus)) {
+      if (!isInert(returnFocus) && !returnFocus.matches(":disabled")) {
         restoreFocus(returnFocus);
       } else {
         const activeElement = document.activeElement;
-        // The containing render may release background inertness after removing the modal.
+        // The containing render may enable the target or release inertness after removal.
         queueMicrotask(() => {
           if (
             !this.isConnected &&
             returnFocus.isConnected &&
             !isInert(returnFocus) &&
+            !returnFocus.matches(":disabled") &&
             document.activeElement === activeElement
           ) {
             restoreFocus(returnFocus);
